@@ -1,112 +1,378 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 2ebc171af1354c57d38adbeb8019a2725ceaa809..4e9e29e905fc08513dd1bede0bfe00ea5f5f20f4 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -57,51 +57,52 @@ def _latency_ms(state: "_StreamState", now_monotonic: float) -> int:
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 3de4ddd9b2efe0ac4ccf277ba6317e305a928cc5..7d6ca371e487ad1e0270ee128af59d0408e2dbd4 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -120,64 +120,89 @@ _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
  
- def _extract_text(payload: Mapping[str, Any]) -> str | None:
-     """Best-effort extraction of transcript text from a vendor payload."""
+ _CLIENT_AUTOSTART_ALLOWED_EVENTS = {
+     "attempt",
+     "armed",
+     "blocked",
+     "cta_click",
+     "cta_shown",
+     "error",
+     "gesture",
+     "max_attempts",
+     "recording_started",
+     "recording_stopped",
+     "rejected",
+ }
  
-     if not isinstance(payload, Mapping):
+ 
+ class TokenBucket:
+     """Simple in-memory token bucket."""
+ 
+     def __init__(self, capacity: int, refill_seconds: float) -> None:
+         self.capacity = capacity
+         self.tokens = float(capacity)
+         self.refill_seconds = refill_seconds
+         self.last_refill = time.monotonic()
+ 
+-    def consume(self, count: int, now: Optional[float] = None) -> bool:
+-        if now is None:
+-            now = time.monotonic()
++    def _peek_tokens(self, now: float) -> float:
++        tokens = self.tokens
+         elapsed = max(0.0, now - self.last_refill)
+-        if elapsed > 0:
++        if elapsed > 0 and self.refill_seconds > 0:
+             refill = (self.capacity / self.refill_seconds) * elapsed
+             if refill > 0:
+-                self.tokens = min(self.capacity, self.tokens + refill)
+-                self.last_refill = now
+-        if self.tokens < count:
++                tokens = min(self.capacity, tokens + refill)
++        return tokens
++
++    def consume(self, count: int, now: Optional[float] = None) -> bool:
++        if now is None:
++            now = time.monotonic()
++        available = self._peek_tokens(now)
++        if available < count:
+             return False
++        if now > self.last_refill:
++            self.tokens = available
++            self.last_refill = now
+         self.tokens -= count
+         return True
+ 
++    def retry_after(self, count: int = 1, now: Optional[float] = None) -> float:
++        """Return seconds until ``count`` tokens are available."""
++
++        if count <= 0:
++            return 0.0
++        if now is None:
++            now = time.monotonic()
++        available = self._peek_tokens(now)
++        if available >= count:
++            return 0.0
++        if self.capacity <= 0 or self.refill_seconds <= 0:
++            return math.inf
++        deficit = count - available
++        refill_rate = self.capacity / self.refill_seconds
++        if refill_rate <= 0:
++            return math.inf
++        return deficit / refill_rate
++
+ 
+ class _PartialCoalescer:
+     """Rate limits outbound ASR partial frames for a connection."""
+ 
+     def __init__(self, min_interval_ms: int = 50) -> None:
+         self.min_interval_ms = max(0, int(min_interval_ms))
+         self._last_emit_ms = 0
+         self._pending: Optional[Dict[str, Any]] = None
+         self._timer: Optional[asyncio.TimerHandle] = None
+ 
+     def offer(
+         self,
+         payload: Dict[str, Any],
+         *,
+         now_ms: int,
+         loop: asyncio.AbstractEventLoop,
+         emit: Callable[[Dict[str, Any]], None],
+     ) -> None:
+         if self.min_interval_ms <= 0:
+             self._pending = None
+             self._cancel_timer()
+             self._last_emit_ms = now_ms
+             emit(payload)
+             return
+ 
+@@ -1540,51 +1565,74 @@ class ChatV2Adapter:
+         return self._HandleResult(True)
+ 
+     async def _check_rate_limit(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> Optional[_HandleResult]:
+         if ctx.sid_bucket is None:
+             return None
+ 
+         now = time.monotonic()
+         if not ctx.sid_bucket.consume(1, now):
+             return await self._handle_rate_limit(ctx, send, "sid")
+ 
+         if ctx.ip_bucket is not None and not ctx.ip_bucket.consume(1, now):
+             return await self._handle_rate_limit(ctx, send, "ip")
+ 
          return None
  
-     # Speechmatics real-time events typically use "results" -> alternatives.
-     results = payload.get("results")
-     if isinstance(results, list):
-         for result in results:
-             if not isinstance(result, Mapping):
-                 continue
-             alternatives = result.get("alternatives")
-             if isinstance(alternatives, list):
-                 for alt in alternatives:
-                     if isinstance(alt, Mapping):
-                         text = alt.get("transcript") or alt.get("text")
-                         if isinstance(text, str) and text.strip():
-                             return text
-             transcript = result.get("transcript")
-             if isinstance(transcript, str) and transcript.strip():
-                 return transcript
+     async def _handle_rate_limit(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]], scope: str
+     ) -> "ChatV2Adapter._HandleResult":
+         await self._publish(
+             EVT_RATE_LIMIT,
+             ctx.sid,
+             {"scope": scope, "ip": ctx.ip},
+         )
+-        await self._send_error(send, ctx.sid, "rate_limited", "try later")
++
++        bucket: Optional[TokenBucket]
++        if scope == "sid":
++            bucket = ctx.sid_bucket
++            message = "Too many concurrent connections."
++        else:
++            bucket = ctx.ip_bucket
++            message = "Too many sessions from this network."
++
++        retry_in_ms: Optional[int] = None
++        if bucket is not None:
++            delay = bucket.retry_after(1)
++            if math.isfinite(delay) and delay >= 0:
++                retry_in_ms = int(math.ceil(delay * 1000.0))
++
++        await self._send_error(
++            send,
++            ctx.sid,
++            "rate_limited",
++            message,
++            message=message,
++            retryable=True,
++            retry_in_ms=retry_in_ms,
++        )
+         return self._HandleResult(False, RATE_LIMIT_CLOSE_CODE, "rate_limited")
  
-     # Some messages may embed text directly.
--    for key in ("transcript", "text", "partial", "message"):
-+    # IMPORTANT: Do NOT treat vendor "message" (e.g. "AddPartialTranscript") as transcript text.
-+    for key in ("transcript", "text", "partial"):
-         value = payload.get(key)
-         if isinstance(value, str) and value.strip():
-             return value
- 
-     return None
- 
- 
- def _invoke_callback(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-     try:
-         callback(*args, **kwargs)
-     except TypeError:
-         # Fallback to positional invocation with reduced arguments for legacy handlers.
-         if kwargs:
-             callback(*args)
-         else:
-             raise
- 
- 
- def _resolve_headers_arg() -> str:
-     try:
-         params = inspect.signature(websockets.connect).parameters
-     except (TypeError, ValueError):  # pragma: no cover - defensive
-         return "extra_headers"
-     if "additional_headers" in params:
-         return "additional_headers"
-@@ -427,50 +428,53 @@ class SpeechmaticsClient:
+     async def _ingest_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+         if seq < 0:
              return
  
-         if message_type and message_type not in {
-             "partial",
-             "partial_transcript",
-             "addpartialtranscript",
-             "final",
-             "transcript",
-             "addtranscript",
-             "endoftranscript",
-         }:
-             state.ready_event.set()
+         window = max(1, ctx.audio_window)
+         expected = ctx.audio_expected_seq
+ 
+         if seq < expected - window:
+             return
+         if seq < expected:
+             return
+         if seq in ctx.audio_buffer:
              return
  
-         # Fallback: treat informational payloads with a message or status as ready.
-         message_value = payload.get("message") if isinstance(payload, Mapping) else None
-         status_value = payload.get("status") if isinstance(payload, Mapping) else None
-         if isinstance(message_value, str) and message_value:
-             state.ready_event.set()
-         elif isinstance(status_value, str) and status_value:
-             state.ready_event.set()
+         ctx.audio_buffer[seq] = bytes(chunk)
+         if seq > ctx.audio_highest_seq:
+             ctx.audio_highest_seq = seq
  
-     def _emit_transcript_event(
-         self, state: _StreamState, text: str, is_final: bool
+         gap = self._compute_audio_gap(ctx)
+         if gap is not None:
+             gap_from, gap_to = gap
+             await self._publish(
+                 "EVT_AUDIO_GAP",
+@@ -1673,53 +1721,69 @@ class ChatV2Adapter:
+ 
+     async def _send_json(
+         self,
+         send: Callable[[dict], Awaitable[None]],
+         sid: str,
+         payload: Dict[str, Any],
      ) -> None:
-+        # Drop vendor sentinel names if they ever slip through
-+        if text.strip().lower() in ("addpartialtranscript", "addtranscript"):
-+            return
-         event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
+         text = json.dumps(payload, separators=(",", ":"))
+         await send({"type": "websocket.send", "text": text})
+         payload_bytes = text.encode("utf-8")
+         byte_count = len(payload_bytes)
          meta: Dict[str, Any] = {
-             "text": text,
-             "vendor": "speechmatics",
+             "byte_count": byte_count,
+             "frame_type": payload.get("type"),
+             "ws": {
+                 "dir": "out",
+                 "size": byte_count,
+             },
          }
-         if state.stream_id:
-             meta["stream_id"] = state.stream_id
-         event = {
-             "type": event_type,
-             "sid": state.sid,
-             "text": text,
-             "vendor": "speechmatics",
-             "meta": meta,
-             "source": "speechmatics_client",
-         }
+         preview = self._make_preview_from_bytes(payload_bytes)
+         if preview is not None:
+             meta["ws"]["preview"] = preview
+         await self._publish(EVT_WS_JSON_SEND, sid, meta, payload)
+ 
+     async def _send_error(
+-        self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
++        self,
++        send: Callable[[dict], Awaitable[None]],
++        sid: str,
++        code: str,
++        detail: str,
++        *,
++        message: Optional[str] = None,
++        retryable: Optional[bool] = None,
++        retry_in_ms: Optional[int] = None,
+     ) -> None:
+-        payload = {"type": "error", "code": code, "detail": detail}
++        payload: Dict[str, Any] = {"type": "error", "code": code}
++        if detail:
++            payload["detail"] = detail
++        if message:
++            payload["message"] = message
++        if retryable is not None:
++            payload["retryable"] = bool(retryable)
++        if retry_in_ms is not None:
++            payload["retry_in_ms"] = int(retry_in_ms)
+         await self._send_json(send, sid, payload)
+ 
+     def _start_server_keepalive(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         if self._ping_interval_ms <= 0 or ctx.server_keepalive_task is not None:
+             return
+ 
+         async def _run() -> None:
+             interval = self._ping_interval_ms / 1000.0
+             if interval <= 0:
+                 return
+             try:
+                 while True:
+                     await asyncio.sleep(interval)
+                     now_ms = int(time.time() * 1000)
+                     last_activity = ctx.last_client_activity_ms or 0
+                     last_pong = ctx.last_client_pong_ms or 0
+                     last_ping = ctx.last_server_ping_ms or 0
+                     timeout_threshold = now_ms - _HEARTBEAT_TIMEOUT_MS
+                     activity_missed = bool(last_activity) and last_activity <= timeout_threshold
+                     pong_missed = False
+                     if last_ping and last_ping <= timeout_threshold:
+                         pong_missed = last_pong == 0 or last_pong < last_ping
+                     if activity_missed or pong_missed:
+diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
+index bea24ddbced6f63e43e8e13d75c88b6bebe0549c..8bc6d8e77ceaeba835e8220b43d03b4ca6952097 100644
+--- a/tests/test_ws_json_contract.py
++++ b/tests/test_ws_json_contract.py
+@@ -1,38 +1,39 @@
+ """Tests for chat.v2 JSON contract handshakes and diagnostics."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import json
+ import unittest
+ import uuid
+ from typing import Any, Callable, Dict, List
+ 
+ from app.telemetry import bus
+ from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV, EVT_WS_JSON_SEND
+ from app.voice_v2.asr_runtime import ASRRuntime
+ from app.security.jwt_utils import mint_ws_token
++import app.ws.adapter as adapter_module
+ from app.ws.adapter import (
+     CHAT_V2_SUBPROTOCOL,
+     EVT_BACKPRESSURE_OFF,
+     EVT_BACKPRESSURE_ON,
+     QUEUE_OFF_THRESHOLD,
+     QUEUE_ON_THRESHOLD,
+     ChatV2Adapter,
+ )
+ 
+ 
+ class RecordingEngine:
+     """Minimal engine stub that records the opened session identifier."""
+ 
+     def __init__(self) -> None:
+         self.open_sid: str | None = None
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
+         self.open_sid = sid
+ 
+ 
+ class TestWebSocketJsonContract(unittest.TestCase):
+     """Integration tests covering JSON contract behavior."""
+ 
+     def setUp(self) -> None:
+         bus.reset()
+@@ -191,50 +192,84 @@ class TestWebSocketJsonContract(unittest.TestCase):
+         self.assertEqual(len(accepts), 1)
+ 
+         send_payloads = [
+             json.loads(msg["text"])
+             for msg in sent
+             if msg.get("type") == "websocket.send" and msg.get("text") is not None
+         ]
+         error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
+         self.assertEqual(error_payloads, [])
+ 
+         self.assertEqual(len(recorded), 1)
+         event = recorded[0]
+         self.assertEqual(event["type"], EVT_CLIENT_AUTOSTART)
+         event_meta = event.get("meta", {})
+         self.assertEqual(event_meta.get("event"), "blocked")
+         sanitized_meta = event_meta.get("meta", {})
+         self.assertIn("trigger", sanitized_meta)
+         self.assertEqual(sanitized_meta["trigger"], "boot")
+         self.assertIn("reason", sanitized_meta)
+         self.assertEqual(len(sanitized_meta["reason"]), 120)
+         self.assertEqual(sanitized_meta["attempt"], 3)
+         self.assertTrue(sanitized_meta["active"])
+         self.assertNotIn("ignore", sanitized_meta)
+         self.assertNotIn("empty", sanitized_meta)
+ 
++    def test_rate_limit_error_includes_retry_metadata(self) -> None:
++        original_capacity = adapter_module.RATE_LIMIT_CAPACITY
++        original_window = adapter_module.RATE_LIMIT_WINDOW_SECONDS
++        adapter_module.RATE_LIMIT_CAPACITY = 1
++        adapter_module.RATE_LIMIT_WINDOW_SECONDS = 1.0
++        try:
++            adapter = ChatV2Adapter()
++            frame = {"type": "client.log", "label": "probe"}
++            events = [
++                {"type": "websocket.connect"},
++                {"type": "websocket.receive", "text": json.dumps(frame)},
++                {"type": "websocket.receive", "text": json.dumps(frame)},
++                {"type": "websocket.disconnect", "code": 1000},
++            ]
++
++            sent = self._drive(adapter, events)
++        finally:
++            adapter_module.RATE_LIMIT_CAPACITY = original_capacity
++            adapter_module.RATE_LIMIT_WINDOW_SECONDS = original_window
++
++        error_payloads = [
++            json.loads(msg["text"])
++            for msg in sent
++            if msg.get("type") == "websocket.send" and msg.get("text") is not None
++        ]
++        rate_limited = [payload for payload in error_payloads if payload.get("code") == "rate_limited"]
++        self.assertEqual(len(rate_limited), 1, msg=f"unexpected error payloads: {error_payloads}")
++        payload = rate_limited[0]
++        self.assertEqual(payload.get("message"), "Too many concurrent connections.")
++        self.assertTrue(payload.get("retryable"))
++        retry_in_ms = payload.get("retry_in_ms")
++        self.assertIsInstance(retry_in_ms, int)
++        self.assertGreaterEqual(retry_in_ms, 500)
++
+     def test_send_json_publishes_frame_payload_and_asr_runtime_consumes(self) -> None:
+         adapter = ChatV2Adapter()
+         sid = "sid-send-json"
+         frame = {"type": "start_listening"}
+ 
+         recorded: List[dict] = []
+         token = bus.subscribe(EVT_WS_JSON_SEND, recorded.append)
          try:
-             self._bus.publish(event)
-         except Exception:
-             self._logger.exception(
-                 "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
-             )
-         else:
-             log_event = "evt=sm_final" if is_final else "evt=sm_partial"
-             self._logger.info("%s text_chars=%d", log_event, len(text))
+             sent: List[dict] = []
+ 
+             async def fake_send(message: dict) -> None:
+                 sent.append(message)
+ 
+             asyncio.run(adapter._send_json(fake_send, sid, frame))
+         finally:
+             bus.unsubscribe(token)
+ 
+         self.assertEqual(len(sent), 1)
+         self.assertEqual(len(recorded), 1)
+         event = recorded[0]
+         self.assertEqual(event.get("type"), EVT_WS_JSON_SEND)
+         self.assertEqual(event.get("sid"), sid)
+         self.assertEqual(event.get("payload"), frame)
+         self.assertEqual(event.get("frame"), frame)
  

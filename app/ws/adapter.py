@@ -142,19 +142,44 @@ class TokenBucket:
         self.refill_seconds = refill_seconds
         self.last_refill = time.monotonic()
 
+    def _peek_tokens(self, now: float) -> float:
+        tokens = self.tokens
+        elapsed = max(0.0, now - self.last_refill)
+        if elapsed > 0 and self.refill_seconds > 0:
+            refill = (self.capacity / self.refill_seconds) * elapsed
+            if refill > 0:
+                tokens = min(self.capacity, tokens + refill)
+        return tokens
+
     def consume(self, count: int, now: Optional[float] = None) -> bool:
         if now is None:
             now = time.monotonic()
-        elapsed = max(0.0, now - self.last_refill)
-        if elapsed > 0:
-            refill = (self.capacity / self.refill_seconds) * elapsed
-            if refill > 0:
-                self.tokens = min(self.capacity, self.tokens + refill)
-                self.last_refill = now
-        if self.tokens < count:
+        available = self._peek_tokens(now)
+        if available < count:
             return False
+        if now > self.last_refill:
+            self.tokens = available
+            self.last_refill = now
         self.tokens -= count
         return True
+
+    def retry_after(self, count: int = 1, now: Optional[float] = None) -> float:
+        """Return seconds until ``count`` tokens are available."""
+
+        if count <= 0:
+            return 0.0
+        if now is None:
+            now = time.monotonic()
+        available = self._peek_tokens(now)
+        if available >= count:
+            return 0.0
+        if self.capacity <= 0 or self.refill_seconds <= 0:
+            return math.inf
+        deficit = count - available
+        refill_rate = self.capacity / self.refill_seconds
+        if refill_rate <= 0:
+            return math.inf
+        return deficit / refill_rate
 
 
 class _PartialCoalescer:
@@ -1562,7 +1587,30 @@ class ChatV2Adapter:
             ctx.sid,
             {"scope": scope, "ip": ctx.ip},
         )
-        await self._send_error(send, ctx.sid, "rate_limited", "try later")
+
+        bucket: Optional[TokenBucket]
+        if scope == "sid":
+            bucket = ctx.sid_bucket
+            message = "Too many concurrent connections."
+        else:
+            bucket = ctx.ip_bucket
+            message = "Too many sessions from this network."
+
+        retry_in_ms: Optional[int] = None
+        if bucket is not None:
+            delay = bucket.retry_after(1)
+            if math.isfinite(delay) and delay >= 0:
+                retry_in_ms = int(math.ceil(delay * 1000.0))
+
+        await self._send_error(
+            send,
+            ctx.sid,
+            "rate_limited",
+            message,
+            message=message,
+            retryable=True,
+            retry_in_ms=retry_in_ms,
+        )
         return self._HandleResult(False, RATE_LIMIT_CLOSE_CODE, "rate_limited")
 
     async def _ingest_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
@@ -1695,9 +1743,25 @@ class ChatV2Adapter:
         await self._publish(EVT_WS_JSON_SEND, sid, meta, payload)
 
     async def _send_error(
-        self, send: Callable[[dict], Awaitable[None]], sid: str, code: str, detail: str
+        self,
+        send: Callable[[dict], Awaitable[None]],
+        sid: str,
+        code: str,
+        detail: str,
+        *,
+        message: Optional[str] = None,
+        retryable: Optional[bool] = None,
+        retry_in_ms: Optional[int] = None,
     ) -> None:
-        payload = {"type": "error", "code": code, "detail": detail}
+        payload: Dict[str, Any] = {"type": "error", "code": code}
+        if detail:
+            payload["detail"] = detail
+        if message:
+            payload["message"] = message
+        if retryable is not None:
+            payload["retryable"] = bool(retryable)
+        if retry_in_ms is not None:
+            payload["retry_in_ms"] = int(retry_in_ms)
         await self._send_json(send, sid, payload)
 
     def _start_server_keepalive(

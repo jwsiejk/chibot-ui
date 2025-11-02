@@ -11,6 +11,7 @@ from app.telemetry import bus
 from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV, EVT_WS_JSON_SEND
 from app.voice_v2.asr_runtime import ASRRuntime
 from app.security.jwt_utils import mint_ws_token
+import app.ws.adapter as adapter_module
 from app.ws.adapter import (
     CHAT_V2_SUBPROTOCOL,
     EVT_BACKPRESSURE_OFF,
@@ -212,6 +213,40 @@ class TestWebSocketJsonContract(unittest.TestCase):
         self.assertTrue(sanitized_meta["active"])
         self.assertNotIn("ignore", sanitized_meta)
         self.assertNotIn("empty", sanitized_meta)
+
+    def test_rate_limit_error_includes_retry_metadata(self) -> None:
+        original_capacity = adapter_module.RATE_LIMIT_CAPACITY
+        original_window = adapter_module.RATE_LIMIT_WINDOW_SECONDS
+        adapter_module.RATE_LIMIT_CAPACITY = 1
+        adapter_module.RATE_LIMIT_WINDOW_SECONDS = 1.0
+        try:
+            adapter = ChatV2Adapter()
+            frame = {"type": "client.log", "label": "probe"}
+            events = [
+                {"type": "websocket.connect"},
+                {"type": "websocket.receive", "text": json.dumps(frame)},
+                {"type": "websocket.receive", "text": json.dumps(frame)},
+                {"type": "websocket.disconnect", "code": 1000},
+            ]
+
+            sent = self._drive(adapter, events)
+        finally:
+            adapter_module.RATE_LIMIT_CAPACITY = original_capacity
+            adapter_module.RATE_LIMIT_WINDOW_SECONDS = original_window
+
+        error_payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
+        ]
+        rate_limited = [payload for payload in error_payloads if payload.get("code") == "rate_limited"]
+        self.assertEqual(len(rate_limited), 1, msg=f"unexpected error payloads: {error_payloads}")
+        payload = rate_limited[0]
+        self.assertEqual(payload.get("message"), "Too many concurrent connections.")
+        self.assertTrue(payload.get("retryable"))
+        retry_in_ms = payload.get("retry_in_ms")
+        self.assertIsInstance(retry_in_ms, int)
+        self.assertGreaterEqual(retry_in_ms, 500)
 
     def test_send_json_publishes_frame_payload_and_asr_runtime_consumes(self) -> None:
         adapter = ChatV2Adapter()
