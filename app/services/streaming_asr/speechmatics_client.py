@@ -142,6 +142,7 @@ class _StreamState:
     ready_error: Optional[str] = None
     ready_error_detail: Optional[str] = None
     vendor_notices: set[str] = field(default_factory=set)
+    end_of_stream_sent: bool = False
 
 
 class SpeechmaticsClient:
@@ -643,9 +644,7 @@ class SpeechmaticsClient:
 
     async def _shutdown(self, state: _StreamState) -> None:
         try:
-            # If you don’t track seq numbers yet, just close the socket cleanly:
-            await state.websocket.close()
-            # (Optional later: {"message":"EndOfStream","last_seq_no": N})
+            await self._send_end_of_stream(state)
         except Exception:
             self._logger.debug(
                 "evt=sm_stop_send_failed sid=%s stream_id=%s", state.sid, state.stream_id
@@ -653,9 +652,43 @@ class SpeechmaticsClient:
         await self._close_websocket(state)
         await self._finalize_close(state, None, None)
 
+    async def _send_end_of_stream(self, state: _StreamState) -> None:
+        if state.end_of_stream_sent or state.closed:
+            return
+
+        # Ensure the sender loop has an opportunity to flush pending audio prior to
+        # signalling the vendor that no more data will arrive.
+        sender_task = state.sender_task
+        if sender_task is not None and not sender_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(sender_task), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                self._logger.debug(
+                    "evt=sm_wait_sender_failed sid=%s stream_id=%s",
+                    state.sid,
+                    state.stream_id,
+                )
+
+        payload = json.dumps({"message": "EndOfStream"})
+        try:
+            await state.websocket.send(payload)
+        except websockets.ConnectionClosed:
+            pass
+        except Exception:
+            self._logger.debug(
+                "evt=sm_end_of_stream_send_failed sid=%s stream_id=%s",
+                state.sid,
+                state.stream_id,
+            )
+        finally:
+            state.end_of_stream_sent = True
+
     async def _close_websocket(self, state: _StreamState) -> None:
         try:
             await state.websocket.close()
+            await state.websocket.wait_closed()
         except Exception:
             self._logger.debug(
                 "evt=sm_ws_close_failed sid=%s stream_id=%s", state.sid, state.stream_id
