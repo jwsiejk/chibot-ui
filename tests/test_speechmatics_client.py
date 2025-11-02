@@ -1,6 +1,7 @@
 import unittest
 
 from app.services.streaming_asr.speechmatics_client import (
+    _coerce_transcript_text,
     _extract_text,
     _is_fatal_concurrency_notice,
 )
@@ -59,6 +60,25 @@ class TestSpeechmaticsExtractText(unittest.TestCase):
             "metadata": {"transcript": "flasharray"},
         }
         self.assertEqual(_extract_text(payload), "flasharray")
+
+    def test_coerce_transcript_text_handles_tokenized_results(self) -> None:
+        payload = {
+            "message": "AddTranscript",
+            "results": [
+                {
+                    "alternatives": [
+                        {
+                            "content": [
+                                {"type": "word", "text": "By"},
+                                {"type": "punctuation", "text": "."},
+                            ],
+                        }
+                    ]
+                }
+            ],
+        }
+
+        self.assertEqual(_coerce_transcript_text(payload), "By.")
 
 
 if __name__ == "__main__":

@@ -1,97 +1,26 @@
 diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 15bcc7159294428a8a24e7483014869702490df5..016eddd4554bd9ab80833c844c197dc78540546d 100644
+index 016eddd4554bd9ab80833c844c197dc78540546d..0afc2d581035832527668233098e76a8c2d0bc09 100644
 --- a/app/services/streaming_asr/speechmatics_client.py
 +++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -39,70 +39,108 @@ def _coerce_language(policy: Mapping[str, Any] | None) -> str:
-             lookup = lookup.get(key)
-         if isinstance(lookup, str) and lookup.strip():
-             return lookup.strip()
-     return "en"
+@@ -104,50 +104,92 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
+     if isinstance(alternatives, list):
+         for alt in alternatives:
+             if isinstance(alt, Mapping):
+                 text = _from_mapping(alt)
+                 if text:
+                     return text
  
- 
- def _now_ms() -> int:
-     return int(time.time() * 1000)
- 
- 
- def _latency_ms(state: "_StreamState", now_monotonic: float) -> int:
-     if state.first_audio_ts is not None:
-         baseline = state.first_audio_ts
-     else:
-         baseline = state.opened_monotonic
-     latency = int(max(0.0, (now_monotonic - baseline) * 1000))
-     return latency
- 
- 
- def _extract_text(payload: Mapping[str, Any]) -> str | None:
-     """Best-effort extraction of transcript text from a vendor payload."""
- 
-     if not isinstance(payload, Mapping):
-         return None
- 
-+    def _from_mapping(candidate: Mapping[str, Any]) -> str | None:
-+        for key in ("transcript", "text", "partial"):
-+            value = candidate.get(key)
-+            if isinstance(value, str) and value.strip():
-+                return value
-+
-+        # Speechmatics sometimes returns tokenized content lists.
-+        content = candidate.get("content") or candidate.get("tokens")
-+        if isinstance(content, list):
-+            pieces: list[str] = []
-+            for item in content:
-+                if isinstance(item, Mapping):
-+                    token = item.get("text") or item.get("value")
-+                    if isinstance(token, str):
-+                        pieces.append(token)
-+            combined = "".join(pieces).strip()
-+            if combined:
-+                return combined
-+
-+        return None
-+
-     # Speechmatics real-time events typically use "results" -> alternatives.
-     results = payload.get("results")
-     if isinstance(results, list):
-         for result in results:
-             if not isinstance(result, Mapping):
-                 continue
-             alternatives = result.get("alternatives")
-             if isinstance(alternatives, list):
-                 for alt in alternatives:
-                     if isinstance(alt, Mapping):
--                        text = alt.get("transcript") or alt.get("text")
--                        if isinstance(text, str) and text.strip():
-+                        text = _from_mapping(alt)
-+                        if text:
-                             return text
--            transcript = result.get("transcript")
--            if isinstance(transcript, str) and transcript.strip():
--                return transcript
-+            text = _from_mapping(result)
-+            if text:
-+                return text
-+
-+    # Some messages may embed text under "alternatives" directly.
-+    alternatives = payload.get("alternatives")
-+    if isinstance(alternatives, list):
-+        for alt in alternatives:
-+            if isinstance(alt, Mapping):
-+                text = _from_mapping(alt)
-+                if text:
-+                    return text
-+
-+    # Metadata blobs sometimes carry the transcript/partial text.
-+    metadata = payload.get("metadata")
-+    if isinstance(metadata, Mapping):
-+        text = _from_mapping(metadata)
-+        if text:
-+            return text
+     # Metadata blobs sometimes carry the transcript/partial text.
+     metadata = payload.get("metadata")
+     if isinstance(metadata, Mapping):
+         text = _from_mapping(metadata)
+         if text:
+             return text
  
      # Some messages may embed text directly.
      # IMPORTANT: Do NOT treat vendor "message" (e.g. "AddPartialTranscript") as transcript text.
--    for key in ("transcript", "text", "partial"):
-+    direct_keys = ("transcript", "text", "partial")
-+    for key in direct_keys:
+     direct_keys = ("transcript", "text", "partial")
+     for key in direct_keys:
          value = payload.get(key)
          if isinstance(value, str) and value.strip():
              return value
@@ -99,6 +28,48 @@ index 15bcc7159294428a8a24e7483014869702490df5..016eddd4554bd9ab80833c844c197dc7
      return None
  
  
++def _coerce_transcript_text(payload: Mapping[str, Any]) -> str:
++    """Normalize transcript text from vendor payloads.
++
++    Speechmatics transcript messages sometimes omit the top-level
++    ``transcript`` field and instead provide tokenized content inside
++    nested results.  Prior to this helper we attempted to read only the
++    explicit ``transcript`` fields which meant we silently discarded
++    perfectly valid finals that only contained token lists.  Falling back
++    to the general ``_extract_text`` logic ensures we preserve those
++    finals while keeping the existing fast-path for simple payloads.
++    """
++
++    text = ""
++    transcript = payload.get("transcript")
++    if isinstance(transcript, str):
++        text = transcript
++
++    if not text:
++        results = payload.get("results")
++        if isinstance(results, list) and results:
++            first_result = results[0] if isinstance(results[0], Mapping) else None
++            if isinstance(first_result, Mapping):
++                alternatives = first_result.get("alternatives")
++                if isinstance(alternatives, list) and alternatives:
++                    first_alt = alternatives[0] if isinstance(alternatives[0], Mapping) else None
++                    if isinstance(first_alt, Mapping):
++                        candidate = first_alt.get("transcript")
++                        if isinstance(candidate, str):
++                            text = candidate
++                if not text:
++                    candidate = first_result.get("transcript")
++                    if isinstance(candidate, str):
++                        text = candidate
++
++    if not text:
++        fallback = _extract_text(payload)
++        if isinstance(fallback, str):
++            text = fallback
++
++    return text
++
++
  def _invoke_callback(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
      try:
          callback(*args, **kwargs)
@@ -117,18 +88,97 @@ index 15bcc7159294428a8a24e7483014869702490df5..016eddd4554bd9ab80833c844c197dc7
          return "extra_headers"
      if "additional_headers" in params:
          return "additional_headers"
+     return "extra_headers"
+ 
+ 
+ _CONNECT_HEADERS_ARG = _resolve_headers_arg()
+ 
+ 
+ def _is_fatal_concurrency_notice(payload: Mapping[str, Any] | None) -> bool:
+@@ -415,70 +457,51 @@ class SpeechmaticsClient:
+             )
+             self._handle_error(state, "send_failed", str(exc))
+         finally:
+             await self._finalize_sender(state)
+ 
+     async def _receiver_loop(self, state: _StreamState) -> None:
+         websocket = state.websocket
+         try:
+             async for message in websocket:
+                 if isinstance(message, bytes):
+                     continue
+                 try:
+                     payload = json.loads(message)
+                 except Exception:
+                     self._logger.debug(
+                         "evt=sm_msg_parse_failed sid=%s stream_id=%s", state.sid, state.stream_id
+                     )
+                     continue
+ 
+                 if isinstance(payload, Mapping):
+                     message_name = payload.get("message")
+                 else:
+                     message_name = None
+ 
+                 if message_name == "AddTranscript":
+-                    transcript = payload.get("transcript")
+-                    text = transcript if isinstance(transcript, str) else ""
+-                    if not text:
+-                        results = payload.get("results")
+-                        if isinstance(results, list) and results:
+-                            first_result = results[0] if isinstance(results[0], Mapping) else None
+-                            if isinstance(first_result, Mapping):
+-                                alternatives = first_result.get("alternatives")
+-                                alt_text = ""
+-                                if isinstance(alternatives, list) and alternatives:
+-                                    first_alt = alternatives[0] if isinstance(alternatives[0], Mapping) else None
+-                                    if isinstance(first_alt, Mapping):
+-                                        candidate = first_alt.get("transcript")
+-                                        if isinstance(candidate, str):
+-                                            alt_text = candidate
+-                                if not alt_text:
+-                                    candidate = first_result.get("transcript")
+-                                    if isinstance(candidate, str):
+-                                        alt_text = candidate
+-                                text = alt_text or text
++                    text = _coerce_transcript_text(payload)
+ 
+                     if not text.strip():
+                         self._logger.debug(
+                             "evt=sm_empty_transcript_ignored"
+                         )
+                         continue
+ 
+                     type_field = payload.get("type")
+                     is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
+                     if isinstance(type_field, str) and type_field.lower() == "final":
+                         is_final = True
+ 
+                     self._emit_transcript_event(state, text, is_final)
+ 
+                     if is_final:
+                         self._handle_final(state, payload, text_override=text, emit_event=False)
+                     else:
+                         self._handle_partial(state, payload, text_override=text, emit_event=False)
+                     continue
+ 
+                 notice_type = ""
+                 if isinstance(payload, Mapping):
+                     raw_notice = payload.get("type") or payload.get("notice")
+                     if isinstance(raw_notice, str):
+                         notice_type = raw_notice.strip().lower()
 diff --git a/tests/test_speechmatics_client.py b/tests/test_speechmatics_client.py
-index bdd3a975579a5c736829f6cda2c97925dc2e1779..dd60ac9cece97c1f75da2f390ee8d51054a73020 100644
+index dd60ac9cece97c1f75da2f390ee8d51054a73020..0ed4f0056a10be40997055ba7d0991ed7dfdc254 100644
 --- a/tests/test_speechmatics_client.py
 +++ b/tests/test_speechmatics_client.py
-@@ -1,25 +1,65 @@
+@@ -1,28 +1,29 @@
  import unittest
  
--from app.services.streaming_asr.speechmatics_client import _is_fatal_concurrency_notice
-+from app.services.streaming_asr.speechmatics_client import (
-+    _extract_text,
-+    _is_fatal_concurrency_notice,
-+)
+ from app.services.streaming_asr.speechmatics_client import (
++    _coerce_transcript_text,
+     _extract_text,
+     _is_fatal_concurrency_notice,
+ )
  
  
  class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
@@ -149,42 +199,53 @@ index bdd3a975579a5c736829f6cda2c97925dc2e1779..dd60ac9cece97c1f75da2f390ee8d510
          self.assertTrue(_is_fatal_concurrency_notice(payload))
  
  
-+class TestSpeechmaticsExtractText(unittest.TestCase):
-+    def test_extracts_from_results_alternatives(self) -> None:
+ class TestSpeechmaticsExtractText(unittest.TestCase):
+     def test_extracts_from_results_alternatives(self) -> None:
+@@ -38,28 +39,47 @@ class TestSpeechmaticsExtractText(unittest.TestCase):
+                 }
+             ]
+         }
+         self.assertEqual(_extract_text(payload), "Hello there")
+ 
+     def test_extracts_from_metadata_tokens(self) -> None:
+         payload = {
+             "message": "AddPartialTranscript",
+             "metadata": {
+                 "content": [
+                     {"type": "word", "text": "Pure"},
+                     {"type": "word", "text": " "},
+                     {"type": "word", "text": "Storage"},
+                 ]
+             },
+         }
+         self.assertEqual(_extract_text(payload), "Pure Storage")
+ 
+     def test_extracts_from_metadata_transcript(self) -> None:
+         payload = {
+             "message": "AddTranscript",
+             "metadata": {"transcript": "flasharray"},
+         }
+         self.assertEqual(_extract_text(payload), "flasharray")
+ 
++    def test_coerce_transcript_text_handles_tokenized_results(self) -> None:
 +        payload = {
++            "message": "AddTranscript",
 +            "results": [
 +                {
 +                    "alternatives": [
 +                        {
-+                            "transcript": "Hello there",
-+                            "confidence": 0.92,
++                            "content": [
++                                {"type": "word", "text": "By"},
++                                {"type": "punctuation", "text": "."},
++                            ],
 +                        }
 +                    ]
 +                }
-+            ]
++            ],
 +        }
-+        self.assertEqual(_extract_text(payload), "Hello there")
 +
-+    def test_extracts_from_metadata_tokens(self) -> None:
-+        payload = {
-+            "message": "AddPartialTranscript",
-+            "metadata": {
-+                "content": [
-+                    {"type": "word", "text": "Pure"},
-+                    {"type": "word", "text": " "},
-+                    {"type": "word", "text": "Storage"},
-+                ]
-+            },
-+        }
-+        self.assertEqual(_extract_text(payload), "Pure Storage")
++        self.assertEqual(_coerce_transcript_text(payload), "By.")
 +
-+    def test_extracts_from_metadata_transcript(self) -> None:
-+        payload = {
-+            "message": "AddTranscript",
-+            "metadata": {"transcript": "flasharray"},
-+        }
-+        self.assertEqual(_extract_text(payload), "flasharray")
-+
-+
+ 
  if __name__ == "__main__":
      unittest.main()

@@ -126,6 +126,48 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _coerce_transcript_text(payload: Mapping[str, Any]) -> str:
+    """Normalize transcript text from vendor payloads.
+
+    Speechmatics transcript messages sometimes omit the top-level
+    ``transcript`` field and instead provide tokenized content inside
+    nested results.  Prior to this helper we attempted to read only the
+    explicit ``transcript`` fields which meant we silently discarded
+    perfectly valid finals that only contained token lists.  Falling back
+    to the general ``_extract_text`` logic ensures we preserve those
+    finals while keeping the existing fast-path for simple payloads.
+    """
+
+    text = ""
+    transcript = payload.get("transcript")
+    if isinstance(transcript, str):
+        text = transcript
+
+    if not text:
+        results = payload.get("results")
+        if isinstance(results, list) and results:
+            first_result = results[0] if isinstance(results[0], Mapping) else None
+            if isinstance(first_result, Mapping):
+                alternatives = first_result.get("alternatives")
+                if isinstance(alternatives, list) and alternatives:
+                    first_alt = alternatives[0] if isinstance(alternatives[0], Mapping) else None
+                    if isinstance(first_alt, Mapping):
+                        candidate = first_alt.get("transcript")
+                        if isinstance(candidate, str):
+                            text = candidate
+                if not text:
+                    candidate = first_result.get("transcript")
+                    if isinstance(candidate, str):
+                        text = candidate
+
+    if not text:
+        fallback = _extract_text(payload)
+        if isinstance(fallback, str):
+            text = fallback
+
+    return text
+
+
 def _invoke_callback(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
     try:
         callback(*args, **kwargs)
@@ -437,26 +479,7 @@ class SpeechmaticsClient:
                     message_name = None
 
                 if message_name == "AddTranscript":
-                    transcript = payload.get("transcript")
-                    text = transcript if isinstance(transcript, str) else ""
-                    if not text:
-                        results = payload.get("results")
-                        if isinstance(results, list) and results:
-                            first_result = results[0] if isinstance(results[0], Mapping) else None
-                            if isinstance(first_result, Mapping):
-                                alternatives = first_result.get("alternatives")
-                                alt_text = ""
-                                if isinstance(alternatives, list) and alternatives:
-                                    first_alt = alternatives[0] if isinstance(alternatives[0], Mapping) else None
-                                    if isinstance(first_alt, Mapping):
-                                        candidate = first_alt.get("transcript")
-                                        if isinstance(candidate, str):
-                                            alt_text = candidate
-                                if not alt_text:
-                                    candidate = first_result.get("transcript")
-                                    if isinstance(candidate, str):
-                                        alt_text = candidate
-                                text = alt_text or text
+                    text = _coerce_transcript_text(payload)
 
                     if not text.strip():
                         self._logger.debug(
