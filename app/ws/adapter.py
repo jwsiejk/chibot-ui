@@ -312,6 +312,9 @@ class AdapterContext:
     asr_unavailable_subscription_token: Optional[str] = None
     asr_partial_subscription_token: Optional[str] = None
     asr_final_subscription_token: Optional[str] = None
+    asr_recovering_until: float = 0.0
+    asr_recovering_reason: Optional[str] = None
+    asr_recovering_audio_logged: bool = False
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
     policy_snapshot: Optional[Dict[str, Any]] = None
@@ -1450,23 +1453,41 @@ class ChatV2Adapter:
             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
             return self._HandleResult(False, 1009, "frame_too_large")
 
+        now = time.monotonic()
         if not ctx.asr_ready:
-            if ALLOW_AUDIO_WITHOUT_ASR:
-                _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
+            grace_deadline = getattr(ctx, "asr_recovering_until", 0.0) or 0.0
+            if grace_deadline and now <= grace_deadline:
+                if not ctx.asr_recovering_audio_logged:
+                    remaining_ms = max(0, int((grace_deadline - now) * 1000.0))
+                    reason_label = ctx.asr_recovering_reason or "unspecified"
+                    _log.warning(
+                        "evt=asr_guard_grace sid=%s remaining_ms=%s reason=%s",
+                        ctx.sid,
+                        remaining_ms,
+                        reason_label,
+                    )
+                    ctx.asr_recovering_audio_logged = True
             else:
-                meta = {
-                    "byte_count": byte_count,
-                    "error": "audio_not_expected",
-                    "ws": {"dir": "in", "size": byte_count},
-                }
-                await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-                await self._send_error(
-                    send,
-                    ctx.sid,
-                    "audio_not_expected",
-                    "asr not ready",
-                )
-                return self._HandleResult(False, 1003, "audio_not_expected")
+                if grace_deadline:
+                    ctx.asr_recovering_until = 0.0
+                    ctx.asr_recovering_reason = None
+                    ctx.asr_recovering_audio_logged = False
+                if ALLOW_AUDIO_WITHOUT_ASR:
+                    _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
+                else:
+                    meta = {
+                        "byte_count": byte_count,
+                        "error": "audio_not_expected",
+                        "ws": {"dir": "in", "size": byte_count},
+                    }
+                    await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+                    await self._send_error(
+                        send,
+                        ctx.sid,
+                        "audio_not_expected",
+                        "asr not ready",
+                    )
+                    return self._HandleResult(False, 1003, "audio_not_expected")
 
         if not ctx.accepting_audio:
             ctx.audio_violation_count += 1
@@ -1939,8 +1960,26 @@ class ChatV2Adapter:
                 if isinstance(reason, str) and reason:
                     payload["reason"] = reason
                 details = event.get("details")
+                detail_text = ""
                 if details is not None:
-                    payload["details"] = details if isinstance(details, str) else str(details)
+                    detail_text = details if isinstance(details, str) else str(details)
+                    payload["details"] = detail_text
+                else:
+                    detail_text = ""
+                lower_reason = reason.lower() if isinstance(reason, str) else ""
+                lower_detail = detail_text.lower()
+                if (
+                    ctx.asr_vendor == "speechmatics"
+                    and lower_reason == "open_failed"
+                    and "concurrent_session" in lower_detail
+                ):
+                    ctx.asr_recovering_until = time.monotonic() + 3.0
+                    ctx.asr_recovering_reason = "concurrent_session"
+                    ctx.asr_recovering_audio_logged = False
+                else:
+                    ctx.asr_recovering_until = 0.0
+                    ctx.asr_recovering_reason = None
+                    ctx.asr_recovering_audio_logged = False
                 _enqueue(payload)
 
             try:
@@ -2380,6 +2419,9 @@ class ChatV2Adapter:
                 if ctx.asr_ready:
                     return
                 ctx.asr_ready = True
+                ctx.asr_recovering_until = 0.0
+                ctx.asr_recovering_reason = None
+                ctx.asr_recovering_audio_logged = False
                 frame: Dict[str, Any] = {"type": "asr.ready"}
                 vendor = event.get("vendor")
                 if isinstance(vendor, str) and vendor:
@@ -3081,6 +3123,9 @@ class ChatV2Adapter:
         if token:
             telemetry_bus.unsubscribe(token)
         ctx.asr_ready = False
+        ctx.asr_recovering_until = 0.0
+        ctx.asr_recovering_reason = None
+        ctx.asr_recovering_audio_logged = False
         ctx.await_user_after_mask = False
 
         open_token = ctx.asr_open_subscription_token
@@ -3563,6 +3608,9 @@ class ChatV2Adapter:
 
         now_ms = int(time.time() * 1000)
         ctx.asr_ready = True
+        ctx.asr_recovering_until = 0.0
+        ctx.asr_recovering_reason = None
+        ctx.asr_recovering_audio_logged = False
         ctx.ingress_packets = 0
         ctx.ingress_bytes = 0
         ctx.first_ingress_ms = None
