@@ -488,9 +488,20 @@ class SpeechmaticsClient:
                         continue
 
                     type_field = payload.get("type")
-                    is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
-                    if isinstance(type_field, str) and type_field.lower() == "final":
-                        is_final = True
+                    is_final = True
+                    if isinstance(type_field, str):
+                        normalized_type = type_field.strip().lower()
+                        if normalized_type == "partial":
+                            is_final = False
+                        elif normalized_type == "final":
+                            is_final = True
+                    if "is_final" in payload:
+                        is_final = bool(payload.get("is_final"))
+                    elif "final" in payload:
+                        # Some payloads use "final": 0/1 to indicate the status.
+                        final_flag = payload.get("final")
+                        if isinstance(final_flag, (bool, int)):
+                            is_final = bool(final_flag)
 
                     self._emit_transcript_event(state, text, is_final)
 
