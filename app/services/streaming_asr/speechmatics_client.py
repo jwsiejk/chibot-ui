@@ -79,7 +79,8 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
                 return transcript
 
     # Some messages may embed text directly.
-    for key in ("transcript", "text", "partial", "message"):
+    # IMPORTANT: Do NOT treat vendor "message" (e.g. "AddPartialTranscript") as transcript text.
+    for key in ("transcript", "text", "partial"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value
@@ -449,6 +450,9 @@ class SpeechmaticsClient:
     def _emit_transcript_event(
         self, state: _StreamState, text: str, is_final: bool
     ) -> None:
+        # Drop vendor sentinel names if they ever slip through
+        if text.strip().lower() in ("addpartialtranscript", "addtranscript"):
+            return
         event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
         meta: Dict[str, Any] = {
             "text": text,

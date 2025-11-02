@@ -1,62 +1,112 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 421c32204df34c0ba0a315e11aeb25f35463ba2a..3de4ddd9b2efe0ac4ccf277ba6317e305a928cc5 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -2640,50 +2640,57 @@ class ChatV2Adapter:
-                 try:
-                     await self._send_outbound_frame(ctx, send, payload)
-                 except asyncio.CancelledError:
-                     raise
-                 except ClientDisconnected:
-                     _log.info(
-                         "evt=ws_outbound_client_disconnect sid=%s phase=frame",
-                         ctx.sid,
-                     )
-                     break
-                 except Exception:  # pragma: no cover - defensive
-                     _log.exception("evt=ws_outbound_frame_failed sid=%s", ctx.sid)
-                 finally:
-                     queue.task_done()
-         except asyncio.CancelledError:
+diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
+index 2ebc171af1354c57d38adbeb8019a2725ceaa809..4e9e29e905fc08513dd1bede0bfe00ea5f5f20f4 100644
+--- a/app/services/streaming_asr/speechmatics_client.py
++++ b/app/services/streaming_asr/speechmatics_client.py
+@@ -57,51 +57,52 @@ def _latency_ms(state: "_StreamState", now_monotonic: float) -> int:
+ 
+ def _extract_text(payload: Mapping[str, Any]) -> str | None:
+     """Best-effort extraction of transcript text from a vendor payload."""
+ 
+     if not isinstance(payload, Mapping):
+         return None
+ 
+     # Speechmatics real-time events typically use "results" -> alternatives.
+     results = payload.get("results")
+     if isinstance(results, list):
+         for result in results:
+             if not isinstance(result, Mapping):
+                 continue
+             alternatives = result.get("alternatives")
+             if isinstance(alternatives, list):
+                 for alt in alternatives:
+                     if isinstance(alt, Mapping):
+                         text = alt.get("transcript") or alt.get("text")
+                         if isinstance(text, str) and text.strip():
+                             return text
+             transcript = result.get("transcript")
+             if isinstance(transcript, str) and transcript.strip():
+                 return transcript
+ 
+     # Some messages may embed text directly.
+-    for key in ("transcript", "text", "partial", "message"):
++    # IMPORTANT: Do NOT treat vendor "message" (e.g. "AddPartialTranscript") as transcript text.
++    for key in ("transcript", "text", "partial"):
+         value = payload.get(key)
+         if isinstance(value, str) and value.strip():
+             return value
+ 
+     return None
+ 
+ 
+ def _invoke_callback(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+     try:
+         callback(*args, **kwargs)
+     except TypeError:
+         # Fallback to positional invocation with reduced arguments for legacy handlers.
+         if kwargs:
+             callback(*args)
+         else:
              raise
-         finally:
-             ctx.outbox = None
  
-     async def _send_outbound_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         payload: Dict[str, Any],
+ 
+ def _resolve_headers_arg() -> str:
+     try:
+         params = inspect.signature(websockets.connect).parameters
+     except (TypeError, ValueError):  # pragma: no cover - defensive
+         return "extra_headers"
+     if "additional_headers" in params:
+         return "additional_headers"
+@@ -427,50 +428,53 @@ class SpeechmaticsClient:
+             return
+ 
+         if message_type and message_type not in {
+             "partial",
+             "partial_transcript",
+             "addpartialtranscript",
+             "final",
+             "transcript",
+             "addtranscript",
+             "endoftranscript",
+         }:
+             state.ready_event.set()
+             return
+ 
+         # Fallback: treat informational payloads with a message or status as ready.
+         message_value = payload.get("message") if isinstance(payload, Mapping) else None
+         status_value = payload.get("status") if isinstance(payload, Mapping) else None
+         if isinstance(message_value, str) and message_value:
+             state.ready_event.set()
+         elif isinstance(status_value, str) and status_value:
+             state.ready_event.set()
+ 
+     def _emit_transcript_event(
+         self, state: _StreamState, text: str, is_final: bool
      ) -> None:
-+        if (
-+            isinstance(payload, dict)
-+            and "message" in payload
-+            and isinstance(ctx.asr_vendor, str)
-+            and ctx.asr_vendor.lower() == "speechmatics"
-+        ):
++        # Drop vendor sentinel names if they ever slip through
++        if text.strip().lower() in ("addpartialtranscript", "addtranscript"):
 +            return
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
-             text = json.dumps(payload, separators=(",", ":"))
-             frame_type = payload.get("type")
-             if frame_type in {"asr.partial", "asr.final"}:
-                 vendor = payload.get("vendor")
-                 if isinstance(vendor, str) and vendor.lower() == "speechmatics":
-                     log_event = (
-                         "evt=asr_partial_sent"
-                         if frame_type == "asr.partial"
-                         else "evt=asr_final_sent"
-                     )
-                     text_value = payload.get("text")
-                     text_len = len(text_value) if isinstance(text_value, str) else 0
-                     _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
-             await send({"type": "websocket.send", "text": text})
+         event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
+         meta: Dict[str, Any] = {
+             "text": text,
+             "vendor": "speechmatics",
+         }
+         if state.stream_id:
+             meta["stream_id"] = state.stream_id
+         event = {
+             "type": event_type,
+             "sid": state.sid,
+             "text": text,
+             "vendor": "speechmatics",
+             "meta": meta,
+             "source": "speechmatics_client",
+         }
+         try:
+             self._bus.publish(event)
+         except Exception:
+             self._logger.exception(
+                 "evt=sm_bus_publish_failed sid=%s event=%s", state.sid, event_type
+             )
+         else:
+             log_event = "evt=sm_final" if is_final else "evt=sm_partial"
+             self._logger.info("%s text_chars=%d", log_event, len(text))
  
-     async def _send_audio_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         chunk: bytes,
-     ) -> None:
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
