@@ -1,408 +1,232 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 4e9e29e905fc08513dd1bede0bfe00ea5f5f20f4..70d09f26254cf0d43e4aa10b94f018f401913825 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -132,70 +132,107 @@ class _StreamState:
-     receiver_task: Optional[asyncio.Task[None]] = None
-     closing: bool = False
-     closed: bool = False
-     partial_count: int = 0
-     final_count: int = 0
-     bytes_sent: int = 0
-     first_audio_ts: float | None = None
-     last_audio_ts: float | None = None
-     last_partial_log: float = 0.0
-     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
-     ready_error: Optional[str] = None
-     ready_error_detail: Optional[str] = None
-     vendor_notices: set[str] = field(default_factory=set)
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 7d6ca371e487ad1e0270ee128af59d0408e2dbd4..fbcd01cbb37139bb19f54e41886a62c228457073 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -72,50 +72,59 @@ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
  
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
  
- class SpeechmaticsClient:
-     """Client wrapper responsible for Speechmatics realtime streams."""
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
  
-     def __init__(self, api_key: str, url: str, bus: Any, logger: logging.Logger) -> None:
-         self._api_key = api_key
-         self._url = url
-         self._bus = bus
-         self._logger = logger or logging.getLogger(__name__)
-         self._streams: Dict[str, _StreamState] = {}
+ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+ _MIC_OPEN_TIMEOUT_SECONDS = 2.5
  
-+    async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
-+        if not self._streams:
-+            return
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "asr.unavailable",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+     "hud.nudge",
+ }
+ 
++_RATE_LIMIT_EXEMPT_TYPES = {
++    "client.autostart",
++    "client.banner",
++    "client.diag",
++    "client.log",
++    "client.ping",
++    "client.telemetry",
++}
 +
-+        deadline = time.monotonic() + max(0.0, timeout)
-+        while self._streams:
-+            active_sids = [sid for sid in self._streams if sid != new_sid]
-+            if not active_sids:
-+                break
-+
-+            for existing_sid in active_sids:
-+                state = self._streams.get(existing_sid)
-+                if state is None:
-+                    continue
-+                if not state.closing:
-+                    self._logger.warning(
-+                        "evt=sm_concurrency_guard closing_sid=%s new_sid=%s",
-+                        existing_sid,
-+                        new_sid,
-+                    )
-+                    state.closing = True
-+                    try:
-+                        state.audio_queue.put_nowait(_AUDIO_SENTINEL)
-+                    except Exception:
-+                        pass
-+                    state.loop.create_task(self._shutdown(state))
-+
-+            if not self._streams:
-+                break
-+
-+            if time.monotonic() >= deadline:
-+                raise RuntimeError("speechmatics_concurrency_guard_timeout")
-+
-+            await asyncio.sleep(0.05)
-+
-     async def open_stream(
-         self,
-         sid: str,
-         on_partial: Callable[[str, Dict[str, object]], None],
-         on_final: Callable[[str, Dict[str, object]], None],
-         on_error: Callable[..., None],
-         *,
-         stream_id: str,
-         on_close: Optional[Callable[[int | None, str | None], None]] = None,
-         encoding: str = "linear16",
-         sample_rate: int = 16000,
-         policy: Mapping[str, Any] | None = None,
-     ) -> str:
-         if not isinstance(sid, str) or not sid:
-             raise ValueError("sid must be a non-empty string")
-         if not isinstance(stream_id, str) or not stream_id:
-             raise ValueError("stream_id must be a non-empty string")
-         if sid in self._streams:
-             raise RuntimeError(f"stream for sid {sid!r} already exists")
+ _OUTBOX_MAXSIZE = 256
  
-+        await self._await_capacity(new_sid=sid)
-+
-         language = _coerce_language(policy)
+ _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
  
-         headers = {"Authorization": f"Bearer {self._api_key}"}
-         connect_kwargs = {
-             _CONNECT_HEADERS_ARG: headers,
-             "max_size": None,
-             "ping_interval": 20,
-             "ping_timeout": 10,
-         }
-         try:
-             websocket = await websockets.connect(self._url, **connect_kwargs)
-         except Exception as exc:
-             self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
-             raise
+ _log = logging.getLogger(__name__)
  
-         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
+     "client.diag",
+     "client.log",
+     "client.autostart",
+     "client.telemetry",
+     "client.banner",
+     "asr.rearm.request",
+ }
  
-         start_payload = {
-             "message": "StartRecognition",
-             "transcription_config": {
-                 "language": language,
-                 "enable_partials": True,
-             },
-             "audio_format": {
-                 "type": "raw",
-@@ -355,50 +392,66 @@ class SpeechmaticsClient:
-                                 if not alt_text:
-                                     candidate = first_result.get("transcript")
-                                     if isinstance(candidate, str):
-                                         alt_text = candidate
-                                 text = alt_text or text
+ _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
+     "EVT_RECORDER_STARTED",
+     "EVT_AUDIO_CHUNK_SENT_CLIENT",
+ }
  
-                     if not text.strip():
-                         self._logger.debug(
-                             "evt=sm_empty_transcript_ignored"
-                         )
-                         continue
- 
-                     type_field = payload.get("type")
-                     is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
-                     if isinstance(type_field, str) and type_field.lower() == "final":
-                         is_final = True
- 
-                     self._emit_transcript_event(state, text, is_final)
- 
-                     if is_final:
-                         self._handle_final(state, payload, text_override=text, emit_event=False)
-                     else:
-                         self._handle_partial(state, payload, text_override=text, emit_event=False)
-                     continue
- 
-+                notice_type = ""
-+                if isinstance(payload, Mapping):
-+                    raw_notice = payload.get("type") or payload.get("notice")
-+                    if isinstance(raw_notice, str):
-+                        notice_type = raw_notice.strip().lower()
-+
-+                if notice_type.startswith("concurrent_session"):
-+                    self._logger.error(
-+                        "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
-+                        state.sid,
-+                        state.stream_id,
-+                        notice_type,
-+                    )
-+                    self._handle_error(state, "concurrent_session", notice_type)
-+                    continue
-+
-                 if isinstance(message_name, str) and message_name in {
-                     "Info",
-                     "RecognitionStarted",
-                     "AudioAdded",
-                 }:
-                     if message_name not in state.vendor_notices:
-                         self._logger.info("evt=sm_notice message=%s", message_name.lower())
-                         state.vendor_notices.add(message_name)
-                     # Treat vendor notices as sufficient to consider the stream ready so
-                     # that the sender loop can proceed with audio transmission.
-                     self._mark_stream_ready(state, payload)
-                     continue
- 
-                 self._handle_payload(state, payload)
-         except asyncio.CancelledError:
-             raise
-         except websockets.ConnectionClosedOK as exc:
-             await self._finalize_close(state, exc.code, exc.reason)
-         except websockets.ConnectionClosedError as exc:
-             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
-             await self._finalize_close(state, exc.code, exc.reason)
-         except Exception as exc:
-             self._logger.exception(
-                 "evt=sm_recv_failed sid=%s stream_id=%s err=%s",
-                 state.sid,
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index fec9f2b9d0fc8619572ec97cb801ee4f7f733141..c12be64f78f4706e2c2bd1351f4e9e3c9264ef57 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -329,56 +329,55 @@ class ASRRuntime:
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.probe_active = False
-         state.probe_target_samples = 0
-         state.probe_samples_collected = 0
-         state.probe_sum_squares = 0.0
-         state.probe_peak = 0.0
-         state.utterance_active = False
-         self._cancel_commit_timer(state)
-         self._apply_commit_policy(state)
- 
-     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
--            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
--        elif (
--            self._vendor == "speechmatics"
--            and state.input_desc.get("codec") != "pcm_s16le"
--        ):
-+
-+        if self._vendor == "speechmatics":
-             state.input_desc = _pcm_input_descriptor()
-+        elif not state.input_desc:
-+            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
- 
-         if not state.listening:
-             return
- 
-         if not state.utterance_active:
-             state.utterance_active = True
-             self._apply_commit_policy(state)
-             self._start_commit_timer(sid, state)
- 
-         state.unavailable_emitted = False
- 
-         now_monotonic = time.monotonic()
-         state.last_audio_ts = now_monotonic
-         now_ms = int(time.time() * 1000)
-         state.last_audio_ts_ms = now_ms
-         if state.ready_watchdog is not None and state.ready_armed_at:
-             self._cancel_ready_watchdog(state)
-         chunk_len = len(data)
- 
-         input_desc = state.input_desc or {}
-         if not isinstance(input_desc, Mapping):
-             input_desc = {}
-         expected_codec = str(input_desc.get("codec") or "").strip().lower()
-         chunk_is_webm = data.startswith(_EBML_MAGIC)
- 
-@@ -640,64 +639,83 @@ class ASRRuntime:
-             return
-         if not meta.get("commit"):
-             return
-         self._apply_commit_policy(state)
-         if not state.commit_on_vad_silence:
-             return
-         reason_val = meta.get("reason")
-         reason = reason_val if isinstance(reason_val, str) and reason_val else "vad_silence"
-         _log.info(
-             "evt=asr_commit_trigger sid=%s vendor=%s source=client reason=%s",
-             sid,
-             self._vendor,
-             reason,
-         )
-         self.commit(sid, reason=reason)
- 
-     def _on_start_listening_frame(self, sid: str) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-+        if self._vendor == "speechmatics":
-+            # Speechmatics strictly requires 16 kHz PCM input.
-+            state.input_desc = _pcm_input_descriptor()
-+
-+        task = state.stream_open_task
-+        if task is not None and not task.done():
-+            task.cancel()
-+        state.stream_open_task = None
-+
-+        if state.stream_open:
-+            try:
-+                self._client.close_stream(sid)
-+            except Exception:  # pragma: no cover - defensive
-+                _log.exception("evt=asr_stream_close_failed sid=%s", sid)
-+            finally:
-+                self._finalize_rms_probe(sid, state)
-+            state.stream_open = False
-+            state.stream_id = None
-+
-         state.listening = True
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.pending.clear()
-         state.buffered_bytes = 0
--        state.prearm_requested = True
-+        state.prearm_requested = self._vendor != "speechmatics"
-         state.utterance_active = False
-         self._cancel_commit_timer(state)
-         self._apply_commit_policy(state)
-         self._ensure_stream(sid, state)
- 
-     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             return
- 
-         state.listening = False
-         state.prearm_requested = False
-         state.pending.clear()
-         state.buffered_bytes = 0
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-@@ -832,73 +850,73 @@ class ASRRuntime:
-             log_template += " e2e_latency_ms=%d"
-             log_args.append(int(e2e_latency))
-         msg = log_template % tuple(log_args)
-         _log.info(msg)
-         self._emit_log(
+ _CLIENT_AUTOSTART_ALLOWED_EVENTS = {
+@@ -902,54 +911,50 @@ class ChatV2Adapter:
+     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
+         detail = "use chat.v2"
+         body = json.dumps(
              {
-                 "type": "EVT_LOG",
-                 "logger": "app.voice_v2.asr_runtime",
-                 "level": "INFO",
-                 "sid": state.sid,
-                 "stream_id": stream_id,
-                 "req_id": req_id,
-                 "msg": msg,
+                 "type": "error",
+                 "code": "bad_subprotocol",
+                 "detail": detail,
              }
-         )
+         ).encode("utf-8")
+         headers = [
+             (b"content-type", b"application/json"),
+             (b"content-length", str(len(body)).encode("ascii")),
+         ]
+         await send({"type": "websocket.http.response.start", "status": 426, "headers": headers})
+         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
  
-     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
-         loop = self._ensure_loop()
-         if loop is None:
-             _log.warning("evt=asr_no_loop sid=%s", sid)
-             return
-         if state.stream_open:
-             return
-         if not state.pending and not state.prearm_requested:
-             return
-+        if self._vendor == "speechmatics" and not state.pending:
-+            return
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             return
+     @dataclass
+     class _HandleResult:
+         should_continue: bool
+         close_code: Optional[int] = None
+         close_reason: Optional[str] = None
  
-         async def _open() -> None:
-             if state.stream_id is None:
-                 state.stream_id = self._generate_stream_id()
-             stream_id = state.stream_id
-             state.last_stream_id = stream_id
-             state.close_reason = None
-             state.prearm_requested = False
-             try:
-                 policy_snapshot = None
-                 try:
-                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
-                 except Exception:  # pragma: no cover - defensive
-                     policy_snapshot = None
--                input_desc = self._input_descriptor_from_policy(policy_snapshot)
--                if (
--                    self._vendor == "speechmatics"
--                    and input_desc.get("codec") != "pcm_s16le"
--                ):
-+                if self._vendor == "speechmatics":
-                     input_desc = _pcm_input_descriptor()
-+                else:
-+                    input_desc = self._input_descriptor_from_policy(policy_snapshot)
-                 state.input_desc = input_desc
-                 model_name = None
-                 if isinstance(policy_snapshot, Mapping):
-                     candidate = policy_snapshot.get("model")
-                     if isinstance(candidate, str) and candidate:
-                         model_name = candidate
-                     else:
-                         interaction = policy_snapshot.get("interaction")
-                         if isinstance(interaction, Mapping):
-                             maybe_model = interaction.get("model")
-                             if isinstance(maybe_model, str) and maybe_model:
-                                 model_name = maybe_model
-                 else:
-                     candidate_model = getattr(policy_snapshot, "model", None)
-                     if isinstance(candidate_model, str) and candidate_model:
-                         model_name = candidate_model
-                 state.model = model_name if isinstance(model_name, str) and model_name else None
-                 _log.info(
-                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
-                     sid,
-                     self._vendor,
-                 )
-                 open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
-                 qs = await asyncio.wait_for(
-                     self._client.open_stream(
+     async def _handle_text(
+         self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+-        limited = await self._check_rate_limit(ctx, send)
+-        if limited is not None:
+-            return limited
+-
+         try:
+             payload_bytes = data.encode("utf-8")
+             byte_count = len(payload_bytes)
+         except UnicodeEncodeError:
+             sanitized = data.encode("utf-8", "replace")
+             meta = {
+                 "byte_count": len(sanitized),
+                 "error": "bad_utf8",
+                 "frame_type": None,
+                 "ws": {
+                     "dir": "in",
+                     "size": len(sanitized),
+                     "preview": self._make_preview_from_bytes(sanitized),
+                 },
+             }
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "bad_utf8", "Text frame must be UTF-8 encoded JSON")
+             return self._HandleResult(True)
+ 
+         meta: Dict[str, Any] = {
+             "byte_count": byte_count,
+             "frame_type": None,
+             "ws": {
+                 "dir": "in",
+                 "size": byte_count,
+@@ -974,50 +979,55 @@ class ChatV2Adapter:
+             meta["error"] = "bad_json"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
+             return self._HandleResult(True)
+ 
+         if not isinstance(frame, dict):
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
+             return self._HandleResult(True)
+ 
+         frame_payload = frame
+ 
+         raw_type = frame.get("type")
+         if not isinstance(raw_type, str):
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
+             return self._HandleResult(True)
+ 
+         frame_type = raw_type
+         meta["frame_type"] = frame_type
+         now_ms = int(time.time() * 1000)
+         ctx.last_client_activity_ms = now_ms
+ 
++        if frame_type not in _RATE_LIMIT_EXEMPT_TYPES:
++            limited = await self._check_rate_limit(ctx, send)
++            if limited is not None:
++                return limited
++
+         if frame_type == "client.ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 client_ts = frame.get("ts")
+                 payload = {"type": "server.pong", "ts": now_ms}
+                 if isinstance(client_ts, int):
+                     payload["echo"] = client_ts
+                 await self._send_json(send, ctx.sid, payload)
+             return self._HandleResult(True)
+ 
+         if frame_type == "client.pong":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             ctx.last_client_pong_ms = now_ms
+             return self._HandleResult(True)
+ 
+         if frame_type == "ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 reply_ts = frame.get("t")
+                 if not isinstance(reply_ts, int):
+                     reply_ts = now_ms
+                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
+             return self._HandleResult(True)
+diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
+index 8bc6d8e77ceaeba835e8220b43d03b4ca6952097..c8338eddc866296406ad65c02ca15bf6115c7bd4 100644
+--- a/tests/test_ws_json_contract.py
++++ b/tests/test_ws_json_contract.py
+@@ -199,51 +199,51 @@ class TestWebSocketJsonContract(unittest.TestCase):
+         error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
+         self.assertEqual(error_payloads, [])
+ 
+         self.assertEqual(len(recorded), 1)
+         event = recorded[0]
+         self.assertEqual(event["type"], EVT_CLIENT_AUTOSTART)
+         event_meta = event.get("meta", {})
+         self.assertEqual(event_meta.get("event"), "blocked")
+         sanitized_meta = event_meta.get("meta", {})
+         self.assertIn("trigger", sanitized_meta)
+         self.assertEqual(sanitized_meta["trigger"], "boot")
+         self.assertIn("reason", sanitized_meta)
+         self.assertEqual(len(sanitized_meta["reason"]), 120)
+         self.assertEqual(sanitized_meta["attempt"], 3)
+         self.assertTrue(sanitized_meta["active"])
+         self.assertNotIn("ignore", sanitized_meta)
+         self.assertNotIn("empty", sanitized_meta)
+ 
+     def test_rate_limit_error_includes_retry_metadata(self) -> None:
+         original_capacity = adapter_module.RATE_LIMIT_CAPACITY
+         original_window = adapter_module.RATE_LIMIT_WINDOW_SECONDS
+         adapter_module.RATE_LIMIT_CAPACITY = 1
+         adapter_module.RATE_LIMIT_WINDOW_SECONDS = 1.0
+         try:
+             adapter = ChatV2Adapter()
+-            frame = {"type": "client.log", "label": "probe"}
++            frame = {"type": "chat.user", "text": "probe"}
+             events = [
+                 {"type": "websocket.connect"},
+                 {"type": "websocket.receive", "text": json.dumps(frame)},
+                 {"type": "websocket.receive", "text": json.dumps(frame)},
+                 {"type": "websocket.disconnect", "code": 1000},
+             ]
+ 
+             sent = self._drive(adapter, events)
+         finally:
+             adapter_module.RATE_LIMIT_CAPACITY = original_capacity
+             adapter_module.RATE_LIMIT_WINDOW_SECONDS = original_window
+ 
+         error_payloads = [
+             json.loads(msg["text"])
+             for msg in sent
+             if msg.get("type") == "websocket.send" and msg.get("text") is not None
+         ]
+         rate_limited = [payload for payload in error_payloads if payload.get("code") == "rate_limited"]
+         self.assertEqual(len(rate_limited), 1, msg=f"unexpected error payloads: {error_payloads}")
+         payload = rate_limited[0]
+         self.assertEqual(payload.get("message"), "Too many concurrent connections.")
+         self.assertTrue(payload.get("retryable"))
+         retry_in_ms = payload.get("retry_in_ms")
+         self.assertIsInstance(retry_in_ms, int)
+         self.assertGreaterEqual(retry_in_ms, 500)

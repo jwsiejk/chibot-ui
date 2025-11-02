@@ -94,6 +94,15 @@ _OUTBOUND_ALLOWED_TYPES = {
     "hud.nudge",
 }
 
+_RATE_LIMIT_EXEMPT_TYPES = {
+    "client.autostart",
+    "client.banner",
+    "client.diag",
+    "client.log",
+    "client.ping",
+    "client.telemetry",
+}
+
 _OUTBOX_MAXSIZE = 256
 
 _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
@@ -924,10 +933,6 @@ class ChatV2Adapter:
     async def _handle_text(
         self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
     ) -> _HandleResult:
-        limited = await self._check_rate_limit(ctx, send)
-        if limited is not None:
-            return limited
-
         try:
             payload_bytes = data.encode("utf-8")
             byte_count = len(payload_bytes)
@@ -995,6 +1000,11 @@ class ChatV2Adapter:
         meta["frame_type"] = frame_type
         now_ms = int(time.time() * 1000)
         ctx.last_client_activity_ms = now_ms
+
+        if frame_type not in _RATE_LIMIT_EXEMPT_TYPES:
+            limited = await self._check_rate_limit(ctx, send)
+            if limited is not None:
+                return limited
 
         if frame_type == "client.ping":
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)

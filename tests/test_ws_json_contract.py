@@ -221,7 +221,7 @@ class TestWebSocketJsonContract(unittest.TestCase):
         adapter_module.RATE_LIMIT_WINDOW_SECONDS = 1.0
         try:
             adapter = ChatV2Adapter()
-            frame = {"type": "client.log", "label": "probe"}
+            frame = {"type": "chat.user", "text": "probe"}
             events = [
                 {"type": "websocket.connect"},
                 {"type": "websocket.receive", "text": json.dumps(frame)},
