@@ -1,124 +1,196 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 383f7991da8a8488beaac4d201224922849fb33f..715af92f6687d060b1f63bf2a055c3fa1ab22211 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -51,51 +51,53 @@ def _latency_ms(state: "_StreamState", now_monotonic: float) -> int:
-         baseline = state.first_audio_ts
-     else:
-         baseline = state.opened_monotonic
-     latency = int(max(0.0, (now_monotonic - baseline) * 1000))
-     return latency
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 82ecead2e88b6e432ed3ca206b8a3bdf58b8185b..0494c36b596ef061f8d022c72da3e64ac398f6e0 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1883,55 +1883,70 @@ import { WakeWord } from "./wake_word.js";
+       applyPolicySnapshotFromSource(frame.policy, 'info');
+     }
+     logStage('client.ws', { outcome: 'auth_ok' });
+     flushClientBannerQueue();
+   }
  
+   function handlePongFrame(frame) {
+     const now = Date.now();
+     let reference = null;
+     if (frame && typeof frame.echo === "number") {
+       reference = frame.echo;
+     } else if (frame && typeof frame.t === "number") {
+       reference = frame.t;
+     } else if (typeof lastPingAt === "number") {
+       reference = lastPingAt;
+     }
+     let rtt = null;
+     if (typeof reference === "number") {
+       const latency = Math.max(0, now - reference);
+       updateState({ latencyMs: latency });
+       rtt = latency;
+     }
+     logStage('client.ws', { outcome: 'pong', rtt_ms: rtt });
+   }
  
- def _extract_text(payload: Mapping[str, Any]) -> str | None:
-     """Best-effort extraction of transcript text from a vendor payload."""
- 
-     if not isinstance(payload, Mapping):
-         return None
- 
-     def _from_mapping(candidate: Mapping[str, Any]) -> str | None:
-         for key in ("transcript", "text", "partial"):
-             value = candidate.get(key)
-             if isinstance(value, str) and value.strip():
-                 return value
- 
-         # Speechmatics sometimes returns tokenized content lists.
-         content = candidate.get("content") or candidate.get("tokens")
-         if isinstance(content, list):
-             pieces: list[str] = []
-             for item in content:
-                 if isinstance(item, Mapping):
--                    token = item.get("text") or item.get("value")
-+                    token = item.get("value")
-+                    if not isinstance(token, str) or not token.strip():
-+                        token = item.get("text")
-                     if isinstance(token, str):
-                         pieces.append(token)
-             combined = "".join(pieces).strip()
-             if combined:
-                 return combined
- 
-         return None
- 
-     # Speechmatics real-time events typically use "results" -> alternatives.
-     results = payload.get("results")
-     if isinstance(results, list):
-         for result in results:
-             if not isinstance(result, Mapping):
-                 continue
-             alternatives = result.get("alternatives")
-             if isinstance(alternatives, list):
-                 for alt in alternatives:
-                     if isinstance(alt, Mapping):
-                         text = _from_mapping(alt)
-                         if text:
-                             return text
-             text = _from_mapping(result)
-             if text:
-                 return text
- 
-diff --git a/tests/test_speechmatics_client.py b/tests/test_speechmatics_client.py
-index 0ed4f0056a10be40997055ba7d0991ed7dfdc254..cd9887f5af0fbe523e230ef7fb6d65efaaff5010 100644
---- a/tests/test_speechmatics_client.py
-+++ b/tests/test_speechmatics_client.py
-@@ -39,47 +39,60 @@ class TestSpeechmaticsExtractText(unittest.TestCase):
-                 }
-             ]
-         }
-         self.assertEqual(_extract_text(payload), "Hello there")
- 
-     def test_extracts_from_metadata_tokens(self) -> None:
-         payload = {
-             "message": "AddPartialTranscript",
-             "metadata": {
-                 "content": [
-                     {"type": "word", "text": "Pure"},
-                     {"type": "word", "text": " "},
-                     {"type": "word", "text": "Storage"},
-                 ]
-             },
-         }
-         self.assertEqual(_extract_text(payload), "Pure Storage")
- 
-     def test_extracts_from_metadata_transcript(self) -> None:
-         payload = {
-             "message": "AddTranscript",
-             "metadata": {"transcript": "flasharray"},
-         }
-         self.assertEqual(_extract_text(payload), "flasharray")
- 
-+    def test_token_value_preferred_over_text(self) -> None:
-+        payload = {
-+            "message": "AddPartialTranscript",
-+            "metadata": {
-+                "content": [
-+                    {"type": "word", "text": "Hello", "value": "Hello"},
-+                    {"type": "punctuation", "text": "Slash", "value": "/"},
-+                    {"type": "word", "text": "Pure", "value": "Pure"},
-+                ]
-+            },
-+        }
-+        self.assertEqual(_extract_text(payload), "Hello/Pure")
++  function transcriptFrameAllowed(frame) {
++    const type = typeof frame?.type === "string" ? frame.type : "";
++    const role = typeof frame?.role === "string" ? frame.role : "";
++    const canonicalType = type === "message" || type === "chat.message";
++    const canonicalRole = role === "user" || role === "assistant";
++    const allow = canonicalType && canonicalRole;
++    try {
++      console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
++    } catch {}
++    return allow;
++  }
 +
-     def test_coerce_transcript_text_handles_tokenized_results(self) -> None:
-         payload = {
-             "message": "AddTranscript",
-             "results": [
-                 {
-                     "alternatives": [
-                         {
-                             "content": [
-                                 {"type": "word", "text": "By"},
-                                 {"type": "punctuation", "text": "."},
-                             ],
-                         }
-                     ]
-                 }
-             ],
+   function handleChatHistoryFrame(frame) {
+     const view = window.TranscriptView;
+     const messages = Array.isArray(frame.messages) ? frame.messages : [];
+     if (view && typeof view.handleChatMessage === "function" && messages.length) {
+       for (const message of messages) {
++        if (!transcriptFrameAllowed(message)) {
++          continue;
++        }
+         try {
+           view.handleChatMessage(message);
+         } catch (err) {
+           console.warn("TranscriptView chat history handler error", err);
+           break;
          }
+       }
+     }
+   }
  
-         self.assertEqual(_coerce_transcript_text(payload), "By.")
+   function handleErrorFrame(frame) {
+     console.error("WS error frame", frame);
+     const errorMeta = {};
+     if (frame && typeof frame.code === "string") {
+       errorMeta.code = truncateBannerString(frame.code, 64);
+     }
+     if (frame && typeof frame.detail === "string" && frame.detail) {
+       errorMeta.detail = truncateBannerString(frame.detail, 160);
+     } else if (frame && typeof frame.message === "string" && frame.message) {
+       errorMeta.detail = truncateBannerString(frame.message, 160);
+     }
+     if (Object.keys(errorMeta).length) {
+       recordClientBannerEvent("ws.error.frame", errorMeta);
+     } else {
+       recordClientBannerEvent("ws.error.frame", null);
+@@ -2127,107 +2142,97 @@ import { WakeWord } from "./wake_word.js";
+       } catch (err) {
+         console.warn("Hub start_listening handler error", err);
+         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+       }
+     } else if (frame.type === "stop_listening") {
+       try {
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+         } else {
+           stopInputCapture({ reason: "server_requested" });
+         }
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
+     } else if (frame.type === "input.start") {
+       startInputCapture(frame);
+     } else if (frame.type === "input.stop") {
+       stopInputCapture({ reason: "input.stop" });
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
+     } else if (frame.type === "asr.partial") {
+-      const view = window.TranscriptView;
+-      if (view && typeof view.handlePartial === "function") {
+-        try {
+-          view.handlePartial(frame);
+-        } catch (err) {
+-          console.warn("TranscriptView partial handler error", err);
+-        }
+-      }
++      transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.final") {
+-      const view = window.TranscriptView;
+-      if (view && typeof view.handleFinal === "function") {
+-        try {
+-          view.handleFinal(frame);
+-        } catch (err) {
+-          console.warn("TranscriptView final handler error", err);
+-        }
+-      }
++      transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details
+         : (frame && typeof frame.detail === "string" ? frame.detail : "");
+       console.warn("asr.unavailable", reason, details);
+       AppState.asrReady = false;
+       updateState({ asrReady: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("asrReady", { ready: false, reason });
+       }
+       try {
+         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
+         hud?.setState?.("Chat");
+       } catch (err) {
+         console.warn("Failed to update HUD state after asr.unavailable", err);
+       }
+       try {
+         const view = window.TranscriptView;
+         view?.showSystemFromChip?.(
+           "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
+         );
+       } catch (err) {
+         console.warn("Failed to render Chip system message after asr.unavailable", err);
+       }
+       try {
+         window?.Banner?.show?.(
+           "Voice temporarily unavailable. You can continue via chat.",
+           { level: "warning", ttlMs: 10000 }
+         );
+       } catch (err) {
+         console.warn("Failed to show voice unavailable banner", err);
+       }
+-    } else if (frame.type === "chat.message") {
+-      const view = window.TranscriptView;
+-      if (view && typeof view.handleChatMessage === "function") {
+-        try {
+-          view.handleChatMessage(frame);
+-        } catch (err) {
+-          console.warn("TranscriptView chat handler error", err);
++    } else if (frame.type === "chat.message" || frame.type === "message") {
++      if (!transcriptFrameAllowed(frame)) {
++        // Keep frame flowing to other listeners without rendering in transcript.
++      } else {
++        const view = window.TranscriptView;
++        if (view && typeof view.handleChatMessage === "function") {
++          try {
++            view.handleChatMessage(frame);
++          } catch (err) {
++            console.warn("TranscriptView chat handler error", err);
++          }
+         }
+       }
+     } else if (frame.type === "chat.history") {
+       handleChatHistoryFrame(frame);
+     }
+     dispatchFrame(frame);
+   }
  
- 
- if __name__ == "__main__":
-     unittest.main()
+   async function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
+         if (frame && typeof frame.message === "string") {
+           if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+             return;
+           }
+         }
+         if (frame && frame.type === "server.ping") {
+           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
+           return;
+         }
+         await handleMessageFrame(frame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);

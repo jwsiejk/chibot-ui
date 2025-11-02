@@ -1905,11 +1905,26 @@ import { WakeWord } from "./wake_word.js";
     logStage('client.ws', { outcome: 'pong', rtt_ms: rtt });
   }
 
+  function transcriptFrameAllowed(frame) {
+    const type = typeof frame?.type === "string" ? frame.type : "";
+    const role = typeof frame?.role === "string" ? frame.role : "";
+    const canonicalType = type === "message" || type === "chat.message";
+    const canonicalRole = role === "user" || role === "assistant";
+    const allow = canonicalType && canonicalRole;
+    try {
+      console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
+    } catch {}
+    return allow;
+  }
+
   function handleChatHistoryFrame(frame) {
     const view = window.TranscriptView;
     const messages = Array.isArray(frame.messages) ? frame.messages : [];
     if (view && typeof view.handleChatMessage === "function" && messages.length) {
       for (const message of messages) {
+        if (!transcriptFrameAllowed(message)) {
+          continue;
+        }
         try {
           view.handleChatMessage(message);
         } catch (err) {
@@ -2149,23 +2164,9 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
     } else if (frame.type === "asr.partial") {
-      const view = window.TranscriptView;
-      if (view && typeof view.handlePartial === "function") {
-        try {
-          view.handlePartial(frame);
-        } catch (err) {
-          console.warn("TranscriptView partial handler error", err);
-        }
-      }
+      transcriptFrameAllowed(frame);
     } else if (frame.type === "asr.final") {
-      const view = window.TranscriptView;
-      if (view && typeof view.handleFinal === "function") {
-        try {
-          view.handleFinal(frame);
-        } catch (err) {
-          console.warn("TranscriptView final handler error", err);
-        }
-      }
+      transcriptFrameAllowed(frame);
     } else if (frame.type === "asr.unavailable") {
       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
       const details = frame && typeof frame.details === "string"
@@ -2199,13 +2200,17 @@ import { WakeWord } from "./wake_word.js";
       } catch (err) {
         console.warn("Failed to show voice unavailable banner", err);
       }
-    } else if (frame.type === "chat.message") {
-      const view = window.TranscriptView;
-      if (view && typeof view.handleChatMessage === "function") {
-        try {
-          view.handleChatMessage(frame);
-        } catch (err) {
-          console.warn("TranscriptView chat handler error", err);
+    } else if (frame.type === "chat.message" || frame.type === "message") {
+      if (!transcriptFrameAllowed(frame)) {
+        // Keep frame flowing to other listeners without rendering in transcript.
+      } else {
+        const view = window.TranscriptView;
+        if (view && typeof view.handleChatMessage === "function") {
+          try {
+            view.handleChatMessage(frame);
+          } catch (err) {
+            console.warn("TranscriptView chat handler error", err);
+          }
         }
       }
     } else if (frame.type === "chat.history") {
