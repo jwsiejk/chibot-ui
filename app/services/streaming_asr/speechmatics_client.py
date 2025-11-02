@@ -73,7 +73,9 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
             pieces: list[str] = []
             for item in content:
                 if isinstance(item, Mapping):
-                    token = item.get("text") or item.get("value")
+                    token = item.get("value")
+                    if not isinstance(token, str) or not token.strip():
+                        token = item.get("text")
                     if isinstance(token, str):
                         pieces.append(token)
             combined = "".join(pieces).strip()

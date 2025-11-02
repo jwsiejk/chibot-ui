@@ -61,6 +61,19 @@ class TestSpeechmaticsExtractText(unittest.TestCase):
         }
         self.assertEqual(_extract_text(payload), "flasharray")
 
+    def test_token_value_preferred_over_text(self) -> None:
+        payload = {
+            "message": "AddPartialTranscript",
+            "metadata": {
+                "content": [
+                    {"type": "word", "text": "Hello", "value": "Hello"},
+                    {"type": "punctuation", "text": "Slash", "value": "/"},
+                    {"type": "word", "text": "Pure", "value": "Pure"},
+                ]
+            },
+        }
+        self.assertEqual(_extract_text(payload), "Hello/Pure")
+
     def test_coerce_transcript_text_handles_tokenized_results(self) -> None:
         payload = {
             "message": "AddTranscript",
