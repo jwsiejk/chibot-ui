@@ -61,6 +61,27 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
     if not isinstance(payload, Mapping):
         return None
 
+    def _from_mapping(candidate: Mapping[str, Any]) -> str | None:
+        for key in ("transcript", "text", "partial"):
+            value = candidate.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+
+        # Speechmatics sometimes returns tokenized content lists.
+        content = candidate.get("content") or candidate.get("tokens")
+        if isinstance(content, list):
+            pieces: list[str] = []
+            for item in content:
+                if isinstance(item, Mapping):
+                    token = item.get("text") or item.get("value")
+                    if isinstance(token, str):
+                        pieces.append(token)
+            combined = "".join(pieces).strip()
+            if combined:
+                return combined
+
+        return None
+
     # Speechmatics real-time events typically use "results" -> alternatives.
     results = payload.get("results")
     if isinstance(results, list):
@@ -71,16 +92,33 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
             if isinstance(alternatives, list):
                 for alt in alternatives:
                     if isinstance(alt, Mapping):
-                        text = alt.get("transcript") or alt.get("text")
-                        if isinstance(text, str) and text.strip():
+                        text = _from_mapping(alt)
+                        if text:
                             return text
-            transcript = result.get("transcript")
-            if isinstance(transcript, str) and transcript.strip():
-                return transcript
+            text = _from_mapping(result)
+            if text:
+                return text
+
+    # Some messages may embed text under "alternatives" directly.
+    alternatives = payload.get("alternatives")
+    if isinstance(alternatives, list):
+        for alt in alternatives:
+            if isinstance(alt, Mapping):
+                text = _from_mapping(alt)
+                if text:
+                    return text
+
+    # Metadata blobs sometimes carry the transcript/partial text.
+    metadata = payload.get("metadata")
+    if isinstance(metadata, Mapping):
+        text = _from_mapping(metadata)
+        if text:
+            return text
 
     # Some messages may embed text directly.
     # IMPORTANT: Do NOT treat vendor "message" (e.g. "AddPartialTranscript") as transcript text.
-    for key in ("transcript", "text", "partial"):
+    direct_keys = ("transcript", "text", "partial")
+    for key in direct_keys:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value

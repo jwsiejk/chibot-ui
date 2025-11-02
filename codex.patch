@@ -1,8 +1,103 @@
 diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 13c07049181d0f7699c17bcf532e38f6db51ca47..15bcc7159294428a8a24e7483014869702490df5 100644
+index 15bcc7159294428a8a24e7483014869702490df5..016eddd4554bd9ab80833c844c197dc78540546d 100644
 --- a/app/services/streaming_asr/speechmatics_client.py
 +++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -90,50 +90,74 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
+@@ -39,70 +39,108 @@ def _coerce_language(policy: Mapping[str, Any] | None) -> str:
+             lookup = lookup.get(key)
+         if isinstance(lookup, str) and lookup.strip():
+             return lookup.strip()
+     return "en"
+ 
+ 
+ def _now_ms() -> int:
+     return int(time.time() * 1000)
+ 
+ 
+ def _latency_ms(state: "_StreamState", now_monotonic: float) -> int:
+     if state.first_audio_ts is not None:
+         baseline = state.first_audio_ts
+     else:
+         baseline = state.opened_monotonic
+     latency = int(max(0.0, (now_monotonic - baseline) * 1000))
+     return latency
+ 
+ 
+ def _extract_text(payload: Mapping[str, Any]) -> str | None:
+     """Best-effort extraction of transcript text from a vendor payload."""
+ 
+     if not isinstance(payload, Mapping):
+         return None
+ 
++    def _from_mapping(candidate: Mapping[str, Any]) -> str | None:
++        for key in ("transcript", "text", "partial"):
++            value = candidate.get(key)
++            if isinstance(value, str) and value.strip():
++                return value
++
++        # Speechmatics sometimes returns tokenized content lists.
++        content = candidate.get("content") or candidate.get("tokens")
++        if isinstance(content, list):
++            pieces: list[str] = []
++            for item in content:
++                if isinstance(item, Mapping):
++                    token = item.get("text") or item.get("value")
++                    if isinstance(token, str):
++                        pieces.append(token)
++            combined = "".join(pieces).strip()
++            if combined:
++                return combined
++
++        return None
++
+     # Speechmatics real-time events typically use "results" -> alternatives.
+     results = payload.get("results")
+     if isinstance(results, list):
+         for result in results:
+             if not isinstance(result, Mapping):
+                 continue
+             alternatives = result.get("alternatives")
+             if isinstance(alternatives, list):
+                 for alt in alternatives:
+                     if isinstance(alt, Mapping):
+-                        text = alt.get("transcript") or alt.get("text")
+-                        if isinstance(text, str) and text.strip():
++                        text = _from_mapping(alt)
++                        if text:
+                             return text
+-            transcript = result.get("transcript")
+-            if isinstance(transcript, str) and transcript.strip():
+-                return transcript
++            text = _from_mapping(result)
++            if text:
++                return text
++
++    # Some messages may embed text under "alternatives" directly.
++    alternatives = payload.get("alternatives")
++    if isinstance(alternatives, list):
++        for alt in alternatives:
++            if isinstance(alt, Mapping):
++                text = _from_mapping(alt)
++                if text:
++                    return text
++
++    # Metadata blobs sometimes carry the transcript/partial text.
++    metadata = payload.get("metadata")
++    if isinstance(metadata, Mapping):
++        text = _from_mapping(metadata)
++        if text:
++            return text
+ 
+     # Some messages may embed text directly.
+     # IMPORTANT: Do NOT treat vendor "message" (e.g. "AddPartialTranscript") as transcript text.
+-    for key in ("transcript", "text", "partial"):
++    direct_keys = ("transcript", "text", "partial")
++    for key in direct_keys:
+         value = payload.get(key)
+         if isinstance(value, str) and value.strip():
+             return value
+ 
+     return None
+ 
  
  def _invoke_callback(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
      try:
@@ -22,162 +117,74 @@ index 13c07049181d0f7699c17bcf532e38f6db51ca47..15bcc7159294428a8a24e74830148697
          return "extra_headers"
      if "additional_headers" in params:
          return "additional_headers"
-     return "extra_headers"
- 
- 
- _CONNECT_HEADERS_ARG = _resolve_headers_arg()
- 
- 
-+def _is_fatal_concurrency_notice(payload: Mapping[str, Any] | None) -> bool:
-+    """Return True when a Speechmatics concurrency notice is fatal."""
-+
-+    if not isinstance(payload, Mapping):
-+        return True
-+
-+    severity_candidates = (
-+        payload.get("severity"),
-+        payload.get("level"),
-+        payload.get("message"),
-+    )
-+    for candidate in severity_candidates:
-+        if isinstance(candidate, str) and candidate.strip():
-+            normalized = candidate.strip().lower()
-+            if normalized in {"error", "critical", "fatal"}:
-+                return True
-+            if normalized in {"warning", "warn", "info", "informational"}:
-+                return False
-+    # Default to non-fatal so that benign vendor telemetry does not tear down the
-+    # stream. Hard failures will include an explicit error severity or will result
-+    # in the connection closing, which is handled elsewhere.
-+    return False
-+
-+
- @dataclass
- class _StreamState:
-     sid: str
-     stream_id: str
-     websocket: WebSocketClientProtocol
-     on_partial: Callable[[str, Dict[str, object]], None]
-     on_final: Callable[[str, Dict[str, object]], None]
-     on_error: Callable[..., None]
-     on_close: Optional[Callable[[int | None, str | None], None]]
-     language: str
-     encoding: str
-     sample_rate: int
-     opened_monotonic: float = field(default_factory=time.monotonic)
-     opened_wall: float = field(default_factory=time.time)
-     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_event_loop)
-     audio_queue: "asyncio.Queue[bytes | object]" = field(default_factory=asyncio.Queue)
-     sender_task: Optional[asyncio.Task[None]] = None
-     receiver_task: Optional[asyncio.Task[None]] = None
-     closing: bool = False
-     closed: bool = False
-     partial_count: int = 0
-     final_count: int = 0
-     bytes_sent: int = 0
-     first_audio_ts: float | None = None
-     last_audio_ts: float | None = None
-@@ -400,57 +424,65 @@ class SpeechmaticsClient:
-                         self._logger.debug(
-                             "evt=sm_empty_transcript_ignored"
-                         )
-                         continue
- 
-                     type_field = payload.get("type")
-                     is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
-                     if isinstance(type_field, str) and type_field.lower() == "final":
-                         is_final = True
- 
-                     self._emit_transcript_event(state, text, is_final)
- 
-                     if is_final:
-                         self._handle_final(state, payload, text_override=text, emit_event=False)
-                     else:
-                         self._handle_partial(state, payload, text_override=text, emit_event=False)
-                     continue
- 
-                 notice_type = ""
-                 if isinstance(payload, Mapping):
-                     raw_notice = payload.get("type") or payload.get("notice")
-                     if isinstance(raw_notice, str):
-                         notice_type = raw_notice.strip().lower()
- 
-                 if notice_type.startswith("concurrent_session"):
--                    self._logger.error(
--                        "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
--                        state.sid,
--                        state.stream_id,
--                        notice_type,
--                    )
--                    self._handle_error(state, "concurrent_session", notice_type)
-+                    if _is_fatal_concurrency_notice(payload):
-+                        self._logger.error(
-+                            "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
-+                            state.sid,
-+                            state.stream_id,
-+                            notice_type,
-+                        )
-+                        self._handle_error(state, "concurrent_session", notice_type)
-+                    else:
-+                        self._logger.warning(
-+                            "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s severity=benign",
-+                            state.sid,
-+                            state.stream_id,
-+                            notice_type,
-+                        )
-                     continue
- 
-                 if isinstance(message_name, str) and message_name in {
-                     "Info",
-                     "RecognitionStarted",
-                     "AudioAdded",
-                 }:
-                     if message_name not in state.vendor_notices:
-                         self._logger.info("evt=sm_notice message=%s", message_name.lower())
-                         state.vendor_notices.add(message_name)
-                     # Treat vendor notices as sufficient to consider the stream ready so
-                     # that the sender loop can proceed with audio transmission.
-                     self._mark_stream_ready(state, payload)
-                     continue
- 
-                 self._handle_payload(state, payload)
-         except asyncio.CancelledError:
-             raise
-         except websockets.ConnectionClosedOK as exc:
-             await self._finalize_close(state, exc.code, exc.reason)
-         except websockets.ConnectionClosedError as exc:
-             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
-             await self._finalize_close(state, exc.code, exc.reason)
-         except Exception as exc:
-             self._logger.exception(
 diff --git a/tests/test_speechmatics_client.py b/tests/test_speechmatics_client.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..bdd3a975579a5c736829f6cda2c97925dc2e1779
---- /dev/null
+index bdd3a975579a5c736829f6cda2c97925dc2e1779..dd60ac9cece97c1f75da2f390ee8d51054a73020 100644
+--- a/tests/test_speechmatics_client.py
 +++ b/tests/test_speechmatics_client.py
-@@ -0,0 +1,25 @@
-+import unittest
+@@ -1,25 +1,65 @@
+ import unittest
+ 
+-from app.services.streaming_asr.speechmatics_client import _is_fatal_concurrency_notice
++from app.services.streaming_asr.speechmatics_client import (
++    _extract_text,
++    _is_fatal_concurrency_notice,
++)
+ 
+ 
+ class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
+     def test_info_notice_not_fatal(self) -> None:
+         payload = {"message": "Info", "type": "concurrent_session_usage"}
+         self.assertFalse(_is_fatal_concurrency_notice(payload))
+ 
+     def test_warning_notice_not_fatal(self) -> None:
+         payload = {"message": "Warning", "severity": "warning", "type": "concurrent_session_limit"}
+         self.assertFalse(_is_fatal_concurrency_notice(payload))
+ 
+     def test_error_notice_fatal(self) -> None:
+         payload = {"message": "Error", "type": "concurrent_session_usage"}
+         self.assertTrue(_is_fatal_concurrency_notice(payload))
+ 
+     def test_explicit_severity_error_fatal(self) -> None:
+         payload = {"severity": "critical", "type": "concurrent_session_usage"}
+         self.assertTrue(_is_fatal_concurrency_notice(payload))
+ 
+ 
++class TestSpeechmaticsExtractText(unittest.TestCase):
++    def test_extracts_from_results_alternatives(self) -> None:
++        payload = {
++            "results": [
++                {
++                    "alternatives": [
++                        {
++                            "transcript": "Hello there",
++                            "confidence": 0.92,
++                        }
++                    ]
++                }
++            ]
++        }
++        self.assertEqual(_extract_text(payload), "Hello there")
 +
-+from app.services.streaming_asr.speechmatics_client import _is_fatal_concurrency_notice
++    def test_extracts_from_metadata_tokens(self) -> None:
++        payload = {
++            "message": "AddPartialTranscript",
++            "metadata": {
++                "content": [
++                    {"type": "word", "text": "Pure"},
++                    {"type": "word", "text": " "},
++                    {"type": "word", "text": "Storage"},
++                ]
++            },
++        }
++        self.assertEqual(_extract_text(payload), "Pure Storage")
++
++    def test_extracts_from_metadata_transcript(self) -> None:
++        payload = {
++            "message": "AddTranscript",
++            "metadata": {"transcript": "flasharray"},
++        }
++        self.assertEqual(_extract_text(payload), "flasharray")
 +
 +
-+class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
-+    def test_info_notice_not_fatal(self) -> None:
-+        payload = {"message": "Info", "type": "concurrent_session_usage"}
-+        self.assertFalse(_is_fatal_concurrency_notice(payload))
-+
-+    def test_warning_notice_not_fatal(self) -> None:
-+        payload = {"message": "Warning", "severity": "warning", "type": "concurrent_session_limit"}
-+        self.assertFalse(_is_fatal_concurrency_notice(payload))
-+
-+    def test_error_notice_fatal(self) -> None:
-+        payload = {"message": "Error", "type": "concurrent_session_usage"}
-+        self.assertTrue(_is_fatal_concurrency_notice(payload))
-+
-+    def test_explicit_severity_error_fatal(self) -> None:
-+        payload = {"severity": "critical", "type": "concurrent_session_usage"}
-+        self.assertTrue(_is_fatal_concurrency_notice(payload))
-+
-+
-+if __name__ == "__main__":
-+    unittest.main()
+ if __name__ == "__main__":
+     unittest.main()

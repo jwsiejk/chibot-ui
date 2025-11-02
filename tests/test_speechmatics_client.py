@@ -1,6 +1,9 @@
 import unittest
 
-from app.services.streaming_asr.speechmatics_client import _is_fatal_concurrency_notice
+from app.services.streaming_asr.speechmatics_client import (
+    _extract_text,
+    _is_fatal_concurrency_notice,
+)
 
 
 class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
@@ -19,6 +22,43 @@ class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
     def test_explicit_severity_error_fatal(self) -> None:
         payload = {"severity": "critical", "type": "concurrent_session_usage"}
         self.assertTrue(_is_fatal_concurrency_notice(payload))
+
+
+class TestSpeechmaticsExtractText(unittest.TestCase):
+    def test_extracts_from_results_alternatives(self) -> None:
+        payload = {
+            "results": [
+                {
+                    "alternatives": [
+                        {
+                            "transcript": "Hello there",
+                            "confidence": 0.92,
+                        }
+                    ]
+                }
+            ]
+        }
+        self.assertEqual(_extract_text(payload), "Hello there")
+
+    def test_extracts_from_metadata_tokens(self) -> None:
+        payload = {
+            "message": "AddPartialTranscript",
+            "metadata": {
+                "content": [
+                    {"type": "word", "text": "Pure"},
+                    {"type": "word", "text": " "},
+                    {"type": "word", "text": "Storage"},
+                ]
+            },
+        }
+        self.assertEqual(_extract_text(payload), "Pure Storage")
+
+    def test_extracts_from_metadata_transcript(self) -> None:
+        payload = {
+            "message": "AddTranscript",
+            "metadata": {"transcript": "flasharray"},
+        }
+        self.assertEqual(_extract_text(payload), "flasharray")
 
 
 if __name__ == "__main__":
