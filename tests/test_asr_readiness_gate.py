@@ -1,8 +1,14 @@
 import asyncio
 import json
+import os
+import time
 import unittest
 import uuid
 from typing import Any, Dict, List
+
+from unittest.mock import patch
+
+os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
@@ -102,6 +108,71 @@ class TestASRReadinessGate(unittest.TestCase):
 
         return sent, engine, audio_events
 
+    async def _exercise_speechmatics_concurrency(self) -> tuple[List[dict], Dict[str, Any]]:
+        adapter = ChatV2Adapter()
+        engine = RecordingEngine()
+        adapter.engine = engine
+
+        scope = self._make_scope()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        sent: List[dict] = []
+
+        async def receive() -> dict:
+            return await queue.get()
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        task = asyncio.create_task(adapter(scope, receive, send))
+        await queue.put({"type": "websocket.connect"})
+
+        async def wait_for(predicate, timeout: float = 0.5) -> None:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while not predicate():
+                if loop.time() >= deadline:
+                    raise TimeoutError("timed out waiting for condition")
+                await asyncio.sleep(0.01)
+
+        await wait_for(lambda: engine.open_sid is not None)
+        sid = engine.open_sid
+        if sid is None:  # pragma: no cover - defensive
+            raise RuntimeError("sid not set")
+
+        ctx = adapter._contexts.get(sid)
+        if ctx is None:  # pragma: no cover - defensive
+            raise RuntimeError("context missing")
+
+        bus.publish(
+            {
+                "type": "asr.unavailable",
+                "sid": sid,
+                "reason": "upstream_closed",
+                "details": "concurrent_session: concurrent_session_usage",
+            }
+        )
+
+        await asyncio.sleep(0.05)
+
+        await queue.put({"type": "websocket.receive", "bytes": b"\x00" * 4})
+        await asyncio.sleep(0.05)
+
+        snapshot = {
+            "recovering_until": ctx.asr_recovering_until,
+            "recovering_reason": ctx.asr_recovering_reason,
+            "audio_logged": ctx.asr_recovering_audio_logged,
+            "vendor": ctx.asr_vendor,
+        }
+
+        await queue.put({"type": "websocket.disconnect", "code": 1000})
+        try:
+            await asyncio.wait_for(task, timeout=0.5)
+        except asyncio.TimeoutError:  # pragma: no cover - defensive
+            task.cancel()
+            raise
+
+        return sent, snapshot
+
     def test_binary_pre_ready_rejected(self) -> None:
         sent, engine, audio_events = asyncio.run(self._exercise(publish_ready=False))
 
@@ -156,6 +227,27 @@ class TestASRReadinessGate(unittest.TestCase):
         self.assertEqual(len(audio_events), 1)
         self.assertNotIn("error", audio_events[0]["meta"])
         self.assertEqual(audio_events[0]["meta"]["seq"], 0)
+
+    @patch.object(ChatV2Adapter, "_allowed_asr_vendors", return_value=["speechmatics"])
+    def test_speechmatics_concurrency_sets_grace(self, _mock_allowed: Any) -> None:
+        sent, snapshot = asyncio.run(self._exercise_speechmatics_concurrency())
+
+        self.assertEqual(snapshot["vendor"], "speechmatics")
+        self.assertEqual(snapshot["recovering_reason"], "concurrent_session")
+        self.assertTrue(snapshot["audio_logged"])
+        self.assertGreater(snapshot["recovering_until"], time.monotonic())
+
+        outbound_payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text")
+        ]
+        for payload in outbound_payloads:
+            self.assertNotEqual(payload.get("type"), "error")
+
+        close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
+        for frame in close_frames:
+            self.assertNotEqual(frame.get("code"), 1003)
 
 
 if __name__ == "__main__":  # pragma: no cover

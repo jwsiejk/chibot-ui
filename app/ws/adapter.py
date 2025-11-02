@@ -1968,11 +1968,13 @@ class ChatV2Adapter:
                     detail_text = ""
                 lower_reason = reason.lower() if isinstance(reason, str) else ""
                 lower_detail = detail_text.lower()
-                if (
-                    ctx.asr_vendor == "speechmatics"
-                    and lower_reason == "open_failed"
-                    and "concurrent_session" in lower_detail
-                ):
+                concurrency_likely = False
+                if ctx.asr_vendor == "speechmatics":
+                    if "concurrent_session" in lower_detail:
+                        concurrency_likely = True
+                    elif "concurrent_session" in lower_reason:
+                        concurrency_likely = True
+                if concurrency_likely:
                     ctx.asr_recovering_until = time.monotonic() + 3.0
                     ctx.asr_recovering_reason = "concurrent_session"
                     ctx.asr_recovering_audio_logged = False
