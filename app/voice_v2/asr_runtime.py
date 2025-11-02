@@ -351,12 +351,11 @@ class ASRRuntime:
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
-            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
-        elif (
-            self._vendor == "speechmatics"
-            and state.input_desc.get("codec") != "pcm_s16le"
-        ):
+
+        if self._vendor == "speechmatics":
             state.input_desc = _pcm_input_descriptor()
+        elif not state.input_desc:
+            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
 
         if not state.listening:
             return
@@ -662,6 +661,25 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
 
+        if self._vendor == "speechmatics":
+            # Speechmatics strictly requires 16 kHz PCM input.
+            state.input_desc = _pcm_input_descriptor()
+
+        task = state.stream_open_task
+        if task is not None and not task.done():
+            task.cancel()
+        state.stream_open_task = None
+
+        if state.stream_open:
+            try:
+                self._client.close_stream(sid)
+            except Exception:  # pragma: no cover - defensive
+                _log.exception("evt=asr_stream_close_failed sid=%s", sid)
+            finally:
+                self._finalize_rms_probe(sid, state)
+            state.stream_open = False
+            state.stream_id = None
+
         state.listening = True
         state.bytes_received = 0
         state.first_chunk_seen = False
@@ -675,7 +693,7 @@ class ASRRuntime:
         state.last_partial_log = 0.0
         state.pending.clear()
         state.buffered_bytes = 0
-        state.prearm_requested = True
+        state.prearm_requested = self._vendor != "speechmatics"
         state.utterance_active = False
         self._cancel_commit_timer(state)
         self._apply_commit_policy(state)
@@ -854,6 +872,8 @@ class ASRRuntime:
             return
         if not state.pending and not state.prearm_requested:
             return
+        if self._vendor == "speechmatics" and not state.pending:
+            return
         task = state.stream_open_task
         if task is not None and not task.done():
             return
@@ -871,12 +891,10 @@ class ASRRuntime:
                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
                 except Exception:  # pragma: no cover - defensive
                     policy_snapshot = None
-                input_desc = self._input_descriptor_from_policy(policy_snapshot)
-                if (
-                    self._vendor == "speechmatics"
-                    and input_desc.get("codec") != "pcm_s16le"
-                ):
+                if self._vendor == "speechmatics":
                     input_desc = _pcm_input_descriptor()
+                else:
+                    input_desc = self._input_descriptor_from_policy(policy_snapshot)
                 state.input_desc = input_desc
                 model_name = None
                 if isinstance(policy_snapshot, Mapping):

@@ -1,90 +1,408 @@
-diff --git a/app/static/js/state.js b/app/static/js/state.js
-index c27d7a4206e6b50f16d1c1f7304260d72c4076b6..179b8558698e39dec2c388344b4fb6797c501fa2 100644
---- a/app/static/js/state.js
-+++ b/app/static/js/state.js
-@@ -21,57 +21,81 @@
+diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
+index 4e9e29e905fc08513dd1bede0bfe00ea5f5f20f4..70d09f26254cf0d43e4aa10b94f018f401913825 100644
+--- a/app/services/streaming_asr/speechmatics_client.py
++++ b/app/services/streaming_asr/speechmatics_client.py
+@@ -132,70 +132,107 @@ class _StreamState:
+     receiver_task: Optional[asyncio.Task[None]] = None
+     closing: bool = False
+     closed: bool = False
+     partial_count: int = 0
+     final_count: int = 0
+     bytes_sent: int = 0
+     first_audio_ts: float | None = None
+     last_audio_ts: float | None = None
+     last_partial_log: float = 0.0
+     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
+     ready_error: Optional[str] = None
+     ready_error_detail: Optional[str] = None
+     vendor_notices: set[str] = field(default_factory=set)
  
-   function snapshot() {
-     return { ...state };
-   }
  
-   function notify() {
-     const current = snapshot();
-     listeners.forEach((listener) => {
-       try {
-         listener(current);
-       } catch (err) {
-         console.error("AppState subscriber error", err);
-       }
-     });
-   }
+ class SpeechmaticsClient:
+     """Client wrapper responsible for Speechmatics realtime streams."""
  
-   function setState(patch) {
-     if (!patch || typeof patch !== "object") return;
-     const sanitized = { ...patch };
-     if ("resume" in sanitized) {
-       delete sanitized.resume;
-     }
-     if ("resumeError" in sanitized) {
-       delete sanitized.resumeError;
-     }
--    state = { ...state, ...sanitized, resume: null, resumeError: null };
-+    const preservedResume = state.resume;
-+    const preservedResumeError = state.resumeError;
-+    state = {
-+      ...state,
-+      ...sanitized,
-+      resume: preservedResume,
-+      resumeError: preservedResumeError
-+    };
-     notify();
-   }
+     def __init__(self, api_key: str, url: str, bus: Any, logger: logging.Logger) -> None:
+         self._api_key = api_key
+         self._url = url
+         self._bus = bus
+         self._logger = logger or logging.getLogger(__name__)
+         self._streams: Dict[str, _StreamState] = {}
  
--  function setResume() {
--    clearResume();
--    return null;
-+  function setResume(token, ttlMs) {
-+    const candidate = typeof token === "string" ? token.trim() : "";
-+    const ttl = Number(ttlMs);
-+    if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
-+      clearResume();
-+      return null;
-+    }
-+    const expiresAt = Date.now() + ttl;
-+    const resumeState = {
-+      token: candidate,
-+      ttlMs: ttl,
-+      expiresAt
-+    };
-+    state = {
-+      ...state,
-+      resume: resumeState,
-+      resumeError: null
-+    };
-+    notify();
-+    return resumeState;
-   }
++    async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
++        if not self._streams:
++            return
++
++        deadline = time.monotonic() + max(0.0, timeout)
++        while self._streams:
++            active_sids = [sid for sid in self._streams if sid != new_sid]
++            if not active_sids:
++                break
++
++            for existing_sid in active_sids:
++                state = self._streams.get(existing_sid)
++                if state is None:
++                    continue
++                if not state.closing:
++                    self._logger.warning(
++                        "evt=sm_concurrency_guard closing_sid=%s new_sid=%s",
++                        existing_sid,
++                        new_sid,
++                    )
++                    state.closing = True
++                    try:
++                        state.audio_queue.put_nowait(_AUDIO_SENTINEL)
++                    except Exception:
++                        pass
++                    state.loop.create_task(self._shutdown(state))
++
++            if not self._streams:
++                break
++
++            if time.monotonic() >= deadline:
++                raise RuntimeError("speechmatics_concurrency_guard_timeout")
++
++            await asyncio.sleep(0.05)
++
+     async def open_stream(
+         self,
+         sid: str,
+         on_partial: Callable[[str, Dict[str, object]], None],
+         on_final: Callable[[str, Dict[str, object]], None],
+         on_error: Callable[..., None],
+         *,
+         stream_id: str,
+         on_close: Optional[Callable[[int | None, str | None], None]] = None,
+         encoding: str = "linear16",
+         sample_rate: int = 16000,
+         policy: Mapping[str, Any] | None = None,
+     ) -> str:
+         if not isinstance(sid, str) or not sid:
+             raise ValueError("sid must be a non-empty string")
+         if not isinstance(stream_id, str) or not stream_id:
+             raise ValueError("stream_id must be a non-empty string")
+         if sid in self._streams:
+             raise RuntimeError(f"stream for sid {sid!r} already exists")
  
-   function clearResume() {
-     if (state.resume !== null || state.resumeError !== null) {
-       state = { ...state, resume: null, resumeError: null };
-       notify();
-     }
-   }
++        await self._await_capacity(new_sid=sid)
++
+         language = _coerce_language(policy)
  
-   function reset() {
-     state = { ...initialState };
-     notify();
-   }
+         headers = {"Authorization": f"Bearer {self._api_key}"}
+         connect_kwargs = {
+             _CONNECT_HEADERS_ARG: headers,
+             "max_size": None,
+             "ping_interval": 20,
+             "ping_timeout": 10,
+         }
+         try:
+             websocket = await websockets.connect(self._url, **connect_kwargs)
+         except Exception as exc:
+             self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
+             raise
  
-   function subscribe(listener) {
-     if (typeof listener !== "function") {
-       throw new TypeError("listener must be a function");
-     }
-     listeners.add(listener);
-     listener(snapshot());
-     return () => {
-       listeners.delete(listener);
-     };
-   }
+         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
  
+         start_payload = {
+             "message": "StartRecognition",
+             "transcription_config": {
+                 "language": language,
+                 "enable_partials": True,
+             },
+             "audio_format": {
+                 "type": "raw",
+@@ -355,50 +392,66 @@ class SpeechmaticsClient:
+                                 if not alt_text:
+                                     candidate = first_result.get("transcript")
+                                     if isinstance(candidate, str):
+                                         alt_text = candidate
+                                 text = alt_text or text
+ 
+                     if not text.strip():
+                         self._logger.debug(
+                             "evt=sm_empty_transcript_ignored"
+                         )
+                         continue
+ 
+                     type_field = payload.get("type")
+                     is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
+                     if isinstance(type_field, str) and type_field.lower() == "final":
+                         is_final = True
+ 
+                     self._emit_transcript_event(state, text, is_final)
+ 
+                     if is_final:
+                         self._handle_final(state, payload, text_override=text, emit_event=False)
+                     else:
+                         self._handle_partial(state, payload, text_override=text, emit_event=False)
+                     continue
+ 
++                notice_type = ""
++                if isinstance(payload, Mapping):
++                    raw_notice = payload.get("type") or payload.get("notice")
++                    if isinstance(raw_notice, str):
++                        notice_type = raw_notice.strip().lower()
++
++                if notice_type.startswith("concurrent_session"):
++                    self._logger.error(
++                        "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
++                        state.sid,
++                        state.stream_id,
++                        notice_type,
++                    )
++                    self._handle_error(state, "concurrent_session", notice_type)
++                    continue
++
+                 if isinstance(message_name, str) and message_name in {
+                     "Info",
+                     "RecognitionStarted",
+                     "AudioAdded",
+                 }:
+                     if message_name not in state.vendor_notices:
+                         self._logger.info("evt=sm_notice message=%s", message_name.lower())
+                         state.vendor_notices.add(message_name)
+                     # Treat vendor notices as sufficient to consider the stream ready so
+                     # that the sender loop can proceed with audio transmission.
+                     self._mark_stream_ready(state, payload)
+                     continue
+ 
+                 self._handle_payload(state, payload)
+         except asyncio.CancelledError:
+             raise
+         except websockets.ConnectionClosedOK as exc:
+             await self._finalize_close(state, exc.code, exc.reason)
+         except websockets.ConnectionClosedError as exc:
+             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
+             await self._finalize_close(state, exc.code, exc.reason)
+         except Exception as exc:
+             self._logger.exception(
+                 "evt=sm_recv_failed sid=%s stream_id=%s err=%s",
+                 state.sid,
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index fec9f2b9d0fc8619572ec97cb801ee4f7f733141..c12be64f78f4706e2c2bd1351f4e9e3c9264ef57 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -329,56 +329,55 @@ class ASRRuntime:
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+         state.first_partial_logged = False
+         state.last_partial_log = 0.0
+         state.probe_active = False
+         state.probe_target_samples = 0
+         state.probe_samples_collected = 0
+         state.probe_sum_squares = 0.0
+         state.probe_peak = 0.0
+         state.utterance_active = False
+         self._cancel_commit_timer(state)
+         self._apply_commit_policy(state)
+ 
+     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+-            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
+-        elif (
+-            self._vendor == "speechmatics"
+-            and state.input_desc.get("codec") != "pcm_s16le"
+-        ):
++
++        if self._vendor == "speechmatics":
+             state.input_desc = _pcm_input_descriptor()
++        elif not state.input_desc:
++            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
+ 
+         if not state.listening:
+             return
+ 
+         if not state.utterance_active:
+             state.utterance_active = True
+             self._apply_commit_policy(state)
+             self._start_commit_timer(sid, state)
+ 
+         state.unavailable_emitted = False
+ 
+         now_monotonic = time.monotonic()
+         state.last_audio_ts = now_monotonic
+         now_ms = int(time.time() * 1000)
+         state.last_audio_ts_ms = now_ms
+         if state.ready_watchdog is not None and state.ready_armed_at:
+             self._cancel_ready_watchdog(state)
+         chunk_len = len(data)
+ 
+         input_desc = state.input_desc or {}
+         if not isinstance(input_desc, Mapping):
+             input_desc = {}
+         expected_codec = str(input_desc.get("codec") or "").strip().lower()
+         chunk_is_webm = data.startswith(_EBML_MAGIC)
+ 
+@@ -640,64 +639,83 @@ class ASRRuntime:
+             return
+         if not meta.get("commit"):
+             return
+         self._apply_commit_policy(state)
+         if not state.commit_on_vad_silence:
+             return
+         reason_val = meta.get("reason")
+         reason = reason_val if isinstance(reason_val, str) and reason_val else "vad_silence"
+         _log.info(
+             "evt=asr_commit_trigger sid=%s vendor=%s source=client reason=%s",
+             sid,
+             self._vendor,
+             reason,
+         )
+         self.commit(sid, reason=reason)
+ 
+     def _on_start_listening_frame(self, sid: str) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+ 
++        if self._vendor == "speechmatics":
++            # Speechmatics strictly requires 16 kHz PCM input.
++            state.input_desc = _pcm_input_descriptor()
++
++        task = state.stream_open_task
++        if task is not None and not task.done():
++            task.cancel()
++        state.stream_open_task = None
++
++        if state.stream_open:
++            try:
++                self._client.close_stream(sid)
++            except Exception:  # pragma: no cover - defensive
++                _log.exception("evt=asr_stream_close_failed sid=%s", sid)
++            finally:
++                self._finalize_rms_probe(sid, state)
++            state.stream_open = False
++            state.stream_id = None
++
+         state.listening = True
+         state.bytes_received = 0
+         state.first_chunk_seen = False
+         state.rollup_window_start = 0.0
+         state.rollup_chunks = 0
+         state.rollup_bytes = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+         state.first_partial_logged = False
+         state.last_partial_log = 0.0
+         state.pending.clear()
+         state.buffered_bytes = 0
+-        state.prearm_requested = True
++        state.prearm_requested = self._vendor != "speechmatics"
+         state.utterance_active = False
+         self._cancel_commit_timer(state)
+         self._apply_commit_policy(state)
+         self._ensure_stream(sid, state)
+ 
+     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             return
+ 
+         state.listening = False
+         state.prearm_requested = False
+         state.pending.clear()
+         state.buffered_bytes = 0
+         state.bytes_received = 0
+         state.first_chunk_seen = False
+         state.rollup_window_start = 0.0
+         state.rollup_chunks = 0
+         state.rollup_bytes = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+@@ -832,73 +850,73 @@ class ASRRuntime:
+             log_template += " e2e_latency_ms=%d"
+             log_args.append(int(e2e_latency))
+         msg = log_template % tuple(log_args)
+         _log.info(msg)
+         self._emit_log(
+             {
+                 "type": "EVT_LOG",
+                 "logger": "app.voice_v2.asr_runtime",
+                 "level": "INFO",
+                 "sid": state.sid,
+                 "stream_id": stream_id,
+                 "req_id": req_id,
+                 "msg": msg,
+             }
+         )
+ 
+     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
+         loop = self._ensure_loop()
+         if loop is None:
+             _log.warning("evt=asr_no_loop sid=%s", sid)
+             return
+         if state.stream_open:
+             return
+         if not state.pending and not state.prearm_requested:
+             return
++        if self._vendor == "speechmatics" and not state.pending:
++            return
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             return
+ 
+         async def _open() -> None:
+             if state.stream_id is None:
+                 state.stream_id = self._generate_stream_id()
+             stream_id = state.stream_id
+             state.last_stream_id = stream_id
+             state.close_reason = None
+             state.prearm_requested = False
+             try:
+                 policy_snapshot = None
+                 try:
+                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
+                 except Exception:  # pragma: no cover - defensive
+                     policy_snapshot = None
+-                input_desc = self._input_descriptor_from_policy(policy_snapshot)
+-                if (
+-                    self._vendor == "speechmatics"
+-                    and input_desc.get("codec") != "pcm_s16le"
+-                ):
++                if self._vendor == "speechmatics":
+                     input_desc = _pcm_input_descriptor()
++                else:
++                    input_desc = self._input_descriptor_from_policy(policy_snapshot)
+                 state.input_desc = input_desc
+                 model_name = None
+                 if isinstance(policy_snapshot, Mapping):
+                     candidate = policy_snapshot.get("model")
+                     if isinstance(candidate, str) and candidate:
+                         model_name = candidate
+                     else:
+                         interaction = policy_snapshot.get("interaction")
+                         if isinstance(interaction, Mapping):
+                             maybe_model = interaction.get("model")
+                             if isinstance(maybe_model, str) and maybe_model:
+                                 model_name = maybe_model
+                 else:
+                     candidate_model = getattr(policy_snapshot, "model", None)
+                     if isinstance(candidate_model, str) and candidate_model:
+                         model_name = candidate_model
+                 state.model = model_name if isinstance(model_name, str) and model_name else None
+                 _log.info(
+                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
+                     sid,
+                     self._vendor,
+                 )
+                 open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
+                 qs = await asyncio.wait_for(
+                     self._client.open_stream(

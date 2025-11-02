@@ -154,6 +154,41 @@ class SpeechmaticsClient:
         self._logger = logger or logging.getLogger(__name__)
         self._streams: Dict[str, _StreamState] = {}
 
+    async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
+        if not self._streams:
+            return
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self._streams:
+            active_sids = [sid for sid in self._streams if sid != new_sid]
+            if not active_sids:
+                break
+
+            for existing_sid in active_sids:
+                state = self._streams.get(existing_sid)
+                if state is None:
+                    continue
+                if not state.closing:
+                    self._logger.warning(
+                        "evt=sm_concurrency_guard closing_sid=%s new_sid=%s",
+                        existing_sid,
+                        new_sid,
+                    )
+                    state.closing = True
+                    try:
+                        state.audio_queue.put_nowait(_AUDIO_SENTINEL)
+                    except Exception:
+                        pass
+                    state.loop.create_task(self._shutdown(state))
+
+            if not self._streams:
+                break
+
+            if time.monotonic() >= deadline:
+                raise RuntimeError("speechmatics_concurrency_guard_timeout")
+
+            await asyncio.sleep(0.05)
+
     async def open_stream(
         self,
         sid: str,
@@ -173,6 +208,8 @@ class SpeechmaticsClient:
             raise ValueError("stream_id must be a non-empty string")
         if sid in self._streams:
             raise RuntimeError(f"stream for sid {sid!r} already exists")
+
+        await self._await_capacity(new_sid=sid)
 
         language = _coerce_language(policy)
 
@@ -375,6 +412,22 @@ class SpeechmaticsClient:
                         self._handle_final(state, payload, text_override=text, emit_event=False)
                     else:
                         self._handle_partial(state, payload, text_override=text, emit_event=False)
+                    continue
+
+                notice_type = ""
+                if isinstance(payload, Mapping):
+                    raw_notice = payload.get("type") or payload.get("notice")
+                    if isinstance(raw_notice, str):
+                        notice_type = raw_notice.strip().lower()
+
+                if notice_type.startswith("concurrent_session"):
+                    self._logger.error(
+                        "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
+                        state.sid,
+                        state.stream_id,
+                        notice_type,
+                    )
+                    self._handle_error(state, "concurrent_session", notice_type)
                     continue
 
                 if isinstance(message_name, str) and message_name in {
