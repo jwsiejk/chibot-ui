@@ -40,6 +40,8 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
             "commit_on_vad_silence": True,
             "commit_silence_ms": 900,
             "max_utterance_ms": 8000,
+            "dup_final_suppress_ms": 150,
+            "dedupe_normalize": True,
             "vendor": {"primary": "deepgram", "secondary": None},
         },
         "routing": {

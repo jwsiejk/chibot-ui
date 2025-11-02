@@ -4,16 +4,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import hashlib
 import os
 import struct
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, Mapping, Optional
 
 from app.config import (
     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+    ASR_DEDUPE_NORMALIZE,
+    ASR_DUP_FINAL_SUPPRESS_MS,
     ASR_IDLE_CLOSE_MS,
     ASR_TRACE,
 )
@@ -21,6 +24,7 @@ from app.policy.model import Policy
 from app.telemetry import bus
 from app.voice_v2 import (
     EVT_ASR_FINAL,
+    EVT_ASR_FINAL_SUPPRESSED_DUP,
     EVT_ASR_OPEN,
     EVT_ASR_PARTIAL,
     EVT_ASR_READY,
@@ -149,6 +153,7 @@ class _SessionState:
     commit_timer: asyncio.TimerHandle | None = None
     utterance_active: bool = False
     utterance_started_at: float = 0.0
+    final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -1516,8 +1521,44 @@ class ASRRuntime:
             "confidence": _FINAL_CONFIDENCE,
             "vendor": self._vendor,
         }
+        suppress_ms, normalize = self._resolve_final_dedupe_policy()
+        suppressed, text_hash, delta_ms = self._should_suppress_final(
+            state, text, suppress_ms, normalize
+        )
+        if suppressed:
+            diag_event = {
+                "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
+                "sid": sid,
+                "req_id": req_id,
+                "vendor": self._vendor,
+                "text_hash": text_hash,
+                "delta_ms": delta_ms,
+                "suppress_ms": suppress_ms,
+            }
+            self._bus.publish(diag_event)
+            _log.info(
+                "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
+                sid,
+                req_id,
+                self._vendor,
+                text,
+                text_hash,
+                delta_ms,
+                suppress_ms,
+            )
+            self._log_utterance(state, stream_id, req_id, metadata, text)
+            return
+
         self._bus.publish(event)
         state.finals_delivered += 1
+        _log.info(
+            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
+            sid,
+            req_id,
+            self._vendor,
+            text,
+            text_hash,
+        )
         self._log_utterance(state, stream_id, req_id, metadata, text)
 
     def _on_error(self, sid: str, error: str) -> None:
@@ -1884,6 +1925,81 @@ class ASRRuntime:
         except (TypeError, ValueError):
             return max(0, int(default))
         return max(0, candidate)
+
+    def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
+        asr_policy = getattr(self.policy, "asr", None)
+        suppress_ms = self._coerce_policy_int(
+            getattr(asr_policy, "dup_final_suppress_ms", ASR_DUP_FINAL_SUPPRESS_MS),
+            ASR_DUP_FINAL_SUPPRESS_MS,
+        )
+        normalize = bool(
+            getattr(asr_policy, "dedupe_normalize", ASR_DEDUPE_NORMALIZE)
+        )
+
+        snapshot = getattr(self._engine, "policy_snapshot", None)
+        if isinstance(snapshot, Mapping):
+            policy_block = snapshot.get("policy")
+            if isinstance(policy_block, Mapping):
+                asr_block = policy_block.get("asr")
+                if isinstance(asr_block, Mapping):
+                    if "dup_final_suppress_ms" in asr_block:
+                        suppress_ms = self._coerce_policy_int(
+                            asr_block.get("dup_final_suppress_ms"), suppress_ms
+                        )
+                    if "dedupe_normalize" in asr_block:
+                        normalize = bool(asr_block.get("dedupe_normalize"))
+
+        suppress_ms = self._coerce_policy_int(suppress_ms, ASR_DUP_FINAL_SUPPRESS_MS)
+        return suppress_ms, normalize
+
+    @staticmethod
+    def _normalize_final_text(text: str, normalize: bool) -> str:
+        if not isinstance(text, str):
+            return ""
+        candidate = text.strip()
+        if not candidate:
+            return ""
+        if not normalize:
+            return candidate
+        return " ".join(candidate.split()).lower()
+
+    def _should_suppress_final(
+        self,
+        state: _SessionState,
+        text: str,
+        suppress_ms: int,
+        normalize: bool,
+    ) -> tuple[bool, str, int]:
+        if suppress_ms <= 0:
+            normalized = self._normalize_final_text(text, normalize)
+            if not normalized:
+                return False, "", 0
+            digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()
+            return False, digest, 0
+
+        normalized = self._normalize_final_text(text, normalize)
+        if not normalized:
+            return False, "", 0
+
+        digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()
+        now_ms = int(time.time() * 1000)
+        cache = state.final_dedupe_cache
+
+        threshold = now_ms - suppress_ms
+        for key, ts in list(cache.items()):
+            if ts < threshold:
+                cache.pop(key, None)
+
+        previous_ts = cache.get(digest)
+        cache[digest] = now_ms
+        cache.move_to_end(digest)
+        while len(cache) > 64:
+            cache.popitem(last=False)
+
+        if previous_ts is not None and now_ms - previous_ts <= suppress_ms:
+            return True, digest, now_ms - previous_ts
+
+        return False, digest, 0
 
     def _start_commit_timer(self, sid: str, state: _SessionState) -> None:
         if state.max_utterance_ms <= 0 or state.commit_timer is not None:

@@ -45,6 +45,8 @@ class ASRPolicy:
     commit_on_vad_silence: bool = True
     commit_silence_ms: int = 900
     max_utterance_ms: int = 8000
+    dup_final_suppress_ms: int = 150
+    dedupe_normalize: bool = True
 
 
 @dataclass

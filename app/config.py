@@ -93,6 +93,8 @@ _DEFAULT_POLICY_ASR = {
     "commit_on_vad_silence": True,
     "commit_silence_ms": 900,
     "max_utterance_ms": 8000,
+    "dup_final_suppress_ms": 150,
+    "dedupe_normalize": True,
 }
 
 _DEFAULT_POLICY_ROUTING = {
@@ -398,6 +400,19 @@ def _sanitize_asr_policy(
     sanitized["max_utterance_ms"] = _coerce_db_int(
         value.get("max_utterance_ms"), sanitized["max_utterance_ms"], minimum=0
     )
+    sanitized["dup_final_suppress_ms"] = _coerce_db_int(
+        value.get("dup_final_suppress_ms"), sanitized["dup_final_suppress_ms"], minimum=0
+    )
+    try:
+        sanitized["dedupe_normalize"] = _coerce_db_bool(
+            value.get("dedupe_normalize"), sanitized["dedupe_normalize"]
+        )
+    except ValueError:
+        _log.warning(
+            "evt=admin_settings_invalid_policy_asr key=dedupe_normalize source=%s",
+            source,
+            extra={"component": "admin.settings", "raw": raw},
+        )
 
     vendor_value = value.get("vendor")
     if isinstance(vendor_value, Mapping):
@@ -632,6 +647,12 @@ def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None)
     return value
 
 
+ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(
+    "ASR_DUP_FINAL_SUPPRESS_MS", default=150, minimum=0
+)
+ASR_DEDUPE_NORMALIZE = bool_env_or_db("ASR_DEDUPE_NORMALIZE", default=True)
+
+
 def reload_runtime_flags() -> None:
     """Refresh runtime configuration flags from env and admin settings."""
 
@@ -835,6 +856,8 @@ __all__ = [
     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
     "ASR_IDLE_CLOSE_MS",
     "ASR_TRACE",
+    "ASR_DUP_FINAL_SUPPRESS_MS",
+    "ASR_DEDUPE_NORMALIZE",
     "ASR_DEEPGRAM_ENABLED",
     "ASR_SPEECHMATICS_ENABLED",
     "AUDIO_GUARDRAILS",

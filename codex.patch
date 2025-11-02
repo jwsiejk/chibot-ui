@@ -1,196 +1,752 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 82ecead2e88b6e432ed3ca206b8a3bdf58b8185b..0494c36b596ef061f8d022c72da3e64ac398f6e0 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1883,55 +1883,70 @@ import { WakeWord } from "./wake_word.js";
-       applyPolicySnapshotFromSource(frame.policy, 'info');
-     }
-     logStage('client.ws', { outcome: 'auth_ok' });
-     flushClientBannerQueue();
-   }
+diff --git a/app/config.py b/app/config.py
+index f7740bf570451acae17c73cc0378538e18ad74a2..0e8099a7324913647e4a2e4248c76f7237703afc 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -71,50 +71,52 @@ _DEFAULT_POLICY_MEDIA = {
+ }
  
-   function handlePongFrame(frame) {
-     const now = Date.now();
-     let reference = null;
-     if (frame && typeof frame.echo === "number") {
-       reference = frame.echo;
-     } else if (frame && typeof frame.t === "number") {
-       reference = frame.t;
-     } else if (typeof lastPingAt === "number") {
-       reference = lastPingAt;
-     }
-     let rtt = null;
-     if (typeof reference === "number") {
-       const latency = Math.max(0, now - reference);
-       updateState({ latencyMs: latency });
-       rtt = latency;
-     }
-     logStage('client.ws', { outcome: 'pong', rtt_ms: rtt });
-   }
+ _DEFAULT_POLICY_CAPTURE = {
+     "start_on_asr_ready": True,
+     "start_on_turn_ready": True,
+     "timeslice_ms": 200,
+     "mask_during_tts": True,
+ }
  
-+  function transcriptFrameAllowed(frame) {
-+    const type = typeof frame?.type === "string" ? frame.type : "";
-+    const role = typeof frame?.role === "string" ? frame.role : "";
-+    const canonicalType = type === "message" || type === "chat.message";
-+    const canonicalRole = role === "user" || role === "assistant";
-+    const allow = canonicalType && canonicalRole;
-+    try {
-+      console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
-+    } catch {}
-+    return allow;
-+  }
+ _DEFAULT_POLICY_RECORDER = {
+     "stop_on_tts_start": False,
+     "mute_send_during_tts": True,
+ }
+ 
+ _DEFAULT_POLICY_INPUT = {
+     "require_hotword_to_start": False,
+ }
+ 
+ _DEFAULT_POLICY_ASR = {
+     "prearm_on_tts_end": True,
+     "keep_stream_warm_ms": 30000,
+     "vendor": {"primary": "deepgram", "secondary": None},
+     "commit_on_vad_silence": True,
+     "commit_silence_ms": 900,
+     "max_utterance_ms": 8000,
++    "dup_final_suppress_ms": 150,
++    "dedupe_normalize": True,
+ }
+ 
+ _DEFAULT_POLICY_ROUTING = {
+     "ws_version": "v2",
+ }
+ 
+ _DEFAULT_POLICY_AUDIO = {
+     "pipeline": {"mode": "opus-webm"},
+ }
+ 
+ POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
+ POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
+ POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
+ POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
+ POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
+ POLICY_AUDIO: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_AUDIO)
+ POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
+ POLICY_OVERRIDES: MutableMapping[str, Any] = {
+     "media": dict(POLICY_MEDIA),
+     "capture": dict(POLICY_CAPTURE),
+     "policy": {
+         "recorder": dict(POLICY_RECORDER),
+         "input": dict(POLICY_INPUT),
+         "asr": dict(POLICY_ASR),
+         "routing": dict(POLICY_ROUTING),
+@@ -376,50 +378,63 @@ def _sanitize_asr_policy(
+         return sanitized
+ 
+     for key in ("prearm_on_tts_end", "commit_on_vad_silence"):
+         try:
+             sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
+         except ValueError:
+             _log.warning(
+                 "evt=admin_settings_invalid_policy_asr key=%s source=%s",
+                 key,
+                 source,
+                 extra={"component": "admin.settings", "raw": raw},
+             )
+ 
+     sanitized["keep_stream_warm_ms"] = _coerce_db_int(
+         value.get("keep_stream_warm_ms"),
+         sanitized["keep_stream_warm_ms"],
+         minimum=0,
+     )
+ 
+     sanitized["commit_silence_ms"] = _coerce_db_int(
+         value.get("commit_silence_ms"), sanitized["commit_silence_ms"], minimum=0
+     )
+     sanitized["max_utterance_ms"] = _coerce_db_int(
+         value.get("max_utterance_ms"), sanitized["max_utterance_ms"], minimum=0
+     )
++    sanitized["dup_final_suppress_ms"] = _coerce_db_int(
++        value.get("dup_final_suppress_ms"), sanitized["dup_final_suppress_ms"], minimum=0
++    )
++    try:
++        sanitized["dedupe_normalize"] = _coerce_db_bool(
++            value.get("dedupe_normalize"), sanitized["dedupe_normalize"]
++        )
++    except ValueError:
++        _log.warning(
++            "evt=admin_settings_invalid_policy_asr key=dedupe_normalize source=%s",
++            source,
++            extra={"component": "admin.settings", "raw": raw},
++        )
+ 
+     vendor_value = value.get("vendor")
+     if isinstance(vendor_value, Mapping):
+         vendor_block = dict(sanitized.get("vendor", {}))
+         primary = vendor_value.get("primary")
+         if isinstance(primary, str) and primary.strip():
+             normalized = primary.strip().lower()
+             if normalized in _SUPPORTED_ASR_VENDORS:
+                 vendor_block["primary"] = normalized
+             else:
+                 _log.warning(
+                     "evt=admin_settings_invalid_policy_asr key=vendor.primary source=%s",
+                     source,
+                     extra={
+                         "component": "admin.settings",
+                         "raw": raw,
+                         "vendor": primary,
+                     },
+                 )
+         secondary = vendor_value.get("secondary")
+         if secondary is None:
+             vendor_block["secondary"] = None
+         elif isinstance(secondary, str) and secondary.strip():
+             normalized_secondary = secondary.strip().lower()
+             if normalized_secondary in _SUPPORTED_ASR_VENDORS:
+@@ -610,50 +625,56 @@ def _resolve_mapping_setting(
+     return dict(base_default), "default", None
+ 
+ 
+ def _resolve_int_setting(
+     name: str, default: int, *, minimum: Optional[int] = None
+ ) -> tuple[int, str, Any]:
+     env_value = os.getenv(_env_name(name))
+     if env_value is not None:
+         return _coerce_int(env_value, default, minimum=minimum), "env", env_value
+     stored = _get_cached_admin_setting(name)
+     if stored is not None:
+         return _coerce_db_int(stored, default, minimum=minimum), "db", stored
+     fallback = int(default)
+     if minimum is not None and fallback < minimum:
+         fallback = minimum
+     return fallback, "default", None
+ 
+ 
+ def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
+     """Resolve an integer config value from env, admin settings, or default."""
+ 
+     value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
+     return value
+ 
+ 
++ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(
++    "ASR_DUP_FINAL_SUPPRESS_MS", default=150, minimum=0
++)
++ASR_DEDUPE_NORMALIZE = bool_env_or_db("ASR_DEDUPE_NORMALIZE", default=True)
 +
-   function handleChatHistoryFrame(frame) {
-     const view = window.TranscriptView;
-     const messages = Array.isArray(frame.messages) ? frame.messages : [];
-     if (view && typeof view.handleChatMessage === "function" && messages.length) {
-       for (const message of messages) {
-+        if (!transcriptFrameAllowed(message)) {
-+          continue;
-+        }
-         try {
-           view.handleChatMessage(message);
-         } catch (err) {
-           console.warn("TranscriptView chat history handler error", err);
-           break;
-         }
-       }
-     }
-   }
++
+ def reload_runtime_flags() -> None:
+     """Refresh runtime configuration flags from env and admin settings."""
  
-   function handleErrorFrame(frame) {
-     console.error("WS error frame", frame);
-     const errorMeta = {};
-     if (frame && typeof frame.code === "string") {
-       errorMeta.code = truncateBannerString(frame.code, 64);
-     }
-     if (frame && typeof frame.detail === "string" && frame.detail) {
-       errorMeta.detail = truncateBannerString(frame.detail, 160);
-     } else if (frame && typeof frame.message === "string" && frame.message) {
-       errorMeta.detail = truncateBannerString(frame.message, 160);
-     }
-     if (Object.keys(errorMeta).length) {
-       recordClientBannerEvent("ws.error.frame", errorMeta);
-     } else {
-       recordClientBannerEvent("ws.error.frame", null);
-@@ -2127,107 +2142,97 @@ import { WakeWord } from "./wake_word.js";
-       } catch (err) {
-         console.warn("Hub start_listening handler error", err);
-         const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-         logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-       }
-     } else if (frame.type === "stop_listening") {
-       try {
-         const hub = AppState?.hub;
-         if (hub && typeof hub.stopListening === "function") {
-           hub.stopListening("server_requested");
-         } else {
-           stopInputCapture({ reason: "server_requested" });
-         }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-     } else if (frame.type === "input.start") {
-       startInputCapture(frame);
-     } else if (frame.type === "input.stop") {
-       stopInputCapture({ reason: "input.stop" });
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-     } else if (frame.type === "asr.partial") {
--      const view = window.TranscriptView;
--      if (view && typeof view.handlePartial === "function") {
--        try {
--          view.handlePartial(frame);
--        } catch (err) {
--          console.warn("TranscriptView partial handler error", err);
--        }
--      }
-+      transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.final") {
--      const view = window.TranscriptView;
--      if (view && typeof view.handleFinal === "function") {
--        try {
--          view.handleFinal(frame);
--        } catch (err) {
--          console.warn("TranscriptView final handler error", err);
--        }
--      }
-+      transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.unavailable") {
-       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-       const details = frame && typeof frame.details === "string"
-         ? frame.details
-         : (frame && typeof frame.detail === "string" ? frame.detail : "");
-       console.warn("asr.unavailable", reason, details);
-       AppState.asrReady = false;
-       updateState({ asrReady: false });
-       if (typeof AppState.emit === "function") {
-         AppState.emit("asrReady", { ready: false, reason });
-       }
-       try {
-         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
-         hud?.setState?.("Chat");
-       } catch (err) {
-         console.warn("Failed to update HUD state after asr.unavailable", err);
-       }
-       try {
-         const view = window.TranscriptView;
-         view?.showSystemFromChip?.(
-           "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
-         );
-       } catch (err) {
-         console.warn("Failed to render Chip system message after asr.unavailable", err);
-       }
-       try {
-         window?.Banner?.show?.(
-           "Voice temporarily unavailable. You can continue via chat.",
-           { level: "warning", ttlMs: 10000 }
-         );
-       } catch (err) {
-         console.warn("Failed to show voice unavailable banner", err);
-       }
--    } else if (frame.type === "chat.message") {
--      const view = window.TranscriptView;
--      if (view && typeof view.handleChatMessage === "function") {
--        try {
--          view.handleChatMessage(frame);
--        } catch (err) {
--          console.warn("TranscriptView chat handler error", err);
-+    } else if (frame.type === "chat.message" || frame.type === "message") {
-+      if (!transcriptFrameAllowed(frame)) {
-+        // Keep frame flowing to other listeners without rendering in transcript.
-+      } else {
-+        const view = window.TranscriptView;
-+        if (view && typeof view.handleChatMessage === "function") {
-+          try {
-+            view.handleChatMessage(frame);
-+          } catch (err) {
-+            console.warn("TranscriptView chat handler error", err);
-+          }
-         }
-       }
-     } else if (frame.type === "chat.history") {
-       handleChatHistoryFrame(frame);
-     }
-     dispatchFrame(frame);
-   }
+     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
+         "diag_client_hud", default=False
+     )
+     audio_guardrails_default = {"enabled": True}
+     audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
+         "audio_guardrails", default=audio_guardrails_default
+     )
+     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
+         "diag_audio_guard", default=True
+     )
+     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
+         "diag_chunk_sample_n", default=10, minimum=1
+     )
  
-   async function parseFrame(event) {
-     const { data } = event;
-     if (typeof data === "string") {
-       try {
-         const frame = JSON.parse(data);
-         if (frame && typeof frame.message === "string") {
-           if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-             return;
-           }
+     policy_media_raw, media_source, media_raw = _resolve_mapping_setting(
+         "policy_media", default=_DEFAULT_POLICY_MEDIA
+     )
+     policy_media = _sanitize_media_policy(
+         policy_media_raw, source=media_source, raw=media_raw
+     )
+ 
+     policy_capture_raw, capture_source, capture_raw = _resolve_mapping_setting(
+@@ -813,50 +834,52 @@ def get_client_config_snapshot() -> dict[str, Any]:
+ 
+ 
+ def set_admin_settings(
+     values: Mapping[str, Optional[Any]], *, updated_by: str | None = None
+ ) -> None:
+     """Persist multiple admin settings and refresh runtime flags."""
+ 
+     store = _get_admin_settings_store()
+     if store is None:
+         raise RuntimeError("Admin settings store unavailable")
+     normalized_updates: dict[str, Optional[Any]] = {}
+     for key, value in values.items():
+         normalized = _normalize_key(key)
+         store.set(normalized, value, updated_by=updated_by)
+         normalized_updates[normalized] = value
+     update_admin_settings_cache(normalized_updates)
+ 
+ 
+ reload_runtime_flags()
+ 
+ 
+ __all__ = [
+     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
+     "ASR_IDLE_CLOSE_MS",
+     "ASR_TRACE",
++    "ASR_DUP_FINAL_SUPPRESS_MS",
++    "ASR_DEDUPE_NORMALIZE",
+     "ASR_DEEPGRAM_ENABLED",
+     "ASR_SPEECHMATICS_ENABLED",
+     "AUDIO_GUARDRAILS",
+     "DEEPGRAM_API_KEY",
+     "SPEECHMATICS_API_KEY",
+     "SPEECHMATICS_REALTIME_URL",
+     "DIAG_AUDIO_GUARD",
+     "DIAG_CHUNK_SAMPLE_N",
+     "DIAG_CLIENT_HUD",
+     "POLICY_MEDIA",
+     "POLICY_CAPTURE",
+     "POLICY_RECORDER",
+     "POLICY_INPUT",
+     "POLICY_ASR",
+     "POLICY_AUDIO",
+     "POLICY_ROUTING",
+     "POLICY_OVERRIDES",
+     "bool_env_or_db",
+     "get_admin_setting_raw",
+     "get_client_config_snapshot",
+     "get_env",
+     "int_env_or_db",
+     "reload_runtime_flags",
+     "set_admin_setting_raw",
+     "set_admin_settings",
+diff --git a/app/policy/loader.py b/app/policy/loader.py
+index 77fd28df3923170d86ec7a134d13f450d66aa00b..cb0482ba024699506bd97f8c66f38a302cbab6f0 100644
+--- a/app/policy/loader.py
++++ b/app/policy/loader.py
+@@ -18,50 +18,52 @@ _DEFAULT_ASSISTANT_TURN_ACTIONS: Sequence[str] = (
+ # ``load_interaction_policy`` when no overrides are provided. The structure is
+ # intentionally shallow so that overrides replace entire child objects rather
+ # than performing recursive merges.
+ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
+     "mode": "idle",
+     "allow_auto_vad": True,
+     "barge_in_enabled": True,
+     "auto_commit_when_ready": True,
+     "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
+     "greet": {"enabled": True, "mode": "persona", "post_hold_ms": 200},
+     "suggestions": {"on_connect": True, "count": 3},
+     "policy": {
+         "recorder": {
+             "stop_on_tts_start": False,
+             "mute_send_during_tts": True,
+         },
+         "input": {
+             "require_hotword_to_start": False,
+         },
+         "asr": {
+             "prearm_on_tts_end": True,
+             "keep_stream_warm_ms": 30000,
+             "commit_on_vad_silence": True,
+             "commit_silence_ms": 900,
+             "max_utterance_ms": 8000,
++            "dup_final_suppress_ms": 150,
++            "dedupe_normalize": True,
+             "vendor": {"primary": "deepgram", "secondary": None},
+         },
+         "routing": {
+             "ws_version": "v2",
+         },
+     },
+     "audio": {"pipeline": {"mode": "opus-webm"}},
+     "actions": {
+         "allowed": ["answer"],
+         "surface_via_suggestions": True,
+         _ASSISTANT_TURN_SEQUENCE_KEY: list(_DEFAULT_ASSISTANT_TURN_ACTIONS),
+     },
+     "telemetry": {
+         "enabled": True,
+         "level": "debug",
+         "categories": {
+             "ws": True,
+             "audio": True,
+             "policy": True,
+             "tts": True,
+             "gate": True,
+             "barge": True,
+             "asr": True,
+             "nlu": True,
+             "nlg": True,
+diff --git a/app/policy/model.py b/app/policy/model.py
+index 5edbfbcc6e3f0a1e7c8f0ddf89834a24ece7bcbc..1b3c4219e58982e4a8c886a2ef11e6b2c947b5ee 100644
+--- a/app/policy/model.py
++++ b/app/policy/model.py
+@@ -23,50 +23,52 @@ class CapturePolicy:
+     start_on_turn_ready: bool = True
+     timeslice_ms: int = 200
+     mask_during_tts: bool = True
+     mask_keepalive_enable: bool = True
+     mask_keepalive_ms: int = 5000
+ 
+ 
+ @dataclass
+ class ASRVendorPolicy:
+     """Describe how ASR vendors should be selected at runtime."""
+ 
+     primary: str = "deepgram"
+     secondary: Optional[str] = None
+ 
+ 
+ @dataclass
+ class ASRPolicy:
+     """Server-side ASR endpointing configuration."""
+ 
+     vendor: ASRVendorPolicy = field(default_factory=ASRVendorPolicy)
+     prearm_on_tts_end: bool = True
+     keep_stream_warm_ms: int = 30000
+     commit_on_vad_silence: bool = True
+     commit_silence_ms: int = 900
+     max_utterance_ms: int = 8000
++    dup_final_suppress_ms: int = 150
++    dedupe_normalize: bool = True
+ 
+ 
+ @dataclass
+ class AudioPipelinePolicy:
+     """Describe the media pipeline presented to clients."""
+ 
+     mode: Literal["opus-webm", "pcm16"] = "opus-webm"
+ 
+ 
+ @dataclass
+ class AudioPolicy:
+     """Audio-focused policy controls."""
+ 
+     pipeline: AudioPipelinePolicy = field(default_factory=AudioPipelinePolicy)
+ 
+ 
+ @dataclass
+ class Policy:
+     """Container for policy knobs exposed to the runtime."""
+ 
+     interaction: Dict[str, Any] = field(default_factory=dict)
+     media: MediaPolicy = field(default_factory=MediaPolicy)
+     capture: CapturePolicy = field(default_factory=CapturePolicy)
+     asr: ASRPolicy = field(default_factory=ASRPolicy)
+     audio: AudioPolicy = field(default_factory=AudioPolicy)
+diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
+index d5336f92114cad4e36b795ccb871e043dd493601..53c094f54b953d1855d3cb156863dd521fd0e6f1 100644
+--- a/app/voice_v2/__init__.py
++++ b/app/voice_v2/__init__.py
+@@ -10,75 +10,77 @@ EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
+ EVT_CHAT_USER = "EVT_CHAT_USER"
+ 
+ EVT_TTS_START = "EVT_TTS_START"
+ EVT_TTS_END = "EVT_TTS_END"
+ EVT_TTS_MASK = "EVT_TTS_MASK"
+ 
+ EVT_TURN_STATE = "EVT_TURN_STATE"
+ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+ EVT_TURN_END = "EVT_TURN_END"
+ EVT_TURN_ROLLUP = "EVT_TURN_ROLLUP"
+ EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
+ 
+ EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
+ EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
+ 
+ EVT_MIC_GATE = "EVT_MIC_GATE"
+ EVT_BARGE_DETECTED = "EVT_BARGE_DETECTED"
+ EVT_BARGE_CONFIRMED = "EVT_BARGE_CONFIRMED"
+ EVT_BARGE_REJECTED = "EVT_BARGE_REJECTED"
+ EVT_ACTION_SAY_END = "EVT_ACTION_SAY_END"
+ 
+ EVT_ASR_READY = "EVT_ASR_READY"
+ EVT_ASR_OPEN = "EVT_ASR_OPEN"
+ EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
+ EVT_ASR_FINAL = "EVT_ASR_FINAL"
++EVT_ASR_FINAL_SUPPRESSED_DUP = "EVT_ASR_FINAL_SUPPRESSED_DUP"
+ EVT_NLU = "EVT_NLU"
+ EVT_NLG = "EVT_NLG"
+ EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
+ EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
+ EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
+ EVT_HUD_STATE = "EVT_HUD_STATE"
+ EVT_CLIENT_MIC_OPEN = "EVT_CLIENT_MIC_OPEN"
+ EVT_CLIENT_BANNER = "EVT_CLIENT_BANNER"
+ EVT_CLIENT_LOG = "EVT_CLIENT_LOG"
+ EVT_CLIENT_AUTOSTART = "EVT_CLIENT_AUTOSTART"
+ 
+ __all__ = [
+     "EVT_WS_OPEN",
+     "EVT_WS_CLOSE",
+     "EVT_WS_JSON_RECV",
+     "EVT_WS_JSON_SEND",
+     "EVT_SESSION_STEP",
+     "EVT_WS_AUDIO_RECV",
+     "EVT_WS_AUDIO_SEND",
+     "EVT_CHAT_USER",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_TTS_MASK",
+     "EVT_TURN_STATE",
+     "EVT_TURN_BEGIN",
+     "EVT_TURN_END",
+     "EVT_TURN_ROLLUP",
+     "EVT_PERF_SUMMARY",
+     "EVT_POLICY_APPLIED",
+     "EVT_ACWR_RECOMPUTE",
+     "EVT_MIC_GATE",
+     "EVT_BARGE_DETECTED",
+     "EVT_BARGE_CONFIRMED",
+     "EVT_BARGE_REJECTED",
+     "EVT_ACTION_SAY_END",
+     "EVT_ASR_READY",
+     "EVT_ASR_OPEN",
+     "EVT_ASR_PARTIAL",
+     "EVT_ASR_FINAL",
++    "EVT_ASR_FINAL_SUPPRESSED_DUP",
+     "EVT_NLU",
+     "EVT_NLG",
+     "EVT_LLM_RESPONSE_START",
+     "EVT_LLM_RESPONSE_END",
+     "EVT_DIALOG_PLAN",
+     "EVT_HUD_STATE",
+     "EVT_CLIENT_MIC_OPEN",
+     "EVT_CLIENT_BANNER",
+     "EVT_CLIENT_LOG",
+     "EVT_CLIENT_AUTOSTART",
+ ]
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index c12be64f78f4706e2c2bd1351f4e9e3c9264ef57..5ca511246e200fa39e356119cc4cc65094f5408f 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -1,48 +1,52 @@
+ """Vendor-agnostic ASR runtime for the voice v2 engine."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import logging
+ import math
++import hashlib
+ import os
+ import struct
+ import time
+ import uuid
+-from collections import deque
++from collections import OrderedDict, deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Optional
+ 
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
++    ASR_DEDUPE_NORMALIZE,
++    ASR_DUP_FINAL_SUPPRESS_MS,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.policy.model import Policy
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
++    EVT_ASR_FINAL_SUPPRESSED_DUP,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+ _EBML_MAGIC = b"\x1a\x45\xdf\xa3"
+ _RMS_PROBE_WINDOW_MS = 2000
+ def _resolve_stream_open_timeout(default: float = 10.0) -> float:
+     raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
+     if raw is None:
+         return default
+     try:
+         timeout = float(raw)
+     except (TypeError, ValueError):
+@@ -127,50 +131,51 @@ class _SessionState:
+     first_chunk_seen: bool = False
+     rollup_window_start: float = 0.0
+     rollup_chunks: int = 0
+     rollup_bytes: int = 0
+     bytes_received: int = 0
+     listening: bool = False
+     ingress_packets: int = 0
+     ingress_bytes: int = 0
+     first_ingress_ms: int = 0
+     first_partial_logged: bool = False
+     last_partial_log: float = 0.0
+     model: Optional[str] = None
+     keep_warm_until: float = 0.0
+     probe_active: bool = False
+     probe_target_samples: int = 0
+     probe_samples_collected: int = 0
+     probe_sum_squares: float = 0.0
+     probe_peak: float = 0.0
+     probe_window_ms: int = _RMS_PROBE_WINDOW_MS
+     commit_on_vad_silence: bool = True
+     commit_silence_ms: int = 900
+     max_utterance_ms: int = 8000
+     commit_timer: asyncio.TimerHandle | None = None
+     utterance_active: bool = False
+     utterance_started_at: float = 0.0
++    final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
+ 
+     def __post_init__(self) -> None:
+         now_monotonic = time.monotonic()
+         now_wall = time.time()
+         self.opened_at_monotonic = now_monotonic
+         self.opened_at_ms = int(now_wall * 1000)
+         self.last_audio_ts = now_monotonic
+         self.last_audio_ts_ms = int(now_wall * 1000)
+ 
+ 
+ class ASRRuntime:
+     """Bridge websocket audio to realtime transcription providers."""
+ 
+     def __init__(
+         self,
+         engine: EngineV2,
+         client: Any,
+         *,
+         telemetry_bus: Any | None = None,
+     ) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+             raise ValueError("client must be provided")
+ 
+@@ -1494,52 +1499,88 @@ class ASRRuntime:
+ 
+         _log.debug(
+             "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
+             "utterance_id=%s latency_ms=%d req_id=%s",
+             sid,
+             stream_id,
+             len_chars,
+             utterance_id,
+             latency_ms,
+             req_id,
+         )
+ 
+         try:
+             self._engine.on_asr_final(sid, text, req_id)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_engine_final_failed sid=%s", sid)
+ 
+         event = {
+             "type": EVT_ASR_FINAL,
+             "sid": sid,
+             "req_id": req_id,
+             "text": text,
+             "confidence": _FINAL_CONFIDENCE,
+             "vendor": self._vendor,
          }
-         if (frame && frame.type === "server.ping") {
-           send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
-           return;
-         }
-         await handleMessageFrame(frame);
-       } catch (err) {
-         console.error("Failed to parse WS frame", err, data);
++        suppress_ms, normalize = self._resolve_final_dedupe_policy()
++        suppressed, text_hash, delta_ms = self._should_suppress_final(
++            state, text, suppress_ms, normalize
++        )
++        if suppressed:
++            diag_event = {
++                "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
++                "sid": sid,
++                "req_id": req_id,
++                "vendor": self._vendor,
++                "text_hash": text_hash,
++                "delta_ms": delta_ms,
++                "suppress_ms": suppress_ms,
++            }
++            self._bus.publish(diag_event)
++            _log.info(
++                "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
++                sid,
++                req_id,
++                self._vendor,
++                text,
++                text_hash,
++                delta_ms,
++                suppress_ms,
++            )
++            self._log_utterance(state, stream_id, req_id, metadata, text)
++            return
++
+         self._bus.publish(event)
+         state.finals_delivered += 1
++        _log.info(
++            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
++            sid,
++            req_id,
++            self._vendor,
++            text,
++            text_hash,
++        )
+         self._log_utterance(state, stream_id, req_id, metadata, text)
+ 
+     def _on_error(self, sid: str, error: str) -> None:
+         reason = error or "unknown"
+         _log.error("asr_error vendor=%s code=stream reason=%s", self._vendor, reason)
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             return
+         self._publish_asr_unavailable(
+             sid,
+             "upstream_closed",
+             error or "unknown error",
+             state=state,
+         )
+         state.close_reason = "error"
+         state.stream_open = False
+         state.req_id = None
+         self._cancel_idle_timer(state)
+         self._cancel_ready_watchdog(state)
+         self._cancel_commit_timer(state)
+         state.utterance_active = False
+         try:
+             self._client.close_stream(sid)
+         except Exception:  # pragma: no cover - defensive
+@@ -1863,50 +1904,125 @@ class ASRRuntime:
+         if isinstance(snapshot, Mapping):
+             policy_block = snapshot.get("policy")
+             if isinstance(policy_block, Mapping):
+                 asr_block = policy_block.get("asr")
+                 if isinstance(asr_block, Mapping):
+                     if "commit_on_vad_silence" in asr_block:
+                         commit_on_vad = bool(asr_block.get("commit_on_vad_silence"))
+                     if "commit_silence_ms" in asr_block:
+                         commit_silence_ms = self._coerce_policy_int(
+                             asr_block.get("commit_silence_ms"), commit_silence_ms
+                         )
+                     if "max_utterance_ms" in asr_block:
+                         max_utterance_ms = self._coerce_policy_int(
+                             asr_block.get("max_utterance_ms"), max_utterance_ms
+                         )
+         return commit_on_vad, commit_silence_ms, max_utterance_ms
+ 
+     @staticmethod
+     def _coerce_policy_int(value: Any, default: int) -> int:
+         try:
+             candidate = int(value)
+         except (TypeError, ValueError):
+             return max(0, int(default))
+         return max(0, candidate)
+ 
++    def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
++        asr_policy = getattr(self.policy, "asr", None)
++        suppress_ms = self._coerce_policy_int(
++            getattr(asr_policy, "dup_final_suppress_ms", ASR_DUP_FINAL_SUPPRESS_MS),
++            ASR_DUP_FINAL_SUPPRESS_MS,
++        )
++        normalize = bool(
++            getattr(asr_policy, "dedupe_normalize", ASR_DEDUPE_NORMALIZE)
++        )
++
++        snapshot = getattr(self._engine, "policy_snapshot", None)
++        if isinstance(snapshot, Mapping):
++            policy_block = snapshot.get("policy")
++            if isinstance(policy_block, Mapping):
++                asr_block = policy_block.get("asr")
++                if isinstance(asr_block, Mapping):
++                    if "dup_final_suppress_ms" in asr_block:
++                        suppress_ms = self._coerce_policy_int(
++                            asr_block.get("dup_final_suppress_ms"), suppress_ms
++                        )
++                    if "dedupe_normalize" in asr_block:
++                        normalize = bool(asr_block.get("dedupe_normalize"))
++
++        suppress_ms = self._coerce_policy_int(suppress_ms, ASR_DUP_FINAL_SUPPRESS_MS)
++        return suppress_ms, normalize
++
++    @staticmethod
++    def _normalize_final_text(text: str, normalize: bool) -> str:
++        if not isinstance(text, str):
++            return ""
++        candidate = text.strip()
++        if not candidate:
++            return ""
++        if not normalize:
++            return candidate
++        return " ".join(candidate.split()).lower()
++
++    def _should_suppress_final(
++        self,
++        state: _SessionState,
++        text: str,
++        suppress_ms: int,
++        normalize: bool,
++    ) -> tuple[bool, str, int]:
++        if suppress_ms <= 0:
++            normalized = self._normalize_final_text(text, normalize)
++            if not normalized:
++                return False, "", 0
++            digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()
++            return False, digest, 0
++
++        normalized = self._normalize_final_text(text, normalize)
++        if not normalized:
++            return False, "", 0
++
++        digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()
++        now_ms = int(time.time() * 1000)
++        cache = state.final_dedupe_cache
++
++        threshold = now_ms - suppress_ms
++        for key, ts in list(cache.items()):
++            if ts < threshold:
++                cache.pop(key, None)
++
++        previous_ts = cache.get(digest)
++        cache[digest] = now_ms
++        cache.move_to_end(digest)
++        while len(cache) > 64:
++            cache.popitem(last=False)
++
++        if previous_ts is not None and now_ms - previous_ts <= suppress_ms:
++            return True, digest, now_ms - previous_ts
++
++        return False, digest, 0
++
+     def _start_commit_timer(self, sid: str, state: _SessionState) -> None:
+         if state.max_utterance_ms <= 0 or state.commit_timer is not None:
+             return
+         loop = self._ensure_loop()
+         if loop is None:
+             return
+         delay = state.max_utterance_ms / 1000.0
+         if delay <= 0:
+             return
+ 
+         def _fire() -> None:
+             state.commit_timer = None
+             _log.info(
+                 "evt=asr_commit_timer_fired sid=%s vendor=%s max_utterance_ms=%d",
+                 sid,
+                 self._vendor,
+                 state.max_utterance_ms,
+             )
+             self.commit(sid, reason="time_cap")
+ 
+         state.commit_timer = loop.call_later(delay, _fire)
+         state.utterance_started_at = time.monotonic()
+ 
+     @staticmethod
+     def _cancel_commit_timer(state: _SessionState) -> None:
