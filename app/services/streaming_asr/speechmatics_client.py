@@ -112,6 +112,30 @@ def _resolve_headers_arg() -> str:
 _CONNECT_HEADERS_ARG = _resolve_headers_arg()
 
 
+def _is_fatal_concurrency_notice(payload: Mapping[str, Any] | None) -> bool:
+    """Return True when a Speechmatics concurrency notice is fatal."""
+
+    if not isinstance(payload, Mapping):
+        return True
+
+    severity_candidates = (
+        payload.get("severity"),
+        payload.get("level"),
+        payload.get("message"),
+    )
+    for candidate in severity_candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            normalized = candidate.strip().lower()
+            if normalized in {"error", "critical", "fatal"}:
+                return True
+            if normalized in {"warning", "warn", "info", "informational"}:
+                return False
+    # Default to non-fatal so that benign vendor telemetry does not tear down the
+    # stream. Hard failures will include an explicit error severity or will result
+    # in the connection closing, which is handled elsewhere.
+    return False
+
+
 @dataclass
 class _StreamState:
     sid: str
@@ -422,13 +446,21 @@ class SpeechmaticsClient:
                         notice_type = raw_notice.strip().lower()
 
                 if notice_type.startswith("concurrent_session"):
-                    self._logger.error(
-                        "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
-                        state.sid,
-                        state.stream_id,
-                        notice_type,
-                    )
-                    self._handle_error(state, "concurrent_session", notice_type)
+                    if _is_fatal_concurrency_notice(payload):
+                        self._logger.error(
+                            "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
+                            state.sid,
+                            state.stream_id,
+                            notice_type,
+                        )
+                        self._handle_error(state, "concurrent_session", notice_type)
+                    else:
+                        self._logger.warning(
+                            "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s severity=benign",
+                            state.sid,
+                            state.stream_id,
+                            notice_type,
+                        )
                     continue
 
                 if isinstance(message_name, str) and message_name in {

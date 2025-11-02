@@ -1,8 +1,62 @@
 diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 70d09f26254cf0d43e4aa10b94f018f401913825..13c07049181d0f7699c17bcf532e38f6db51ca47 100644
+index 13c07049181d0f7699c17bcf532e38f6db51ca47..15bcc7159294428a8a24e7483014869702490df5 100644
 --- a/app/services/streaming_asr/speechmatics_client.py
 +++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -120,50 +120,51 @@ class _StreamState:
+@@ -90,50 +90,74 @@ def _extract_text(payload: Mapping[str, Any]) -> str | None:
+ 
+ def _invoke_callback(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+     try:
+         callback(*args, **kwargs)
+     except TypeError:
+         # Fallback to positional invocation with reduced arguments for legacy handlers.
+         if kwargs:
+             callback(*args)
+         else:
+             raise
+ 
+ 
+ def _resolve_headers_arg() -> str:
+     try:
+         params = inspect.signature(websockets.connect).parameters
+     except (TypeError, ValueError):  # pragma: no cover - defensive
+         return "extra_headers"
+     if "additional_headers" in params:
+         return "additional_headers"
+     return "extra_headers"
+ 
+ 
+ _CONNECT_HEADERS_ARG = _resolve_headers_arg()
+ 
+ 
++def _is_fatal_concurrency_notice(payload: Mapping[str, Any] | None) -> bool:
++    """Return True when a Speechmatics concurrency notice is fatal."""
++
++    if not isinstance(payload, Mapping):
++        return True
++
++    severity_candidates = (
++        payload.get("severity"),
++        payload.get("level"),
++        payload.get("message"),
++    )
++    for candidate in severity_candidates:
++        if isinstance(candidate, str) and candidate.strip():
++            normalized = candidate.strip().lower()
++            if normalized in {"error", "critical", "fatal"}:
++                return True
++            if normalized in {"warning", "warn", "info", "informational"}:
++                return False
++    # Default to non-fatal so that benign vendor telemetry does not tear down the
++    # stream. Hard failures will include an explicit error severity or will result
++    # in the connection closing, which is handled elsewhere.
++    return False
++
++
+ @dataclass
+ class _StreamState:
+     sid: str
+     stream_id: str
+     websocket: WebSocketClientProtocol
      on_partial: Callable[[str, Dict[str, object]], None]
      on_final: Callable[[str, Dict[str, object]], None]
      on_error: Callable[..., None]
@@ -23,133 +77,107 @@ index 70d09f26254cf0d43e4aa10b94f018f401913825..13c07049181d0f7699c17bcf532e38f6
      bytes_sent: int = 0
      first_audio_ts: float | None = None
      last_audio_ts: float | None = None
-     last_partial_log: float = 0.0
-     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
-     ready_error: Optional[str] = None
-     ready_error_detail: Optional[str] = None
-     vendor_notices: set[str] = field(default_factory=set)
-+    end_of_stream_sent: bool = False
+@@ -400,57 +424,65 @@ class SpeechmaticsClient:
+                         self._logger.debug(
+                             "evt=sm_empty_transcript_ignored"
+                         )
+                         continue
  
+                     type_field = payload.get("type")
+                     is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
+                     if isinstance(type_field, str) and type_field.lower() == "final":
+                         is_final = True
  
- class SpeechmaticsClient:
-     """Client wrapper responsible for Speechmatics realtime streams."""
+                     self._emit_transcript_event(state, text, is_final)
  
-     def __init__(self, api_key: str, url: str, bus: Any, logger: logging.Logger) -> None:
-         self._api_key = api_key
-         self._url = url
-         self._bus = bus
-         self._logger = logger or logging.getLogger(__name__)
-         self._streams: Dict[str, _StreamState] = {}
+                     if is_final:
+                         self._handle_final(state, payload, text_override=text, emit_event=False)
+                     else:
+                         self._handle_partial(state, payload, text_override=text, emit_event=False)
+                     continue
  
-     async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
-         if not self._streams:
-             return
+                 notice_type = ""
+                 if isinstance(payload, Mapping):
+                     raw_notice = payload.get("type") or payload.get("notice")
+                     if isinstance(raw_notice, str):
+                         notice_type = raw_notice.strip().lower()
  
-         deadline = time.monotonic() + max(0.0, timeout)
-         while self._streams:
-             active_sids = [sid for sid in self._streams if sid != new_sid]
-             if not active_sids:
-                 break
+                 if notice_type.startswith("concurrent_session"):
+-                    self._logger.error(
+-                        "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
+-                        state.sid,
+-                        state.stream_id,
+-                        notice_type,
+-                    )
+-                    self._handle_error(state, "concurrent_session", notice_type)
++                    if _is_fatal_concurrency_notice(payload):
++                        self._logger.error(
++                            "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
++                            state.sid,
++                            state.stream_id,
++                            notice_type,
++                        )
++                        self._handle_error(state, "concurrent_session", notice_type)
++                    else:
++                        self._logger.warning(
++                            "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s severity=benign",
++                            state.sid,
++                            state.stream_id,
++                            notice_type,
++                        )
+                     continue
  
-             for existing_sid in active_sids:
-                 state = self._streams.get(existing_sid)
-                 if state is None:
-@@ -621,63 +622,95 @@ class SpeechmaticsClient:
+                 if isinstance(message_name, str) and message_name in {
+                     "Info",
+                     "RecognitionStarted",
+                     "AudioAdded",
+                 }:
+                     if message_name not in state.vendor_notices:
+                         self._logger.info("evt=sm_notice message=%s", message_name.lower())
+                         state.vendor_notices.add(message_name)
+                     # Treat vendor notices as sufficient to consider the stream ready so
+                     # that the sender loop can proceed with audio transmission.
+                     self._mark_stream_ready(state, payload)
+                     continue
  
-     def _handle_error(self, state: _StreamState, code: str, reason: str) -> None:
-         if not state.ready_event.is_set():
-             state.ready_error = code
-             state.ready_error_detail = reason
-             state.ready_event.set()
-         self._logger.error(
-             "asr_error vendor=speechmatics code=%s reason=%s",
-             code,
-             reason,
-         )
-         try:
-             _invoke_callback(state.on_error, code, reason)
-         except Exception:
-             self._logger.exception("evt=sm_error_callback_failed sid=%s", state.sid)
-         if not state.closing:
-             state.closing = True
-             try:
-                 state.audio_queue.put_nowait(_AUDIO_SENTINEL)
-             except Exception:
-                 pass
-             state.loop.create_task(self._shutdown(state))
- 
-     async def _shutdown(self, state: _StreamState) -> None:
-         try:
--            # If you don’t track seq numbers yet, just close the socket cleanly:
--            await state.websocket.close()
--            # (Optional later: {"message":"EndOfStream","last_seq_no": N})
-+            await self._send_end_of_stream(state)
-         except Exception:
-             self._logger.debug(
-                 "evt=sm_stop_send_failed sid=%s stream_id=%s", state.sid, state.stream_id
-             )
-         await self._close_websocket(state)
-         await self._finalize_close(state, None, None)
- 
-+    async def _send_end_of_stream(self, state: _StreamState) -> None:
-+        if state.end_of_stream_sent or state.closed:
-+            return
+                 self._handle_payload(state, payload)
+         except asyncio.CancelledError:
+             raise
+         except websockets.ConnectionClosedOK as exc:
+             await self._finalize_close(state, exc.code, exc.reason)
+         except websockets.ConnectionClosedError as exc:
+             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
+             await self._finalize_close(state, exc.code, exc.reason)
+         except Exception as exc:
+             self._logger.exception(
+diff --git a/tests/test_speechmatics_client.py b/tests/test_speechmatics_client.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..bdd3a975579a5c736829f6cda2c97925dc2e1779
+--- /dev/null
++++ b/tests/test_speechmatics_client.py
+@@ -0,0 +1,25 @@
++import unittest
 +
-+        # Ensure the sender loop has an opportunity to flush pending audio prior to
-+        # signalling the vendor that no more data will arrive.
-+        sender_task = state.sender_task
-+        if sender_task is not None and not sender_task.done():
-+            try:
-+                await asyncio.wait_for(asyncio.shield(sender_task), timeout=0.5)
-+            except asyncio.TimeoutError:
-+                pass
-+            except Exception:
-+                self._logger.debug(
-+                    "evt=sm_wait_sender_failed sid=%s stream_id=%s",
-+                    state.sid,
-+                    state.stream_id,
-+                )
++from app.services.streaming_asr.speechmatics_client import _is_fatal_concurrency_notice
 +
-+        payload = json.dumps({"message": "EndOfStream"})
-+        try:
-+            await state.websocket.send(payload)
-+        except websockets.ConnectionClosed:
-+            pass
-+        except Exception:
-+            self._logger.debug(
-+                "evt=sm_end_of_stream_send_failed sid=%s stream_id=%s",
-+                state.sid,
-+                state.stream_id,
-+            )
-+        finally:
-+            state.end_of_stream_sent = True
 +
-     async def _close_websocket(self, state: _StreamState) -> None:
-         try:
-             await state.websocket.close()
-+            await state.websocket.wait_closed()
-         except Exception:
-             self._logger.debug(
-                 "evt=sm_ws_close_failed sid=%s stream_id=%s", state.sid, state.stream_id
-             )
- 
-     async def _finalize_close(
-         self, state: _StreamState, code: int | None, reason: str | None
-     ) -> None:
-         if state.closed:
-             return
-         state.closed = True
-         if not state.ready_event.is_set():
-             state.ready_error = state.ready_error or "connection_closed"
-             state.ready_error_detail = state.ready_error_detail or (reason or "")
-             state.ready_event.set()
-         current = self._streams.get(state.sid)
-         if current is state:
-             self._streams.pop(state.sid, None)
-         if state.on_close is not None:
-             try:
-                 _invoke_callback(state.on_close, code, reason)
-             except Exception:
-                 self._logger.exception("evt=sm_close_callback_failed sid=%s", state.sid)
-         duration_ms = self._duration_ms(state)
-         self._logger.info(
++class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
++    def test_info_notice_not_fatal(self) -> None:
++        payload = {"message": "Info", "type": "concurrent_session_usage"}
++        self.assertFalse(_is_fatal_concurrency_notice(payload))
++
++    def test_warning_notice_not_fatal(self) -> None:
++        payload = {"message": "Warning", "severity": "warning", "type": "concurrent_session_limit"}
++        self.assertFalse(_is_fatal_concurrency_notice(payload))
++
++    def test_error_notice_fatal(self) -> None:
++        payload = {"message": "Error", "type": "concurrent_session_usage"}
++        self.assertTrue(_is_fatal_concurrency_notice(payload))
++
++    def test_explicit_severity_error_fatal(self) -> None:
++        payload = {"severity": "critical", "type": "concurrent_session_usage"}
++        self.assertTrue(_is_fatal_concurrency_notice(payload))
++
++
++if __name__ == "__main__":
++    unittest.main()
