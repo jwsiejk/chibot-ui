@@ -1,72 +1,208 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 0afc2d581035832527668233098e76a8c2d0bc09..383f7991da8a8488beaac4d201224922849fb33f 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -466,53 +466,64 @@ class SpeechmaticsClient:
-                 if isinstance(message, bytes):
-                     continue
-                 try:
-                     payload = json.loads(message)
-                 except Exception:
-                     self._logger.debug(
-                         "evt=sm_msg_parse_failed sid=%s stream_id=%s", state.sid, state.stream_id
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 92107ddbce859a841154f5d9b68d1bd88f382ff0..ec1331d9dbb3af77493218c52bc4d0e86d70a7db 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -283,50 +283,51 @@ class AdapterContext:
+     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+     audio_window: int = AUDIO_SEQ_WINDOW
+     audio_chunks_recv: int = 0
+     audio_bytes_recv: int = 0
+     ingress_packets: int = 0
+     ingress_bytes: int = 0
+     first_ingress_ms: Optional[int] = None
+     mic_armed_ms: Optional[int] = None
+     last_pong_sent_ms: int = 0
+     last_client_activity_ms: int = 0
+     last_client_pong_ms: int = 0
+     last_server_ping_ms: int = 0
+     ip: Optional[str] = None
+     sid_bucket: Optional[TokenBucket] = None
+     ip_bucket: Optional[TokenBucket] = None
+     audio_profile: Optional[Dict[str, Any]] = None
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
+     audio_subscription_token: Optional[str] = None
+     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
++    audio_send_closed: bool = False
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     asr_subscription_bus: Optional[Any] = None
+     asr_open_subscription_token: Optional[str] = None
+     asr_unavailable_subscription_token: Optional[str] = None
+     asr_partial_subscription_token: Optional[str] = None
+     asr_final_subscription_token: Optional[str] = None
+     asr_recovering_until: float = 0.0
+     asr_recovering_reason: Optional[str] = None
+     asr_recovering_audio_logged: bool = False
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     policy_snapshot: Optional[Dict[str, Any]] = None
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+     tts_end_ts: Optional[float] = None
+     diag_audio_seen: bool = False
+     diag_timer: asyncio.TimerHandle | None = None
+     diag_timer_key: Optional[str] = None
+     await_user_expected: bool = False
+     await_user_pending: bool = False
+     await_user_pending_key: Optional[str] = None
+     await_user_after_mask: bool = False
+     await_user_after_mask_key: Optional[str] = None
+@@ -2239,67 +2240,75 @@ class ChatV2Adapter:
+                 return
+             meta = event.get("meta")
+             if not isinstance(meta, Mapping):
+                 return
+             state = meta.get("state")
+             reason = meta.get("reason")
+             if state != "Ready" or reason != "tts_end":
+                 return
+ 
+             def _on_loop() -> None:
+                 policy = self._policy_snapshot()
+                 self._maybe_emit_await_user(ctx, policy)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 _on_loop()
+ 
+         ctx.turn_state_subscription_token = bus.subscribe(
+             "EVT_TURN_STATE", _handle_turn_state_event
+         )
+ 
+         def _handle_audio_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
++            if ctx.audio_send_closed:
++                return
+             chunk = event.get("chunk")
+             if isinstance(chunk, (bytes, bytearray, memoryview)):
+                 chunk_bytes = bytes(chunk)
+             else:
+                 return
+ 
+             def _deliver() -> None:
+                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+                 ctx.audio_tasks.add(task)
+ 
+                 def _on_done(done: asyncio.Task[None]) -> None:
+                     ctx.audio_tasks.discard(done)
+                     try:
+                         done.result()
+                     except asyncio.CancelledError:
+                         pass
++                    except ClientDisconnected:
++                        self._disable_audio_send(ctx, "client_disconnected")
++                    except RuntimeError:
++                        self._disable_audio_send(ctx, "send_failed")
++                        _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+                     except Exception:  # pragma: no cover - defensive logging
++                        self._disable_audio_send(ctx, "send_failed")
+                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+ 
+                 task.add_done_callback(_on_done)
+ 
+             try:
+                 loop.call_soon_threadsafe(_deliver)
+             except RuntimeError:
+                 pass
+ 
+         _handle_audio_event._telemetry_accepts_binary = True  # type: ignore[attr-defined]
+         ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
+         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+ 
+     def _offer_partial_frame(
+         self,
+         ctx: AdapterContext,
+         loop: asyncio.AbstractEventLoop,
+         payload: Dict[str, Any],
+         enqueue: Callable[[Dict[str, Any]], None],
+     ) -> None:
+         def _emit(frame: Dict[str, Any]) -> None:
+             prepared = self._prepare_partial_frame(ctx, frame)
+             enqueue(prepared)
+ 
+         ctx.partial_coalescer.offer(
+@@ -2797,50 +2806,75 @@ class ChatV2Adapter:
+                     log_event = (
+                         "evt=asr_partial_sent"
+                         if frame_type == "asr.partial"
+                         else "evt=asr_final_sent"
                      )
-                     continue
+                     text_value = payload.get("text")
+                     text_len = len(text_value) if isinstance(text_value, str) else 0
+                     _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
+             await send({"type": "websocket.send", "text": text})
  
-                 if isinstance(payload, Mapping):
-                     message_name = payload.get("message")
-                 else:
-                     message_name = None
+     async def _send_audio_frame(
+         self,
+         ctx: AdapterContext,
+         send: Callable[[dict], Awaitable[None]],
+         chunk: bytes,
+     ) -> None:
+         lock = self._ensure_send_lock(ctx)
+         async with lock:
+             try:
+                 await send({"type": "websocket.send", "bytes": chunk})
+             except ClientDisconnected:
+                 _log.info(
+                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
+                     ctx.sid,
+                 )
++                self._disable_audio_send(ctx, "client_disconnected")
++            except Exception:
++                self._disable_audio_send(ctx, "send_failed")
++                raise
++
++    def _disable_audio_send(self, ctx: AdapterContext, reason: str) -> None:
++        if ctx.audio_send_closed:
++            return
++        ctx.audio_send_closed = True
++        _log.info("evt=ws_audio_send_disabled sid=%s reason=%s", ctx.sid, reason)
++
++        token = ctx.audio_subscription_token
++        ctx.audio_subscription_token = None
++        if token:
++            try:
++                bus.unsubscribe(token)
++            except Exception:  # pragma: no cover - defensive
++                _log.debug(
++                    "evt=ws_audio_send_unsubscribe_failed sid=%s", ctx.sid, exc_info=True
++                )
++
++        pending = list(ctx.audio_tasks)
++        ctx.audio_tasks.clear()
++        for task in pending:
++            task.cancel()
  
-                 if message_name == "AddTranscript":
-                     text = _coerce_transcript_text(payload)
+     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
+         self._cancel_diag_timer(ctx)
+         self._cancel_mic_open_timer(ctx)
+         token = ctx.subscription_token
+         ctx.subscription_token = None
+         if token:
+             bus.unsubscribe(token)
  
-                     if not text.strip():
-                         self._logger.debug(
-                             "evt=sm_empty_transcript_ignored"
-                         )
-                         continue
+         audio_token = ctx.audio_subscription_token
+         ctx.audio_subscription_token = None
+         if audio_token:
+             bus.unsubscribe(audio_token)
  
-                     type_field = payload.get("type")
--                    is_final = bool(payload.get("is_final")) or bool(payload.get("final"))
--                    if isinstance(type_field, str) and type_field.lower() == "final":
--                        is_final = True
-+                    is_final = True
-+                    if isinstance(type_field, str):
-+                        normalized_type = type_field.strip().lower()
-+                        if normalized_type == "partial":
-+                            is_final = False
-+                        elif normalized_type == "final":
-+                            is_final = True
-+                    if "is_final" in payload:
-+                        is_final = bool(payload.get("is_final"))
-+                    elif "final" in payload:
-+                        # Some payloads use "final": 0/1 to indicate the status.
-+                        final_flag = payload.get("final")
-+                        if isinstance(final_flag, (bool, int)):
-+                            is_final = bool(final_flag)
+         unavailable_token = ctx.asr_unavailable_subscription_token
+         ctx.asr_unavailable_subscription_token = None
+         if unavailable_token:
+             bus.unsubscribe(unavailable_token)
  
-                     self._emit_transcript_event(state, text, is_final)
+         partial_token = ctx.asr_partial_subscription_token
+         ctx.asr_partial_subscription_token = None
+         if partial_token:
+             bus.unsubscribe(partial_token)
  
-                     if is_final:
-                         self._handle_final(state, payload, text_override=text, emit_event=False)
-                     else:
-                         self._handle_partial(state, payload, text_override=text, emit_event=False)
-                     continue
- 
-                 notice_type = ""
-                 if isinstance(payload, Mapping):
-                     raw_notice = payload.get("type") or payload.get("notice")
-                     if isinstance(raw_notice, str):
-                         notice_type = raw_notice.strip().lower()
- 
-                 if notice_type.startswith("concurrent_session"):
-                     if _is_fatal_concurrency_notice(payload):
-                         self._logger.error(
-                             "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
-                             state.sid,
-                             state.stream_id,
-                             notice_type,
-                         )
-                         self._handle_error(state, "concurrent_session", notice_type)
-                     else:
+         final_token = ctx.asr_final_subscription_token

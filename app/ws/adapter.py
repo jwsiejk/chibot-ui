@@ -305,6 +305,7 @@ class AdapterContext:
     subscription_token: Optional[str] = None
     audio_subscription_token: Optional[str] = None
     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+    audio_send_closed: bool = False
     asr_ready: bool = False
     asr_subscription_token: Optional[str] = None
     asr_subscription_bus: Optional[Any] = None
@@ -2261,6 +2262,8 @@ class ChatV2Adapter:
         def _handle_audio_event(event: dict) -> None:
             if event.get("sid") != ctx.sid:
                 return
+            if ctx.audio_send_closed:
+                return
             chunk = event.get("chunk")
             if isinstance(chunk, (bytes, bytearray, memoryview)):
                 chunk_bytes = bytes(chunk)
@@ -2277,7 +2280,13 @@ class ChatV2Adapter:
                         done.result()
                     except asyncio.CancelledError:
                         pass
+                    except ClientDisconnected:
+                        self._disable_audio_send(ctx, "client_disconnected")
+                    except RuntimeError:
+                        self._disable_audio_send(ctx, "send_failed")
+                        _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
                     except Exception:  # pragma: no cover - defensive logging
+                        self._disable_audio_send(ctx, "send_failed")
                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
 
                 task.add_done_callback(_on_done)
@@ -2819,6 +2828,31 @@ class ChatV2Adapter:
                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
                     ctx.sid,
                 )
+                self._disable_audio_send(ctx, "client_disconnected")
+            except Exception:
+                self._disable_audio_send(ctx, "send_failed")
+                raise
+
+    def _disable_audio_send(self, ctx: AdapterContext, reason: str) -> None:
+        if ctx.audio_send_closed:
+            return
+        ctx.audio_send_closed = True
+        _log.info("evt=ws_audio_send_disabled sid=%s reason=%s", ctx.sid, reason)
+
+        token = ctx.audio_subscription_token
+        ctx.audio_subscription_token = None
+        if token:
+            try:
+                bus.unsubscribe(token)
+            except Exception:  # pragma: no cover - defensive
+                _log.debug(
+                    "evt=ws_audio_send_unsubscribe_failed sid=%s", ctx.sid, exc_info=True
+                )
+
+        pending = list(ctx.audio_tasks)
+        ctx.audio_tasks.clear()
+        for task in pending:
+            task.cancel()
 
     async def _cleanup_outbound(self, ctx: AdapterContext) -> None:
         self._cancel_diag_timer(ctx)
