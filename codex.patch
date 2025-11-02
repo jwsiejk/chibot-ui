@@ -1,546 +1,90 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index b3d279a612f99ec49253a5be654c64a48b1e01a6..fec9f2b9d0fc8619572ec97cb801ee4f7f733141 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -67,50 +67,56 @@ def _safe_url(url: str | None) -> str:
-         u = urlparse(url)
-         # strip query to avoid leaking keys; keep scheme/host/path
-         return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
-     except Exception:
-         return ""
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index c27d7a4206e6b50f16d1c1f7304260d72c4076b6..179b8558698e39dec2c388344b4fb6797c501fa2 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -21,57 +21,81 @@
  
+   function snapshot() {
+     return { ...state };
+   }
  
- def _default_input_descriptor() -> Dict[str, Any]:
-     return {
-         "container": "webm",
-         "codec": "opus",
-         "rate_hz": 48000,
-         "channels": 1,
+   function notify() {
+     const current = snapshot();
+     listeners.forEach((listener) => {
+       try {
+         listener(current);
+       } catch (err) {
+         console.error("AppState subscriber error", err);
+       }
+     });
+   }
+ 
+   function setState(patch) {
+     if (!patch || typeof patch !== "object") return;
+     const sanitized = { ...patch };
+     if ("resume" in sanitized) {
+       delete sanitized.resume;
      }
- 
- 
- def _pcm_input_descriptor() -> Dict[str, Any]:
-     return {
-         "container": "raw",
-         "codec": "pcm_s16le",
-         "rate_hz": 16000,
-         "channels": 1,
+     if ("resumeError" in sanitized) {
+       delete sanitized.resumeError;
      }
+-    state = { ...state, ...sanitized, resume: null, resumeError: null };
++    const preservedResume = state.resume;
++    const preservedResumeError = state.resumeError;
++    state = {
++      ...state,
++      ...sanitized,
++      resume: preservedResume,
++      resumeError: preservedResumeError
++    };
+     notify();
+   }
  
+-  function setResume() {
+-    clearResume();
+-    return null;
++  function setResume(token, ttlMs) {
++    const candidate = typeof token === "string" ? token.trim() : "";
++    const ttl = Number(ttlMs);
++    if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
++      clearResume();
++      return null;
++    }
++    const expiresAt = Date.now() + ttl;
++    const resumeState = {
++      token: candidate,
++      ttlMs: ttl,
++      expiresAt
++    };
++    state = {
++      ...state,
++      resume: resumeState,
++      resumeError: null
++    };
++    notify();
++    return resumeState;
+   }
  
-+def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
-+    if isinstance(vendor, str) and vendor.strip().lower() == "speechmatics":
-+        return _pcm_input_descriptor()
-+    return _default_input_descriptor()
-+
-+
- @dataclass
- class _SessionState:
-     """Track per-session streaming state."""
+   function clearResume() {
+     if (state.resume !== null || state.resumeError !== null) {
+       state = { ...state, resume: null, resumeError: null };
+       notify();
+     }
+   }
  
-     sid: str
-     pending: Deque[bytes] = field(default_factory=deque)
-     buffered_bytes: int = 0
-     req_id: Optional[str] = None
-     stream_open_task: Optional[asyncio.Task[None]] = None
-     stream_open: bool = False
-     last_audio_ts: float = 0.0
-     idle_handle: asyncio.TimerHandle | None = None
-     stream_id: Optional[str] = None
-     close_reason: Optional[str] = None
-     opened_at_ms: int = 0
-     opened_at_monotonic: float = 0.0
-     last_audio_ts_ms: int = 0
-     chunks_sent: int = 0
-     bytes_sent: int = 0
-     dg_msgs_partial: int = 0
-     dg_msgs_final: int = 0
-     finals_delivered: int = 0
-     dropped_chunks: int = 0
-     last_stream_id: Optional[str] = None
-     ready_watchdog: asyncio.TimerHandle | None = None
-@@ -225,217 +231,254 @@ class ASRRuntime:
-         class_name = type(client).__name__.lower()
-         module_name = getattr(type(client), "__module__", "").lower()
-         if "speechmatics" in class_name or "speechmatics" in module_name:
-             return "speechmatics"
-         return "deepgram"
+   function reset() {
+     state = { ...initialState };
+     notify();
+   }
  
-     def _configure_client(self) -> None:
-         """Force the Deepgram client to use the containerized listen URL."""
+   function subscribe(listener) {
+     if (typeof listener !== "function") {
+       throw new TypeError("listener must be a function");
+     }
+     listeners.add(listener);
+     listener(snapshot());
+     return () => {
+       listeners.delete(listener);
+     };
+   }
  
-         target_url = _DG_LISTEN_URL
-         current_url = getattr(self._client, "_url", None)
-         if current_url == target_url:
-             return
-         try:
-             setattr(self._client, "_url", target_url)
-         except Exception:  # pragma: no cover - defensive
-             _log.debug(
-                 "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
-                 exc_info=True,
-             )
-         else:
-             _log.debug(
-                 "evt=asr_runtime_listen_url_set url=%s", target_url
-             )
- 
-+    def _generate_stream_id(self) -> str:
-+        prefix = "dg"
-+        if isinstance(self._vendor, str):
-+            normalized = self._vendor.strip().lower()
-+            if normalized.startswith("speechmatics"):
-+                prefix = "sm"
-+            elif normalized and normalized != "deepgram":
-+                prefix = normalized[:2]
-+        return f"{prefix}-stream-{uuid.uuid4().hex}"
-+
-     def _input_descriptor_from_policy(
-         self, policy_snapshot: Mapping[str, Any] | Any | None
-     ) -> Dict[str, Any]:
-         if policy_snapshot is None:
--            return _default_input_descriptor()
-+            return _default_input_descriptor_for_vendor(self._vendor)
- 
-         media: Mapping[str, Any] | Any | None
-         if isinstance(policy_snapshot, Mapping):
-             media = policy_snapshot.get("media")
-         else:
-             media = getattr(policy_snapshot, "media", None)
- 
-         if media is None:
--            return _default_input_descriptor()
-+            return _default_input_descriptor_for_vendor(self._vendor)
- 
-         if isinstance(media, Mapping):
-             get_value = media.get
-         else:
-             get_value = lambda key, default=None: getattr(media, key, default)
- 
-         asr_input = get_value("asr_input")
-         if asr_input == "webm_opus":
-             rate = get_value("asr_rate_hz", 48000)
-             channels = get_value("asr_channels", 1)
-             rate_value = rate if isinstance(rate, int) and rate > 0 else 48000
-             channels_value = (
-                 channels if isinstance(channels, int) and channels > 0 else 1
-             )
-             return {
-                 "container": "webm",
-                 "codec": "opus",
-                 "rate_hz": rate_value,
-                 "channels": channels_value,
-             }
- 
-         if asr_input == "pcm_16k":
-             return _pcm_input_descriptor()
- 
-         if asr_input:
-             self._emit_log(
-                 {
-                     "type": "EVT_LOG",
-                     "level": "ERROR",
-                     "msg": f"evt=asr_policy_invalid input={asr_input}",
-                 }
-             )
- 
--        return _default_input_descriptor()
-+        return _default_input_descriptor_for_vendor(self._vendor)
- 
-     # ------------------------------------------------------------------
-     # Websocket hooks
-     # ------------------------------------------------------------------
-     def on_ws_open(self, sid: str) -> None:
-         self._ensure_loop()
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-         _log.info("evt=asr_on_ws_open sid=%s", sid)
-+        state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
-         state.listening = False
-         state.prearm_requested = False
-         state.bytes_received = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.probe_active = False
-         state.probe_target_samples = 0
-         state.probe_samples_collected = 0
-         state.probe_sum_squares = 0.0
-         state.probe_peak = 0.0
-         state.utterance_active = False
-         self._cancel_commit_timer(state)
-         self._apply_commit_policy(state)
- 
-     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-+            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
-+        elif (
-+            self._vendor == "speechmatics"
-+            and state.input_desc.get("codec") != "pcm_s16le"
-+        ):
-+            state.input_desc = _pcm_input_descriptor()
- 
-         if not state.listening:
-             return
- 
-         if not state.utterance_active:
-             state.utterance_active = True
-             self._apply_commit_policy(state)
-             self._start_commit_timer(sid, state)
- 
-         state.unavailable_emitted = False
- 
-         now_monotonic = time.monotonic()
-         state.last_audio_ts = now_monotonic
-         now_ms = int(time.time() * 1000)
-         state.last_audio_ts_ms = now_ms
-         if state.ready_watchdog is not None and state.ready_armed_at:
-             self._cancel_ready_watchdog(state)
-         chunk_len = len(data)
- 
-+        input_desc = state.input_desc or {}
-+        if not isinstance(input_desc, Mapping):
-+            input_desc = {}
-+        expected_codec = str(input_desc.get("codec") or "").strip().lower()
-+        chunk_is_webm = data.startswith(_EBML_MAGIC)
-+
-+        if expected_codec == "pcm_s16le" and chunk_is_webm:
-+            _log.warning(
-+                "evt=asr_drop_incompatible_chunk sid=%s vendor=%s reason=unexpected_webm",
-+                sid,
-+                self._vendor,
-+            )
-+            return
-+
-         if state.ingress_packets == 0:
-             state.first_ingress_ms = now_ms
-         state.ingress_packets += 1
-         state.ingress_bytes += chunk_len
- 
-         if (
-             state.stream_open
-             and state.bytes_received > 0
-             and data.startswith(_EBML_MAGIC)
-         ):
-             stream_id = state.stream_id or state.last_stream_id or ""
-             _log.warning(
-                 "evt=asr_midstream_header sid=%s stream_id=%s action=reopen_vendor",
-                 sid,
-                 stream_id,
-             )
-             state.close_reason = "midstream_header"
-             try:
-                 self._client.close_stream(sid)
-             except Exception:  # pragma: no cover - defensive
-                 _log.exception("evt=asr_midstream_close_failed sid=%s", sid)
-             finally:
-                 self._finalize_rms_probe(sid, state)
-             state.stream_open = False
-             state.stream_id = None
-             state.bytes_received = 0
-             state.chunks_sent = 0
-             state.pending.clear()
-             state.buffered_bytes = 0
-             state.first_chunk_seen = False
- 
-         if not state.first_chunk_seen:
-             state.first_chunk_seen = True
-             state.rollup_window_start = now_monotonic
-             state.rollup_chunks = 0
-             state.rollup_bytes = 0
-+            codec_value = input_desc.get("codec")
-+            if isinstance(codec_value, str) and codec_value:
-+                codec_label = codec_value
-+            else:
-+                codec_label = "webm_opus" if chunk_is_webm else "unknown"
-             _log.info(
--                "evt=audio_first_chunk sid=%s bytes=%d codec=webm_opus",
-+                "evt=audio_first_chunk sid=%s bytes=%d codec=%s",
-                 sid,
-                 chunk_len,
-+                codec_label,
-             )
-         if not state.rollup_window_start:
-             state.rollup_window_start = now_monotonic
-         state.rollup_chunks += 1
-         state.rollup_bytes += chunk_len
-         if (
-             state.rollup_window_start
-             and now_monotonic - state.rollup_window_start >= 1.0
-         ):
-             _log.debug(
-                 "evt=audio_rollup sid=%s chunks=%d bytes=%d window_ms=1000",
-                 sid,
-                 state.rollup_chunks,
-                 state.rollup_bytes,
-             )
-             state.rollup_window_start = now_monotonic
-             state.rollup_chunks = 0
-             state.rollup_bytes = 0
- 
-         if state.stream_id is None:
--            state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
-+            state.stream_id = self._generate_stream_id()
-             state.last_stream_id = state.stream_id
- 
-         if not state.stream_open:
-             state.pending.append(data)
-             state.buffered_bytes += chunk_len
-             self._apply_backpressure(sid, state)
-             if state.pending:
-                 self._ensure_stream(sid, state)
-         else:
-             self._forward_chunk(sid, state, data)
- 
-         if _TRACE_ENABLED:
-             _log.debug(
-                 "evt=asr_audio_enqueued sid=%s stream_id=%s bytes=%d buffered_bytes=%d pending_chunks=%d",
-                 sid,
-                 state.stream_id or state.last_stream_id or "",
-                 chunk_len,
-                 state.buffered_bytes,
-                 len(state.pending),
-             )
- 
-         self._reset_idle_timer(sid, state)
- 
-     def on_ws_close(self, sid: str) -> None:
-         state = self._sessions.pop(sid, None)
-@@ -795,107 +838,116 @@ class ASRRuntime:
-                 "type": "EVT_LOG",
-                 "logger": "app.voice_v2.asr_runtime",
-                 "level": "INFO",
-                 "sid": state.sid,
-                 "stream_id": stream_id,
-                 "req_id": req_id,
-                 "msg": msg,
-             }
-         )
- 
-     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
-         loop = self._ensure_loop()
-         if loop is None:
-             _log.warning("evt=asr_no_loop sid=%s", sid)
-             return
-         if state.stream_open:
-             return
-         if not state.pending and not state.prearm_requested:
-             return
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             return
- 
-         async def _open() -> None:
-             if state.stream_id is None:
--                state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
-+                state.stream_id = self._generate_stream_id()
-             stream_id = state.stream_id
-             state.last_stream_id = stream_id
-             state.close_reason = None
-             state.prearm_requested = False
-             try:
-                 policy_snapshot = None
-                 try:
-                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
-                 except Exception:  # pragma: no cover - defensive
-                     policy_snapshot = None
-                 input_desc = self._input_descriptor_from_policy(policy_snapshot)
-+                if (
-+                    self._vendor == "speechmatics"
-+                    and input_desc.get("codec") != "pcm_s16le"
-+                ):
-+                    input_desc = _pcm_input_descriptor()
-                 state.input_desc = input_desc
-                 model_name = None
-                 if isinstance(policy_snapshot, Mapping):
-                     candidate = policy_snapshot.get("model")
-                     if isinstance(candidate, str) and candidate:
-                         model_name = candidate
-                     else:
-                         interaction = policy_snapshot.get("interaction")
-                         if isinstance(interaction, Mapping):
-                             maybe_model = interaction.get("model")
-                             if isinstance(maybe_model, str) and maybe_model:
-                                 model_name = maybe_model
-                 else:
-                     candidate_model = getattr(policy_snapshot, "model", None)
-                     if isinstance(candidate_model, str) and candidate_model:
-                         model_name = candidate_model
-                 state.model = model_name if isinstance(model_name, str) and model_name else None
-                 _log.info(
-                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
-                     sid,
-                     self._vendor,
-                 )
-                 open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
-                 qs = await asyncio.wait_for(
-                     self._client.open_stream(
-                         sid,
-                         on_partial=self._make_partial_cb(sid),
-                         on_final=self._make_final_cb(sid),
-                         on_error=self._make_error_cb(sid),
-                         stream_id=stream_id,
-                         on_close=self._make_close_cb(sid, state),
-                         policy=policy_snapshot,
-                     ),
-                     timeout=open_timeout,
-                 )
-                 _log.info(
-                     "evt=asr_opened sid=%s vendor=%s stream_id=%s",
-                     sid,
-                     self._vendor,
-                     stream_id,
-                 )
-+                container = state.input_desc.get("container", "")
-+                codec = state.input_desc.get("codec", "")
-                 _log.info(
--                    "evt=asr_vendor_info sid=%s vendor=%s transport=ws container=webm_opus model=%s",
-+                    "evt=asr_vendor_info sid=%s vendor=%s transport=ws container=%s codec=%s model=%s",
-                     sid,
-                     self._vendor,
-+                    container,
-+                    codec,
-                     state.model or "auto",
-                 )
-             except asyncio.CancelledError:
-                 raise
-             except asyncio.TimeoutError as err:
-                 last_url = getattr(self._client, "debug_last_url", None)
-                 self._emit_log(
-                     {
-                         "type": "EVT_LOG",
-                         "logger": "app.voice_v2.asr_runtime",
-                         "level": "ERROR",
-                         "sid": sid,
-                         "msg": (
-                             "evt=asr_open_failed_timeout sid=%s vendor=%s url=%s timeout_s=%s"
-                         )
-                         % (sid, self._vendor, _safe_url(last_url), open_timeout),
-                     }
-                 )
-                 _log.error(
-                     "evt=asr_open_failed sid=%s vendor=%s err=%s",
-                     sid,
-                     self._vendor,
-                     str(err) or "timeout",
-                 )
-                 _log.error(
-@@ -1259,51 +1311,51 @@ class ASRRuntime:
-             state.close_reason = None
-             state.stream_open = False
-             state.req_id = None
-             state.bytes_received = 0
- 
-         return _callback
- 
-     def _on_partial(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-         metadata = metadata or {}
-         self._cancel_commit_timer(state)
-         if state.stream_id is None:
-             meta_stream = metadata.get("stream_id")
-             if isinstance(meta_stream, str) and meta_stream:
-                 state.stream_id = meta_stream
-         stream_id = state.stream_id or ""
-         if not stream_id:
--            stream_id = f"dg-stream-{uuid.uuid4().hex}"
-+            stream_id = self._generate_stream_id()
-             state.stream_id = stream_id
-         state.last_stream_id = stream_id
-         state.dg_msgs_partial += 1
-         raw_len = metadata.get("len_chars")
-         len_chars = len(text)
-         if raw_len:
-             try:
-                 candidate_len = int(raw_len)
-             except (TypeError, ValueError):
-                 candidate_len = None
-             if candidate_len is not None and candidate_len >= 0:
-                 len_chars = candidate_len
-         utterance_id = metadata.get("utterance_id")
-         if not utterance_id:
-             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
-         latency_ms = int(metadata.get("latency_ms") or 0)
- 
-         now_monotonic = time.monotonic()
-         should_log_partial = False
-         if not state.first_partial_logged:
-             should_log_partial = True
-         elif now_monotonic - state.last_partial_log >= 0.5:
-             should_log_partial = True
-         if should_log_partial:
-             state.first_partial_logged = True
-@@ -1354,51 +1406,51 @@ class ASRRuntime:
-             "sid": sid,
-             "req_id": req_id,
-             "text": text,
-             "confidence": _PARTIAL_CONFIDENCE,
-             "vendor": self._vendor,
-         }
-         self._bus.publish(event)
- 
-     def _on_final(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-         metadata = metadata or {}
-         if state.stream_id is None:
-             meta_stream = metadata.get("stream_id")
-             if isinstance(meta_stream, str) and meta_stream:
-                 state.stream_id = meta_stream
-         stream_id = state.stream_id or ""
-         if not stream_id:
--            stream_id = f"dg-stream-{uuid.uuid4().hex}"
-+            stream_id = self._generate_stream_id()
-             state.stream_id = stream_id
-         state.last_stream_id = stream_id
-         state.dg_msgs_final += 1
-         raw_len = metadata.get("len_chars")
-         len_chars = len(text)
-         if raw_len:
-             try:
-                 candidate_len = int(raw_len)
-             except (TypeError, ValueError):
-                 candidate_len = None
-             if candidate_len is not None and candidate_len >= 0:
-                 len_chars = candidate_len
-         utterance_id = metadata.get("utterance_id")
-         if not utterance_id:
-             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
-         latency_ms = int(metadata.get("latency_ms") or 0)
- 
-         _log.info(
-             "asr_final vendor=%s chars=%d latency_ms=%d",
-             self._vendor,
-             len_chars,
-             latency_ms,
-         )
- 
-         ensure_session = getattr(self._engine, "_ensure_session", None)

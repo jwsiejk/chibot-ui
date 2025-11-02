@@ -43,13 +43,37 @@
     if ("resumeError" in sanitized) {
       delete sanitized.resumeError;
     }
-    state = { ...state, ...sanitized, resume: null, resumeError: null };
+    const preservedResume = state.resume;
+    const preservedResumeError = state.resumeError;
+    state = {
+      ...state,
+      ...sanitized,
+      resume: preservedResume,
+      resumeError: preservedResumeError
+    };
     notify();
   }
 
-  function setResume() {
-    clearResume();
-    return null;
+  function setResume(token, ttlMs) {
+    const candidate = typeof token === "string" ? token.trim() : "";
+    const ttl = Number(ttlMs);
+    if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
+      clearResume();
+      return null;
+    }
+    const expiresAt = Date.now() + ttl;
+    const resumeState = {
+      token: candidate,
+      ttlMs: ttl,
+      expiresAt
+    };
+    state = {
+      ...state,
+      resume: resumeState,
+      resumeError: null
+    };
+    notify();
+    return resumeState;
   }
 
   function clearResume() {
