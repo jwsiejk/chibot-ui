@@ -89,6 +89,12 @@ def _pcm_input_descriptor() -> Dict[str, Any]:
     }
 
 
+def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
+    if isinstance(vendor, str) and vendor.strip().lower() == "speechmatics":
+        return _pcm_input_descriptor()
+    return _default_input_descriptor()
+
+
 @dataclass
 class _SessionState:
     """Track per-session streaming state."""
@@ -247,11 +253,21 @@ class ASRRuntime:
                 "evt=asr_runtime_listen_url_set url=%s", target_url
             )
 
+    def _generate_stream_id(self) -> str:
+        prefix = "dg"
+        if isinstance(self._vendor, str):
+            normalized = self._vendor.strip().lower()
+            if normalized.startswith("speechmatics"):
+                prefix = "sm"
+            elif normalized and normalized != "deepgram":
+                prefix = normalized[:2]
+        return f"{prefix}-stream-{uuid.uuid4().hex}"
+
     def _input_descriptor_from_policy(
         self, policy_snapshot: Mapping[str, Any] | Any | None
     ) -> Dict[str, Any]:
         if policy_snapshot is None:
-            return _default_input_descriptor()
+            return _default_input_descriptor_for_vendor(self._vendor)
 
         media: Mapping[str, Any] | Any | None
         if isinstance(policy_snapshot, Mapping):
@@ -260,7 +276,7 @@ class ASRRuntime:
             media = getattr(policy_snapshot, "media", None)
 
         if media is None:
-            return _default_input_descriptor()
+            return _default_input_descriptor_for_vendor(self._vendor)
 
         if isinstance(media, Mapping):
             get_value = media.get
@@ -294,7 +310,7 @@ class ASRRuntime:
                 }
             )
 
-        return _default_input_descriptor()
+        return _default_input_descriptor_for_vendor(self._vendor)
 
     # ------------------------------------------------------------------
     # Websocket hooks
@@ -306,6 +322,7 @@ class ASRRuntime:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
         _log.info("evt=asr_on_ws_open sid=%s", sid)
+        state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
         state.listening = False
         state.prearm_requested = False
         state.bytes_received = 0
@@ -334,6 +351,12 @@ class ASRRuntime:
         if state is None:
             state = _SessionState(sid=sid)
             self._sessions[sid] = state
+            state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
+        elif (
+            self._vendor == "speechmatics"
+            and state.input_desc.get("codec") != "pcm_s16le"
+        ):
+            state.input_desc = _pcm_input_descriptor()
 
         if not state.listening:
             return
@@ -352,6 +375,20 @@ class ASRRuntime:
         if state.ready_watchdog is not None and state.ready_armed_at:
             self._cancel_ready_watchdog(state)
         chunk_len = len(data)
+
+        input_desc = state.input_desc or {}
+        if not isinstance(input_desc, Mapping):
+            input_desc = {}
+        expected_codec = str(input_desc.get("codec") or "").strip().lower()
+        chunk_is_webm = data.startswith(_EBML_MAGIC)
+
+        if expected_codec == "pcm_s16le" and chunk_is_webm:
+            _log.warning(
+                "evt=asr_drop_incompatible_chunk sid=%s vendor=%s reason=unexpected_webm",
+                sid,
+                self._vendor,
+            )
+            return
 
         if state.ingress_packets == 0:
             state.first_ingress_ms = now_ms
@@ -389,10 +426,16 @@ class ASRRuntime:
             state.rollup_window_start = now_monotonic
             state.rollup_chunks = 0
             state.rollup_bytes = 0
+            codec_value = input_desc.get("codec")
+            if isinstance(codec_value, str) and codec_value:
+                codec_label = codec_value
+            else:
+                codec_label = "webm_opus" if chunk_is_webm else "unknown"
             _log.info(
-                "evt=audio_first_chunk sid=%s bytes=%d codec=webm_opus",
+                "evt=audio_first_chunk sid=%s bytes=%d codec=%s",
                 sid,
                 chunk_len,
+                codec_label,
             )
         if not state.rollup_window_start:
             state.rollup_window_start = now_monotonic
@@ -413,7 +456,7 @@ class ASRRuntime:
             state.rollup_bytes = 0
 
         if state.stream_id is None:
-            state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+            state.stream_id = self._generate_stream_id()
             state.last_stream_id = state.stream_id
 
         if not state.stream_open:
@@ -817,7 +860,7 @@ class ASRRuntime:
 
         async def _open() -> None:
             if state.stream_id is None:
-                state.stream_id = f"dg-stream-{uuid.uuid4().hex}"
+                state.stream_id = self._generate_stream_id()
             stream_id = state.stream_id
             state.last_stream_id = stream_id
             state.close_reason = None
@@ -829,6 +872,11 @@ class ASRRuntime:
                 except Exception:  # pragma: no cover - defensive
                     policy_snapshot = None
                 input_desc = self._input_descriptor_from_policy(policy_snapshot)
+                if (
+                    self._vendor == "speechmatics"
+                    and input_desc.get("codec") != "pcm_s16le"
+                ):
+                    input_desc = _pcm_input_descriptor()
                 state.input_desc = input_desc
                 model_name = None
                 if isinstance(policy_snapshot, Mapping):
@@ -870,10 +918,14 @@ class ASRRuntime:
                     self._vendor,
                     stream_id,
                 )
+                container = state.input_desc.get("container", "")
+                codec = state.input_desc.get("codec", "")
                 _log.info(
-                    "evt=asr_vendor_info sid=%s vendor=%s transport=ws container=webm_opus model=%s",
+                    "evt=asr_vendor_info sid=%s vendor=%s transport=ws container=%s codec=%s model=%s",
                     sid,
                     self._vendor,
+                    container,
+                    codec,
                     state.model or "auto",
                 )
             except asyncio.CancelledError:
@@ -1281,7 +1333,7 @@ class ASRRuntime:
                 state.stream_id = meta_stream
         stream_id = state.stream_id or ""
         if not stream_id:
-            stream_id = f"dg-stream-{uuid.uuid4().hex}"
+            stream_id = self._generate_stream_id()
             state.stream_id = stream_id
         state.last_stream_id = stream_id
         state.dg_msgs_partial += 1
@@ -1376,7 +1428,7 @@ class ASRRuntime:
                 state.stream_id = meta_stream
         stream_id = state.stream_id or ""
         if not stream_id:
-            stream_id = f"dg-stream-{uuid.uuid4().hex}"
+            stream_id = self._generate_stream_id()
             state.stream_id = stream_id
         state.last_stream_id = stream_id
         state.dg_msgs_final += 1
