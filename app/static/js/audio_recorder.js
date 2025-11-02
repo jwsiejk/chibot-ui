@@ -85,9 +85,14 @@ import { WakeWord } from "./wake_word.js";
     }
 
     setPolicy(policy) {
-      const snapshot = policy && typeof policy === "object" ? policy : {};
+      const hasPayload = policy && typeof policy === "object" && Object.keys(policy).length > 0;
+      const previousUsePCM = this._usePCM;
+      const snapshot = hasPayload
+        ? policy
+        : (this._policy && typeof this._policy === "object" ? this._policy : {});
       const nextUsePCM = this._resolveUsePCM(snapshot);
-      if (nextUsePCM && this._rec) {
+
+      if (hasPayload && nextUsePCM && !previousUsePCM && this._rec) {
         const recorder = this._rec;
         try {
           if (recorder.state !== "inactive") {
@@ -98,23 +103,37 @@ import { WakeWord } from "./wake_word.js";
         }
         this._rec = null;
       }
-      if (nextUsePCM) {
+      if (hasPayload && nextUsePCM && !previousUsePCM) {
         this._headerSent = false;
         this._resetStreamingTelemetry();
       }
-      this._policy = snapshot;
+      if (hasPayload && !nextUsePCM && previousUsePCM) {
+        this._headerSent = false;
+        try {
+          this._teardownPcmGraph();
+        } catch (err) {
+          console.warn("AudioRecorder pcm teardown failed", err);
+        }
+      }
+
+      if (hasPayload || !this._policy || typeof this._policy !== "object") {
+        this._policy = snapshot;
+      }
       this._usePCM = nextUsePCM;
-      try {
-        const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
-        const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
-        const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
-        console.info(
-          "diag=recorder_policy usePCM=%s asr_input=%s pipeline=%s",
-          this._usePCM,
-          mediaPolicy?.asr_input ?? null,
-          pipeline?.mode ?? null,
-        );
-      } catch {}
+
+      if (hasPayload || previousUsePCM !== nextUsePCM) {
+        try {
+          const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
+          const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
+          const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
+          console.info(
+            "diag=recorder_policy usePCM=%s asr_input=%s pipeline=%s",
+            this._usePCM,
+            mediaPolicy?.asr_input ?? null,
+            pipeline?.mode ?? null,
+          );
+        } catch {}
+      }
     }
 
     get policy() {

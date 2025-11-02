@@ -1,232 +1,119 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 7d6ca371e487ad1e0270ee128af59d0408e2dbd4..fbcd01cbb37139bb19f54e41886a62c228457073 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -72,50 +72,59 @@ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 7054f5effd589eb2889dc3078c32da277073985c..0f048b04eb2a14c4980d639face180866944b775 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -63,80 +63,99 @@ import { WakeWord } from "./wake_word.js";
+       this._sendMuted = false;
+       this._headerSent = false;
+       this._usePCM = false;
+       this._audioContext = null;
+       this._pcmSource = null;
+       this._pcmNode = null;
+       this._pcmGainNode = null;
+       this._pcmResampleBuffer = [];
+       this._pcmOutputBuffer = [];
+       this._pcmResampleCursor = 0;
+       this._pcmFrameSeq = 0;
+       this._pcmLastTelemetryAt = 0;
+       this._pcmUtteranceStartAt = null;
+       this._pcmLastVoiceAt = null;
+       this._pcmSilenceStartAt = null;
+       this._pcmCommitSent = false;
+       this._pcmWorkletLoaded = false;
+       this._armingPromise = null;
+     }
  
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
+     setSocket(ws) {
+       this._ws = ws || null;
+     }
  
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
- _MIC_OPEN_TIMEOUT_SECONDS = 2.5
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "asr.unavailable",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
- }
- 
-+_RATE_LIMIT_EXEMPT_TYPES = {
-+    "client.autostart",
-+    "client.banner",
-+    "client.diag",
-+    "client.log",
-+    "client.ping",
-+    "client.telemetry",
-+}
+     setPolicy(policy) {
+-      const snapshot = policy && typeof policy === "object" ? policy : {};
++      const hasPayload = policy && typeof policy === "object" && Object.keys(policy).length > 0;
++      const previousUsePCM = this._usePCM;
++      const snapshot = hasPayload
++        ? policy
++        : (this._policy && typeof this._policy === "object" ? this._policy : {});
+       const nextUsePCM = this._resolveUsePCM(snapshot);
+-      if (nextUsePCM && this._rec) {
 +
- _OUTBOX_MAXSIZE = 256
- 
- _POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
- 
- _log = logging.getLogger(__name__)
- 
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
-     "client.diag",
-     "client.log",
-     "client.autostart",
-     "client.telemetry",
-     "client.banner",
-     "asr.rearm.request",
- }
- 
- _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
-     "EVT_RECORDER_STARTED",
-     "EVT_AUDIO_CHUNK_SENT_CLIENT",
- }
- 
- _CLIENT_AUTOSTART_ALLOWED_EVENTS = {
-@@ -902,54 +911,50 @@ class ChatV2Adapter:
-     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-         detail = "use chat.v2"
-         body = json.dumps(
-             {
-                 "type": "error",
-                 "code": "bad_subprotocol",
-                 "detail": detail,
-             }
-         ).encode("utf-8")
-         headers = [
-             (b"content-type", b"application/json"),
-             (b"content-length", str(len(body)).encode("ascii")),
-         ]
-         await send({"type": "websocket.http.response.start", "status": 426, "headers": headers})
-         await send({"type": "websocket.http.response.body", "body": body, "more_body": False})
- 
-     @dataclass
-     class _HandleResult:
-         should_continue: bool
-         close_code: Optional[int] = None
-         close_reason: Optional[str] = None
- 
-     async def _handle_text(
-         self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> _HandleResult:
--        limited = await self._check_rate_limit(ctx, send)
--        if limited is not None:
--            return limited
--
-         try:
-             payload_bytes = data.encode("utf-8")
-             byte_count = len(payload_bytes)
-         except UnicodeEncodeError:
-             sanitized = data.encode("utf-8", "replace")
-             meta = {
-                 "byte_count": len(sanitized),
-                 "error": "bad_utf8",
-                 "frame_type": None,
-                 "ws": {
-                     "dir": "in",
-                     "size": len(sanitized),
-                     "preview": self._make_preview_from_bytes(sanitized),
-                 },
-             }
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "bad_utf8", "Text frame must be UTF-8 encoded JSON")
-             return self._HandleResult(True)
- 
-         meta: Dict[str, Any] = {
-             "byte_count": byte_count,
-             "frame_type": None,
-             "ws": {
-                 "dir": "in",
-                 "size": byte_count,
-@@ -974,50 +979,55 @@ class ChatV2Adapter:
-             meta["error"] = "bad_json"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
-             return self._HandleResult(True)
- 
-         if not isinstance(frame, dict):
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
-             return self._HandleResult(True)
- 
-         frame_payload = frame
- 
-         raw_type = frame.get("type")
-         if not isinstance(raw_type, str):
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
-             return self._HandleResult(True)
- 
-         frame_type = raw_type
-         meta["frame_type"] = frame_type
-         now_ms = int(time.time() * 1000)
-         ctx.last_client_activity_ms = now_ms
- 
-+        if frame_type not in _RATE_LIMIT_EXEMPT_TYPES:
-+            limited = await self._check_rate_limit(ctx, send)
-+            if limited is not None:
-+                return limited
++      if (hasPayload && nextUsePCM && !previousUsePCM && this._rec) {
+         const recorder = this._rec;
+         try {
+           if (recorder.state !== "inactive") {
+             recorder.stop();
+           }
+         } catch (err) {
+           console.warn("AudioRecorder policy switch stop failed", err);
+         }
+         this._rec = null;
+       }
+-      if (nextUsePCM) {
++      if (hasPayload && nextUsePCM && !previousUsePCM) {
+         this._headerSent = false;
+         this._resetStreamingTelemetry();
+       }
+-      this._policy = snapshot;
++      if (hasPayload && !nextUsePCM && previousUsePCM) {
++        this._headerSent = false;
++        try {
++          this._teardownPcmGraph();
++        } catch (err) {
++          console.warn("AudioRecorder pcm teardown failed", err);
++        }
++      }
 +
-         if frame_type == "client.ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 client_ts = frame.get("ts")
-                 payload = {"type": "server.pong", "ts": now_ms}
-                 if isinstance(client_ts, int):
-                     payload["echo"] = client_ts
-                 await self._send_json(send, ctx.sid, payload)
-             return self._HandleResult(True)
++      if (hasPayload || !this._policy || typeof this._policy !== "object") {
++        this._policy = snapshot;
++      }
+       this._usePCM = nextUsePCM;
+-      try {
+-        const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
+-        const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
+-        const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
+-        console.info(
+-          "diag=recorder_policy usePCM=%s asr_input=%s pipeline=%s",
+-          this._usePCM,
+-          mediaPolicy?.asr_input ?? null,
+-          pipeline?.mode ?? null,
+-        );
+-      } catch {}
++
++      if (hasPayload || previousUsePCM !== nextUsePCM) {
++        try {
++          const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
++          const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
++          const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
++          console.info(
++            "diag=recorder_policy usePCM=%s asr_input=%s pipeline=%s",
++            this._usePCM,
++            mediaPolicy?.asr_input ?? null,
++            pipeline?.mode ?? null,
++          );
++        } catch {}
++      }
+     }
  
-         if frame_type == "client.pong":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             ctx.last_client_pong_ms = now_ms
-             return self._HandleResult(True)
+     get policy() {
+       return this._policy || {};
+     }
  
-         if frame_type == "ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 reply_ts = frame.get("t")
-                 if not isinstance(reply_ts, int):
-                     reply_ts = now_ms
-                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
-             return self._HandleResult(True)
-diff --git a/tests/test_ws_json_contract.py b/tests/test_ws_json_contract.py
-index 8bc6d8e77ceaeba835e8220b43d03b4ca6952097..c8338eddc866296406ad65c02ca15bf6115c7bd4 100644
---- a/tests/test_ws_json_contract.py
-+++ b/tests/test_ws_json_contract.py
-@@ -199,51 +199,51 @@ class TestWebSocketJsonContract(unittest.TestCase):
-         error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
-         self.assertEqual(error_payloads, [])
+     _resolveUsePCM(policy) {
+       const source = policy && typeof policy === "object" ? policy : this._policy || {};
+       try {
+         const media = source.media && typeof source.media === "object" ? source.media : null;
+         if (media && typeof media.asr_input === "string" && media.asr_input === "pcm_16k") {
+           return true;
+         }
+         const audio = source.audio && typeof source.audio === "object" ? source.audio : null;
+         const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : null;
+         if (pipeline && typeof pipeline.mode === "string" && pipeline.mode === "pcm16") {
+           return true;
+         }
+       } catch {}
+       return false;
+     }
  
-         self.assertEqual(len(recorded), 1)
-         event = recorded[0]
-         self.assertEqual(event["type"], EVT_CLIENT_AUTOSTART)
-         event_meta = event.get("meta", {})
-         self.assertEqual(event_meta.get("event"), "blocked")
-         sanitized_meta = event_meta.get("meta", {})
-         self.assertIn("trigger", sanitized_meta)
-         self.assertEqual(sanitized_meta["trigger"], "boot")
-         self.assertIn("reason", sanitized_meta)
-         self.assertEqual(len(sanitized_meta["reason"]), 120)
-         self.assertEqual(sanitized_meta["attempt"], 3)
-         self.assertTrue(sanitized_meta["active"])
-         self.assertNotIn("ignore", sanitized_meta)
-         self.assertNotIn("empty", sanitized_meta)
- 
-     def test_rate_limit_error_includes_retry_metadata(self) -> None:
-         original_capacity = adapter_module.RATE_LIMIT_CAPACITY
-         original_window = adapter_module.RATE_LIMIT_WINDOW_SECONDS
-         adapter_module.RATE_LIMIT_CAPACITY = 1
-         adapter_module.RATE_LIMIT_WINDOW_SECONDS = 1.0
-         try:
-             adapter = ChatV2Adapter()
--            frame = {"type": "client.log", "label": "probe"}
-+            frame = {"type": "chat.user", "text": "probe"}
-             events = [
-                 {"type": "websocket.connect"},
-                 {"type": "websocket.receive", "text": json.dumps(frame)},
-                 {"type": "websocket.receive", "text": json.dumps(frame)},
-                 {"type": "websocket.disconnect", "code": 1000},
-             ]
- 
-             sent = self._drive(adapter, events)
-         finally:
-             adapter_module.RATE_LIMIT_CAPACITY = original_capacity
-             adapter_module.RATE_LIMIT_WINDOW_SECONDS = original_window
- 
-         error_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text") is not None
-         ]
-         rate_limited = [payload for payload in error_payloads if payload.get("code") == "rate_limited"]
-         self.assertEqual(len(rate_limited), 1, msg=f"unexpected error payloads: {error_payloads}")
-         payload = rate_limited[0]
-         self.assertEqual(payload.get("message"), "Too many concurrent connections.")
-         self.assertTrue(payload.get("retryable"))
-         retry_in_ms = payload.get("retry_in_ms")
-         self.assertIsInstance(retry_in_ms, int)
-         self.assertGreaterEqual(retry_in_ms, 500)
+     _recorderPolicy() {
+       const policy = this.policy;
+       if (!policy || typeof policy !== "object") {
