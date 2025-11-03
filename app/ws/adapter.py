@@ -2524,6 +2524,15 @@ class ChatV2Adapter:
                 return
             if ctx.audio_send_closed:
                 return
+            source = event.get("source")
+            if source == "ws_server":
+                meta = event.get("meta")
+                audio_meta = meta.get("audio") if isinstance(meta, Mapping) else None
+                if not isinstance(audio_meta, Mapping):
+                    _log.debug(
+                        "evt=audio_event_ignored sid=%s source=%s", ctx.sid, source
+                    )
+                    return
             chunk = event.get("chunk")
             if isinstance(chunk, (bytes, bytearray, memoryview)):
                 chunk_bytes = bytes(chunk)

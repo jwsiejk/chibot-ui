@@ -1,65 +1,64 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index d813e4e8b5e34796e6bb05244a822f22544faa02..55dde7e125ce05a54c1cd78480dfe4dcab2d12f6 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -948,51 +948,59 @@ class ASRRuntime:
-         state.stream_open_task = None
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 31e0ae4b3db95d6b734e66a8ef3ac5bc0cafec9b..40ceae4fbe016706510e237f2d679c1769dd7e41 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -2502,50 +2502,59 @@ class ChatV2Adapter:
+                 frame: Dict[str, Any] = {
+                     "type": "turn.state",
+                     "state": state,
+                     "reason": reason,
+                     "meta": meta,
+                 }
+                 _enqueue(frame)
+                 if state_text == "Ready" and reason_text == "tts_end":
+                     policy = self._policy_snapshot()
+                     self._maybe_emit_await_user(ctx, policy)
  
-         if state.stream_open:
              try:
-                 self._client.close_stream(sid)
-             except Exception:  # pragma: no cover - defensive
-                 _log.exception("evt=asr_stream_close_failed sid=%s", sid)
-             finally:
-                 self._finalize_rms_probe(sid, state)
-             state.stream_open = False
-             state.stream_id = None
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 _on_loop()
  
-         state.listening = True
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.pending.clear()
-         state.buffered_bytes = 0
--        state.prearm_requested = self._vendor != "speechmatics"
-+        # Speechmatics gating requires the websocket adapter to receive an
-+        # asr.ready signal before it will forward any client audio.  The previous
-+        # behaviour intentionally skipped the proactive stream open for
-+        # Speechmatics, assuming audio would trigger the open path.  In practice
-+        # the adapter suppresses audio until it sees asr.ready, so the runtime
-+        # never received audio and the conversation stalled immediately after the
-+        # greet.  Always request a prearm so the stream opens and emits the
-+        # asr.ready event before we wait on client audio.
-+        state.prearm_requested = True
-         state.utterance_active = False
-         self._cancel_commit_timer(state)
-         self._apply_commit_policy(state)
-         self._ensure_stream(sid, state)
+         ctx.turn_state_subscription_token = bus.subscribe(
+             "EVT_TURN_STATE", _handle_turn_state_event
+         )
  
-     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
+         def _handle_audio_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             if ctx.audio_send_closed:
+                 return
++            source = event.get("source")
++            if source == "ws_server":
++                meta = event.get("meta")
++                audio_meta = meta.get("audio") if isinstance(meta, Mapping) else None
++                if not isinstance(audio_meta, Mapping):
++                    _log.debug(
++                        "evt=audio_event_ignored sid=%s source=%s", ctx.sid, source
++                    )
++                    return
+             chunk = event.get("chunk")
+             if isinstance(chunk, (bytes, bytearray, memoryview)):
+                 chunk_bytes = bytes(chunk)
+             else:
+                 return
  
-         state = self._sessions.get(sid)
-         if state is None:
-             return
- 
-         state.listening = False
-         state.prearm_requested = False
-         state.pending.clear()
-         state.buffered_bytes = 0
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
+             def _deliver() -> None:
+                 async def _run_audio_task() -> None:
+                     start = time.perf_counter()
+                     try:
+                         await self._send_audio_frame(ctx, send, chunk_bytes)
+                     except asyncio.CancelledError:
+                         return
+                     except ClientDisconnected:
+                         self._disable_audio_send(ctx, "client_disconnected")
+                     except Exception:  # pragma: no cover - defensive logging
+                         self._disable_audio_send(ctx, "send_failed")
+                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+                     finally:
+                         duration_ms = max(0, int((time.perf_counter() - start) * 1000))
+                         current = asyncio.current_task()
+                         if current is not None:
+                             ctx.audio_tasks.discard(current)
+                         _log.info(
+                             "evt=audio_task_complete sid=%s duration_ms=%d",
