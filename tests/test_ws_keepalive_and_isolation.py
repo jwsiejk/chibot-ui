@@ -281,7 +281,7 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                 self.assertEqual(capture.get("rate_hz"), 16000)
                 self.assertEqual(capture.get("channels"), 1)
                 session_policy = ctx.session_capture_policy or adapter._session_capture_policy_for_mode(
-                    ctx.audio_pipeline_mode or "opus-webm"
+                    ctx.audio_pipeline_mode or "pcm16"
                 )
                 self.assertEqual(input_start.get("policy"), session_policy)
 

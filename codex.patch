@@ -1,207 +1,306 @@
+diff --git a/tests/test_listen_handoff.py b/tests/test_listen_handoff.py
+index d9cd5a5028ba07918e09037478b94cacbed2d16a..04339d17a585606acec26a470810f8e1c98c54c8 100644
+--- a/tests/test_listen_handoff.py
++++ b/tests/test_listen_handoff.py
+@@ -152,51 +152,51 @@ class ListenHarness:
+ 
+ 
+ def test_listen_handoff_basic_success(
+     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+ ) -> None:
+     async def _run() -> None:
+         harness = ListenHarness(monkeypatch)
+         await harness.start()
+         caplog.set_level(logging.INFO)
+         try:
+             await harness.expect_policy("r1")
+             await harness.emit_tts_end("r1")
+             await harness.set_mask("off")
+             await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
+             await harness.publish_asr_ready("r1")
+             await harness.wait_for_listen_task()
+             await wait_for(lambda: len(harness.ws.frames_of_type("asr.ready")) == 1)
+             await wait_for(lambda: len(harness.ws.frames_of_type("input.start")) == 1)
+ 
+             frames = [
+                 frame
+                 for frame in harness.ws.text_frames
+                 if frame.get("type") in {"asr.ready", "input.start"}
+             ]
+             assert [frame.get("type") for frame in frames] == ["asr.ready", "input.start"]
+-            assert frames[0]["input"]["codec"] == "opus"
++            assert frames[0]["input"]["codec"] == "pcm_s16le"
+             assert frames[1]["capture"]["timeslice_ms"] == 250
+             assert any(
+                 "evt=listen_handoff_ready" in record.message and "req_id=r1" in record.message
+                 for record in caplog.records
+             )
+         finally:
+             await harness.stop()
+ 
+     asyncio.run(_run())
+ 
+ 
+ def test_listen_handoff_duplicate_triggers_collapse(
+     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+ ) -> None:
+     async def _run() -> None:
+         harness = ListenHarness(monkeypatch)
+         await harness.start()
+         caplog.set_level(logging.INFO)
+         try:
+             await harness.expect_policy("r1")
+             await harness.emit_tts_end("r1")
+             await harness.set_mask("off")
+             await wait_for(lambda: ("S1", "r1") in harness.runtime.open_calls)
+             await harness.publish_asr_ready("r1")
+             await harness.wait_for_listen_task()
+diff --git a/tests/test_policy_loader.py b/tests/test_policy_loader.py
+index 7941de336a598b4b7cedb253989e0972cca03d2f..c4e129a597f9419c5eb84acf2740fbb0b71b9c30 100644
+--- a/tests/test_policy_loader.py
++++ b/tests/test_policy_loader.py
+@@ -12,52 +12,52 @@ class InteractionPolicyLoaderTests(unittest.TestCase):
+ 
+     def test_defaults_shape_and_types(self) -> None:
+         snapshot = load_interaction_policy()
+ 
+         expected_keys = {
+             "mode",
+             "allow_auto_vad",
+             "barge_in_enabled",
+             "auto_commit_when_ready",
+             "telemetry",
+             "media",
+             "capture",
+         }
+         self.assertEqual(set(snapshot.keys()), expected_keys)
+ 
+         self.assertEqual(snapshot["mode"], "idle")
+         self.assertIs(snapshot["allow_auto_vad"], True)
+         self.assertIs(snapshot["barge_in_enabled"], True)
+         self.assertIs(snapshot["auto_commit_when_ready"], True)
+ 
+         media = snapshot["media"]
+         self.assertIsInstance(media, dict)
+         self.assertEqual(
+             media,
+             {
+-                "asr_input": "webm_opus",
+-                "asr_rate_hz": 48000,
++                "asr_input": "pcm_16k",
++                "asr_rate_hz": 16000,
+                 "asr_channels": 1,
+                 "fallbacks_allowed": False,
+             },
+         )
+ 
+         capture = snapshot["capture"]
+         self.assertIsInstance(capture, dict)
+         self.assertEqual(
+             capture,
+             {
+                 "start_on_asr_ready": True,
+                 "start_on_turn_ready": True,
+                 "timeslice_ms": 200,
+                 "mask_during_tts": True,
+             },
+         )
+ 
+         telemetry = snapshot["telemetry"]
+         self.assertIsInstance(telemetry, dict)
+         self.assertIs(telemetry["enabled"], True)
+         self.assertEqual(telemetry["level"], "debug")
+ 
+         categories = telemetry["categories"]
+         self.assertIsInstance(categories, dict)
+         expected_categories = {
+diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
+index 119e44c11bb6c126bbcf4b8c169daaa36494e0e2..b5edd21b9f91cf2549ec4295c5819ecc871a396d 100644
+--- a/tests/test_ws_binary_guard.py
++++ b/tests/test_ws_binary_guard.py
+@@ -117,79 +117,94 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)
+ 
+         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
+         self.assertEqual(len(accept_messages), 1)
+ 
+         self.assertEqual(len(engine.audio_calls), 2)
+         self.assertEqual(engine.audio_calls[0][2], 0)
+         self.assertEqual(engine.audio_calls[1][2], 1)
+ 
+         self.assertEqual(len(received_events), 2)
+         self.assertEqual(received_events[0]["meta"]["seq"], 0)
+         self.assertEqual(received_events[1]["meta"]["seq"], 1)
+         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload_one))
+         self.assertEqual(received_events[1]["meta"]["ws"]["size"], len(payload_two))
+ 
+     def test_audio_header_sets_profile_and_allows_audio(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter)
+         adapter.engine = engine
+ 
+         received_events: List[dict] = []
+         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
+         try:
+-            header = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
++            header = {
++                "type": "audio.header",
++                "format": "pcm",
++                "sample_rate": 16000,
++                "channels": 1,
++            }
+             payload = b"\x03" * 2
+             events = [
+                 {"type": "websocket.connect"},
+                 {"type": "websocket.receive", "text": json.dumps(header)},
+                 {"type": "websocket.receive", "bytes": payload},
+                 {"type": "websocket.disconnect", "code": 1000},
+             ]
+ 
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)
+ 
+         self.assertEqual(len(engine.audio_calls), 1)
+         self.assertEqual(engine.audio_calls[0][2], 0)
+ 
+         errors = self._extract_error_frames(sent)
+         self.assertFalse(errors)
+ 
+         self.assertEqual(len(received_events), 1)
+         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
+ 
+     def test_duplicate_audio_header_reports_error(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter)
+         adapter.engine = engine
+ 
+-        header_one = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
+-        header_two = {"type": "audio.header", "format": "pcm", "sample_rate": 16000, "channels": 1}
++        header_one = {
++            "type": "audio.header",
++            "format": "pcm",
++            "sample_rate": 16000,
++            "channels": 1,
++        }
++        header_two = {
++            "type": "audio.header",
++            "format": "pcm",
++            "sample_rate": 44100,
++            "channels": 1,
++        }
+         events = [
+             {"type": "websocket.connect"},
+             {"type": "websocket.receive", "text": json.dumps(header_one)},
+             {"type": "websocket.receive", "text": json.dumps(header_two)},
+             {"type": "websocket.disconnect", "code": 1000},
+         ]
+ 
+         sent = self._drive(adapter, events)
+ 
+         error_messages = self._extract_error_frames(sent)
+         self.assertEqual(len(error_messages), 1)
+         payload = error_messages[0]
+         self.assertEqual(payload, {
+             "type": "error",
+             "code": "schema_invalid",
+             "detail": "duplicate or conflicting audio.header",
+         })
+ 
+         close_messages = [msg for msg in sent if msg.get("type") == "websocket.close"]
+         self.assertFalse(close_messages)
+ 
+     def test_not_accepting_audio_triggers_policy_close(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter, accept_audio=False)
+         adapter.engine = engine
+@@ -208,51 +223,51 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)
+ 
+         self.assertFalse(engine.audio_calls)
+ 
+         error_frames = self._extract_error_frames(sent)
+         self.assertEqual(len(error_frames), 3)
+         parsed = error_frames
+         for payload in parsed[:2]:
+             self.assertEqual(payload["code"], "audio_not_expected")
+             self.assertEqual(payload["detail"], "engine not accepting audio")
+         self.assertEqual(parsed[2]["code"], "audio_not_expected")
+         self.assertEqual(parsed[2]["detail"], "engine not accepting audio")
+ 
+     def test_audio_stream_not_rate_limited(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter)
+         adapter.engine = engine
+ 
+         chunk = b"\x07" * 160
+         chunk_count = RATE_LIMIT_CAPACITY + 6
+ 
+         ready_frame = {
+             "type": "client.ready",
+-            "mic": {"state": "open", "vendor": "webm_opus", "ts": 1761889784321},
++            "mic": {"state": "open", "vendor": "pcm16", "ts": 1761889784321},
+         }
+         client_log_ready = {
+             "type": "client.log",
+             "label": "client_ready_handshake",
+             "detail": {
+                 "outcome": "sent",
+                 "attempts": 1,
+                 "readyState": 1,
+                 "events": [
+                     {"kind": "enqueue", "ts": 1761889784339},
+                     {"kind": "attempt", "ts": 1761889784339},
+                     {"kind": "sent", "ts": 1761889784339},
+                 ],
+             },
+         }
+ 
+         events = [{"type": "websocket.connect"}]
+         events.append({"type": "websocket.receive", "text": json.dumps(ready_frame)})
+         events.append({"type": "websocket.receive", "text": json.dumps(client_log_ready)})
+ 
+         for idx in range(chunk_count):
+             if idx in {0, 3, 12}:
+                 events.append(
+                     {
+                         "type": "websocket.receive",
 diff --git a/tests/test_ws_keepalive_and_isolation.py b/tests/test_ws_keepalive_and_isolation.py
-index df6137acef92c04af6ddd89a7f392a5ddd037513..8e2685ef84f47db9b4be9a841a52c6bad3f40f01 100644
+index 8e2685ef84f47db9b4be9a841a52c6bad3f40f01..5eb5b4a10fcc55d8ad822bb23e40c733eeb246cd 100644
 --- a/tests/test_ws_keepalive_and_isolation.py
 +++ b/tests/test_ws_keepalive_and_isolation.py
-@@ -1,58 +1,41 @@
- import asyncio
- import json
- import os
- import unittest
- import uuid
- from unittest.mock import patch
- 
- os.environ.setdefault("SECRET_KEY", "test-secret")
- 
- from app import config
--from app.services.streaming_asr.deepgram_client import DeepgramClient
- from app.telemetry import bus
- from app.voice_v2 import EVT_WS_JSON_SEND
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.security.jwt_utils import mint_ws_token
- 
- 
--class FakeDeepgramWebSocket:
--    """Minimal websocket stub that records text frames."""
--
--    def __init__(self) -> None:
--        self.sent: list[str] = []
--        self.closed = False
--        self.close_code: int | None = None
--
--    async def send(self, message: str) -> None:
--        self.sent.append(message)
--
--    async def close(self) -> None:
--        self.closed = True
--        self.close_code = 1000
--
--
- class LabelRecordingEngine:
-     """Engine stub that records session identifiers by label."""
- 
-     def __init__(self, on_open_hook=None) -> None:
-         self.sid_by_label: dict[str, str] = {}
-         self._on_open_hook = on_open_hook
- 
-     def on_open(self, sid: str, headers: dict[str, str]) -> None:
-         label = headers.get("x-test-label")
-         if label:
-             self.sid_by_label[label] = sid
-         if self._on_open_hook is not None:
-             self._on_open_hook(sid, headers)
- 
- 
- class AdapterHarness:
-     """Drive the adapter inside asyncio tests and record outbound frames."""
- 
-     def __init__(self, adapter: ChatV2Adapter, engine: LabelRecordingEngine, *, label: str) -> None:
-         self.adapter = adapter
-         self.engine = engine
-         self.label = label
-         sid = f"sid-{uuid.uuid4().hex}"
-         token = mint_ws_token("user-1", sid, False)
-         self.scope = {
-@@ -106,81 +89,65 @@ class AdapterHarness:
-                 raise TimeoutError("timed out waiting for outbound frame")
-             await asyncio.sleep(0.01)
- 
-     async def close(self) -> None:
-         if self._task is None:
-             return
-         await self._inbound.put({"type": "websocket.disconnect", "code": 1000})
-         await self._task
-         self._task = None
- 
-     @property
-     def sid(self) -> str:
-         sid = self.engine.sid_by_label.get(self.label)
-         if sid is None:
-             raise RuntimeError("connection not yet open")
-         return sid
- 
- 
- class TestWSKeepaliveAndIsolation(unittest.TestCase):
-     def setUp(self) -> None:
-         bus.reset()
- 
-     def tearDown(self) -> None:
-         bus.reset()
- 
--    def test_deepgram_keepalive_cadence(self) -> None:
--        asyncio.run(self._test_deepgram_keepalive_cadence())
--
-     def test_server_keepalive_cadence(self) -> None:
-         asyncio.run(self._test_server_keepalive_cadence())
- 
-     def test_initial_policy_ordering(self) -> None:
-         asyncio.run(self._test_initial_policy_ordering())
- 
-     def test_speechmatics_vendor_selection(self) -> None:
-         asyncio.run(self._test_speechmatics_vendor_selection())
- 
-     def test_asr_runtime_switches_on_vendor_change(self) -> None:
-         asyncio.run(self._test_asr_runtime_switches_on_vendor_change())
- 
-     def test_multi_session_isolation(self) -> None:
-         asyncio.run(self._test_multi_session_isolation())
- 
--    async def _test_deepgram_keepalive_cadence(self) -> None:
--        fake_ws = FakeDeepgramWebSocket()
--        with patch.dict(os.environ, {"DG_KEEPALIVE_INTERVAL_S": "0.05"}, clear=False):
--            client = DeepgramClient()
--            await client.connect(fake_ws)
--            await asyncio.sleep(0.12)
--            count_before_close = self._count_keepalives(fake_ws)
--            self.assertGreaterEqual(count_before_close, 2)
--            await client.close()
--            await asyncio.sleep(0.06)
--            self.assertEqual(count_before_close, self._count_keepalives(fake_ws))
--            self.assertTrue(fake_ws.closed)
--
-     async def _test_server_keepalive_cadence(self) -> None:
-         engine = LabelRecordingEngine()
-         with patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "50"}, clear=False):
-             adapter = ChatV2Adapter(engine=engine)
-             harness = AdapterHarness(adapter, engine, label="srv")
-             await harness.start()
-             try:
-                 await asyncio.sleep(0.12)
-                 keepalive_frames = [
-                     json.loads(message["text"])
-                     for message in harness.sent
-                     if message.get("type") == "websocket.send" and message.get("text")
-                 ]
-                 count = sum(
-                     1
-                     for frame in keepalive_frames
-                     if frame.get("type") in {"keepalive", "server.ping"}
+@@ -259,51 +259,51 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
+                     timeout=2.0,
                  )
-                 self.assertGreaterEqual(count, 1)
-                 count_before_close = count
-             finally:
-                 await harness.close()
-             await asyncio.sleep(0.06)
-             keepalive_frames = [
-                 json.loads(message["text"])
-@@ -225,53 +192,51 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
-         class StubSpeechmaticsClient:
-             vendor = "speechmatics"
+                 input_desc = (
+                     asr_ready.get("input", {}) if isinstance(asr_ready, dict) else {}
+                 )
+                 self.assertEqual(input_desc.get("container"), "raw")
+                 self.assertEqual(input_desc.get("codec"), "pcm_s16le")
+                 self.assertEqual(input_desc.get("rate_hz"), 16000)
+                 self.assertEqual(input_desc.get("channels"), 1)
  
-             def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
-                 self.api_key = api_key
-                 self.url = url
- 
-         class StubASRRuntime:
-             def __init__(self, engine, client, telemetry_bus=None) -> None:
-                 self.engine = engine
-                 self.client = client
-                 self.telemetry_bus = telemetry_bus
-                 self.bus = None
-                 self.opened: list[str] = []
-                 self.closed: list[str] = []
- 
-             def set_bus(self, telemetry_bus) -> None:
-                 self.bus = telemetry_bus
- 
-             def on_ws_open(self, sid: str) -> None:
-                 self.opened.append(sid)
- 
-             def on_ws_close(self, sid: str) -> None:
-                 self.closed.append(sid)
- 
--        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
--            config, "DEEPGRAM_API_KEY", None
--        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
-+        with patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
-             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
-         ), patch.object(
-             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
-         ), patch(
-             "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
-         ), patch(
-             "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
-         ):
-             harness = AdapterHarness(adapter, engine, label="sm")
-             engine.policy_snapshot = adapter._session_capture_policy_for_mode("pcm16")
-             await harness.start()
-             try:
-                 ctx = adapter._contexts.get(harness.sid)
-                 self.assertIsNotNone(ctx)
-                 if ctx is None:  # pragma: no cover - satisfy type checkers
-                     raise AssertionError("context not initialized")
-                 self.assertEqual(ctx.asr_vendor, "speechmatics")
-                 self.assertEqual(ctx.audio_pipeline_mode, "pcm16")
-                 runtime = adapter.asr_runtime
-                 self.assertIsInstance(runtime, StubASRRuntime)
-                 self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
-                 self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
- 
-                 info_frame = await harness.wait_for_outbound(
-                     lambda frame: frame.get("type") == "info"
-@@ -317,119 +282,108 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
+                 input_start = await harness.wait_for_outbound(
+                     lambda frame: frame.get("type") == "input.start",
+                     timeout=2.0,
+                 )
+                 capture = (
+                     input_start.get("capture", {})
+                     if isinstance(input_start, dict)
+                     else {}
+                 )
+                 self.assertEqual(capture.get("mode"), "pcm16")
+                 self.assertEqual(capture.get("codec"), "pcm_s16le")
+                 self.assertEqual(capture.get("container"), "raw")
+                 self.assertEqual(capture.get("rate_hz"), 16000)
                  self.assertEqual(capture.get("channels"), 1)
                  session_policy = ctx.session_capture_policy or adapter._session_capture_policy_for_mode(
-                     ctx.audio_pipeline_mode or "opus-webm"
+-                    ctx.audio_pipeline_mode or "opus-webm"
++                    ctx.audio_pipeline_mode or "pcm16"
                  )
                  self.assertEqual(input_start.get("policy"), session_policy)
  
@@ -224,102 +323,6 @@ index df6137acef92c04af6ddd89a7f392a5ddd037513..8e2685ef84f47db9b4be9a841a52c6ba
                  self.api_key = api_key
                  self.url = url
  
--        class StubDeepgramClient:
--            vendor = "deepgram"
-+        class StubLegacyClient:
-+            vendor = "legacy"
+         class StubLegacyClient:
+             vendor = "legacy"
  
-         class StubASRRuntime:
-             def __init__(self, engine, client, telemetry_bus=None) -> None:
-                 self.engine = engine
-                 self.client = client
-                 self.telemetry_bus = telemetry_bus
-                 self.bus = None
-                 self.opened: list[str] = []
-                 self.closed: list[str] = []
- 
-             def set_bus(self, telemetry_bus) -> None:
-                 self.bus = telemetry_bus
- 
-             def on_ws_open(self, sid: str) -> None:
-                 self.opened.append(sid)
- 
-             def on_ws_close(self, sid: str) -> None:
-                 self.closed.append(sid)
- 
--        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
--            config, "DEEPGRAM_API_KEY", None
--        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
-+        with patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
-             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
-         ), patch.object(
-             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
-         ), patch(
-             "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
-         ), patch(
-             "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
-         ):
--            original_runtime = StubASRRuntime(engine, StubDeepgramClient())
-+            original_runtime = StubASRRuntime(engine, StubLegacyClient())
-             adapter.asr_runtime = original_runtime
--            adapter._asr_runtime_vendor = "deepgram"
-+            adapter._asr_runtime_vendor = "legacy"
- 
-             harness = AdapterHarness(adapter, engine, label="sm-switch")
-             await harness.start()
-             try:
-                 ctx = adapter._contexts.get(harness.sid)
-                 self.assertIsNotNone(ctx)
-                 if ctx is None:  # pragma: no cover - satisfy type checkers
-                     raise AssertionError("context not initialized")
-                 self.assertEqual(ctx.asr_vendor, "speechmatics")
-                 runtime = adapter.asr_runtime
-                 self.assertIsInstance(runtime, StubASRRuntime)
-                 self.assertIsInstance(runtime.client, StubSpeechmaticsClient)
-                 self.assertIsNot(runtime, original_runtime)
-                 self.assertEqual(adapter._asr_runtime_vendor, "speechmatics")
-             finally:
-                 await harness.close()
- 
-     async def _test_multi_session_isolation(self) -> None:
-         engine = LabelRecordingEngine()
-         with patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "0"}, clear=False):
-             adapter = ChatV2Adapter(engine=engine)
-             harness_a = AdapterHarness(adapter, engine, label="A")
-             harness_b = AdapterHarness(adapter, engine, label="B")
-             await harness_a.start()
-             await harness_b.start()
-             try:
-                 payload_a = {"type": "info", "label": "A"}
-                 payload_b = {"type": "info", "label": "B"}
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_a.sid, "payload": payload_a})
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness_b.sid, "payload": payload_b})
-                 frame_a = await harness_a.wait_for_outbound(
-                     lambda item: item.get("type") == "info" and item.get("label") == "A"
-                 )
-                 frame_b = await harness_b.wait_for_outbound(
-                     lambda item: item.get("type") == "info" and item.get("label") == "B"
-                 )
-                 self.assertEqual(frame_a.get("label"), "A")
-                 self.assertEqual(frame_b.get("label"), "B")
-                 self.assertTrue(
-                     all(frame.get("label") != "B" for frame in harness_a.outbound_frames)
-                 )
-                 self.assertTrue(
-                     all(frame.get("label") != "A" for frame in harness_b.outbound_frames)
-                 )
-             finally:
-                 await harness_a.close()
-                 await harness_b.close()
- 
--    @staticmethod
--    def _count_keepalives(fake_ws: FakeDeepgramWebSocket) -> int:
--        return sum(
--            1
--            for message in fake_ws.sent
--            if json.loads(message).get("type") == "KeepAlive"
--        )
--
--
- if __name__ == "__main__":  # pragma: no cover - convenience
-     unittest.main()

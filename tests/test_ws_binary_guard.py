@@ -139,7 +139,12 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         received_events: List[dict] = []
         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
         try:
-            header = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
+            header = {
+                "type": "audio.header",
+                "format": "pcm",
+                "sample_rate": 16000,
+                "channels": 1,
+            }
             payload = b"\x03" * 2
             events = [
                 {"type": "websocket.connect"},
@@ -166,8 +171,18 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         engine = RecordingEngine(adapter)
         adapter.engine = engine
 
-        header_one = {"type": "audio.header", "format": "opus", "sample_rate": 48000, "channels": 1}
-        header_two = {"type": "audio.header", "format": "pcm", "sample_rate": 16000, "channels": 1}
+        header_one = {
+            "type": "audio.header",
+            "format": "pcm",
+            "sample_rate": 16000,
+            "channels": 1,
+        }
+        header_two = {
+            "type": "audio.header",
+            "format": "pcm",
+            "sample_rate": 44100,
+            "channels": 1,
+        }
         events = [
             {"type": "websocket.connect"},
             {"type": "websocket.receive", "text": json.dumps(header_one)},
@@ -230,7 +245,7 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
 
         ready_frame = {
             "type": "client.ready",
-            "mic": {"state": "open", "vendor": "webm_opus", "ts": 1761889784321},
+            "mic": {"state": "open", "vendor": "pcm16", "ts": 1761889784321},
         }
         client_log_ready = {
             "type": "client.log",

@@ -34,8 +34,8 @@ class InteractionPolicyLoaderTests(unittest.TestCase):
         self.assertEqual(
             media,
             {
-                "asr_input": "webm_opus",
-                "asr_rate_hz": 48000,
+                "asr_input": "pcm_16k",
+                "asr_rate_hz": 16000,
                 "asr_channels": 1,
                 "fallbacks_allowed": False,
             },

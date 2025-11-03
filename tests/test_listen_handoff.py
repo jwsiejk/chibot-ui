@@ -174,7 +174,7 @@ def test_listen_handoff_basic_success(
                 if frame.get("type") in {"asr.ready", "input.start"}
             ]
             assert [frame.get("type") for frame in frames] == ["asr.ready", "input.start"]
-            assert frames[0]["input"]["codec"] == "opus"
+            assert frames[0]["input"]["codec"] == "pcm_s16le"
             assert frames[1]["capture"]["timeslice_ms"] == 250
             assert any(
                 "evt=listen_handoff_ready" in record.message and "req_id=r1" in record.message
