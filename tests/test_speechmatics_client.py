@@ -1,6 +1,7 @@
 import unittest
 
 from app.services.streaming_asr.speechmatics_client import (
+    _coerce_max_delay_seconds,
     _coerce_transcript_text,
     _extract_text,
     _is_fatal_concurrency_notice,
@@ -92,6 +93,17 @@ class TestSpeechmaticsExtractText(unittest.TestCase):
         }
 
         self.assertEqual(_coerce_transcript_text(payload), "By.")
+
+
+class TestSpeechmaticsMaxDelay(unittest.TestCase):
+    def test_converts_milliseconds_to_seconds(self) -> None:
+        self.assertAlmostEqual(_coerce_max_delay_seconds(1200), 1.2)
+
+    def test_clamps_above_20_seconds(self) -> None:
+        self.assertEqual(_coerce_max_delay_seconds(25000), 20)
+
+    def test_negative_returns_none(self) -> None:
+        self.assertIsNone(_coerce_max_delay_seconds(-1))
 
 
 if __name__ == "__main__":

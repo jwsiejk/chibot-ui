@@ -89,6 +89,23 @@ def _coerce_bool(value: Any) -> bool | None:
     return None
 
 
+def _coerce_max_delay_seconds(utterance_end_ms: int) -> float | None:
+    """Convert policy utterance end latency to Speechmatics max_delay seconds.
+
+    Speechmatics expects ``max_delay`` to be expressed in seconds with an upper
+    bound of 20s. Our policies use milliseconds (default 1200). Passing the raw
+    millisecond value triggers a ``protocol_error`` ("max_delay must be less than
+    or equal to 20").
+    """
+
+    if utterance_end_ms < 0:
+        return None
+    seconds = utterance_end_ms / 1000.0
+    if seconds > 20:
+        seconds = 20
+    return seconds
+
+
 def _resolve_asr_policy(policy: Mapping[str, Any] | None) -> Dict[str, int | bool]:
     defaults: Dict[str, int | bool] = {
         "utterance_end_ms": 1200,
@@ -427,8 +444,9 @@ class SpeechmaticsClient:
             "language": language,
             "enable_partials": True,
         }
-        if utterance_end_ms >= 0:
-            transcription_config["max_delay"] = utterance_end_ms
+        max_delay_s = _coerce_max_delay_seconds(utterance_end_ms)
+        if max_delay_s is not None:
+            transcription_config["max_delay"] = max_delay_s
 
         start_payload = {
             "message": "StartRecognition",
