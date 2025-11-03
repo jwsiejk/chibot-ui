@@ -45,7 +45,7 @@ from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
 from app.voice_v2.llm import LLMAdapter
 from app.voice_v2.gate import GateController
 from app.voice_v2.conversation_buffer import ConversationBuffer
-from app.voice_v2.vad import VADAggregator
+from app.voice_v2.vad import VADAggregator, rms_dbfs_from_pcm16
 from app.voice_v2.planner import _MODE_CHIPS, plan_turn
 from app.voice_v2.persona import default_chips_for_mode, load_persona
 from app.voice_v2.streaming import StreamingController
@@ -408,7 +408,29 @@ class EngineV2:
             )
         else:
             self._commit_turn_start(sid, "audio_rx")
+
+        if not isinstance(chunk, (bytes, bytearray)):
+            _log.warning(
+                "evt=audio_invalid_chunk type=%s", type(chunk).__name__, extra={"sid": sid}
+            )
+            return
+
         byte_count = len(chunk)
+        frame_ms = int((byte_count / (2 * _PCM_CHANNELS * _PCM_RATE_HZ)) * 1000)
+        if frame_ms <= 0:
+            frame_ms = 20
+        dbfs = rms_dbfs_from_pcm16(chunk)
+        aggregator = self._aggregators.get(sid)
+        if aggregator is not None:
+            aggregator.feed_auto_energy(dbfs, frame_ms=frame_ms)
+
+        if session.perf_first_partial_ms is None and not getattr(
+            session, "_vad_energy_logged", False
+        ):
+            _log.info(
+                "evt=auto_vad_energy sid=%s dbfs=%.1f frame_ms=%d", sid, dbfs, frame_ms
+            )
+            session._vad_energy_logged = True
         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
         self._publish(event)
@@ -1301,6 +1323,7 @@ class EngineV2:
             session.plan = None
             session.tts_mask_phase = "off"
             session.turn_committed = False
+            session._vad_energy_logged = False
 
         if (
             new_state == READY
@@ -1349,6 +1372,7 @@ class EngineV2:
             session.suggestions_emitted = False
             session.plan = None
             session.turn_committed = False
+            session._vad_energy_logged = False
 
         session.state = new_state
 
