@@ -701,7 +701,7 @@ class ChatV2Adapter:
         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
         if ctx.asr_vendor == "speechmatics":
             ctx.audio_pipeline_mode = "pcm16"
-        mode = ctx.audio_pipeline_mode or "opus-webm"
+        mode = ctx.audio_pipeline_mode or "pcm16"
         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
 
         token = current_sid.set(ctx.sid)
@@ -741,7 +741,6 @@ class ChatV2Adapter:
             if getattr(self, "asr_runtime", None) is None:
                 try:
                     from app.voice_v2.asr_runtime import ASRRuntime
-                    from app.services.streaming_asr.deepgram_client import DeepgramClient
 
                     engine = getattr(self, "engine", None)
                     vendor = ctx.asr_vendor or ""
@@ -763,24 +762,18 @@ class ChatV2Adapter:
                                     bool(sm_url),
                                 )
                         else:
-                            dg_enabled = getattr(config, "ASR_DEEPGRAM_ENABLED", True)
-                            api_key = getattr(config, "DEEPGRAM_API_KEY", "")
-                            if dg_enabled and api_key:
-                                client = DeepgramClient(api_key=api_key)
-                            else:
-                                _log.warning(
-                                    "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s",
-                                    ctx.sid,
-                                    vendor or "",
-                                    bool(engine),
-                                    bool(api_key),
-                                )
+                            _log.warning(
+                                "evt=ws_asr_runtime_unsupported_vendor sid=%s vendor=%s",
+                                ctx.sid,
+                                vendor,
+                            )
 
                     if engine is not None and client is not None:
                         self.asr_runtime = ASRRuntime(
                             engine=engine,
                             client=client,
                             telemetry_bus=bus,
+                            metrics=ctx.metrics,
                         )
                         self._asr_runtime_vendor = vendor or None
                     elif engine is None:
@@ -2055,7 +2048,7 @@ class ChatV2Adapter:
                 )
                 return
 
-            mode = ctx.audio_pipeline_mode or "opus-webm"
+            mode = ctx.audio_pipeline_mode or "pcm16"
             descriptor = dict(self._input_descriptor_for_mode(mode))
             timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
             ready_frame = {
@@ -2562,7 +2555,7 @@ class ChatV2Adapter:
                 )
                 if ctx.asr_vendor == "speechmatics":
                     ctx.audio_pipeline_mode = "pcm16"
-                mode = ctx.audio_pipeline_mode or "opus-webm"
+                mode = ctx.audio_pipeline_mode or "pcm16"
                 ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
         return normalized
 
@@ -3318,10 +3311,6 @@ class ChatV2Adapter:
 
     def _allowed_asr_vendors(self) -> List[str]:
         allowed: List[str] = []
-        if getattr(config, "ASR_DEEPGRAM_ENABLED", True) and getattr(
-            config, "DEEPGRAM_API_KEY", None
-        ):
-            allowed.append("deepgram")
         speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
         if speechmatics_enabled:
             api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
@@ -3416,9 +3405,9 @@ class ChatV2Adapter:
                     mode = pipeline.get("mode")
                     if isinstance(mode, str) and mode.strip():
                         normalized = mode.strip().lower()
-                        if normalized in {"opus-webm", "pcm16"}:
+                        if normalized == "pcm16":
                             return normalized
-        return "opus-webm"
+        return "pcm16"
 
     @staticmethod
     def _input_descriptor_for_mode(mode: str) -> Dict[str, Any]:
@@ -3432,12 +3421,12 @@ class ChatV2Adapter:
                 "mime": "audio/raw;rate=16000;channels=1;format=s16le",
             }
         return {
-            "mode": "opus-webm",
-            "container": "webm",
-            "codec": "opus",
-            "rate_hz": 48000,
+            "mode": "pcm16",
+            "container": "raw",
+            "codec": "pcm_s16le",
+            "rate_hz": 16000,
             "channels": 1,
-            "mime": "audio/webm;codecs=opus",
+            "mime": "audio/raw;rate=16000;channels=1;format=s16le",
         }
 
     @staticmethod
@@ -3459,17 +3448,17 @@ class ChatV2Adapter:
             }
         return {
             "media": {
-                "asr_input": "webm_opus",
-                "asr_rate_hz": 48000,
+                "asr_input": "pcm_16k",
+                "asr_rate_hz": 16000,
                 "asr_channels": 1,
             },
             "capture": {
-                "asr_input": "webm_opus",
-                "sample_rate": 48000,
+                "asr_input": "pcm_16k",
+                "sample_rate": 16000,
                 "channels": 1,
-                "timeslice_ms": 250,
+                "timeslice_ms": 50,
             },
-            "audio": {"pipeline": {"mode": "opus-webm"}},
+            "audio": {"pipeline": {"mode": "pcm16"}},
         }
 
     def _resolve_capture_timeslice(self, ctx: AdapterContext, mode: str) -> int:
@@ -3618,7 +3607,7 @@ class ChatV2Adapter:
         send: Callable[[dict], Awaitable[None]],
         ctx: AdapterContext,
     ) -> None:
-        mode = ctx.audio_pipeline_mode or "opus-webm"
+        mode = ctx.audio_pipeline_mode or "pcm16"
         descriptor = dict(self._input_descriptor_for_mode(mode))
         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
         ready_frame = {

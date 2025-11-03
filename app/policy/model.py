@@ -9,8 +9,8 @@ from typing import Any, Dict, Literal, Optional
 class MediaPolicy:
     """Describe how audio should be transported to the ASR provider."""
 
-    asr_input: str = "webm_opus"
-    asr_rate_hz: int = 48000
+    asr_input: str = "pcm_16k"
+    asr_rate_hz: int = 16000
     asr_channels: int = 1
     fallbacks_allowed: bool = False
 
@@ -31,7 +31,7 @@ class CapturePolicy:
 class ASRVendorPolicy:
     """Describe how ASR vendors should be selected at runtime."""
 
-    primary: str = "deepgram"
+    primary: str = "speechmatics"
     secondary: Optional[str] = None
 
 
@@ -57,7 +57,7 @@ class ASRPolicy:
 class AudioPipelinePolicy:
     """Describe the media pipeline presented to clients."""
 
-    mode: Literal["opus-webm", "pcm16"] = "opus-webm"
+    mode: Literal["pcm16"] = "pcm16"
 
 
 @dataclass

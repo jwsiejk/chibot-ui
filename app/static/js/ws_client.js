@@ -1616,8 +1616,8 @@ import { WakeWord } from "./wake_word.js";
     return sanitized;
   }
 
-  const ASR_VENDOR_OPTIONS = ['deepgram', 'speechmatics'];
-  const AUDIO_PIPELINE_OPTIONS = ['opus-webm', 'pcm16'];
+  const ASR_VENDOR_OPTIONS = ['speechmatics'];
+  const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
 
   const DEFAULT_POLICY_FLAGS = {
     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
@@ -1628,10 +1628,10 @@ import { WakeWord } from "./wake_word.js";
       commit_on_vad_silence: true,
       commit_silence_ms: 900,
       max_utterance_ms: 8000,
-      vendor: { primary: 'deepgram', secondary: null },
+      vendor: { primary: 'speechmatics', secondary: null },
     },
     routing: { ws_version: 'v2' },
-    audio: { pipeline: { mode: 'opus-webm' } },
+    audio: { pipeline: { mode: 'pcm16' } },
   };
 
   function sanitizePolicySnapshot(source) {
@@ -1762,7 +1762,7 @@ import { WakeWord } from "./wake_word.js";
           maxUtterance = Math.round(parsed);
         }
       }
-      const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: 'deepgram', secondary: null };
+      const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: 'speechmatics', secondary: null };
       const vendorBlock = asr && typeof asr.vendor === 'object' ? asr.vendor : null;
       const vendor = { ...vendorDefaults };
       if (vendorBlock) {
@@ -1809,8 +1809,8 @@ import { WakeWord } from "./wake_word.js";
     }
 
     const audioSource = source && typeof source === 'object' ? source.audio : null;
-    const audioDefaults = DEFAULT_POLICY_FLAGS.audio || { pipeline: { mode: 'opus-webm' } };
-    const audioPipeline = audioDefaults.pipeline ? { ...audioDefaults.pipeline } : { mode: 'opus-webm' };
+    const audioDefaults = DEFAULT_POLICY_FLAGS.audio || { pipeline: { mode: 'pcm16' } };
+    const audioPipeline = audioDefaults.pipeline ? { ...audioDefaults.pipeline } : { mode: 'pcm16' };
     if (audioSource && typeof audioSource === 'object') {
       const pipeline = audioSource.pipeline && typeof audioSource.pipeline === 'object'
         ? audioSource.pipeline

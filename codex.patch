@@ -1,8 +1,640 @@
+diff --git a/.env.example b/.env.example
+index 61b8aae9cb813535ecc0a7264281134a7941ae18..56aee78f52b89e4df76b85cb03c31b93c48daffc 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,72 +1,68 @@
+ # Non-secrets (safe defaults for local)
+ ADMIN_EMAILS=jwsiejk@purestorage.com
+ ADVANCED_LOGGING_ENABLED=True
+ ASKCHIP_AUTO_ARM_MS=250
+ # Optional: comma-separated WS Origin allow-list (e.g., https://example.com,https://admin.example.com). Leave empty for same-origin only.
+ ASKCHIP_WS_ALLOWED_ORIGINS=
+ ASR_FINAL_GRACE_S=1.0
+ ASR_POST_FLUSH_WAIT_S=1.0
+ ASR_READY_WAIT_S=1.5
++ASR_SPEECHMATICS_ENABLED=1
++SPEECHMATICS_API_KEY=
++SPEECHMATICS_REALTIME_URL=
+ CHIBOT_DISABLE_RAW_FALLBACK=1
+ CSRF_ENFORCED=true
+ DD_TRACE_ENABLED=0
+-DEEPGRAM_LISTEN_URL=wss://api.deepgram.com/v1/listen
+-DEEPGRAM_UTTERANCE_END_MS=3000
+-DG_ENABLE_PARTIALS=true
+-DG_FINAL_WAIT_S=20
+-DG_LINGER_MS=8000
+-DG_OPEN_MICRO_WAIT_S=.60
+ ELEVEN_INACTIVITY=180
+ ELEVEN_MODEL_ID=eleven_flash_v2_5
+ ELEVEN_OUTPUT_FORMAT=pcm_24000
+ ELEVEN_OUTPUT_FORMAT_WS=pcm_24000
+ EMAIL_FROM_NAME=Chip
+ EMAIL_HOST=smtp.gmail.com
+ EMAIL_HOST_USER=you@example.com
+ EMAIL_PORT=587
+ EMAIL_USE_TLS=True
+ EMAIL_WEBHOOK_SECRET=<set-if-used>
+ EMAIL_WEBHOOK_URL=<set-if-used>
+ ENABLE_ADMIN_SSE=true
+ ENABLE_NLU_LOGGING=1
+ FEATURE_ADMIN_UI=1
+ FEATURE_AUDIO=1
+ FEATURE_TOOLS=1
+ FROM_EMAIL=you@example.com
+ GUNICORN_GRACEFUL_TIMEOUT=45
+ GUNICORN_KEEP_ALIVE=75
+ GUNICORN_TIMEOUT=90
+ LLM_VENDOR=openai
+ LLM_MODEL=gpt-4o-mini
+ LLM_TIMEOUT_S=12
+ LLM_RETRIES=1
+ MIC_CAPTURE=1
+ MIC_ECHO_WS=1
+ PIP_ONLY_BINARY=numpy,pandas,PyMuPDF
+ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+ SESSION_TYPE=filesystem
+ SUGGESTION_MAX=3
+ WEB_CONCURRENCY=1
+ WS_BEARER_ONLY=0
+ WS_FAIL_LIMIT=10
+ WS_FAIL_WINDOW_SEC=60
+ WS_FINAL_GUARD_MS=900
+ WS_NO_AUDIO_DETECT_WINDOW_S=10
+ WS_NO_AUDIO_NUDGE_ONLY=1
+ stt_mode=streaming
+ 
+ # Render UI secrets (leave blank locally; set in Render dashboard)
+ ADMIN_SSE_E2E_KEY=
+-DEEPGRAM_API_KEY=
+ ELEVENLABS_API_KEY=
+ ELEVENLABS_VOICE_ID=
+ EMAIL_HOST_PASSWORD=
+ OPENAI_API_KEY=
+ OPENAI_BASE_URL=
+ SECRET_KEY=
+ 
+ # Auth / JWT
+ WS_TOKEN_REQUIRED=1
+ AUTH_JWKS_URL=
+ AUTH_JWT_ISSUER=
+ AUTH_AUDIENCE=askchip
+diff --git a/app/admin/api/settings.py b/app/admin/api/settings.py
+index ee40499d0ee7a17ebc52ba48604d93123ec5a621..d4299dfd46bc8c50f785a53403208b97cc2d979f 100644
+--- a/app/admin/api/settings.py
++++ b/app/admin/api/settings.py
+@@ -1,42 +1,42 @@
+ """Admin settings API handlers."""
+ 
+ from __future__ import annotations
+ 
+ import json
+ import logging
+ from typing import Any, Dict, Mapping, Optional
+ 
+ from app import config
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _DEFAULT_SETTINGS: Dict[str, Any] = {"authentication": "none"}
+ _CHUNK_SAMPLE_MIN = 1
+ _CHUNK_SAMPLE_MAX = 100
+-_POLICY_MEDIA_ALLOWED_INPUTS = {"webm_opus", "pcm_16k"}
+-_POLICY_AUDIO_ALLOWED_MODES = {"opus-webm", "pcm16"}
++_POLICY_MEDIA_ALLOWED_INPUTS = {"pcm_16k"}
++_POLICY_AUDIO_ALLOWED_MODES = {"pcm16"}
+ _POLICY_CAPTURE_MIN_TIMESLICE = 20
+ 
+ 
+ async def handle_admin_settings(scope: dict, receive) -> "Response":
+     """Serve and persist admin runtime settings."""
+ 
+     method = _method(scope)
+     if method == "OPTIONS":
+         await _drain_body(receive)
+         return _options_response()
+ 
+     if method not in {"GET", "HEAD", "PATCH", "POST"}:
+         await _drain_body(receive)
+         return _json_response(status=405, error="method_not_allowed")
+ 
+     if method in {"GET", "HEAD"}:
+         await _drain_body(receive)
+         return _respond_settings(method)
+ 
+     body = await _read_body(receive)
+     if not body:
+         return _json_response(status=400, error="missing_body")
+ 
+     try:
+         payload = json.loads(body.decode("utf-8"))
+@@ -224,60 +224,60 @@ def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
+         current["commit_on_vad_silence"] = _coerce_bool(
+             value.get("commit_on_vad_silence")
+         )
+ 
+     if "commit_silence_ms" in value:
+         current["commit_silence_ms"] = _coerce_int(
+             value.get("commit_silence_ms"), minimum=0, maximum=600000
+         )
+ 
+     if "max_utterance_ms" in value:
+         current["max_utterance_ms"] = _coerce_int(
+             value.get("max_utterance_ms"), minimum=0, maximum=600000
+         )
+ 
+     if "vendor" in value:
+         vendor_value = value.get("vendor")
+         if vendor_value is None:
+             current["vendor"] = dict(config.POLICY_ASR.get("vendor", {}))
+         elif isinstance(vendor_value, Mapping):
+             vendor_block = dict(current.get("vendor", {}))
+             if "primary" in vendor_value:
+                 primary = vendor_value.get("primary")
+                 if not isinstance(primary, str) or not primary.strip():
+                     raise ValueError("expected_string")
+                 normalized = primary.strip().lower()
+-                if normalized not in {"deepgram", "speechmatics"}:
++                if normalized not in {"speechmatics"}:
+                     raise ValueError("unsupported_vendor")
+                 vendor_block["primary"] = normalized
+             if "secondary" in vendor_value:
+                 secondary = vendor_value.get("secondary")
+                 if secondary is None:
+                     vendor_block["secondary"] = None
+                 elif isinstance(secondary, str) and secondary.strip():
+                     normalized_secondary = secondary.strip().lower()
+-                    if normalized_secondary not in {"deepgram", "speechmatics"}:
++                    if normalized_secondary not in {"speechmatics"}:
+                         raise ValueError("unsupported_vendor")
+                     vendor_block["secondary"] = normalized_secondary
+                 else:
+                     raise ValueError("expected_string")
+             current["vendor"] = vendor_block
+         else:
+             raise ValueError("expected_object")
+ 
+     return current
+ 
+ 
+ def _normalize_policy_audio(value: Any) -> Dict[str, Any]:
+     current = dict(config.POLICY_AUDIO)
+     if value is None:
+         raise ValueError("expected_object")
+     if not isinstance(value, Mapping):
+         raise ValueError("expected_object")
+ 
+     if "pipeline" in value:
+         pipeline_value = value.get("pipeline")
+         if pipeline_value is None:
+             current["pipeline"] = dict(config.POLICY_AUDIO.get("pipeline", {}))
+         elif isinstance(pipeline_value, Mapping):
+             pipeline_block = dict(current.get("pipeline", {}))
+             if "mode" in pipeline_value:
+diff --git a/app/admin/ui/config_panel.js b/app/admin/ui/config_panel.js
+index 7f29facaf0ff812a6bc011b5b0427c45d7110472..8595049bd7acb18e14acd32b8f3e30b7c1e2acf9 100644
+--- a/app/admin/ui/config_panel.js
++++ b/app/admin/ui/config_panel.js
+@@ -1,89 +1,87 @@
+ (() => {
+   const ROOT_SCOPE = typeof window !== 'undefined'
+     ? window
+     : typeof globalThis !== 'undefined'
+     ? globalThis
+     : {};
+ 
+   const API_ENDPOINT = '/api/v1/admin/settings';
+   const ASR_VENDOR_OPTIONS = [
+     { value: 'speechmatics', label: 'Speechmatics' },
+-    { value: 'deepgram', label: 'Deepgram' },
+   ];
+ 
+   const ASR_VENDOR_SECONDARY_OPTIONS = [
+     { value: '', label: 'None' },
+     ...ASR_VENDOR_OPTIONS,
+   ];
+ 
+   const AUDIO_PIPELINE_OPTIONS = [
+-    { value: 'opus-webm', label: 'Opus + WebM (default)' },
+     { value: 'pcm16', label: 'PCM 16 kHz' },
+   ];
+ 
+   const DEFAULTS = {
+     diag_client_hud: false,
+     diag_audio_guard: true,
+     diag_chunk_sample_n: 10,
+     policy_media: {
+-      asr_input: 'webm_opus',
+-      asr_rate_hz: 48000,
++      asr_input: 'pcm_16k',
++      asr_rate_hz: 16000,
+       asr_channels: 1,
+       fallbacks_allowed: false,
+     },
+     policy_capture: {
+       start_on_asr_ready: true,
+       start_on_turn_ready: true,
+       timeslice_ms: 200,
+       mask_during_tts: true,
+     },
+     policy_recorder: {
+       stop_on_tts_start: false,
+       mute_send_during_tts: true,
+     },
+     policy_input: {
+       require_hotword_to_start: false,
+     },
+     policy_asr: {
+       prearm_on_tts_end: true,
+       keep_stream_warm_ms: 30000,
+       commit_on_vad_silence: true,
+       commit_silence_ms: 900,
+       max_utterance_ms: 8000,
+-      vendor: { primary: 'deepgram', secondary: null },
++      vendor: { primary: 'speechmatics', secondary: null },
+     },
+     policy_routing: {
+       ws_version: 'v2',
+     },
+     policy_audio: {
+-      pipeline: { mode: 'opus-webm' },
++      pipeline: { mode: 'pcm16' },
+     },
+   };
+   const CHUNK_MIN = 1;
+   const CHUNK_MAX = 100;
+-  const MEDIA_ALLOWED_INPUTS = ['webm_opus', 'pcm_16k'];
++  const MEDIA_ALLOWED_INPUTS = ['pcm_16k'];
+   const CAPTURE_TIMESLICE_MIN = 20;
+   const CAPTURE_TIMESLICE_STEP = 10;
+ 
+   function cloneDefaults() {
+     return {
+       diag_client_hud: DEFAULTS.diag_client_hud,
+       diag_audio_guard: DEFAULTS.diag_audio_guard,
+       diag_chunk_sample_n: DEFAULTS.diag_chunk_sample_n,
+       policy_media: { ...DEFAULTS.policy_media },
+       policy_capture: { ...DEFAULTS.policy_capture },
+       policy_recorder: { ...DEFAULTS.policy_recorder },
+       policy_input: { ...DEFAULTS.policy_input },
+       policy_asr: JSON.parse(JSON.stringify(DEFAULTS.policy_asr)),
+       policy_routing: { ...DEFAULTS.policy_routing },
+       policy_audio: JSON.parse(JSON.stringify(DEFAULTS.policy_audio)),
+     };
+   }
+ 
+   const state = {
+     values: cloneDefaults(),
+     loading: false,
+     saving: {},
+   };
+ 
+   const elements = {};
+@@ -97,54 +95,51 @@
+       label: 'Client HUD',
+       description: 'Enable the in-client diagnostics overlay.',
+     },
+     {
+       key: 'diag_audio_guard',
+       type: 'boolean',
+       label: 'Audio guardrails',
+       description: 'Emit server-side diagnostics when client audio stalls.',
+     },
+     {
+       key: 'diag_chunk_sample_n',
+       type: 'number',
+       label: 'Chunk sample N',
+       description: 'Log every Nth audio chunk in the browser diagnostics overlay.',
+       min: CHUNK_MIN,
+       max: CHUNK_MAX,
+       sanitize: clampChunk,
+     },
+     {
+       key: 'policy_media.asr_input',
+       settingKey: 'policy_media',
+       prop: 'asr_input',
+       type: 'select',
+       label: 'ASR Input',
+       description: 'Choose the microphone stream format sent to the ASR vendor.',
+-      options: [
+-        { value: 'webm_opus', label: 'WebM + Opus (default)' },
+-        { value: 'pcm_16k', label: 'PCM 16 kHz' },
+-      ],
++      options: [{ value: 'pcm_16k', label: 'PCM 16 kHz' }],
+     },
+     {
+       key: 'policy_media.fallbacks_allowed',
+       settingKey: 'policy_media',
+       prop: 'fallbacks_allowed',
+       type: 'boolean',
+       label: 'Allow fallbacks',
+       description: 'Permit switching to alternate ASR inputs when the primary fails.',
+     },
+     {
+       key: 'policy_capture.start_on_asr_ready',
+       settingKey: 'policy_capture',
+       prop: 'start_on_asr_ready',
+       type: 'boolean',
+       label: 'Start on ASR Ready',
+       description: 'Begin microphone capture after the ASR session is ready.',
+     },
+     {
+       key: 'policy_capture.start_on_turn_ready',
+       settingKey: 'policy_capture',
+       prop: 'start_on_turn_ready',
+       type: 'boolean',
+       label: 'Start on Turn Ready',
+       description: 'Begin microphone capture when the turn is ready to listen.',
+     },
+diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
+index d4661a71c4a6c0de8d5ba5de151c39eb1e4c285a..8c9db6365dab68aa3f4048b9c80239aced269556 100644
+--- a/app/asgi_gateway.py
++++ b/app/asgi_gateway.py
+@@ -15,51 +15,50 @@ from pathlib import Path
+ from tempfile import NamedTemporaryFile
+ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
+ from urllib.parse import parse_qs
+ 
+ from app import config
+ from app.admin.api.settings import handle_admin_settings
+ from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
+ from app.auth.http_handlers import (
+     get_me,
+     post_login,
+     post_profile,
+     post_ws_token,
+     _session_email as _auth_session_email,
+     _is_admin as _auth_is_admin,
+ )
+ from app.db import neon
+ from app.logging_config import configure_logging
+ from app.logging_setup import install_bus_handler
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import FileExporter
+ from app.versioning import get_build_id, inject_static_version
+ from app.voice_v2.asr_runtime import ASRRuntime
+ from app.voice_v2.engine import EngineV2
+ from app.voice_v2.tts_runtime import TTSRuntime
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+-from app.services.streaming_asr.deepgram_client import DeepgramClient
+ from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
+ 
+ 
+ configure_logging()
+ install_bus_handler(telemetry_bus, level=logging.INFO)
+ 
+ logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
+ logging.getLogger("app.security.jwt").setLevel(logging.INFO)
+ logging.getLogger("app.auth.http").setLevel(logging.INFO)
+ 
+ for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
+     _category_logger = logging.getLogger(_logger_name)
+     if _category_logger.level == logging.NOTSET:
+         _category_logger.setLevel(logging.INFO)
+ 
+ 
+ _log = logging.getLogger(__name__)
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     """Immutable container describing a serialized HTTP response."""
+ 
+     status: int
+     body: bytes
+@@ -477,50 +476,61 @@ def _get_query_argument(scope: dict, key: str) -> Optional[str]:
+     query = scope.get("query_string") or b""
+     try:
+         parsed = parse_qs(query.decode("latin1", "ignore"))
+     except Exception:
+         return None
+     values = parsed.get(key)
+     if not values:
+         return None
+     value = values[0].strip()
+     return value or None
+ 
+ 
+ async def _require_admin_api(
+     scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Optional[Response]:
+     authenticated, is_admin, _ = await _resolve_request_identity(scope)
+     if not authenticated:
+         await _drain_request_body(receive)
+         return json_response(status=401, error="unauthorized")
+     if not is_admin:
+         await _drain_request_body(receive)
+         return json_response(status=403, error="forbidden")
+     return None
+ 
+ 
++async def _enforce_admin_auth(
++    handler: HttpHandler, scope: dict, receive: Callable[[], Awaitable[dict]]
++) -> Response:
++    """Wrap an admin HTTP handler enforcing authentication."""
++
++    rejection = await _require_admin_api(scope, receive)
++    if rejection is not None:
++        return rejection
++    return await handler(scope, receive)
++
++
+ def _match_admin_flow_route(path: str) -> Optional[HttpHandler]:
+     if not path.startswith(ADMIN_FLOW_ROUTE_PREFIX + "/"):
+         return None
+ 
+     remainder = path[len(ADMIN_FLOW_ROUTE_PREFIX) + 1 :]
+     if not remainder:
+         return None
+ 
+     parts = remainder.split("/")
+     if len(parts) != 2:
+         return None
+ 
+     sid, action = parts
+     if not sid or not action:
+         return None
+ 
+     if action == "trace":
+         return partial(_handle_admin_flow_trace, sid=sid)
+     if action == "zip":
+         return partial(_handle_admin_flow_zip, sid=sid)
+ 
+     return None
+ 
+ 
+ async def _handle_favicon(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+@@ -796,80 +806,61 @@ async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[s
+ 
+     if user is None:
+         return True, False, email
+ 
+     try:
+         is_admin = bool(_auth_is_admin(user))
+     except Exception:  # pragma: no cover - defensive logging
+         _log.exception("evt=admin_context_flag_failed email=%s", email)
+         return True, False, email
+ 
+     return True, is_admin, email
+ 
+ 
+ def _get_adapter() -> ChatV2Adapter:
+     """Return a lazily instantiated ChatV2Adapter singleton."""
+     global _adapter
+     if _adapter is None:
+         exporter = FileExporter(EXPORT_ROOT)
+         engine = EngineV2(exporter=exporter)
+         tts_runtime = TTSRuntime(engine=engine)
+         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
+         _adapter.tts_runtime = tts_runtime
+         runtime_vendor: Optional[str] = None
+         asr_runtime: Optional[ASRRuntime] = None
+ 
+-        preferred_vendor: Optional[str] = None
+-        try:
+-            policy_vendor = getattr(config, "POLICY_ASR", {})
+-            if isinstance(policy_vendor, Mapping):
+-                vendor_block = policy_vendor.get("vendor")
+-                if isinstance(vendor_block, Mapping):
+-                    primary = vendor_block.get("primary")
+-                    if isinstance(primary, str) and primary.strip():
+-                        preferred_vendor = primary.strip().lower()
+-        except Exception:  # pragma: no cover - defensive
+-            preferred_vendor = None
+-
+-        deepgram_enabled = bool(getattr(config, "ASR_DEEPGRAM_ENABLED", True))
+-        deepgram_key = getattr(config, "DEEPGRAM_API_KEY", None)
+-        if deepgram_enabled and deepgram_key:
+-            asr_client = DeepgramClient(api_key=deepgram_key)
+-            asr_runtime = ASRRuntime(engine=engine, client=asr_client)
+-            runtime_vendor = "deepgram"
+-        elif preferred_vendor == "speechmatics":
+-            sm_enabled = bool(getattr(config, "ASR_SPEECHMATICS_ENABLED", False))
+-            sm_key = getattr(config, "SPEECHMATICS_API_KEY", None)
+-            sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
+-            if sm_enabled and sm_key and sm_url:
+-                sm_client = SpeechmaticsClient(sm_key, sm_url, telemetry_bus, _log)
+-                asr_runtime = ASRRuntime(
+-                    engine=engine,
+-                    client=sm_client,
+-                    telemetry_bus=telemetry_bus,
+-                )
+-                runtime_vendor = "speechmatics"
++        sm_enabled = bool(getattr(config, "ASR_SPEECHMATICS_ENABLED", False))
++        sm_key = getattr(config, "SPEECHMATICS_API_KEY", None)
++        sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
++        if sm_enabled and sm_key and sm_url:
++            sm_client = SpeechmaticsClient(sm_key, sm_url, telemetry_bus, _log)
++            asr_runtime = ASRRuntime(
++                engine=engine,
++                client=sm_client,
++                telemetry_bus=telemetry_bus,
++            )
++            runtime_vendor = "speechmatics"
+ 
+         if asr_runtime is not None:
+             _adapter.asr_runtime = asr_runtime
+             _adapter._asr_runtime_vendor = runtime_vendor
+     return _adapter
+ 
+ 
+ async def _handle_admin_settings_route(
+     scope: dict, receive: Callable[[], Awaitable[dict]]
+ ) -> Response:
+     rejection = await _require_admin_api(scope, receive)
+     if rejection is not None:
+         return rejection
+     return await handle_admin_settings(scope, receive)
+ 
+ 
+ def require_db_ready(handler: HttpHandler) -> HttpHandler:
+     async def _wrapped(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
+         status = neon.db_status()
+         state = status.get("state", "init")
+         if state != "ready":
+             await _drain_request_body(receive)
+             _log.info("evt=db_guard_warming state=%s", state)
+             return json_response(status=503, db="warming")
+         return await handler(scope, receive)
 diff --git a/app/config.py b/app/config.py
-index 0e8099a7324913647e4a2e4248c76f7237703afc..06da0154628ba3a6d9b9012dcff48b00912c5ffa 100644
+index 06da0154628ba3a6d9b9012dcff48b00912c5ffa..345519384145df7fcf4b19361430244ab56f7b11 100644
 --- a/app/config.py
 +++ b/app/config.py
-@@ -73,50 +73,54 @@ _DEFAULT_POLICY_MEDIA = {
+@@ -8,127 +8,129 @@ import os
+ import threading
+ from typing import Any, Mapping, MutableMapping, Optional
+ 
+ try:
+     from dotenv import load_dotenv  # type: ignore
+ except ImportError:  # pragma: no cover - optional dependency
+     load_dotenv = None
+ else:  # pragma: no branch
+     load_dotenv(dotenv_path=".env", override=False)
+ 
+ 
+ def env_bool(name: str, default: bool = False) -> bool:
+     """Return an environment variable parsed as a boolean."""
+ 
+     value = os.getenv(name)
+     if value is None:
+         return bool(default)
+     value = value.strip().lower()
+     if value in {"1", "true", "t", "yes", "y", "on"}:
+         return True
+     if value in {"0", "false", "f", "no", "n", "off"}:
+         return False
+     return bool(default)
+ 
+ 
+-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+-ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
+-ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", False)
++# DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
++# ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
++DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
++ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
++ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
+ SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
+ SPEECHMATICS_REALTIME_URL = os.getenv(
+     "SPEECHMATICS_REALTIME_URL", "wss://mp.speechmatics.com/v2"
+ )
+ ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
+     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
+ )
+ ASR_IDLE_CLOSE_MS = 15000
+ ASR_TRACE = env_bool("ASR_TRACE", False)
+ 
+ 
+ def get_env(name: str, default=None):
+     """Retrieve an environment variable with an optional default."""
+ 
+     value = os.getenv(name)
+     return value if value is not None else default
+ 
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _ADMIN_SETTINGS_LOCK = threading.RLock()
+ _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
+ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
+ _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
+ 
+-_ALLOWED_ASR_INPUTS = {"webm_opus", "pcm_16k"}
+-_SUPPORTED_ASR_VENDORS = {"deepgram", "speechmatics"}
+-_AUDIO_PIPELINE_MODES = {"opus-webm", "pcm16"}
++_ALLOWED_ASR_INPUTS = {"pcm_16k"}
++_SUPPORTED_ASR_VENDORS = {"speechmatics"}
++_AUDIO_PIPELINE_MODES = {"pcm16"}
+ _CAPTURE_TIMESLICE_MIN_MS = 20
+ 
+ _DEFAULT_POLICY_MEDIA = {
+-    "asr_input": "webm_opus",
+-    "asr_rate_hz": 48000,
++    "asr_input": "pcm_16k",
++    "asr_rate_hz": 16000,
+     "asr_channels": 1,
+     "fallbacks_allowed": False,
+ }
+ 
  _DEFAULT_POLICY_CAPTURE = {
      "start_on_asr_ready": True,
      "start_on_turn_ready": True,
@@ -22,16 +654,17 @@ index 0e8099a7324913647e4a2e4248c76f7237703afc..06da0154628ba3a6d9b9012dcff48b00
  _DEFAULT_POLICY_ASR = {
      "prearm_on_tts_end": True,
      "keep_stream_warm_ms": 30000,
-     "vendor": {"primary": "deepgram", "secondary": None},
+-    "vendor": {"primary": "deepgram", "secondary": None},
++    "vendor": {"primary": "speechmatics", "secondary": None},
      "commit_on_vad_silence": True,
      "commit_silence_ms": 900,
      "max_utterance_ms": 8000,
      "dup_final_suppress_ms": 150,
      "dedupe_normalize": True,
-+    "utterance_end_ms": 1200,
-+    "min_segment_ms": 800,
-+    "final_guard_ms": 250,
-+    "allow_word_finals": False,
+     "utterance_end_ms": 1200,
+     "min_segment_ms": 800,
+     "final_guard_ms": 250,
+     "allow_word_finals": False,
  }
  
  _DEFAULT_POLICY_ROUTING = {
@@ -39,7 +672,8 @@ index 0e8099a7324913647e4a2e4248c76f7237703afc..06da0154628ba3a6d9b9012dcff48b00
  }
  
  _DEFAULT_POLICY_AUDIO = {
-     "pipeline": {"mode": "opus-webm"},
+-    "pipeline": {"mode": "opus-webm"},
++    "pipeline": {"mode": "pcm16"},
  }
  
  POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
@@ -57,95 +691,19 @@ index 0e8099a7324913647e4a2e4248c76f7237703afc..06da0154628ba3a6d9b9012dcff48b00
          "input": dict(POLICY_INPUT),
          "asr": dict(POLICY_ASR),
          "routing": dict(POLICY_ROUTING),
-@@ -381,60 +385,79 @@ def _sanitize_asr_policy(
-         try:
-             sanitized[key] = _coerce_db_bool(value.get(key), sanitized[key])
-         except ValueError:
-             _log.warning(
-                 "evt=admin_settings_invalid_policy_asr key=%s source=%s",
-                 key,
-                 source,
-                 extra={"component": "admin.settings", "raw": raw},
-             )
+     },
+     "audio": dict(POLICY_AUDIO),
+ }
  
-     sanitized["keep_stream_warm_ms"] = _coerce_db_int(
-         value.get("keep_stream_warm_ms"),
-         sanitized["keep_stream_warm_ms"],
-         minimum=0,
-     )
  
-     sanitized["commit_silence_ms"] = _coerce_db_int(
-         value.get("commit_silence_ms"), sanitized["commit_silence_ms"], minimum=0
-     )
-     sanitized["max_utterance_ms"] = _coerce_db_int(
-         value.get("max_utterance_ms"), sanitized["max_utterance_ms"], minimum=0
-     )
-     sanitized["dup_final_suppress_ms"] = _coerce_db_int(
-         value.get("dup_final_suppress_ms"), sanitized["dup_final_suppress_ms"], minimum=0
-     )
-+    sanitized["utterance_end_ms"] = _coerce_db_int(
-+        value.get("utterance_end_ms"), sanitized["utterance_end_ms"], minimum=0
-+    )
-+    sanitized["min_segment_ms"] = _coerce_db_int(
-+        value.get("min_segment_ms"), sanitized["min_segment_ms"], minimum=0
-+    )
-+    sanitized["final_guard_ms"] = _coerce_db_int(
-+        value.get("final_guard_ms"), sanitized["final_guard_ms"], minimum=0
-+    )
-     try:
-         sanitized["dedupe_normalize"] = _coerce_db_bool(
-             value.get("dedupe_normalize"), sanitized["dedupe_normalize"]
-         )
-     except ValueError:
-         _log.warning(
-             "evt=admin_settings_invalid_policy_asr key=dedupe_normalize source=%s",
-             source,
-             extra={"component": "admin.settings", "raw": raw},
-         )
-+    try:
-+        sanitized["allow_word_finals"] = _coerce_db_bool(
-+            value.get("allow_word_finals"), sanitized["allow_word_finals"]
-+        )
-+    except ValueError:
-+        _log.warning(
-+            "evt=admin_settings_invalid_policy_asr key=allow_word_finals source=%s",
-+            source,
-+            extra={"component": "admin.settings", "raw": raw},
-+        )
+ def _normalize_key(key: str) -> str:
+     return key.strip().lower()
  
-     vendor_value = value.get("vendor")
-     if isinstance(vendor_value, Mapping):
-         vendor_block = dict(sanitized.get("vendor", {}))
-         primary = vendor_value.get("primary")
-         if isinstance(primary, str) and primary.strip():
-             normalized = primary.strip().lower()
-             if normalized in _SUPPORTED_ASR_VENDORS:
-                 vendor_block["primary"] = normalized
-             else:
-                 _log.warning(
-                     "evt=admin_settings_invalid_policy_asr key=vendor.primary source=%s",
-                     source,
-                     extra={
-                         "component": "admin.settings",
-                         "raw": raw,
-                         "vendor": primary,
-                     },
-                 )
-         secondary = vendor_value.get("secondary")
-         if secondary is None:
-             vendor_block["secondary"] = None
-         elif isinstance(secondary, str) and secondary.strip():
-             normalized_secondary = secondary.strip().lower()
-             if normalized_secondary in _SUPPORTED_ASR_VENDORS:
 diff --git a/app/policy/loader.py b/app/policy/loader.py
-index cb0482ba024699506bd97f8c66f38a302cbab6f0..d0fc17ea860e95e8ce3b4d3e611489707ec0c1e8 100644
+index d0fc17ea860e95e8ce3b4d3e611489707ec0c1e8..e7ad266725c75a1c794fdf137ff6125cd168852d 100644
 --- a/app/policy/loader.py
 +++ b/app/policy/loader.py
-@@ -20,50 +20,54 @@ _DEFAULT_ASSISTANT_TURN_ACTIONS: Sequence[str] = (
- # than performing recursive merges.
- _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
-     "mode": "idle",
-     "allow_auto_vad": True,
+@@ -24,57 +24,57 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
      "barge_in_enabled": True,
      "auto_commit_when_ready": True,
      "voice": {"voice_id": "alloy-en-US-001", "locale": "en-US"},
@@ -167,17 +725,19 @@ index cb0482ba024699506bd97f8c66f38a302cbab6f0..d0fc17ea860e95e8ce3b4d3e61148970
              "max_utterance_ms": 8000,
              "dup_final_suppress_ms": 150,
              "dedupe_normalize": True,
-+            "utterance_end_ms": 1200,
-+            "min_segment_ms": 800,
-+            "final_guard_ms": 250,
-+            "allow_word_finals": False,
-             "vendor": {"primary": "deepgram", "secondary": None},
+             "utterance_end_ms": 1200,
+             "min_segment_ms": 800,
+             "final_guard_ms": 250,
+             "allow_word_finals": False,
+-            "vendor": {"primary": "deepgram", "secondary": None},
++            "vendor": {"primary": "speechmatics", "secondary": None},
          },
          "routing": {
              "ws_version": "v2",
          },
      },
-     "audio": {"pipeline": {"mode": "opus-webm"}},
+-    "audio": {"pipeline": {"mode": "opus-webm"}},
++    "audio": {"pipeline": {"mode": "pcm16"}},
      "actions": {
          "allowed": ["answer"],
          "surface_via_suggestions": True,
@@ -196,11 +756,44 @@ index cb0482ba024699506bd97f8c66f38a302cbab6f0..d0fc17ea860e95e8ce3b4d3e61148970
              "asr": True,
              "nlu": True,
              "nlg": True,
+             "client_ui": True,
+             "provider_debug": True,
+         },
+         "redaction": {"pii": True, "secrets": True, "text": False},
+         "sampling": {"percent": 100},
+     },
+ }
 diff --git a/app/policy/model.py b/app/policy/model.py
-index 1b3c4219e58982e4a8c886a2ef11e6b2c947b5ee..e87f162c7caa505c7443c1f826c5cc20f60d3063 100644
+index e87f162c7caa505c7443c1f826c5cc20f60d3063..69934a6dfa4ddfa2fa33a165c6fc1f782062258c 100644
 --- a/app/policy/model.py
 +++ b/app/policy/model.py
-@@ -25,50 +25,54 @@ class CapturePolicy:
+@@ -1,85 +1,85 @@
+ """Dataclasses describing the runtime policy configuration."""
+ from __future__ import annotations
+ 
+ from dataclasses import dataclass, field
+ from typing import Any, Dict, Literal, Optional
+ 
+ 
+ @dataclass
+ class MediaPolicy:
+     """Describe how audio should be transported to the ASR provider."""
+ 
+-    asr_input: str = "webm_opus"
+-    asr_rate_hz: int = 48000
++    asr_input: str = "pcm_16k"
++    asr_rate_hz: int = 16000
+     asr_channels: int = 1
+     fallbacks_allowed: bool = False
+ 
+ 
+ @dataclass
+ class CapturePolicy:
+     """Describe how microphone capture should behave client-side."""
+ 
+     start_on_asr_ready: bool = True
+     start_on_turn_ready: bool = True
+     timeslice_ms: int = 200
      mask_during_tts: bool = True
      mask_keepalive_enable: bool = True
      mask_keepalive_ms: int = 5000
@@ -210,7 +803,8 @@ index 1b3c4219e58982e4a8c886a2ef11e6b2c947b5ee..e87f162c7caa505c7443c1f826c5cc20
  class ASRVendorPolicy:
      """Describe how ASR vendors should be selected at runtime."""
  
-     primary: str = "deepgram"
+-    primary: str = "deepgram"
++    primary: str = "speechmatics"
      secondary: Optional[str] = None
  
  
@@ -226,17 +820,18 @@ index 1b3c4219e58982e4a8c886a2ef11e6b2c947b5ee..e87f162c7caa505c7443c1f826c5cc20
      max_utterance_ms: int = 8000
      dup_final_suppress_ms: int = 150
      dedupe_normalize: bool = True
-+    utterance_end_ms: int = 1200
-+    min_segment_ms: int = 800
-+    final_guard_ms: int = 250
-+    allow_word_finals: bool = False
+     utterance_end_ms: int = 1200
+     min_segment_ms: int = 800
+     final_guard_ms: int = 250
+     allow_word_finals: bool = False
  
  
  @dataclass
  class AudioPipelinePolicy:
      """Describe the media pipeline presented to clients."""
  
-     mode: Literal["opus-webm", "pcm16"] = "opus-webm"
+-    mode: Literal["opus-webm", "pcm16"] = "opus-webm"
++    mode: Literal["pcm16"] = "pcm16"
  
  
  @dataclass
@@ -255,1180 +850,756 @@ index 1b3c4219e58982e4a8c886a2ef11e6b2c947b5ee..e87f162c7caa505c7443c1f826c5cc20
      capture: CapturePolicy = field(default_factory=CapturePolicy)
      asr: ASRPolicy = field(default_factory=ASRPolicy)
      audio: AudioPolicy = field(default_factory=AudioPolicy)
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 715af92f6687d060b1f63bf2a055c3fa1ab22211..a5c74ea1cfb50b82ffa7ab7c9a31beb050376092 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -20,50 +20,134 @@ _AUDIO_SENTINEL = object()
  
  
- def _coerce_language(policy: Mapping[str, Any] | None) -> str:
-     """Return the language preference from policy or default to English."""
+ __all__ = [
+     "MediaPolicy",
+     "CapturePolicy",
+     "ASRPolicy",
+     "ASRVendorPolicy",
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 0494c36b596ef061f8d022c72da3e64ac398f6e0..97a61dd5330f0fe8edc4612b5577fd38b627edb1 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1594,66 +1594,66 @@ import { WakeWord } from "./wake_word.js";
+     const sanitized = sanitizeServerBannerFrame(frame);
+     updateState({ serverBanner: sanitized });
+     console.log("WS server banner", sanitized);
+     dispatchFrame(sanitized);
+   }
  
-     if not isinstance(policy, Mapping):
-         return "en"
+   function handleAsrReadyFrame(frame) {
+     const sanitized = sanitizeAsrReadyFrame(frame);
+     AppState.asrReady = true;
+     updateState({ asrReady: true });
+     if (typeof AppState.emit === "function") {
+       AppState.emit("asrReady", {
+         ready: true,
+         vendor: sanitized.vendor ?? null,
+         input: sanitized.input ?? null,
+       });
+     }
+     logStage('client.asr', {
+       stage: 'ready',
+       vendor: sanitized.vendor ?? null,
+       input: sanitized.input ?? null,
+     });
+     return sanitized;
+   }
  
-     current: Any = policy
-     for path in (
-         ("vendor", "asr", "speechmatics", "language"),
-         ("input", "language"),
-         ("language",),
-     ):
-         lookup = current
-         for key in path:
-             if not isinstance(lookup, Mapping):
-                 lookup = None
-                 break
-             lookup = lookup.get(key)
-         if isinstance(lookup, str) and lookup.strip():
-             return lookup.strip()
-     return "en"
+-  const ASR_VENDOR_OPTIONS = ['deepgram', 'speechmatics'];
+-  const AUDIO_PIPELINE_OPTIONS = ['opus-webm', 'pcm16'];
++  const ASR_VENDOR_OPTIONS = ['speechmatics'];
++  const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
  
+   const DEFAULT_POLICY_FLAGS = {
+     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
+     input: { require_hotword_to_start: false },
+     asr: {
+       prearm_on_tts_end: true,
+       keep_stream_warm_ms: 30000,
+       commit_on_vad_silence: true,
+       commit_silence_ms: 900,
+       max_utterance_ms: 8000,
+-      vendor: { primary: 'deepgram', secondary: null },
++      vendor: { primary: 'speechmatics', secondary: null },
+     },
+     routing: { ws_version: 'v2' },
+-    audio: { pipeline: { mode: 'opus-webm' } },
++    audio: { pipeline: { mode: 'pcm16' } },
+   };
  
-+def _lookup_policy_path(policy: Mapping[str, Any] | None, path: tuple[str, ...]) -> Any:
-+    current: Any = policy
-+    for key in path:
-+        if isinstance(current, Mapping):
-+            current = current.get(key)
-+        else:
-+            current = getattr(current, key, None)
-+        if current is None:
-+            return None
-+    return current
-+
-+
-+def _coerce_int(value: Any) -> int | None:
-+    if isinstance(value, bool):
-+        return int(value)
-+    if isinstance(value, int):
-+        return value
-+    if isinstance(value, float):
-+        try:
-+            return int(value)
-+        except (OverflowError, ValueError):
-+            return None
-+    if isinstance(value, str):
-+        stripped = value.strip()
-+        if not stripped:
-+            return None
-+        try:
-+            return int(stripped)
-+        except ValueError:
-+            return None
-+    return None
-+
-+
-+def _coerce_bool(value: Any) -> bool | None:
-+    if isinstance(value, bool):
-+        return value
-+    if isinstance(value, (int, float)) and not isinstance(value, bool):
-+        return bool(value)
-+    if isinstance(value, str):
-+        normalized = value.strip().lower()
-+        if normalized in {"true", "1", "yes", "on"}:
-+            return True
-+        if normalized in {"false", "0", "no", "off"}:
-+            return False
-+    return None
-+
-+
-+def _resolve_asr_policy(policy: Mapping[str, Any] | None) -> Dict[str, int | bool]:
-+    defaults: Dict[str, int | bool] = {
-+        "utterance_end_ms": 1200,
-+        "min_segment_ms": 800,
-+        "final_guard_ms": 250,
-+        "allow_word_finals": False,
-+    }
-+
-+    candidates = [
-+        ("policy", "asr"),
-+        ("policy", "asr", "speechmatics"),
-+        ("asr",),
-+    ]
-+
-+    for key in list(defaults.keys()):
-+        for path in candidates:
-+            block = _lookup_policy_path(policy, path)
-+            if block is None:
-+                continue
-+            if isinstance(block, Mapping):
-+                candidate = block.get(key)
-+            else:
-+                candidate = getattr(block, key, None)
-+            if key == "allow_word_finals":
-+                coerced = _coerce_bool(candidate)
-+                if coerced is not None:
-+                    defaults[key] = coerced
-+                    break
-+            else:
-+                coerced_int = _coerce_int(candidate)
-+                if coerced_int is not None:
-+                    defaults[key] = coerced_int
-+                    break
-+
-+    return defaults
-+
-+
- def _now_ms() -> int:
-     return int(time.time() * 1000)
+   function sanitizePolicySnapshot(source) {
+     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
+     const policy = { ...base };
  
- 
- def _latency_ms(state: "_StreamState", now_monotonic: float) -> int:
-     if state.first_audio_ts is not None:
-         baseline = state.first_audio_ts
-     else:
-         baseline = state.opened_monotonic
-     latency = int(max(0.0, (now_monotonic - baseline) * 1000))
-     return latency
- 
- 
- def _extract_text(payload: Mapping[str, Any]) -> str | None:
-     """Best-effort extraction of transcript text from a vendor payload."""
- 
-     if not isinstance(payload, Mapping):
-         return None
- 
-     def _from_mapping(candidate: Mapping[str, Any]) -> str | None:
-         for key in ("transcript", "text", "partial"):
-             value = candidate.get(key)
-             if isinstance(value, str) and value.strip():
-                 return value
- 
-@@ -313,62 +397,76 @@ class SpeechmaticsClient:
-             raise ValueError("sid must be a non-empty string")
-         if not isinstance(stream_id, str) or not stream_id:
-             raise ValueError("stream_id must be a non-empty string")
-         if sid in self._streams:
-             raise RuntimeError(f"stream for sid {sid!r} already exists")
- 
-         await self._await_capacity(new_sid=sid)
- 
-         language = _coerce_language(policy)
- 
-         headers = {"Authorization": f"Bearer {self._api_key}"}
-         connect_kwargs = {
-             _CONNECT_HEADERS_ARG: headers,
-             "max_size": None,
-             "ping_interval": 20,
-             "ping_timeout": 10,
+     if (source && typeof source === 'object') {
+       if (typeof source.mode === 'string') {
+         policy.mode = source.mode;
+       }
+       if (typeof source.allow_auto_vad === 'boolean') {
+         policy.allow_auto_vad = source.allow_auto_vad;
+       }
+       if (typeof source.barge_in_enabled === 'boolean') {
+         policy.barge_in_enabled = source.barge_in_enabled;
+       }
+       if (typeof source.ws_auth_mode === 'string' && source.ws_auth_mode.trim()) {
+         policy.ws_auth_mode = source.ws_auth_mode.trim();
+       }
+       if (typeof source.require_user_gesture_first_visit === 'boolean') {
+         policy.require_user_gesture_first_visit = source.require_user_gesture_first_visit;
+       }
+       if (typeof source.auto_record_after_greet === 'boolean') {
+         policy.auto_record_after_greet = source.auto_record_after_greet;
+       }
+@@ -1740,99 +1740,99 @@ import { WakeWord } from "./wake_word.js";
+       const asr = rawNested.asr && typeof rawNested.asr === 'object' ? rawNested.asr : null;
+       let keepWarm = DEFAULT_POLICY_FLAGS.asr.keep_stream_warm_ms;
+       if (asr && Number.isFinite(Number(asr.keep_stream_warm_ms))) {
+         const parsed = Number(asr.keep_stream_warm_ms);
+         if (parsed >= 0) {
+           keepWarm = Math.round(parsed);
          }
-         try:
-             websocket = await websockets.connect(self._url, **connect_kwargs)
-         except Exception as exc:
-             self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
-             raise
- 
-         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
- 
-+        asr_policy = _resolve_asr_policy(policy)
-+        utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
-+        allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
-+
-+        transcription_config = {
-+            "language": language,
-+            "enable_partials": True,
-+        }
-+        if utterance_end_ms >= 0:
-+            transcription_config["max_delay"] = utterance_end_ms
-+
-         start_payload = {
-             "message": "StartRecognition",
--            "transcription_config": {
--                "language": language,
--                "enable_partials": True,
--            },
-+            "transcription_config": transcription_config,
-             "audio_format": {
-                 "type": "raw",
-                 "encoding": "pcm_s16le",
-                 "sample_rate": sample_rate
-             },
+       }
+       const commitOnVad = asr && typeof asr.commit_on_vad_silence === 'boolean'
+         ? asr.commit_on_vad_silence
+         : DEFAULT_POLICY_FLAGS.asr.commit_on_vad_silence;
+       let commitSilence = DEFAULT_POLICY_FLAGS.asr.commit_silence_ms;
+       if (asr && Number.isFinite(Number(asr.commit_silence_ms))) {
+         const parsed = Number(asr.commit_silence_ms);
+         if (parsed >= 0) {
+           commitSilence = Math.round(parsed);
          }
-+
-+        self._logger.info(
-+            "evt=asr_vendor_opts vendor=speechmatics utterance_end_ms=%d allow_word_finals=%s",
-+            utterance_end_ms,
-+            "true" if allow_word_finals else "false",
-+        )
-         await websocket.send(json.dumps(start_payload))
+       }
+       let maxUtterance = DEFAULT_POLICY_FLAGS.asr.max_utterance_ms;
+       if (asr && Number.isFinite(Number(asr.max_utterance_ms))) {
+         const parsed = Number(asr.max_utterance_ms);
+         if (parsed >= 0) {
+           maxUtterance = Math.round(parsed);
+         }
+       }
+-      const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: 'deepgram', secondary: null };
++      const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: 'speechmatics', secondary: null };
+       const vendorBlock = asr && typeof asr.vendor === 'object' ? asr.vendor : null;
+       const vendor = { ...vendorDefaults };
+       if (vendorBlock) {
+         if (typeof vendorBlock.primary === 'string') {
+           const normalized = vendorBlock.primary.trim().toLowerCase();
+           if (ASR_VENDOR_OPTIONS.includes(normalized)) {
+             vendor.primary = normalized;
+           }
+         }
+         if (vendorBlock.secondary === null) {
+           vendor.secondary = null;
+         } else if (typeof vendorBlock.secondary === 'string') {
+           const normalizedSecondary = vendorBlock.secondary.trim().toLowerCase();
+           if (ASR_VENDOR_OPTIONS.includes(normalizedSecondary)) {
+             vendor.secondary = normalizedSecondary;
+           } else {
+             vendor.secondary = vendorDefaults.secondary;
+           }
+         }
+       }
  
-         self._logger.info(
-             "sm_ws_open encoding=%s sr=%d ch=1 interim=true lang=%s",
-             encoding,
-             sample_rate,
-             language,
-         )
+       nested.asr = {
+         prearm_on_tts_end: asr && typeof asr.prearm_on_tts_end === 'boolean'
+           ? asr.prearm_on_tts_end
+           : DEFAULT_POLICY_FLAGS.asr.prearm_on_tts_end,
+         keep_stream_warm_ms: keepWarm,
+         commit_on_vad_silence: commitOnVad,
+         commit_silence_ms: commitSilence,
+         max_utterance_ms: maxUtterance,
+         vendor,
+       };
  
-         state = _StreamState(
+       const routing = rawNested.routing && typeof rawNested.routing === 'object'
+         ? rawNested.routing
+         : null;
+       const rawVersion = routing && typeof routing.ws_version === 'string'
+         ? routing.ws_version.trim()
+         : '';
+       nested.routing = {
+         ws_version: rawVersion && rawVersion.toLowerCase() === 'v2'
+           ? 'v2'
+           : DEFAULT_POLICY_FLAGS.routing.ws_version,
+       };
+     }
+ 
+     const audioSource = source && typeof source === 'object' ? source.audio : null;
+-    const audioDefaults = DEFAULT_POLICY_FLAGS.audio || { pipeline: { mode: 'opus-webm' } };
+-    const audioPipeline = audioDefaults.pipeline ? { ...audioDefaults.pipeline } : { mode: 'opus-webm' };
++    const audioDefaults = DEFAULT_POLICY_FLAGS.audio || { pipeline: { mode: 'pcm16' } };
++    const audioPipeline = audioDefaults.pipeline ? { ...audioDefaults.pipeline } : { mode: 'pcm16' };
+     if (audioSource && typeof audioSource === 'object') {
+       const pipeline = audioSource.pipeline && typeof audioSource.pipeline === 'object'
+         ? audioSource.pipeline
+         : null;
+       if (pipeline && typeof pipeline.mode === 'string') {
+         const mode = pipeline.mode.trim().toLowerCase();
+         if (AUDIO_PIPELINE_OPTIONS.includes(mode)) {
+           audioPipeline.mode = mode;
+         }
+       }
+     }
+ 
+     policy.policy = nested;
+     policy.audio = { pipeline: audioPipeline };
+     return policy;
+   }
+ 
+   function applyPolicySnapshotFromSource(source, origin) {
+     const sanitizedPolicy = sanitizePolicySnapshot(source);
+     AppState.policy = sanitizedPolicy;
+     updateState({ policy: sanitizedPolicy });
+     const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
+     dispatchFrame(snapshotFrame);
+     dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
+     return sanitizedPolicy;
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index ec1331d9dbb3af77493218c52bc4d0e86d70a7db..8bc15feafbd557db84e56085aa5ecb31839a37f4 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -679,130 +679,123 @@ class ChatV2Adapter:
+         ctx = AdapterContext(
              sid=sid,
-             stream_id=vendor_stream_id,
-             websocket=websocket,
-             on_partial=on_partial,
-             on_final=on_final,
-             on_error=on_error,
-             on_close=on_close,
-             language=language,
-             encoding=encoding,
-             sample_rate=sample_rate,
-             loop=asyncio.get_running_loop(),
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
          )
-         state.sender_task = state.loop.create_task(self._sender_loop(state), name=f"sm-send-{sid}")
-         state.receiver_task = state.loop.create_task(self._receiver_loop(state), name=f"sm-recv-{sid}")
-         self._streams[sid] = state
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index 5ca511246e200fa39e356119cc4cc65094f5408f..2d42ca7b5a5f926a4ad5ca28658029713e7d6517 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -40,87 +40,107 @@ _PARTIAL_CONFIDENCE = 0.55
- _FINAL_CONFIDENCE = 0.9
- _DEFAULT_IDLE_CLOSE_MS = 4000
- _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
- _TRACE_ENABLED = bool(ASR_TRACE)
- _EBML_MAGIC = b"\x1a\x45\xdf\xa3"
- _RMS_PROBE_WINDOW_MS = 2000
- def _resolve_stream_open_timeout(default: float = 10.0) -> float:
-     raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
-     if raw is None:
-         return default
-     try:
-         timeout = float(raw)
-     except (TypeError, ValueError):
-         return default
-     if timeout <= 0:
-         return default
-     return timeout
+         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+         ctx.last_client_activity_ms = now_ms
+         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
+         snapshot_mapping = (
+             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+         )
+         ctx.asr_vendor = selected_vendor
+         allowed_display = ",".join(ctx.allowed_asr_vendors)
+         _log.info(
+             "asr_vendor_selected primary=%s allowed=%s reason=%s",
+             selected_vendor or "",
+             allowed_display,
+             selection_reason,
+         )
+         ctx.asr_vendor_logged = True
+         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
+         if ctx.asr_vendor == "speechmatics":
+             ctx.audio_pipeline_mode = "pcm16"
+-        mode = ctx.audio_pipeline_mode or "opus-webm"
++        mode = ctx.audio_pipeline_mode or "pcm16"
+         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
  
- 
- _STREAM_OPEN_TIMEOUT_S = _resolve_stream_open_timeout()
- _NO_AUDIO_TIMEOUT_S = 9.0
- _LISTENING_STATE = "Listening"
- _READY_STATES = {"Ready", "Idle"}
- 
- 
-+def _summarize_text(text: str, limit: int = 120) -> str:
-+    if not isinstance(text, str):
-+        return ""
-+    sanitized = text.replace("\"", "\\\"")
-+    if len(sanitized) <= limit:
-+        return sanitized
-+    if limit <= 1:
-+        return sanitized[:limit]
-+    return f"{sanitized[: limit - 1]}…"
-+
-+
- def _safe_url(url: str | None) -> str:
-     if not url:
-         return ""
-     try:
-         from urllib.parse import urlparse, urlunparse
- 
-         u = urlparse(url)
-         # strip query to avoid leaking keys; keep scheme/host/path
-         return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
-     except Exception:
-         return ""
- 
- 
- def _default_input_descriptor() -> Dict[str, Any]:
-     return {
-         "container": "webm",
-         "codec": "opus",
-         "rate_hz": 48000,
-         "channels": 1,
-     }
- 
- 
- def _pcm_input_descriptor() -> Dict[str, Any]:
-     return {
-         "container": "raw",
-         "codec": "pcm_s16le",
-         "rate_hz": 16000,
-         "channels": 1,
-     }
- 
- 
- def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
-     if isinstance(vendor, str) and vendor.strip().lower() == "speechmatics":
-         return _pcm_input_descriptor()
-     return _default_input_descriptor()
- 
- 
-+@dataclass
-+class _PendingFinal:
-+    text: str
-+    metadata: Dict[str, object]
-+    created_ms: int
-+    segment_ms: int
-+    guard_ms: int
-+
-+
- @dataclass
- class _SessionState:
-     """Track per-session streaming state."""
- 
-     sid: str
-     pending: Deque[bytes] = field(default_factory=deque)
-     buffered_bytes: int = 0
-     req_id: Optional[str] = None
-     stream_open_task: Optional[asyncio.Task[None]] = None
-     stream_open: bool = False
-     last_audio_ts: float = 0.0
-     idle_handle: asyncio.TimerHandle | None = None
-     stream_id: Optional[str] = None
-     close_reason: Optional[str] = None
-     opened_at_ms: int = 0
-     opened_at_monotonic: float = 0.0
-     last_audio_ts_ms: int = 0
-     chunks_sent: int = 0
-     bytes_sent: int = 0
-     dg_msgs_partial: int = 0
-     dg_msgs_final: int = 0
-     finals_delivered: int = 0
-     dropped_chunks: int = 0
-     last_stream_id: Optional[str] = None
-     ready_watchdog: asyncio.TimerHandle | None = None
-@@ -132,50 +152,56 @@ class _SessionState:
-     rollup_window_start: float = 0.0
-     rollup_chunks: int = 0
-     rollup_bytes: int = 0
-     bytes_received: int = 0
-     listening: bool = False
-     ingress_packets: int = 0
-     ingress_bytes: int = 0
-     first_ingress_ms: int = 0
-     first_partial_logged: bool = False
-     last_partial_log: float = 0.0
-     model: Optional[str] = None
-     keep_warm_until: float = 0.0
-     probe_active: bool = False
-     probe_target_samples: int = 0
-     probe_samples_collected: int = 0
-     probe_sum_squares: float = 0.0
-     probe_peak: float = 0.0
-     probe_window_ms: int = _RMS_PROBE_WINDOW_MS
-     commit_on_vad_silence: bool = True
-     commit_silence_ms: int = 900
-     max_utterance_ms: int = 8000
-     commit_timer: asyncio.TimerHandle | None = None
-     utterance_active: bool = False
-     utterance_started_at: float = 0.0
-     final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
-+    segment_started_ms: int = 0
-+    pending_final: Optional[_PendingFinal] = None
-+    pending_final_handle: asyncio.TimerHandle | None = None
-+    final_guard_ms: int = 250
-+    min_segment_ms: int = 800
-+    allow_word_finals: bool = False
- 
-     def __post_init__(self) -> None:
-         now_monotonic = time.monotonic()
-         now_wall = time.time()
-         self.opened_at_monotonic = now_monotonic
-         self.opened_at_ms = int(now_wall * 1000)
-         self.last_audio_ts = now_monotonic
-         self.last_audio_ts_ms = int(now_wall * 1000)
- 
- 
- class ASRRuntime:
-     """Bridge websocket audio to realtime transcription providers."""
- 
-     def __init__(
-         self,
-         engine: EngineV2,
-         client: Any,
-         *,
-         telemetry_bus: Any | None = None,
-     ) -> None:
-         if engine is None:
-             raise ValueError("engine must be provided")
-         if client is None:
-             raise ValueError("client must be provided")
- 
-@@ -295,89 +321,375 @@ class ASRRuntime:
-             rate_value = rate if isinstance(rate, int) and rate > 0 else 48000
-             channels_value = (
-                 channels if isinstance(channels, int) and channels > 0 else 1
-             )
-             return {
-                 "container": "webm",
-                 "codec": "opus",
-                 "rate_hz": rate_value,
-                 "channels": channels_value,
-             }
- 
-         if asr_input == "pcm_16k":
-             return _pcm_input_descriptor()
- 
-         if asr_input:
-             self._emit_log(
-                 {
-                     "type": "EVT_LOG",
-                     "level": "ERROR",
-                     "msg": f"evt=asr_policy_invalid input={asr_input}",
-                 }
-             )
- 
-         return _default_input_descriptor_for_vendor(self._vendor)
- 
-+    def _resolve_speechmatics_policy_values(
-+        self, policy_snapshot: Mapping[str, Any] | Any | None
-+    ) -> Dict[str, int | bool]:
-+        asr_policy = getattr(self.policy, "asr", None)
-+        defaults: Dict[str, int | bool] = {
-+            "utterance_end_ms": getattr(asr_policy, "utterance_end_ms", 1200),
-+            "min_segment_ms": getattr(asr_policy, "min_segment_ms", 800),
-+            "final_guard_ms": getattr(asr_policy, "final_guard_ms", 250),
-+            "allow_word_finals": bool(
-+                getattr(asr_policy, "allow_word_finals", False)
-+            ),
-+        }
-+
-+        if policy_snapshot is None:
-+            return defaults
-+
-+        paths: tuple[tuple[str, ...], ...] = (
-+            ("policy", "asr", "speechmatics"),
-+            ("policy", "asr"),
-+            ("asr",),
-+        )
-+
-+        for key in defaults.keys():
-+            for path in paths:
-+                current: Any = policy_snapshot
-+                for element in path:
-+                    if isinstance(current, Mapping):
-+                        current = current.get(element)
-+                    else:
-+                        current = getattr(current, element, None)
-+                    if current is None:
-+                        break
-+                if current is None:
-+                    continue
-+                if isinstance(current, Mapping):
-+                    candidate = current.get(key)
-+                else:
-+                    candidate = getattr(current, key, None)
-+                if candidate is None:
-+                    continue
-+                if key == "allow_word_finals":
-+                    defaults[key] = self._coerce_policy_bool(
-+                        candidate, bool(defaults[key])
-+                    )
-+                else:
-+                    defaults[key] = self._coerce_policy_int(
-+                        candidate, int(defaults[key])
-+                    )
-+                break
-+
-+        return defaults
-+
-+    def _apply_speechmatics_policy(
-+        self,
-+        state: _SessionState,
-+        policy_snapshot: Mapping[str, Any] | Any | None,
-+    ) -> None:
-+        values = self._resolve_speechmatics_policy_values(policy_snapshot)
-+        state.final_guard_ms = int(values.get("final_guard_ms", 250))
-+        state.min_segment_ms = int(values.get("min_segment_ms", 800))
-+        state.allow_word_finals = bool(values.get("allow_word_finals", False))
-+
-+    def _cancel_pending_final(
-+        self,
-+        state: _SessionState,
-+        reason: str | None = None,
-+        *,
-+        log: bool = True,
-+    ) -> None:
-+        handle = state.pending_final_handle
-+        if handle is not None:
-+            try:
-+                handle.cancel()
-+            except Exception:  # pragma: no cover - defensive
-+                pass
-+        state.pending_final_handle = None
-+        if state.pending_final is None:
-+            return
-+        if log and reason in {"speech_resumed", "too_short"}:
-+            _log.info("evt=asr_final_canceled reason=%s", reason)
-+        state.pending_final = None
-+
-+    def _handle_speechmatics_final_candidate(
-+        self,
-+        sid: str,
-+        state: _SessionState,
-+        text: str,
-+        metadata: Dict[str, object],
-+    ) -> bool:
-+        if state.allow_word_finals:
-+            return False
-+
-+        loop = self._ensure_loop()
-+        if loop is None:
-+            return False
-+
-+        now_ms = int(time.time() * 1000)
-+        if state.segment_started_ms <= 0:
-+            state.segment_started_ms = now_ms
-+        segment_ms = max(0, now_ms - state.segment_started_ms)
-+
-+        guard_ms = max(0, int(state.final_guard_ms))
-+        min_segment_ms = max(0, int(state.min_segment_ms))
-+        if segment_ms < min_segment_ms:
-+            guard_ms = max(guard_ms, min_segment_ms - segment_ms)
-+
-+        if guard_ms <= 0:
-+            return False
-+
-+        if state.pending_final is not None:
-+            self._cancel_pending_final(state, "too_short")
-+
-+        candidate = _PendingFinal(
-+            text=text,
-+            metadata=dict(metadata),
-+            created_ms=now_ms,
-+            segment_ms=segment_ms,
-+            guard_ms=guard_ms,
-+        )
-+        state.pending_final = candidate
-+
-+        summary = _summarize_text(text)
-+        _log.info(
-+            'evt=asr_final_candidate text="%s" len_ms=%d guard_ms=%d',
-+            summary,
-+            segment_ms,
-+            guard_ms,
-+        )
-+
-+        delay = guard_ms / 1000.0
-+
-+        def _fire() -> None:
-+            try:
-+                self._confirm_pending_final(sid, state, candidate)
-+            except Exception:  # pragma: no cover - defensive
-+                _log.exception("evt=asr_final_guard_failed sid=%s", sid)
-+
-+        state.pending_final_handle = loop.call_later(delay, _fire)
-+        return True
-+
-+    def _confirm_pending_final(
-+        self, sid: str, state: _SessionState, candidate: _PendingFinal
-+    ) -> None:
-+        if state.pending_final is not candidate:
-+            return
-+        state.pending_final = None
-+        state.pending_final_handle = None
-+        summary = _summarize_text(candidate.text)
-+        _log.info('evt=asr_final_confirmed text="%s"', summary)
-+        self._deliver_final(sid, candidate.text, candidate.metadata, state)
-+
-+    def _deliver_final(
-+        self,
-+        sid: str,
-+        text: str,
-+        metadata: Dict[str, object] | None,
-+        state: _SessionState,
-+    ) -> None:
-+        metadata = metadata or {}
-+        self._cancel_pending_final(state, log=False)
-+        if state.stream_id is None:
-+            meta_stream = metadata.get("stream_id")
-+            if isinstance(meta_stream, str) and meta_stream:
-+                state.stream_id = meta_stream
-+        stream_id = state.stream_id or ""
-+        if not stream_id:
-+            stream_id = self._generate_stream_id()
-+            state.stream_id = stream_id
-+        state.last_stream_id = stream_id
-+        state.dg_msgs_final += 1
-+        raw_len = metadata.get("len_chars") if isinstance(metadata, Mapping) else None
-+        len_chars = len(text)
-+        if raw_len:
-+            try:
-+                candidate_len = int(raw_len)
-+            except (TypeError, ValueError):
-+                candidate_len = None
-+            if candidate_len is not None and candidate_len >= 0:
-+                len_chars = candidate_len
-+        utterance_id = metadata.get("utterance_id") if isinstance(metadata, Mapping) else None
-+        if not utterance_id:
-+            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
-+        latency_ms = int(metadata.get("latency_ms") or 0)
-+
-+        _log.info(
-+            "asr_final vendor=%s chars=%d latency_ms=%d",
-+            self._vendor,
-+            len_chars,
-+            latency_ms,
-+        )
-+
-+        ensure_session = getattr(self._engine, "_ensure_session", None)
-+        engine_session = ensure_session(sid) if callable(ensure_session) else None
-+        engine_req_id = None
-+        if engine_session is not None:
-+            candidate = getattr(engine_session, "req_id", None)
-+            if isinstance(candidate, str) and candidate:
-+                engine_req_id = candidate
-+
-+        if isinstance(engine_req_id, str) and engine_req_id:
-+            req_id = engine_req_id
-+        elif isinstance(state.req_id, str) and state.req_id:
-+            req_id = state.req_id
-+            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
-+                engine_session.req_id = req_id
-+        else:
-+            req_id = f"req-{uuid.uuid4().hex}"
-+            if engine_session is not None:
-+                engine_session.req_id = req_id
-+
-+        state.req_id = None
-+
-+        _log.debug(
-+            "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
-+            "utterance_id=%s latency_ms=%d req_id=%s",
-+            sid,
-+            stream_id,
-+            len_chars,
-+            utterance_id,
-+            latency_ms,
-+            req_id,
-+        )
-+
-+        try:
-+            self._engine.on_asr_final(sid, text, req_id)
-+        except Exception:  # pragma: no cover - defensive
-+            _log.exception("evt=asr_engine_final_failed sid=%s", sid)
-+
-+        event = {
-+            "type": EVT_ASR_FINAL,
-+            "sid": sid,
-+            "req_id": req_id,
-+            "text": text,
-+            "confidence": _FINAL_CONFIDENCE,
-+            "vendor": self._vendor,
-+        }
-+        suppress_ms, normalize = self._resolve_final_dedupe_policy()
-+        suppressed, text_hash, delta_ms = self._should_suppress_final(
-+            state, text, suppress_ms, normalize
-+        )
-+        if suppressed:
-+            diag_event = {
-+                "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
-+                "sid": sid,
-+                "req_id": req_id,
-+                "vendor": self._vendor,
-+                "text_hash": text_hash,
-+                "delta_ms": delta_ms,
-+                "suppress_ms": suppress_ms,
-+            }
-+            self._bus.publish(diag_event)
-+            _log.info(
-+                "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
-+                sid,
-+                req_id,
-+                self._vendor,
-+                text,
-+                text_hash,
-+                delta_ms,
-+                suppress_ms,
-+            )
-+            self._log_utterance(state, stream_id, req_id, metadata, text)
-+            state.segment_started_ms = 0
-+            return
-+
-+        self._bus.publish(event)
-+        state.finals_delivered += 1
-+        _log.info(
-+            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
-+            sid,
-+            req_id,
-+            self._vendor,
-+            text,
-+            text_hash,
-+        )
-+        self._log_utterance(state, stream_id, req_id, metadata, text)
-+        state.segment_started_ms = 0
-+
-     # ------------------------------------------------------------------
-     # Websocket hooks
-     # ------------------------------------------------------------------
-     def on_ws_open(self, sid: str) -> None:
-         self._ensure_loop()
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-         _log.info("evt=asr_on_ws_open sid=%s", sid)
-         state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
-         state.listening = False
-         state.prearm_requested = False
-         state.bytes_received = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.probe_active = False
-         state.probe_target_samples = 0
-         state.probe_samples_collected = 0
-         state.probe_sum_squares = 0.0
-         state.probe_peak = 0.0
-         state.utterance_active = False
-+        state.segment_started_ms = 0
-+        self._cancel_pending_final(state, log=False)
-+        if self._vendor == "speechmatics":
-+            snapshot = getattr(self._engine, "policy_snapshot", None)
-+            self._apply_speechmatics_policy(state, snapshot)
-         self._cancel_commit_timer(state)
-         self._apply_commit_policy(state)
- 
-     def on_ws_audio(self, sid: str, chunk: bytes) -> None:
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-+            if self._vendor == "speechmatics":
-+                snapshot = getattr(self._engine, "policy_snapshot", None)
-+                self._apply_speechmatics_policy(state, snapshot)
- 
-         if self._vendor == "speechmatics":
-             state.input_desc = _pcm_input_descriptor()
-         elif not state.input_desc:
-             state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
- 
-         if not state.listening:
-             return
- 
-         if not state.utterance_active:
-             state.utterance_active = True
-             self._apply_commit_policy(state)
-             self._start_commit_timer(sid, state)
- 
-         state.unavailable_emitted = False
- 
-         now_monotonic = time.monotonic()
-         state.last_audio_ts = now_monotonic
-         now_ms = int(time.time() * 1000)
-         state.last_audio_ts_ms = now_ms
-         if state.ready_watchdog is not None and state.ready_armed_at:
-             self._cancel_ready_watchdog(state)
-         chunk_len = len(data)
- 
-         input_desc = state.input_desc or {}
-@@ -875,50 +1187,51 @@ class ASRRuntime:
-             return
-         if state.stream_open:
-             return
-         if not state.pending and not state.prearm_requested:
-             return
-         if self._vendor == "speechmatics" and not state.pending:
-             return
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             return
- 
-         async def _open() -> None:
-             if state.stream_id is None:
-                 state.stream_id = self._generate_stream_id()
-             stream_id = state.stream_id
-             state.last_stream_id = stream_id
-             state.close_reason = None
-             state.prearm_requested = False
-             try:
-                 policy_snapshot = None
-                 try:
-                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
-                 except Exception:  # pragma: no cover - defensive
-                     policy_snapshot = None
-                 if self._vendor == "speechmatics":
-+                    self._apply_speechmatics_policy(state, policy_snapshot)
-                     input_desc = _pcm_input_descriptor()
-                 else:
-                     input_desc = self._input_descriptor_from_policy(policy_snapshot)
-                 state.input_desc = input_desc
-                 model_name = None
-                 if isinstance(policy_snapshot, Mapping):
-                     candidate = policy_snapshot.get("model")
-                     if isinstance(candidate, str) and candidate:
-                         model_name = candidate
-                     else:
-                         interaction = policy_snapshot.get("interaction")
-                         if isinstance(interaction, Mapping):
-                             maybe_model = interaction.get("model")
-                             if isinstance(maybe_model, str) and maybe_model:
-                                 model_name = maybe_model
-                 else:
-                     candidate_model = getattr(policy_snapshot, "model", None)
-                     if isinstance(candidate_model, str) and candidate_model:
-                         model_name = candidate_model
-                 state.model = model_name if isinstance(model_name, str) and model_name else None
-                 _log.info(
-                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
-                     sid,
-                     self._vendor,
-                 )
-@@ -1280,97 +1593,107 @@ class ASRRuntime:
-         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
-             self._on_partial(sid, text, metadata or {})
- 
-         return _callback
- 
-     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
-         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
-             self._on_final(sid, text, metadata or {})
- 
-         return _callback
- 
-     def _make_error_cb(self, sid: str) -> Callable[[str, str | None], None]:
-         def _callback(code: str, reason: str | None = None) -> None:
-             error = code
-             if reason and reason != code:
-                 error = f"{code}: {reason}"
-             self._on_error(sid, error)
- 
-         return _callback
- 
-     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
-         def _callback(_code: int | None, _reason: str | None) -> None:
-             stream_id = state.stream_id
-             if not stream_id:
-                 return
-+            self._cancel_pending_final(state, log=False)
-+            state.segment_started_ms = 0
-             reason = state.close_reason
-             if reason is None:
-                 reason = "server_shutdown" if _code == 1001 else "error"
-             state.last_stream_id = stream_id
-             _log.info(
-                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
-                 sid,
-                 stream_id,
-                 reason,
-             )
-             if (
-                 not state.unavailable_emitted
-                 and (
-                     _code == 1011
-                     or (_reason and "net0001" in str(_reason).lower())
-                 )
+         token = current_sid.set(ctx.sid)
+         try:
+             if not (
+                 inspect.iscoroutinefunction(self._on_open_and_greet)
+                 and inspect.iscoroutinefunction(self._invoke_engine)
              ):
-                 detail = "Deepgram closed stream"
-                 if _code is not None:
-                     detail += f" code={_code}"
-                 if _reason:
-                     detail += f" reason={_reason}"
-                 self._publish_asr_unavailable(
-                     sid,
-                     "upstream_closed",
-                     detail,
-                     state=state,
+                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+                 raise RuntimeError("WebSocket async contract violation")
+ 
+             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+             client = scope.get("client")
+             ctx.ip = client[0] if isinstance(client, tuple) and client else None
+             if ctx.ip:
+                 ctx.ip_bucket = self._ip_buckets.setdefault(
+                     ctx.ip,
+                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
                  )
-             state.stream_id = None
-             state.close_reason = None
-             state.stream_open = False
-             state.req_id = None
-             state.bytes_received = 0
  
-         return _callback
+             had_active_contexts = bool(self._contexts)
+             self._contexts[ctx.sid] = ctx
+             current_runtime = getattr(self, "asr_runtime", None)
+             current_vendor = getattr(self, "_asr_runtime_vendor", None)
+             if (
+                 current_runtime is not None
+                 and isinstance(ctx.asr_vendor, str)
+                 and ctx.asr_vendor
+                 and current_vendor
+                 and ctx.asr_vendor != current_vendor
+                 and not had_active_contexts
+             ):
+                 self.asr_runtime = None
+                 current_runtime = None
+                 self._asr_runtime_vendor = None
  
-     def _on_partial(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-+            if self._vendor == "speechmatics":
-+                snapshot = getattr(self._engine, "policy_snapshot", None)
-+                self._apply_speechmatics_policy(state, snapshot)
+             if getattr(self, "asr_runtime", None) is None:
+                 try:
+                     from app.voice_v2.asr_runtime import ASRRuntime
+-                    from app.services.streaming_asr.deepgram_client import DeepgramClient
  
-         metadata = metadata or {}
-+        if self._vendor == "speechmatics":
-+            if state.segment_started_ms <= 0:
-+                state.segment_started_ms = int(time.time() * 1000)
-+            if state.pending_final is not None:
-+                self._cancel_pending_final(state, "speech_resumed")
-         self._cancel_commit_timer(state)
-         if state.stream_id is None:
-             meta_stream = metadata.get("stream_id")
-             if isinstance(meta_stream, str) and meta_stream:
-                 state.stream_id = meta_stream
-         stream_id = state.stream_id or ""
-         if not stream_id:
-             stream_id = self._generate_stream_id()
-             state.stream_id = stream_id
-         state.last_stream_id = stream_id
-         state.dg_msgs_partial += 1
-         raw_len = metadata.get("len_chars")
-         len_chars = len(text)
-         if raw_len:
-             try:
-                 candidate_len = int(raw_len)
-             except (TypeError, ValueError):
-                 candidate_len = None
-             if candidate_len is not None and candidate_len >= 0:
-                 len_chars = candidate_len
-         utterance_id = metadata.get("utterance_id")
-         if not utterance_id:
-             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
-         latency_ms = int(metadata.get("latency_ms") or 0)
+                     engine = getattr(self, "engine", None)
+                     vendor = ctx.asr_vendor or ""
+                     client = None
+                     if engine is not None and vendor:
+                         if vendor == "speechmatics":
+                             sm_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
+                             sm_key = getattr(config, "SPEECHMATICS_API_KEY", "")
+                             sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", "")
+                             if sm_enabled and sm_key and sm_url:
+                                 client = SpeechmaticsClient(sm_key, sm_url, bus, _log)
+                             else:
+                                 _log.warning(
+                                     "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s has_url=%s",
+                                     ctx.sid,
+                                     vendor,
+                                     bool(engine),
+                                     bool(sm_key),
+                                     bool(sm_url),
+                                 )
+                         else:
+-                            dg_enabled = getattr(config, "ASR_DEEPGRAM_ENABLED", True)
+-                            api_key = getattr(config, "DEEPGRAM_API_KEY", "")
+-                            if dg_enabled and api_key:
+-                                client = DeepgramClient(api_key=api_key)
+-                            else:
+-                                _log.warning(
+-                                    "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s",
+-                                    ctx.sid,
+-                                    vendor or "",
+-                                    bool(engine),
+-                                    bool(api_key),
+-                                )
++                            _log.warning(
++                                "evt=ws_asr_runtime_unsupported_vendor sid=%s vendor=%s",
++                                ctx.sid,
++                                vendor,
++                            )
  
-@@ -1421,175 +1744,71 @@ class ASRRuntime:
- 
-         try:
-             self._engine.on_asr_partial(sid, req_id, _PARTIAL_CONFIDENCE, text)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_engine_partial_failed sid=%s", sid)
- 
-         event = {
-             "type": EVT_ASR_PARTIAL,
-             "sid": sid,
-             "req_id": req_id,
-             "text": text,
-             "confidence": _PARTIAL_CONFIDENCE,
-             "vendor": self._vendor,
-         }
-         self._bus.publish(event)
- 
-     def _on_final(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-+            if self._vendor == "speechmatics":
-+                snapshot = getattr(self._engine, "policy_snapshot", None)
-+                self._apply_speechmatics_policy(state, snapshot)
- 
-         metadata = metadata or {}
--        if state.stream_id is None:
--            meta_stream = metadata.get("stream_id")
--            if isinstance(meta_stream, str) and meta_stream:
--                state.stream_id = meta_stream
--        stream_id = state.stream_id or ""
--        if not stream_id:
--            stream_id = self._generate_stream_id()
--            state.stream_id = stream_id
--        state.last_stream_id = stream_id
--        state.dg_msgs_final += 1
--        raw_len = metadata.get("len_chars")
--        len_chars = len(text)
--        if raw_len:
--            try:
--                candidate_len = int(raw_len)
--            except (TypeError, ValueError):
--                candidate_len = None
--            if candidate_len is not None and candidate_len >= 0:
--                len_chars = candidate_len
--        utterance_id = metadata.get("utterance_id")
--        if not utterance_id:
--            utterance_id = f"dg-utt-{uuid.uuid4().hex}"
--        latency_ms = int(metadata.get("latency_ms") or 0)
--
--        _log.info(
--            "asr_final vendor=%s chars=%d latency_ms=%d",
--            self._vendor,
--            len_chars,
--            latency_ms,
--        )
--
--        ensure_session = getattr(self._engine, "_ensure_session", None)
--        engine_session = ensure_session(sid) if callable(ensure_session) else None
--        engine_req_id = None
--        if engine_session is not None:
--            candidate = getattr(engine_session, "req_id", None)
--            if isinstance(candidate, str) and candidate:
--                engine_req_id = candidate
--
--        if isinstance(engine_req_id, str) and engine_req_id:
--            req_id = engine_req_id
--        elif isinstance(state.req_id, str) and state.req_id:
--            req_id = state.req_id
--            if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
--                engine_session.req_id = req_id
--        else:
--            req_id = f"req-{uuid.uuid4().hex}"
--            if engine_session is not None:
--                engine_session.req_id = req_id
--
--        state.req_id = None
--
--        _log.debug(
--            "evt=dg_final sid=%s stream_id=%s len_chars=%d is_final=true "
--            "utterance_id=%s latency_ms=%d req_id=%s",
--            sid,
--            stream_id,
--            len_chars,
--            utterance_id,
--            latency_ms,
--            req_id,
--        )
--
--        try:
--            self._engine.on_asr_final(sid, text, req_id)
--        except Exception:  # pragma: no cover - defensive
--            _log.exception("evt=asr_engine_final_failed sid=%s", sid)
--
--        event = {
--            "type": EVT_ASR_FINAL,
--            "sid": sid,
--            "req_id": req_id,
--            "text": text,
--            "confidence": _FINAL_CONFIDENCE,
--            "vendor": self._vendor,
--        }
--        suppress_ms, normalize = self._resolve_final_dedupe_policy()
--        suppressed, text_hash, delta_ms = self._should_suppress_final(
--            state, text, suppress_ms, normalize
--        )
--        if suppressed:
--            diag_event = {
--                "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
--                "sid": sid,
--                "req_id": req_id,
--                "vendor": self._vendor,
--                "text_hash": text_hash,
--                "delta_ms": delta_ms,
--                "suppress_ms": suppress_ms,
--            }
--            self._bus.publish(diag_event)
--            _log.info(
--                "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
--                sid,
--                req_id,
--                self._vendor,
--                text,
--                text_hash,
--                delta_ms,
--                suppress_ms,
--            )
--            self._log_utterance(state, stream_id, req_id, metadata, text)
--            return
--
--        self._bus.publish(event)
--        state.finals_delivered += 1
--        _log.info(
--            "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
--            sid,
--            req_id,
--            self._vendor,
--            text,
--            text_hash,
--        )
--        self._log_utterance(state, stream_id, req_id, metadata, text)
-+        if self._vendor == "speechmatics":
-+            if not state.allow_word_finals and self._handle_speechmatics_final_candidate(
-+                sid, state, text, metadata
-+            ):
-+                return
-+        self._deliver_final(sid, text, metadata, state)
- 
-     def _on_error(self, sid: str, error: str) -> None:
-         reason = error or "unknown"
-         _log.error("asr_error vendor=%s code=stream reason=%s", self._vendor, reason)
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             return
-+        self._cancel_pending_final(state, log=False)
-+        state.segment_started_ms = 0
-         self._publish_asr_unavailable(
-             sid,
-             "upstream_closed",
-             error or "unknown error",
-             state=state,
-         )
-         state.close_reason = "error"
-         state.stream_open = False
-         state.req_id = None
-         self._cancel_idle_timer(state)
-         self._cancel_ready_watchdog(state)
-         self._cancel_commit_timer(state)
-         state.utterance_active = False
-         try:
-             self._client.close_stream(sid)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_error_close_failed sid=%s", sid)
-         finally:
-             self._finalize_rms_probe(sid, state)
- 
-     def _publish_asr_unavailable(
-         self,
-         sid: str,
-         reason: str,
-         details: str,
-@@ -1904,50 +2123,64 @@ class ASRRuntime:
-         if isinstance(snapshot, Mapping):
-             policy_block = snapshot.get("policy")
-             if isinstance(policy_block, Mapping):
-                 asr_block = policy_block.get("asr")
-                 if isinstance(asr_block, Mapping):
-                     if "commit_on_vad_silence" in asr_block:
-                         commit_on_vad = bool(asr_block.get("commit_on_vad_silence"))
-                     if "commit_silence_ms" in asr_block:
-                         commit_silence_ms = self._coerce_policy_int(
-                             asr_block.get("commit_silence_ms"), commit_silence_ms
+                     if engine is not None and client is not None:
+                         self.asr_runtime = ASRRuntime(
+                             engine=engine,
+                             client=client,
+                             telemetry_bus=bus,
++                            metrics=ctx.metrics,
                          )
-                     if "max_utterance_ms" in asr_block:
-                         max_utterance_ms = self._coerce_policy_int(
-                             asr_block.get("max_utterance_ms"), max_utterance_ms
+                         self._asr_runtime_vendor = vendor or None
+                     elif engine is None:
+                         _log.warning(
+                             "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s vendor=%s",
+                             ctx.sid,
+                             bool(engine),
+                             vendor or "",
                          )
-         return commit_on_vad, commit_silence_ms, max_utterance_ms
+                 except Exception:  # pragma: no cover - defensive logging
+                     _log.exception("evt=ws_asr_runtime_attach_failed sid=%s", ctx.sid)
+ 
+             asr_runtime = getattr(self, "asr_runtime", None)
+             if asr_runtime is not None and hasattr(asr_runtime, "set_bus"):
+                 try:
+                     asr_runtime.set_bus(bus)
+                 except Exception:  # pragma: no cover - defensive logging
+                     _log.exception("evt=ws_asr_set_bus_failed sid=%s", ctx.sid)
+ 
+             _log.info("evt=ws_open sid=%s", ctx.sid)
+             runtime_name = type(asr_runtime).__name__ if asr_runtime is not None else "None"
+             _log.info("evt=ws_open sid=%s asr_runtime=%s", ctx.sid, runtime_name)
+             if asr_runtime is not None:
+                 try:
+                     asr_runtime.on_ws_open(ctx.sid)
+@@ -2033,51 +2026,51 @@ class ChatV2Adapter:
+                         _log.info(
+                             "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
+                             ctx.sid,
+                             req_id,
+                         )
+                         return
+                     await asyncio.sleep(0.01)
+ 
+                 if not ctx.asr_ready:
+                     _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
+ 
+             if ctx.outbox is None:
+                 self._clear_pending_for_key(ctx, key)
+                 return
+ 
+             if ctx.tts_mask_phase != "off":
+                 self._set_after_mask_for_key(ctx, key)
+                 self._clear_pending_for_key(ctx, key)
+                 _log.info(
+                     "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
+                     ctx.sid,
+                     req_id,
+                 )
+                 return
+ 
+-            mode = ctx.audio_pipeline_mode or "opus-webm"
++            mode = ctx.audio_pipeline_mode or "pcm16"
+             descriptor = dict(self._input_descriptor_for_mode(mode))
+             timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
+             ready_frame = {
+                 "type": "asr.ready",
+                 "input": dict(descriptor),
+             }
+             if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+                 ready_frame["vendor"] = ctx.asr_vendor
+             capture = dict(descriptor)
+             capture["timeslice_ms"] = timeslice_ms
+             capture["manual_gate"] = False
+             session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+             input_start = {
+                 "type": "input.start",
+                 "capture": capture,
+             }
+             if session_policy:
+                 input_start["policy"] = session_policy
+ 
+             _enqueue(ready_frame)
+             _enqueue(input_start)
+             ctx.ingress_packets = 0
+             ctx.ingress_bytes = 0
+             ctx.first_ingress_ms = None
+             ctx.mic_armed_ms = int(time.time() * 1000)
+@@ -2540,51 +2533,51 @@ class ChatV2Adapter:
+             )
+         if frame_type == "info":
+             meta = {}
+             source_meta = normalized.get("meta")
+             if isinstance(source_meta, dict):
+                 meta = dict(source_meta)
+             meta["sid"] = ctx.sid
+             normalized["meta"] = meta
+             policy_payload = normalized.get("policy")
+             if isinstance(policy_payload, dict):
+                 ctx.policy_snapshot = policy_payload
+                 ctx.allowed_asr_vendors = self._allowed_asr_vendors()
+                 snapshot_mapping = policy_payload
+                 selected_vendor, _ = self._select_asr_vendor(
+                     ctx,
+                     snapshot_mapping,
+                     ctx.allowed_asr_vendors,
+                     log_selection=not ctx.asr_vendor_logged,
+                 )
+                 ctx.asr_vendor = selected_vendor
+                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
+                     snapshot_mapping
+                 )
+                 if ctx.asr_vendor == "speechmatics":
+                     ctx.audio_pipeline_mode = "pcm16"
+-                mode = ctx.audio_pipeline_mode or "opus-webm"
++                mode = ctx.audio_pipeline_mode or "pcm16"
+                 ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
+         return normalized
  
      @staticmethod
-     def _coerce_policy_int(value: Any, default: int) -> int:
-         try:
-             candidate = int(value)
-         except (TypeError, ValueError):
-             return max(0, int(default))
-         return max(0, candidate)
+     def _truncate_banner_string(value: str, limit: int = 240) -> str:
+         if not isinstance(value, str):
+             return ""
+         if limit <= 0:
+             return ""
+         if len(value) <= limit:
+             return value
+         return value[: limit - 1] + "\u2026"
  
-+    @staticmethod
-+    def _coerce_policy_bool(value: Any, default: bool) -> bool:
-+        if isinstance(value, bool):
-+            return value
-+        if isinstance(value, (int, float)) and not isinstance(value, bool):
-+            return bool(value)
-+        if isinstance(value, str):
-+            normalized = value.strip().lower()
-+            if normalized in {"true", "1", "yes", "on"}:
-+                return True
-+            if normalized in {"false", "0", "no", "off"}:
-+                return False
-+        return bool(default)
-+
-     def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
-         asr_policy = getattr(self.policy, "asr", None)
-         suppress_ms = self._coerce_policy_int(
-             getattr(asr_policy, "dup_final_suppress_ms", ASR_DUP_FINAL_SUPPRESS_MS),
-             ASR_DUP_FINAL_SUPPRESS_MS,
-         )
-         normalize = bool(
-             getattr(asr_policy, "dedupe_normalize", ASR_DEDUPE_NORMALIZE)
-         )
+     @staticmethod
+     def _sanitize_banner_value(value: Any, depth: int = 0) -> Any:
+         if value is None:
+             return None
+         if isinstance(value, bool):
+             return value
+         if isinstance(value, (int, float)):
+             if isinstance(value, float) and not math.isfinite(value):
+                 return None
+             return value
+         if isinstance(value, str):
+             return ChatV2Adapter._truncate_banner_string(value)
+@@ -3296,54 +3289,50 @@ class ChatV2Adapter:
+             return {}
+         stable: Dict[str, Any] = {}
+         for key in _POLICY_STABLE_KEYS:
+             if key in snapshot:
+                 stable[key] = snapshot[key]
+         media = snapshot.get("media")
+         if isinstance(media, dict):
+             stable["media"] = {
+                 key: media[key]
+                 for key in ("asr_input", "asr_rate_hz", "asr_channels")
+                 if key in media
+             }
+         capture = snapshot.get("capture")
+         if isinstance(capture, dict):
+             stable["capture"] = dict(capture)
+         audio = snapshot.get("audio")
+         if isinstance(audio, dict):
+             stable["audio"] = dict(audio)
+         nested_policy = snapshot.get("policy")
+         if isinstance(nested_policy, dict):
+             stable["policy"] = json.loads(json.dumps(nested_policy))
+         return stable
  
-         snapshot = getattr(self._engine, "policy_snapshot", None)
+     def _allowed_asr_vendors(self) -> List[str]:
+         allowed: List[str] = []
+-        if getattr(config, "ASR_DEEPGRAM_ENABLED", True) and getattr(
+-            config, "DEEPGRAM_API_KEY", None
+-        ):
+-            allowed.append("deepgram")
+         speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
+         if speechmatics_enabled:
+             api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
+             url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
+             if api_key and url:
+                 allowed.append("speechmatics")
+         return allowed
+ 
+     @staticmethod
+     def _extract_policy_vendor(snapshot: Mapping[str, Any] | None) -> tuple[Optional[str], Optional[str]]:
+         if not isinstance(snapshot, Mapping):
+             return None, None
+         policy_block = snapshot.get("policy")
+         if not isinstance(policy_block, Mapping):
+             return None, None
+         asr_block = policy_block.get("asr")
+         if not isinstance(asr_block, Mapping):
+             return None, None
+         vendor_block = asr_block.get("vendor")
+         if not isinstance(vendor_block, Mapping):
+             return None, None
+         primary = vendor_block.get("primary")
+         secondary = vendor_block.get("secondary")
+         normalized_primary = (
+             primary.strip().lower()
+@@ -3394,104 +3383,104 @@ class ChatV2Adapter:
+         if selected is None and allowed:
+             selected = allowed[0]
+             reason = "fallback"
+ 
+         if log_selection:
+             allowed_display = ",".join(allowed)
+             _log.info(
+                 "asr_vendor_selected primary=%s allowed=%s reason=%s",
+                 selected or "",
+                 allowed_display,
+                 reason,
+             )
+             ctx.asr_vendor_logged = True
+         return selected, reason
+ 
+     @staticmethod
+     def _resolve_audio_pipeline_mode(snapshot: Mapping[str, Any] | None) -> str:
          if isinstance(snapshot, Mapping):
-             policy_block = snapshot.get("policy")
-             if isinstance(policy_block, Mapping):
-                 asr_block = policy_block.get("asr")
-                 if isinstance(asr_block, Mapping):
-                     if "dup_final_suppress_ms" in asr_block:
-                         suppress_ms = self._coerce_policy_int(
-                             asr_block.get("dup_final_suppress_ms"), suppress_ms
-                         )
-                     if "dedupe_normalize" in asr_block:
-                         normalize = bool(asr_block.get("dedupe_normalize"))
+             audio_block = snapshot.get("audio")
+             if isinstance(audio_block, Mapping):
+                 pipeline = audio_block.get("pipeline")
+                 if isinstance(pipeline, Mapping):
+                     mode = pipeline.get("mode")
+                     if isinstance(mode, str) and mode.strip():
+                         normalized = mode.strip().lower()
+-                        if normalized in {"opus-webm", "pcm16"}:
++                        if normalized == "pcm16":
+                             return normalized
+-        return "opus-webm"
++        return "pcm16"
  
-         suppress_ms = self._coerce_policy_int(suppress_ms, ASR_DUP_FINAL_SUPPRESS_MS)
-         return suppress_ms, normalize
+     @staticmethod
+     def _input_descriptor_for_mode(mode: str) -> Dict[str, Any]:
+         if mode == "pcm16":
+             return {
+                 "mode": "pcm16",
+                 "container": "raw",
+                 "codec": "pcm_s16le",
+                 "rate_hz": 16000,
+                 "channels": 1,
+                 "mime": "audio/raw;rate=16000;channels=1;format=s16le",
+             }
+         return {
+-            "mode": "opus-webm",
+-            "container": "webm",
+-            "codec": "opus",
+-            "rate_hz": 48000,
++            "mode": "pcm16",
++            "container": "raw",
++            "codec": "pcm_s16le",
++            "rate_hz": 16000,
+             "channels": 1,
+-            "mime": "audio/webm;codecs=opus",
++            "mime": "audio/raw;rate=16000;channels=1;format=s16le",
+         }
+ 
+     @staticmethod
+     def _session_capture_policy_for_mode(mode: str) -> Dict[str, Any]:
+         if mode == "pcm16":
+             return {
+                 "media": {
+                     "asr_input": "pcm_16k",
+                     "asr_rate_hz": 16000,
+                     "asr_channels": 1,
+                 },
+                 "capture": {
+                     "asr_input": "pcm_16k",
+                     "sample_rate": 16000,
+                     "channels": 1,
+                     "timeslice_ms": 50,
+                 },
+                 "audio": {"pipeline": {"mode": "pcm16"}},
+             }
+         return {
+             "media": {
+-                "asr_input": "webm_opus",
+-                "asr_rate_hz": 48000,
++                "asr_input": "pcm_16k",
++                "asr_rate_hz": 16000,
+                 "asr_channels": 1,
+             },
+             "capture": {
+-                "asr_input": "webm_opus",
+-                "sample_rate": 48000,
++                "asr_input": "pcm_16k",
++                "sample_rate": 16000,
+                 "channels": 1,
+-                "timeslice_ms": 250,
++                "timeslice_ms": 50,
+             },
+-            "audio": {"pipeline": {"mode": "opus-webm"}},
++            "audio": {"pipeline": {"mode": "pcm16"}},
+         }
+ 
+     def _resolve_capture_timeslice(self, ctx: AdapterContext, mode: str) -> int:
+         candidates: List[Mapping[str, Any]] = []
+         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+         if isinstance(snapshot, Mapping):
+             capture_block = snapshot.get("capture")
+             if isinstance(capture_block, Mapping):
+                 candidates.append(capture_block)
+         session_policy = ctx.session_capture_policy
+         if isinstance(session_policy, Mapping):
+             capture_policy = session_policy.get("capture")
+             if isinstance(capture_policy, Mapping):
+                 candidates.append(capture_policy)
+ 
+         for candidate in candidates:
+             raw_value = candidate.get("timeslice_ms")
+             try:
+                 parsed = int(raw_value)
+             except (TypeError, ValueError):
+                 continue
+             if parsed > 0:
+                 return parsed
+ 
+         return 50 if mode == "pcm16" else 250
+@@ -3596,51 +3585,51 @@ class ChatV2Adapter:
+             ws_version,
+         )
+ 
+     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
+         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
+         policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+         if not isinstance(policy_block, Mapping):
+             return 0
+         asr_block = policy_block.get("asr")
+         if not isinstance(asr_block, Mapping):
+             return 0
+         value = asr_block.get("keep_stream_warm_ms")
+         try:
+             keep_warm = int(value)
+         except (TypeError, ValueError):
+             keep_warm = 0
+         if keep_warm < 0:
+             return 0
+         return keep_warm
+ 
+     async def _send_asr_ready_bundle(
+         self,
+         send: Callable[[dict], Awaitable[None]],
+         ctx: AdapterContext,
+     ) -> None:
+-        mode = ctx.audio_pipeline_mode or "opus-webm"
++        mode = ctx.audio_pipeline_mode or "pcm16"
+         descriptor = dict(self._input_descriptor_for_mode(mode))
+         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
+         ready_frame = {
+             "type": "asr.ready",
+             "input": dict(descriptor),
+         }
+         if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+             ready_frame["vendor"] = ctx.asr_vendor
+         capture = dict(descriptor)
+         capture["timeslice_ms"] = timeslice_ms
+         capture["manual_gate"] = False
+         session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+         input_start = {
+             "type": "input.start",
+             "capture": capture,
+         }
+         if session_policy:
+             input_start["policy"] = session_policy
+ 
+         start_payload: Dict[str, Any] = {"type": "start_listening"}
+         if session_policy:
+             start_payload["policy"] = session_policy
+ 
+         now_ms = int(time.time() * 1000)
+         ctx.asr_ready = True
+diff --git a/app/ws/validator.py b/app/ws/validator.py
+index d10bb0b59a7988f8cc648fe846163d30492c808b..90144a0d9afc0d1c653ef0e649e77b45961af1ef 100644
+--- a/app/ws/validator.py
++++ b/app/ws/validator.py
+@@ -1,35 +1,35 @@
+ """Minimal schema validation for chat.v2 frames."""
+ from __future__ import annotations
+ 
+ import logging
+ from typing import Any, Dict, Mapping, Optional, Tuple
+ 
+ from app.logging_setup import current_sid
+ from app.telemetry import bus
+ 
+-_ALLOWED_AUDIO_FORMATS = {"opus", "pcm"}
++_ALLOWED_AUDIO_FORMATS = {"pcm"}
+ 
+ 
+ _logger = logging.getLogger(__name__)
+ 
+ 
+ def _emit_validator_log(level: str, msg: str) -> None:
+     event = {
+         "type": "EVT_LOG",
+         "logger": "app.ws.validator",
+         "level": level,
+         "msg": msg,
+     }
+     sid = current_sid.get()
+     if isinstance(sid, str) and sid:
+         event["sid"] = sid
+     try:
+         bus.publish(event)
+     except Exception:  # pragma: no cover - defensive
+         _logger.debug("evt=validator_emit_log_failed", exc_info=True)
+ 
+ try:  # pragma: no cover - policy model optional in tests
+     from app.policy.model import Policy  # type: ignore
+ except Exception:  # pragma: no cover - fallback when model absent
+     Policy = Any  # type: ignore  # noqa: N816 - mimic type alias
+ 
+@@ -42,51 +42,51 @@ def _is_int(value: object) -> bool:
+ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
+     """Validate a decoded JSON frame.
+ 
+     Parameters
+     ----------
+     frame:
+         JSON object parsed from the WebSocket text frame.
+ 
+     Returns
+     -------
+     (ok, hint):
+         ok is ``True`` when the frame passes validation. hint contains a
+         human-readable detail when validation fails.
+     """
+ 
+     if not isinstance(frame, dict):
+         return False, "Frame must be a JSON object"
+ 
+     frame_type = frame.get("type")
+     if not isinstance(frame_type, str):
+         return False, "Frame requires a string 'type' field"
+ 
+     if frame_type == "audio.header":
+         fmt = frame.get("format")
+         if fmt not in _ALLOWED_AUDIO_FORMATS:
+-            return False, "audio.header requires format 'opus' or 'pcm'"
++            return False, "audio.header requires format 'pcm'"
+ 
+         sample_rate = frame.get("sample_rate")
+         if sample_rate is not None and not _is_int(sample_rate):
+             return False, "audio.header requires integer sample_rate"
+ 
+         channels = frame.get("channels")
+         if channels is not None and not _is_int(channels):
+             return False, "audio.header requires integer channels"
+ 
+         if fmt == "pcm":
+             expected_sr = 16000
+             expected_channels = 1
+             got_sr = sample_rate
+             got_channels = channels
+             if got_sr is None or got_channels is None:
+                 _logger.warning(
+                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
+                     got_sr,
+                     got_channels,
+                 )
+                 return (
+                     False,
+                     "audio.header pcm requires sample_rate=16000 and channels=1",
+                 )
+             if got_sr != expected_sr or got_channels != expected_channels:

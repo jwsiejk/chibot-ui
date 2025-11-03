@@ -13,8 +13,8 @@ _log = logging.getLogger(__name__)
 _DEFAULT_SETTINGS: Dict[str, Any] = {"authentication": "none"}
 _CHUNK_SAMPLE_MIN = 1
 _CHUNK_SAMPLE_MAX = 100
-_POLICY_MEDIA_ALLOWED_INPUTS = {"webm_opus", "pcm_16k"}
-_POLICY_AUDIO_ALLOWED_MODES = {"opus-webm", "pcm16"}
+_POLICY_MEDIA_ALLOWED_INPUTS = {"pcm_16k"}
+_POLICY_AUDIO_ALLOWED_MODES = {"pcm16"}
 _POLICY_CAPTURE_MIN_TIMESLICE = 20
 
 
@@ -246,7 +246,7 @@ def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
                 if not isinstance(primary, str) or not primary.strip():
                     raise ValueError("expected_string")
                 normalized = primary.strip().lower()
-                if normalized not in {"deepgram", "speechmatics"}:
+                if normalized not in {"speechmatics"}:
                     raise ValueError("unsupported_vendor")
                 vendor_block["primary"] = normalized
             if "secondary" in vendor_value:
@@ -255,7 +255,7 @@ def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
                     vendor_block["secondary"] = None
                 elif isinstance(secondary, str) and secondary.strip():
                     normalized_secondary = secondary.strip().lower()
-                    if normalized_secondary not in {"deepgram", "speechmatics"}:
+                    if normalized_secondary not in {"speechmatics"}:
                         raise ValueError("unsupported_vendor")
                     vendor_block["secondary"] = normalized_secondary
                 else:

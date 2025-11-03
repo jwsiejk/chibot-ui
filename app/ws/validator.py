@@ -7,7 +7,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from app.logging_setup import current_sid
 from app.telemetry import bus
 
-_ALLOWED_AUDIO_FORMATS = {"opus", "pcm"}
+_ALLOWED_AUDIO_FORMATS = {"pcm"}
 
 
 _logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
     if frame_type == "audio.header":
         fmt = frame.get("format")
         if fmt not in _ALLOWED_AUDIO_FORMATS:
-            return False, "audio.header requires format 'opus' or 'pcm'"
+            return False, "audio.header requires format 'pcm'"
 
         sample_rate = frame.get("sample_rate")
         if sample_rate is not None and not _is_int(sample_rate):

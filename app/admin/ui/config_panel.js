@@ -8,7 +8,6 @@
   const API_ENDPOINT = '/api/v1/admin/settings';
   const ASR_VENDOR_OPTIONS = [
     { value: 'speechmatics', label: 'Speechmatics' },
-    { value: 'deepgram', label: 'Deepgram' },
   ];
 
   const ASR_VENDOR_SECONDARY_OPTIONS = [
@@ -17,7 +16,6 @@
   ];
 
   const AUDIO_PIPELINE_OPTIONS = [
-    { value: 'opus-webm', label: 'Opus + WebM (default)' },
     { value: 'pcm16', label: 'PCM 16 kHz' },
   ];
 
@@ -26,8 +24,8 @@
     diag_audio_guard: true,
     diag_chunk_sample_n: 10,
     policy_media: {
-      asr_input: 'webm_opus',
-      asr_rate_hz: 48000,
+      asr_input: 'pcm_16k',
+      asr_rate_hz: 16000,
       asr_channels: 1,
       fallbacks_allowed: false,
     },
@@ -50,18 +48,18 @@
       commit_on_vad_silence: true,
       commit_silence_ms: 900,
       max_utterance_ms: 8000,
-      vendor: { primary: 'deepgram', secondary: null },
+      vendor: { primary: 'speechmatics', secondary: null },
     },
     policy_routing: {
       ws_version: 'v2',
     },
     policy_audio: {
-      pipeline: { mode: 'opus-webm' },
+      pipeline: { mode: 'pcm16' },
     },
   };
   const CHUNK_MIN = 1;
   const CHUNK_MAX = 100;
-  const MEDIA_ALLOWED_INPUTS = ['webm_opus', 'pcm_16k'];
+  const MEDIA_ALLOWED_INPUTS = ['pcm_16k'];
   const CAPTURE_TIMESLICE_MIN = 20;
   const CAPTURE_TIMESLICE_STEP = 10;
 
@@ -119,10 +117,7 @@
       type: 'select',
       label: 'ASR Input',
       description: 'Choose the microphone stream format sent to the ASR vendor.',
-      options: [
-        { value: 'webm_opus', label: 'WebM + Opus (default)' },
-        { value: 'pcm_16k', label: 'PCM 16 kHz' },
-      ],
+      options: [{ value: 'pcm_16k', label: 'PCM 16 kHz' }],
     },
     {
       key: 'policy_media.fallbacks_allowed',

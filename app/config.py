@@ -30,9 +30,11 @@ def env_bool(name: str, default: bool = False) -> bool:
     return bool(default)
 
 
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
-ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", False)
+# DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+# ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
+DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
+ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
+ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
 SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
 SPEECHMATICS_REALTIME_URL = os.getenv(
     "SPEECHMATICS_REALTIME_URL", "wss://mp.speechmatics.com/v2"
@@ -58,14 +60,14 @@ _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
 _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
 _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
 
-_ALLOWED_ASR_INPUTS = {"webm_opus", "pcm_16k"}
-_SUPPORTED_ASR_VENDORS = {"deepgram", "speechmatics"}
-_AUDIO_PIPELINE_MODES = {"opus-webm", "pcm16"}
+_ALLOWED_ASR_INPUTS = {"pcm_16k"}
+_SUPPORTED_ASR_VENDORS = {"speechmatics"}
+_AUDIO_PIPELINE_MODES = {"pcm16"}
 _CAPTURE_TIMESLICE_MIN_MS = 20
 
 _DEFAULT_POLICY_MEDIA = {
-    "asr_input": "webm_opus",
-    "asr_rate_hz": 48000,
+    "asr_input": "pcm_16k",
+    "asr_rate_hz": 16000,
     "asr_channels": 1,
     "fallbacks_allowed": False,
 }
@@ -89,7 +91,7 @@ _DEFAULT_POLICY_INPUT = {
 _DEFAULT_POLICY_ASR = {
     "prearm_on_tts_end": True,
     "keep_stream_warm_ms": 30000,
-    "vendor": {"primary": "deepgram", "secondary": None},
+    "vendor": {"primary": "speechmatics", "secondary": None},
     "commit_on_vad_silence": True,
     "commit_silence_ms": 900,
     "max_utterance_ms": 8000,
@@ -106,7 +108,7 @@ _DEFAULT_POLICY_ROUTING = {
 }
 
 _DEFAULT_POLICY_AUDIO = {
-    "pipeline": {"mode": "opus-webm"},
+    "pipeline": {"mode": "pcm16"},
 }
 
 POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)

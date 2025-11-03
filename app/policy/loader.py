@@ -46,13 +46,13 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
             "min_segment_ms": 800,
             "final_guard_ms": 250,
             "allow_word_finals": False,
-            "vendor": {"primary": "deepgram", "secondary": None},
+            "vendor": {"primary": "speechmatics", "secondary": None},
         },
         "routing": {
             "ws_version": "v2",
         },
     },
-    "audio": {"pipeline": {"mode": "opus-webm"}},
+    "audio": {"pipeline": {"mode": "pcm16"}},
     "actions": {
         "allowed": ["answer"],
         "surface_via_suggestions": True,
