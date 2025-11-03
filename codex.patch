@@ -1,230 +1,75 @@
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 9298031fd5f278e12e87111b6d249da15326884a..55817d8b7502b73827e924be7843d6c969f602bf 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -94,99 +94,135 @@ import { WakeWord } from "./wake_word.js";
-       try {
-         console.warn("AudioRecorder client.mic log failed", err);
-       } catch {}
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index c81c801fc376387c127b3e657d3bd419c5ee2c32..886ba2671979278a852a63112bccd00fd8ff542e 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1511,57 +1511,67 @@ import { WakeWord } from "./wake_word.js";
+       return true;
+     } catch (err) {
+       console.error("Auto-resume open failed", err);
+       autoResumeAttemptToken = null;
+       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       recordClientBannerEvent("ws.auto_resume.failed", { message: getErrorMessage(err) });
+       return false;
      }
-     if (typeof window !== "undefined") {
-       try {
-         window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail } }));
-         return true;
-       } catch {}
-     }
-     return false;
    }
  
-   class AudioRecorder {
-     constructor(ws, appState) {
-       this._ws = ws || null;
-       this._state = appState || null;
-       this._stream = null;
-       this._sendGate = false;
-       this._policy = {};
-       this._micOpenEmitted = false;
-       this._active = false;
-       this._wakeInit = false;
-       this._sendMuted = false;
-       this._headerSent = false;
-+      this._audioHeaderSignature = null;
-       this._audioContext = null;
-       this._pcmSource = null;
-       this._pcmNode = null;
-       this._pcmGainNode = null;
-       this._pcmResampleBuffer = [];
-       this._pcmOutputBuffer = [];
-       this._pcmResampleCursor = 0;
-       this._pcmFrameSeq = 0;
-       this._pcmLastTelemetryAt = 0;
-       this._pcmUtteranceStartAt = null;
-       this._pcmLastVoiceAt = null;
-       this._pcmSilenceStartAt = null;
-       this._pcmCommitSent = false;
-       this._pcmWorkletLoaded = false;
-       this._armingPromise = null;
-     }
- 
-     setSocket(ws) {
-       this._ws = ws || null;
-     }
- 
-     setPolicy(policy) {
-       const hasPayload = policy && typeof policy === "object" && Object.keys(policy).length > 0;
-       const snapshot = hasPayload
-         ? policy
-         : (this._policy && typeof this._policy === "object" ? this._policy : {});
-       if (hasPayload) {
--        this._headerSent = false;
-+        const nextSignature = this._deriveAudioHeaderSignature(snapshot);
-+        if (this._audioHeaderSignature !== nextSignature) {
-+          this._headerSent = false;
-+        }
-+        this._audioHeaderSignature = nextSignature;
-         this._resetStreamingTelemetry();
+   function dispatchFrame(frame) {
+     if (!frame || typeof frame.type !== "string") return;
+     const type = frame.type;
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
+       if (type.includes(".")) {
+         const baseType = type.split(".")[0];
+         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
        }
- 
-       if (hasPayload || !this._policy || typeof this._policy !== "object") {
-         this._policy = snapshot;
-       }
- 
-       if (hasPayload) {
-         try {
-           const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
-           const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
-           const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
-           console.info(
-             "diag=recorder_policy format=pcm asr_input=%s pipeline=%s",
-             mediaPolicy?.asr_input ?? null,
-             pipeline?.mode ?? null,
-           );
-         } catch {}
-       }
+     } catch (err) {
+       console.warn("WSClient dispatch error", err);
      }
+   }
  
-+    _deriveAudioHeaderSignature(policy) {
-+      if (!policy || typeof policy !== "object") {
-+        return null;
-+      }
-+      const media = policy && typeof policy.media === "object" ? policy.media : {};
-+      const audio = policy && typeof policy.audio === "object" ? policy.audio : {};
-+      const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : {};
-+      const nested = policy && typeof policy.policy === "object" ? policy.policy : {};
-+      const nestedMedia = nested && typeof nested.media === "object" ? nested.media : {};
-+      const nestedAudio = nested && typeof nested.audio === "object" ? nested.audio : {};
-+      const nestedPipeline = nestedAudio && typeof nestedAudio.pipeline === "object" ? nestedAudio.pipeline : {};
+   function startInputCapture(frame) {
++    const policy = frame?.policy || {};
++    const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
++    const source = frame?.type || 'input.start';
++    const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
 +
-+      const signature = {
-+        input: media.asr_input ?? nestedMedia.asr_input ?? null,
-+        rate: Number.isFinite(media.asr_rate_hz) ? Number(media.asr_rate_hz)
-+          : (Number.isFinite(nestedMedia.asr_rate_hz) ? Number(nestedMedia.asr_rate_hz) : null),
-+        channels: Number.isFinite(media.asr_channels) ? Number(media.asr_channels)
-+          : (Number.isFinite(nestedMedia.asr_channels) ? Number(nestedMedia.asr_channels) : null),
-+        mode: typeof pipeline.mode === "string" && pipeline.mode
-+          ? pipeline.mode
-+          : (typeof nestedPipeline.mode === "string" && nestedPipeline.mode ? nestedPipeline.mode : null),
-+      };
-+
++    if (unifiedRecorder) {
 +      try {
-+        return JSON.stringify(signature);
-+      } catch (err) {
-+        console.warn("AudioRecorder signature stringify failed", err);
-+        return null;
-+      }
++        logStage('client.input.capture', { source, hasPolicy, skipped: 'unified_recorder' });
++      } catch {}
++      return;
 +    }
 +
-     get policy() {
-       return this._policy || {};
-     }
- 
-     _recorderPolicy() {
-       const policy = this.policy;
-       if (!policy || typeof policy !== "object") {
-         return {};
-       }
-       const nested = policy.policy;
-       if (!nested || typeof nested !== "object") {
-         return {};
-       }
-       const recorder = nested.recorder;
-       return recorder && typeof recorder === "object" ? recorder : {};
-     }
- 
-     _asrPolicy() {
-       const policy = this.policy;
-       if (!policy || typeof policy !== "object") {
-         return {};
-       }
-       const nested = policy.policy;
-       if (!nested || typeof nested !== "object") {
-         return {};
-@@ -813,86 +849,87 @@ import { WakeWord } from "./wake_word.js";
-     async startListening(policy = {}) {
-       this.setPolicy(policy);
-       await this._ensureArmed();
-       console.info("diag=recorder_mode mode=pcm16");
-       // Always send header now; _sendAudioHeader chooses pcm format
-       this._sendAudioHeader();
-       if (!this._sendGate) {
-         this._sendGate = true;
-         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
-         console.info("diag=send_gate_open reason=%s", reason);
-         this._updateRecorderState(true, reason);
-       }
-       this._setSendMuted(false, "start_listening");
-       return true;
-     }
- 
-     stopListening(opts = {}) {
-       const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
-       if (this._sendGate) {
-         console.info("diag=send_gate_closed reason=%s", reason);
-       }
-       this._sendGate = false;
-       this._updateRecorderState(false, reason);
-       this._micOpenEmitted = false;
-       this._setSendMuted(false, reason);
--      this._headerSent = false;
-       this._resetPcmState();
-     }
- 
-     handleStopListening(opts = {}) {
-       this.stopListening(opts);
-     }
- 
-     handleTtsStart() {
-       if (this._shouldStopOnTtsStart()) {
-         this.stopListening({ reason: "tts_active" });
-         return;
-       }
-       if (this._shouldMuteDuringTts()) {
-         this._setSendMuted(true, "tts_active");
-       }
-     }
- 
-     handleTtsEnd() {
-       this._setSendMuted(false, "tts_end");
-     }
- 
-     handleWsClose() {
-       this._headerSent = false;
-+      this._audioHeaderSignature = null;
-       this.endSession();
-     }
- 
-     stop() {
-       this.endSession();
-     }
- 
-     endSession() {
-       this._sendGate = false;
-       this._setSendMuted(false, "session_end");
-       this._updateRecorderState(false, "session_end");
-       this._headerSent = false;
-+      this._audioHeaderSignature = null;
-       if (this._pcmNode || this._pcmSource || this._pcmGainNode) {
+     const hub = AppState?.hub;
+     if (hub && typeof hub.startListening === "function") {
+       try {
+-        const policy = frame?.policy || {};
          try {
-           this._teardownPcmGraph();
-         } catch (err) {
-           console.warn("AudioRecorder pcm teardown failed", err);
-         }
-       }
-       this._micOpenEmitted = false;
-       this._active = false;
-       this._wakeInit = false;
-       if (this._audioContext) {
-         try {
-           if (this._audioContext.state !== "closed") {
-             this._audioContext.close();
-           }
+-          const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
+-          logStage('client.input.capture', { source: frame?.type || 'input.start', hasPolicy });
++          logStage('client.input.capture', { source, hasPolicy });
          } catch {}
-         this._audioContext = null;
-       }
-       if (this._stream) {
-         try {
-           this._stream.getTracks?.().forEach((track) => track.stop?.());
-         } catch {}
-         this._stream = null;
+         return hub.startListening(policy);
+       } catch (err) {
+         console.warn("Hub startListening (legacy input) failed", err);
        }
      }
+     console.warn('Legacy input capture is disabled; recorder hub missing.', frame);
+   }
+ 
+   function stopInputCapture(options = {}) {
+     const hub = AppState?.hub;
+     if (hub && typeof hub.stopListening === "function") {
+       try {
+         const reason = options && typeof options === "object" && options.reason
+           ? options.reason
+           : "legacy_input";
+         hub.stopListening(reason);
+       } catch (err) {
+         console.warn("Hub stopListening (legacy input) failed", err);
+       }
+       return;
+     }
+     void options;
+   }
+ 

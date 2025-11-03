@@ -1533,13 +1533,23 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function startInputCapture(frame) {
+    const policy = frame?.policy || {};
+    const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
+    const source = frame?.type || 'input.start';
+    const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
+
+    if (unifiedRecorder) {
+      try {
+        logStage('client.input.capture', { source, hasPolicy, skipped: 'unified_recorder' });
+      } catch {}
+      return;
+    }
+
     const hub = AppState?.hub;
     if (hub && typeof hub.startListening === "function") {
       try {
-        const policy = frame?.policy || {};
         try {
-          const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
-          logStage('client.input.capture', { source: frame?.type || 'input.start', hasPolicy });
+          logStage('client.input.capture', { source, hasPolicy });
         } catch {}
         return hub.startListening(policy);
       } catch (err) {
