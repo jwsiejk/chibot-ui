@@ -1,68 +1,9 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 1a475446831c5a466823fd3feac572caaae93835..922ae21b5412a9b06bbb05a8a08be8584d37ba51 100644
+index 922ae21b5412a9b06bbb05a8a08be8584d37ba51..8e1add9a816113a2d411a8e43f3d56795163a55e 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -2462,67 +2462,71 @@ class ChatV2Adapter:
- 
-             def _on_loop() -> None:
-                 ctx.tts_mask_phase = phase_value
-                 if ctx.tts_mask_phase != "off":
-                     ctx.await_user_after_mask = False
-                     ctx.await_user_after_mask_key = None
-                     ctx.client_mic_open = False
-                     ctx.hud_state = None
-                     ctx.mic_nudge_sent = False
-                     self._cancel_mic_open_timer(ctx)
-                     return
-                 _schedule_listen_handoff(None)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.mask_subscription_token = bus.subscribe(EVT_TTS_MASK, _handle_tts_mask_event)
- 
-         def _handle_turn_state_event(event: dict) -> None:
-             if event.get("type") != "EVT_TURN_STATE":
-                 return
-             if event.get("sid") != ctx.sid:
-                 return
--            meta = event.get("meta")
--            if not isinstance(meta, Mapping):
--                return
--            state = meta.get("state")
--            reason = meta.get("reason")
-+
-+            raw_meta = event.get("meta")
-+            if isinstance(raw_meta, Mapping):
-+                meta = {key: value for key, value in dict(raw_meta).items() if key}
-+            else:
-+                meta = {}
-+
-+            state = meta.get("state", event.get("state"))
-+            reason = meta.get("reason", event.get("reason"))
-+            state_text = state if isinstance(state, str) else None
-+            reason_text = reason if isinstance(reason, str) else None
- 
-             def _on_loop() -> None:
--                frame: Dict[str, Any] = {"type": "turn.state"}
--                if isinstance(state, str) and state:
--                    frame["state"] = state
--                if isinstance(reason, str) and reason:
--                    frame["reason"] = reason
--                frame_meta = {key: value for key, value in dict(meta).items() if key}
--                if frame_meta:
--                    frame["meta"] = frame_meta
-+                frame: Dict[str, Any] = {
-+                    "type": "turn.state",
-+                    "state": state,
-+                    "reason": reason,
-+                    "meta": meta,
-+                }
-                 _enqueue(frame)
--                if state == "Ready" and reason == "tts_end":
-+                if state_text == "Ready" and reason_text == "tts_end":
+@@ -2507,69 +2507,74 @@ class ChatV2Adapter:
+                 if state_text == "Ready" and reason_text == "tts_end":
                      policy = self._policy_snapshot()
                      self._maybe_emit_await_user(ctx, policy)
  
@@ -87,4 +28,137 @@ index 1a475446831c5a466823fd3feac572caaae93835..922ae21b5412a9b06bbb05a8a08be858
                  return
  
              def _deliver() -> None:
-                 task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+-                task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
+-                ctx.audio_tasks.add(task)
+-
+-                def _on_done(done: asyncio.Task[None]) -> None:
+-                    ctx.audio_tasks.discard(done)
++                async def _run_audio_task() -> None:
++                    start = time.perf_counter()
+                     try:
+-                        done.result()
++                        await self._send_audio_frame(ctx, send, chunk_bytes)
+                     except asyncio.CancelledError:
+-                        pass
++                        return
+                     except ClientDisconnected:
+                         self._disable_audio_send(ctx, "client_disconnected")
+-                    except RuntimeError:
+-                        self._disable_audio_send(ctx, "send_failed")
+-                        _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+                     except Exception:  # pragma: no cover - defensive logging
+                         self._disable_audio_send(ctx, "send_failed")
+                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
++                    finally:
++                        duration_ms = max(0, int((time.perf_counter() - start) * 1000))
++                        current = asyncio.current_task()
++                        if current is not None:
++                            ctx.audio_tasks.discard(current)
++                        _log.info(
++                            "evt=audio_task_complete sid=%s duration_ms=%d",
++                            ctx.sid,
++                            duration_ms,
++                        )
+ 
+-                task.add_done_callback(_on_done)
++                task = asyncio.create_task(_run_audio_task())
++                ctx.audio_tasks.add(task)
+ 
+             try:
+                 loop.call_soon_threadsafe(_deliver)
+             except RuntimeError:
+                 pass
+ 
+         _handle_audio_event._telemetry_accepts_binary = True  # type: ignore[attr-defined]
+         ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
+         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+ 
+     def _offer_partial_frame(
+         self,
+         ctx: AdapterContext,
+         loop: asyncio.AbstractEventLoop,
+         payload: Dict[str, Any],
+         enqueue: Callable[[Dict[str, Any]], None],
+     ) -> None:
+         def _emit(frame: Dict[str, Any]) -> None:
+             prepared = self._prepare_partial_frame(ctx, frame)
+             enqueue(prepared)
+ 
+         ctx.partial_coalescer.offer(
+             payload,
+             now_ms=self._now_ms(),
+             loop=loop,
+@@ -3165,55 +3170,69 @@ class ChatV2Adapter:
+         if turn_state_token:
+             bus.unsubscribe(turn_state_token)
+ 
+         tts_end_token = ctx.tts_end_subscription_token
+         ctx.tts_end_subscription_token = None
+         if tts_end_token:
+             bus.unsubscribe(tts_end_token)
+ 
+         task = ctx.outbound_task
+         ctx.outbound_task = None
+         if task:
+             task.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await task
+ 
+         ctx.partial_coalescer.cancel()
+ 
+         pending_handoff = ctx.listen_handoff_task
+         ctx.listen_handoff_task = None
+         ctx.listen_handoff_task_key = None
+         if pending_handoff is not None:
+             pending_handoff.cancel()
+             with contextlib.suppress(asyncio.CancelledError):
+                 await pending_handoff
+ 
+-        for task in list(ctx.audio_tasks):
+-            task.cancel()
+-            with contextlib.suppress(asyncio.CancelledError):
+-                await task
++        pending_audio = list(ctx.audio_tasks)
++        if pending_audio:
++            for task in pending_audio:
++                task.cancel()
++            for task in pending_audio:
++                with contextlib.suppress(asyncio.CancelledError):
++                    await task
++            completed = sum(1 for task in pending_audio if task.done())
++            remaining = len(pending_audio) - completed
++        else:
++            completed = 0
++            remaining = 0
+         ctx.audio_tasks.clear()
++        _log.info(
++            "evt=audio_task_shutdown_drain sid=%s completed=%d remaining=%d",
++            ctx.sid,
++            completed,
++            remaining,
++        )
+ 
+         ctx.outbox = None
+         ctx.await_user_expected = False
+         ctx.await_user_pending = False
+         ctx.await_user_pending_key = None
+         ctx.await_user_after_mask = False
+         ctx.await_user_after_mask_key = None
+         ctx.await_user_req_id = None
+         ctx.last_tts_end_req_id = None
+         ctx.await_user_cue_emitted = False
+ 
+     def _handle_tts_end_diag(
+         self,
+         ctx: AdapterContext,
+         loop: asyncio.AbstractEventLoop,
+         payload: Optional[Dict[str, Any]] = None,
+     ) -> None:
+         if not config.DIAG_AUDIO_GUARD:
+             return
+         req_id = None
+         if isinstance(payload, dict):
+             candidate = payload.get("req_id")
+             if isinstance(candidate, str) and candidate:
+                 req_id = candidate
+         key = self._turn_key(ctx, req_id)

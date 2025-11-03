@@ -2529,25 +2529,30 @@ class ChatV2Adapter:
                 return
 
             def _deliver() -> None:
-                task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
-                ctx.audio_tasks.add(task)
-
-                def _on_done(done: asyncio.Task[None]) -> None:
-                    ctx.audio_tasks.discard(done)
+                async def _run_audio_task() -> None:
+                    start = time.perf_counter()
                     try:
-                        done.result()
+                        await self._send_audio_frame(ctx, send, chunk_bytes)
                     except asyncio.CancelledError:
-                        pass
+                        return
                     except ClientDisconnected:
                         self._disable_audio_send(ctx, "client_disconnected")
-                    except RuntimeError:
-                        self._disable_audio_send(ctx, "send_failed")
-                        _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
                     except Exception:  # pragma: no cover - defensive logging
                         self._disable_audio_send(ctx, "send_failed")
                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+                    finally:
+                        duration_ms = max(0, int((time.perf_counter() - start) * 1000))
+                        current = asyncio.current_task()
+                        if current is not None:
+                            ctx.audio_tasks.discard(current)
+                        _log.info(
+                            "evt=audio_task_complete sid=%s duration_ms=%d",
+                            ctx.sid,
+                            duration_ms,
+                        )
 
-                task.add_done_callback(_on_done)
+                task = asyncio.create_task(_run_audio_task())
+                ctx.audio_tasks.add(task)
 
             try:
                 loop.call_soon_threadsafe(_deliver)
@@ -3187,11 +3192,25 @@ class ChatV2Adapter:
             with contextlib.suppress(asyncio.CancelledError):
                 await pending_handoff
 
-        for task in list(ctx.audio_tasks):
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        pending_audio = list(ctx.audio_tasks)
+        if pending_audio:
+            for task in pending_audio:
+                task.cancel()
+            for task in pending_audio:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            completed = sum(1 for task in pending_audio if task.done())
+            remaining = len(pending_audio) - completed
+        else:
+            completed = 0
+            remaining = 0
         ctx.audio_tasks.clear()
+        _log.info(
+            "evt=audio_task_shutdown_drain sid=%s completed=%d remaining=%d",
+            ctx.sid,
+            completed,
+            remaining,
+        )
 
         ctx.outbox = None
         ctx.await_user_expected = False
