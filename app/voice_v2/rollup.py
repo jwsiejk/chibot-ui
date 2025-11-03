@@ -152,6 +152,8 @@ class TurnRollupAggregator:
         metrics = self._ensure_metrics(sid, req_id)
         metrics.tts_start_ts = self._coerce_ms(event.get("ts_ms"), metrics.tts_start_ts)
         utt_id = self._extract_utt_id(event.get("meta"))
+        if not utt_id:
+            utt_id = self._coerce_str(event.get("utt_id"), metrics.utt_id)
         if utt_id:
             metrics.utt_id = utt_id
         self._active_req_by_sid[sid] = req_id
@@ -172,6 +174,8 @@ class TurnRollupAggregator:
         if total_bytes is not None and total_bytes > metrics.audio_total_bytes:
             metrics.audio_total_bytes = total_bytes
         utt_id = self._extract_utt_id(event.get("meta"))
+        if not utt_id:
+            utt_id = self._coerce_str(event.get("utt_id"), metrics.utt_id)
         if utt_id:
             metrics.utt_id = utt_id
         self._active_req_by_sid.pop(sid, None)

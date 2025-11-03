@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import compute_sha256
+from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
 
 
 __all__ = ["build_flow_zip"]
@@ -30,8 +31,8 @@ _LOGS_NAME = "logs.ndjson"
 _TIMELINE_TYPES = {
     "EVT_TURN_BEGIN",
     "EVT_TURN_END",
-    "EVT_TTS_START",
-    "EVT_TTS_END",
+    EVT_TTS_START,
+    EVT_TTS_END,
     "EVT_TTS_MASK",
     "EVT_MIC_GATE",
     "EVT_POLICY_APPLIED",

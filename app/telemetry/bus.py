@@ -8,6 +8,8 @@ import uuid
 from typing import Any, Callable, Dict, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
+
 Subscription = Tuple[str, Callable[[dict], None]]
 
 _log = logging.getLogger(__name__)
@@ -275,7 +277,7 @@ def publish(event: dict) -> None:
     sid = normalized.get("sid")
     sid_str = sid if isinstance(sid, str) else None
 
-    if event_type == "EVT_TTS_START" and sid_str:
+    if event_type == EVT_TTS_START and sid_str:
         utt_meta = normalized.get("meta") or {}
         if isinstance(utt_meta, dict):
             tts_meta = utt_meta.get("tts")
@@ -299,7 +301,7 @@ def publish(event: dict) -> None:
                 safe_event["bytes"] = chunk_len
             if total_bytes is not None:
                 safe_event["total_bytes"] = total_bytes
-        elif event_type == "EVT_TTS_END" and sid_str:
+        elif event_type == EVT_TTS_END and sid_str:
             total = _tts_audio_totals.get(sid_str)
             if total is None and sid_str in _tts_current_utt:
                 total = 0
@@ -333,7 +335,7 @@ def publish(event: dict) -> None:
                 exc_info=True,
             )
 
-    if event_type == "EVT_TTS_END" and sid_str:
+    if event_type == EVT_TTS_END and sid_str:
         note_tts_end(sid_str, _tts_current_utt.get(sid_str))
 
 

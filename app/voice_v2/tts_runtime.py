@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
 from app.telemetry import bus
-from app.voice_v2 import EVT_NLG, EVT_TTS_END
+from app.voice_v2 import EVT_NLG, EVT_TTS_END, EVT_TTS_START
 from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_base import (
     ProviderCircuitOpenError,
@@ -232,8 +232,22 @@ class TTSRuntime:
             if callable(note_start):
                 note_start(sid, state.utt_id)
             start_time_ms = time.monotonic()
-            _log.info(
-                "evt=tts_start sid=%s utt_id=%s voice_id=%s text_chars=%d",
+            self._bus.publish(
+                {
+                    "type": EVT_TTS_START,
+                    "sid": sid,
+                    "who": "server",
+                    "source": "tts",
+                    "meta": {
+                        "provider": "elevenlabs",
+                        "voice": voice_id,
+                        "chars": text_chars,
+                    },
+                }
+            )
+            _log.info("evt=tts_start sid=%s provider=elevenlabs chars=%d", sid, text_chars)
+            _log.debug(
+                "evt=tts_start_details sid=%s utt_id=%s voice_id=%s text_chars=%d",
                 sid,
                 state.utt_id,
                 voice_id,
@@ -358,17 +372,30 @@ class TTSRuntime:
                     )
                 buffer.clear()
             _flush_chunk_log(force=True)
+            elapsed_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
             if start_emitted and state.emit_end:
                 self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
-                duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
-                _log.info(
-                    "evt=tts_end sid=%s utt_id=%s total_bytes=%d duration_ms=%d",
+            if start_emitted:
+                self._bus.publish(
+                    {
+                        "type": EVT_TTS_END,
+                        "sid": sid,
+                        "who": "server",
+                        "source": "tts",
+                        "meta": {
+                            "ms_elapsed": elapsed_ms,
+                            "provider": "elevenlabs",
+                        },
+                    }
+                )
+                _log.info("evt=tts_end sid=%s ms_elapsed=%d", sid, elapsed_ms)
+                _log.debug(
+                    "evt=tts_end_stats sid=%s utt_id=%s total_bytes=%d ms_elapsed=%d",
                     sid,
                     state.utt_id,
                     total_bytes,
-                    duration_ms,
+                    elapsed_ms,
                 )
-            if start_emitted:
                 note_end = getattr(self._bus, "note_tts_end", None)
                 if callable(note_end):
                     note_end(sid, state.utt_id)
