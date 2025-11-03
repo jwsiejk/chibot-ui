@@ -10,6 +10,38 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.telemetry import bus as telemetry_bus
+from app.voice_v2 import (
+    EVT_ASR_CLOSED,
+    EVT_ASR_FINAL,
+    EVT_ASR_OPEN,
+    EVT_ASR_PARTIAL,
+    EVT_TTS_END,
+    EVT_TTS_START,
+)
+
+
+EVT_ASR_OPEN_ATTEMPT = "asr.open_attempt"
+EVT_ASR_OPEN_FAILED = "asr.open_failed"
+EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
+EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
+EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
+
+_ASR_LOG_TYPES = {
+    EVT_ASR_OPEN,
+    EVT_ASR_PARTIAL,
+    EVT_ASR_FINAL,
+    EVT_ASR_CLOSED,
+    EVT_ASR_OPEN_ATTEMPT,
+    EVT_ASR_OPEN_FAILED,
+}
+
+_WS_LOG_TYPES = {
+    EVT_WS_JSON_SEND_SUMMARY,
+    EVT_WS_JSON_RECV_SUMMARY,
+    EVT_WS_AUDIO_FIRST_CHUNK,
+}
+
+_TTS_LOG_TYPES = {EVT_TTS_START, EVT_TTS_END}
 
 
 def _now_ms() -> int:
@@ -26,6 +58,9 @@ class _SessionStats:
     events_path: Path
     manifest_path: Path
     logs_path: Path
+    logs_asr_path: Path
+    logs_ws_path: Path
+    logs_tts_path: Path
     events_written: int = 0
     by_type: Dict[str, int] = field(default_factory=dict)
     started_ms: Optional[int] = None
@@ -50,17 +85,26 @@ class FileExporter:
 
         session_dir = self._root / sid
         session_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir = session_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
         stats = _SessionStats(
             directory=session_dir,
             events_path=session_dir / "events.ndjson",
             manifest_path=session_dir / "manifest.json",
             logs_path=session_dir / "logs.ndjson",
+            logs_asr_path=logs_dir / "asr.jsonl",
+            logs_ws_path=logs_dir / "ws.jsonl",
+            logs_tts_path=logs_dir / "tts.jsonl",
             started_ms=_now_ms(),
         )
 
         # Reset the NDJSON log for the session.
         stats.events_path.write_text("", encoding="utf-8")
         stats.logs_path.write_text("", encoding="utf-8")
+        stats.logs_asr_path.write_text("", encoding="utf-8")
+        stats.logs_ws_path.write_text("", encoding="utf-8")
+        stats.logs_tts_path.write_text("", encoding="utf-8")
 
         def _callback(event: Dict[str, Any]) -> None:
             if event.get("sid") != sid:
@@ -135,6 +179,21 @@ class FileExporter:
                     log_entry = {"type": event_type}
                 with stats.logs_path.open("a", encoding="utf-8") as log_handle:
                     json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
+                    log_handle.write("\n")
+
+            if event_type in _ASR_LOG_TYPES:
+                with stats.logs_asr_path.open("a", encoding="utf-8") as log_handle:
+                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
+                    log_handle.write("\n")
+
+            if event_type in _WS_LOG_TYPES:
+                with stats.logs_ws_path.open("a", encoding="utf-8") as log_handle:
+                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
+                    log_handle.write("\n")
+
+            if event_type in _TTS_LOG_TYPES:
+                with stats.logs_tts_path.open("a", encoding="utf-8") as log_handle:
+                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
                     log_handle.write("\n")
 
         ts_ms = event.get("ts_ms")

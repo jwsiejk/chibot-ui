@@ -27,6 +27,9 @@ _TIMELINE_NAME = "flow_timeline.ndjson"
 _NLU_NAME = "nlu.ndjson"
 _NLG_NAME = "nlg.ndjson"
 _LOGS_NAME = "logs.ndjson"
+_LOGS_ASR_NAME = "logs/asr.jsonl"
+_LOGS_WS_NAME = "logs/ws.jsonl"
+_LOGS_TTS_NAME = "logs/tts.jsonl"
 
 _TIMELINE_TYPES = {
     "EVT_TURN_BEGIN",
@@ -80,6 +83,10 @@ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _
     manifest_path = session_dir / _MANIFEST_NAME
     events_path = session_dir / _EVENTS_NAME
     logs_path = session_dir / _LOGS_NAME
+    logs_dir = session_dir / "logs"
+    logs_asr_path = logs_dir / "asr.jsonl"
+    logs_ws_path = logs_dir / "ws.jsonl"
+    logs_tts_path = logs_dir / "tts.jsonl"
 
     _assert_exists(manifest_path)
     _assert_exists(events_path)
@@ -95,9 +102,15 @@ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _
     archive_bytes: bytes = b""
     payloads: Dict[str, bytes] = {}
     manifest_bytes: bytes = b""
-    logs_bytes: bytes | None = None
+    logs_payloads: Dict[str, bytes] = {}
     if logs_path.is_file():
-        logs_bytes = logs_path.read_bytes()
+        logs_payloads[_LOGS_NAME] = logs_path.read_bytes()
+    if logs_asr_path.is_file():
+        logs_payloads[_LOGS_ASR_NAME] = logs_asr_path.read_bytes()
+    if logs_ws_path.is_file():
+        logs_payloads[_LOGS_WS_NAME] = logs_ws_path.read_bytes()
+    if logs_tts_path.is_file():
+        logs_payloads[_LOGS_TTS_NAME] = logs_tts_path.read_bytes()
 
     while True:
         payloads, manifest_bytes = _render_payloads(
@@ -106,7 +119,7 @@ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _
             readme_bytes,
             drop_counts,
             cap_bytes,
-            logs_bytes=logs_bytes,
+            logs_payloads=logs_payloads or None,
         )
         entries = dict(payloads)
         entries[_MANIFEST_NAME] = manifest_bytes
@@ -208,7 +221,7 @@ def _render_payloads(
     drop_counts: Dict[str, int],
     cap_bytes: int,
     *,
-    logs_bytes: bytes | None = None,
+    logs_payloads: Dict[str, bytes] | None = None,
 ) -> Tuple[Dict[str, bytes], bytes]:
     redacted_events = [wrapper.event for wrapper in events]
 
@@ -226,8 +239,8 @@ def _render_payloads(
         _NLG_NAME: _dump_ndjson(nlg_events),
     }
 
-    if logs_bytes is not None:
-        payloads[_LOGS_NAME] = logs_bytes
+    if logs_payloads:
+        payloads.update(logs_payloads)
 
     manifest_bytes = _build_manifest_payload(
         manifest_data,

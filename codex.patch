@@ -1,12 +1,65 @@
-diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
-index f7a8e5837d2bb923cc8f8f354cce422e19774774..12de3ea2eff78d08b3ab9eb8ab5bc1876fdcc622 100644
---- a/app/admin/flow_zip.py
-+++ b/app/admin/flow_zip.py
-@@ -1,59 +1,60 @@
- """Utilities for building deterministic flow export archives."""
+diff --git a/app/admin/flow_api.py b/app/admin/flow_api.py
+index 1aa63f87377699a0dcec27be99a0e898c893573b..496e7a0b8d82d8463b3e227dfc0e0293781929ba 100644
+--- a/app/admin/flow_api.py
++++ b/app/admin/flow_api.py
+@@ -1,49 +1,52 @@
+ """Admin HTTP endpoints exposing flow trace streams and ZIP archives."""
  
  from __future__ import annotations
  
+ import json
+ from dataclasses import dataclass
+ from io import BytesIO
+ from pathlib import Path
+ from typing import Any, Awaitable, Callable, Dict, List, Optional
+ from urllib.parse import parse_qs
+ 
+ from app.admin.flow_zip import build_flow_zip
+ 
+ 
+ EXPORT_ROOT = Path("exports")
+ _EVENTS_FILENAME = "events.ndjson"
+ _ARCHIVE_FILENAME = "flow.zip"
+ _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
+ _CONTENT_TYPE_ZIP = b"application/zip"
+ 
+ _TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
+     "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
+     "EVT_DIAG_FIRST_AUDIO_FRAME": ("EVT_AG_",),
+     "EVT_DIAG_NO_AUDIO_FROM_CLIENT": ("EVT_AG_",),
++    "EVT_WS_JSON_SEND": ("ws.json.send_",),
++    "EVT_WS_JSON_RECV": ("ws.json.recv_",),
++    "EVT_WS_AUDIO_SEND": ("ws.audio.first_",),
+ }
+ 
+ 
+ @dataclass(frozen=True)
+ class Response:
+     status: int
+     body: bytes
+     headers: tuple[tuple[bytes, bytes], ...]
+ 
+ 
+ def json_response(*, status: int = 200, **payload: object) -> Response:
+     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+     headers = (
+         (b"content-type", b"application/json; charset=utf-8"),
+         (b"content-length", str(len(body)).encode("ascii")),
+     )
+     return Response(status=status, body=body, headers=headers)
+ 
+ 
+ async def handle_flow_trace(
+     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
+ ):
+     """Stream filtered redacted events for the given session identifier."""
+ 
+     if _method(scope) != "GET":
+diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
+index 12de3ea2eff78d08b3ab9eb8ab5bc1876fdcc622..48123972278554e0b7f753772a26412f35a4ea32 100644
+--- a/app/admin/flow_zip.py
++++ b/app/admin/flow_zip.py
+@@ -5,50 +5,53 @@ from __future__ import annotations
  import io
  import json
  from copy import deepcopy
@@ -17,7 +70,7 @@ index f7a8e5837d2bb923cc8f8f354cce422e19774774..12de3ea2eff78d08b3ab9eb8ab5bc187
  
  from app.telemetry import bus as telemetry_bus
  from app.telemetry.exporter import compute_sha256
-+from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
+ from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
  
  
  __all__ = ["build_flow_zip"]
@@ -32,14 +85,15 @@ index f7a8e5837d2bb923cc8f8f354cce422e19774774..12de3ea2eff78d08b3ab9eb8ab5bc187
  _NLU_NAME = "nlu.ndjson"
  _NLG_NAME = "nlg.ndjson"
  _LOGS_NAME = "logs.ndjson"
++_LOGS_ASR_NAME = "logs/asr.jsonl"
++_LOGS_WS_NAME = "logs/ws.jsonl"
++_LOGS_TTS_NAME = "logs/tts.jsonl"
  
  _TIMELINE_TYPES = {
      "EVT_TURN_BEGIN",
      "EVT_TURN_END",
--    "EVT_TTS_START",
--    "EVT_TTS_END",
-+    EVT_TTS_START,
-+    EVT_TTS_END,
+     EVT_TTS_START,
+     EVT_TTS_END,
      "EVT_TTS_MASK",
      "EVT_MIC_GATE",
      "EVT_POLICY_APPLIED",
@@ -59,529 +113,371 @@ index f7a8e5837d2bb923cc8f8f354cce422e19774774..12de3ea2eff78d08b3ab9eb8ab5bc187
  }
  _WS_PREFIX = "EVT_WS_"
  _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
- _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
- 
- _PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
+@@ -58,77 +61,87 @@ _PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
  
  _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
  
-diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
-index 592f953bdedf28d0c63dd56ed63755e4b9bd8a5b..129e7adebb314c243e1abd6bb4ad01967211f5e8 100644
---- a/app/telemetry/bus.py
-+++ b/app/telemetry/bus.py
-@@ -1,35 +1,37 @@
- """In-process telemetry bus with publish/subscribe support."""
+ 
+ class _EventWrapper(dict):
+     """Container storing a redacted event and its truncation category."""
+ 
+     __slots__ = ()
+ 
+     @property
+     def event(self) -> Dict[str, object]:
+         return self["event"]
+ 
+     @property
+     def category(self) -> str:
+         return self["category"]
+ 
+ 
+ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
+     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
+ 
+     session_dir = Path(root) / sid
+     manifest_path = session_dir / _MANIFEST_NAME
+     events_path = session_dir / _EVENTS_NAME
+     logs_path = session_dir / _LOGS_NAME
++    logs_dir = session_dir / "logs"
++    logs_asr_path = logs_dir / "asr.jsonl"
++    logs_ws_path = logs_dir / "ws.jsonl"
++    logs_tts_path = logs_dir / "tts.jsonl"
+ 
+     _assert_exists(manifest_path)
+     _assert_exists(events_path)
+ 
+     manifest_data = _load_manifest(manifest_path.read_bytes())
+     created_label = _determine_created_label(manifest_data)
+     readme_bytes = _build_readme(sid, created_label)
+ 
+     raw_events = _load_events(events_path)
+     wrapped_events = _wrap_events(raw_events)
+ 
+     drop_counts = {"vendor_debug": 0, "partials": 0, "events_tail": 0}
+     archive_bytes: bytes = b""
+     payloads: Dict[str, bytes] = {}
+     manifest_bytes: bytes = b""
+-    logs_bytes: bytes | None = None
++    logs_payloads: Dict[str, bytes] = {}
+     if logs_path.is_file():
+-        logs_bytes = logs_path.read_bytes()
++        logs_payloads[_LOGS_NAME] = logs_path.read_bytes()
++    if logs_asr_path.is_file():
++        logs_payloads[_LOGS_ASR_NAME] = logs_asr_path.read_bytes()
++    if logs_ws_path.is_file():
++        logs_payloads[_LOGS_WS_NAME] = logs_ws_path.read_bytes()
++    if logs_tts_path.is_file():
++        logs_payloads[_LOGS_TTS_NAME] = logs_tts_path.read_bytes()
+ 
+     while True:
+         payloads, manifest_bytes = _render_payloads(
+             wrapped_events,
+             manifest_data,
+             readme_bytes,
+             drop_counts,
+             cap_bytes,
+-            logs_bytes=logs_bytes,
++            logs_payloads=logs_payloads or None,
+         )
+         entries = dict(payloads)
+         entries[_MANIFEST_NAME] = manifest_bytes
+         archive_bytes = _render_archive(entries)
+ 
+         if len(archive_bytes) <= cap_bytes:
+             break
+ 
+         if not _drop_next_event(wrapped_events, drop_counts):
+             break
+ 
+     archive_path = session_dir / "flow.zip"
+     archive_path.write_bytes(archive_bytes)
+     return archive_path
+ 
+ 
+ def _assert_exists(path: Path) -> None:
+     if not path.is_file():
+         raise FileNotFoundError(path)
+ 
+ 
+ def _load_manifest(raw: bytes) -> Dict[str, object]:
+     try:
+         return json.loads(raw.decode("utf-8"))
+     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+@@ -186,70 +199,70 @@ def _wrap_events(events: List[Dict[str, object]]) -> List[_EventWrapper]:
+     wrapped: List[_EventWrapper] = []
+     for event in events:
+         redacted = _redact_event(event)
+         event_type = redacted.get("type")
+         category = _categorize_event(event_type)
+         wrapped.append(_EventWrapper(event=redacted, category=category))
+     return wrapped
+ 
+ 
+ def _categorize_event(event_type: object) -> str:
+     if isinstance(event_type, str):
+         if event_type in _VENDOR_DEBUG_TYPES:
+             return "vendor_debug"
+         if event_type in _PARTIAL_TYPES:
+             return "partials"
+     return "main"
+ 
+ 
+ def _render_payloads(
+     events: List[_EventWrapper],
+     manifest_data: Dict[str, object],
+     readme_bytes: bytes,
+     drop_counts: Dict[str, int],
+     cap_bytes: int,
+     *,
+-    logs_bytes: bytes | None = None,
++    logs_payloads: Dict[str, bytes] | None = None,
+ ) -> Tuple[Dict[str, bytes], bytes]:
+     redacted_events = [wrapper.event for wrapper in events]
+ 
+     events_bytes = _dump_ndjson(redacted_events)
+     timeline_events = [evt for evt in redacted_events if _is_timeline_event(evt)]
+     timeline_bytes = _dump_ndjson(timeline_events)
+     nlu_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLU"]
+     nlg_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLG"]
+ 
+     payloads = {
+         _README_NAME: readme_bytes,
+         _EVENTS_REDACTED_NAME: events_bytes,
+         _TIMELINE_NAME: timeline_bytes,
+         _NLU_NAME: _dump_ndjson(nlu_events),
+         _NLG_NAME: _dump_ndjson(nlg_events),
+     }
+ 
+-    if logs_bytes is not None:
+-        payloads[_LOGS_NAME] = logs_bytes
++    if logs_payloads:
++        payloads.update(logs_payloads)
+ 
+     manifest_bytes = _build_manifest_payload(
+         manifest_data,
+         payloads,
+         drop_counts,
+         cap_bytes,
+     )
+ 
+     return payloads, manifest_bytes
+ 
+ 
+ def _is_timeline_event(event: Dict[str, object]) -> bool:
+     event_type = event.get("type")
+     if not isinstance(event_type, str):
+         return False
+     if event_type in _TIMELINE_TYPES:
+         return True
+     return event_type.startswith(_WS_PREFIX)
+ 
+ 
+ def _dump_ndjson(events: Iterable[Dict[str, object]]) -> bytes:
+     lines = [json.dumps(event, separators=(",", ":"), ensure_ascii=False) for event in events]
+     if not lines:
+         return b""
+     return ("\n".join(lines) + "\n").encode("utf-8")
+diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
+index 2ac78597a8e65d1bb3329336ccb3422a8b9ff64e..4adff4d868a714858024cd86163c0b9306597535 100644
+--- a/app/telemetry/exporter.py
++++ b/app/telemetry/exporter.py
+@@ -1,88 +1,132 @@
+ """Minimal NDJSON file exporter for session telemetry."""
  from __future__ import annotations
  
- import logging
- import re
+ import hashlib
+ import json
+ import os
  import time
- import uuid
- from typing import Any, Callable, Dict, Tuple
- from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import Any, Dict, Optional
  
-+from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
+ from app.telemetry import bus as telemetry_bus
++from app.voice_v2 import (
++    EVT_ASR_CLOSED,
++    EVT_ASR_FINAL,
++    EVT_ASR_OPEN,
++    EVT_ASR_PARTIAL,
++    EVT_TTS_END,
++    EVT_TTS_START,
++)
 +
- Subscription = Tuple[str, Callable[[dict], None]]
- 
- _log = logging.getLogger(__name__)
- 
- # Internal registries keyed by subscription token.
- _subscriptions: Dict[str, Subscription] = {}
- # Index mapping event type to tokens for quick lookup.
- _event_index: Dict[str, set[str]] = {}
- 
- # Track per-session TTS metadata for sanitised audio telemetry.
- _tts_current_utt: Dict[str, str] = {}
- _tts_audio_totals: Dict[str, int] = {}
++
++EVT_ASR_OPEN_ATTEMPT = "asr.open_attempt"
++EVT_ASR_OPEN_FAILED = "asr.open_failed"
++EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
++EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
++EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
++
++_ASR_LOG_TYPES = {
++    EVT_ASR_OPEN,
++    EVT_ASR_PARTIAL,
++    EVT_ASR_FINAL,
++    EVT_ASR_CLOSED,
++    EVT_ASR_OPEN_ATTEMPT,
++    EVT_ASR_OPEN_FAILED,
++}
++
++_WS_LOG_TYPES = {
++    EVT_WS_JSON_SEND_SUMMARY,
++    EVT_WS_JSON_RECV_SUMMARY,
++    EVT_WS_AUDIO_FIRST_CHUNK,
++}
++
++_TTS_LOG_TYPES = {EVT_TTS_START, EVT_TTS_END}
  
  
  def _now_ms() -> int:
-     """Return the current time in milliseconds."""
+     """Return the current epoch timestamp in milliseconds."""
+ 
      return int(time.time() * 1000)
  
  
- _TOKEN_KEYWORDS = {"token", "key", "sig", "secret", "auth"}
- _AUTH_KEYWORDS = {"authorization", "auth"}
- _BEARER_RE = re.compile(r"(Bearer\s+)([A-Za-z0-9._\-+/=]+)")
- _EMAIL_RE = re.compile(r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
- _OPAQUE_RE = re.compile(r"^[A-Za-z0-9+/=_-]{32,64}$")
- 
-@@ -253,93 +255,93 @@ def publish(event: dict) -> None:
- 
-     normalized = dict(event)
-     event_type = normalized.get("type")
-     if not isinstance(event_type, str) or not event_type:
-         raise ValueError("event['type'] must be a non-empty string")
- 
-     if "schema_version" not in normalized:
-         normalized["schema_version"] = "1"
- 
-     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
-         normalized["ts_ms"] = _now_ms()
-     if "level" not in normalized or not isinstance(normalized["level"], str):
-         normalized["level"] = "debug"
- 
-     if "meta" in normalized:
-         original_meta = normalized["meta"]
-         try:
-             normalized["meta"] = _redact_meta(original_meta)
-         except Exception:  # pylint: disable=broad-except
-             _log.warning("evt=telemetry_redact_failed", exc_info=True)
-             normalized["meta"] = original_meta
- 
-     sid = normalized.get("sid")
-     sid_str = sid if isinstance(sid, str) else None
- 
--    if event_type == "EVT_TTS_START" and sid_str:
-+    if event_type == EVT_TTS_START and sid_str:
-         utt_meta = normalized.get("meta") or {}
-         if isinstance(utt_meta, dict):
-             tts_meta = utt_meta.get("tts")
-             if isinstance(tts_meta, dict):
-                 utt_id = tts_meta.get("utt_id")
-                 if isinstance(utt_id, str) and utt_id:
-                     note_tts_start(sid_str, utt_id)
- 
-     safe_event = _json_safe(normalized)
-     if isinstance(safe_event, dict):
-         if event_type == "EVT_WS_AUDIO_SEND":
-             chunk_len = _extract_audio_chunk_len(normalized)
-             total_bytes = None
-             if sid_str and chunk_len is not None:
-                 total_bytes = _increment_audio_total(sid_str, chunk_len)
-                 utt_id = _tts_current_utt.get(sid_str)
-                 if utt_id:
-                     safe_event.setdefault("utt_id", utt_id)
-             safe_event.pop("chunk", None)
-             if chunk_len is not None:
-                 safe_event["bytes"] = chunk_len
-             if total_bytes is not None:
-                 safe_event["total_bytes"] = total_bytes
--        elif event_type == "EVT_TTS_END" and sid_str:
-+        elif event_type == EVT_TTS_END and sid_str:
-             total = _tts_audio_totals.get(sid_str)
-             if total is None and sid_str in _tts_current_utt:
-                 total = 0
-             if total is not None:
-                 safe_event["total_bytes"] = total
-             utt_id = _tts_current_utt.get(sid_str)
-             if utt_id:
-                 safe_event.setdefault("utt_id", utt_id)
- 
-     tokens = set()
-     tokens.update(_event_index.get(event_type, set()))
-     tokens.update(_event_index.get("*", set()))
- 
-     for token in list(tokens):
-         subscription = _subscriptions.get(token)
-         if not subscription:
-             continue
-         _, handler = subscription
-         try:
-             if getattr(handler, "_telemetry_accepts_binary", False):
-                 payload = _clone_payload(normalized)
-             else:
-                 payload = _clone_payload(safe_event)
-             handler(payload)
-         except Exception:  # pylint: disable=broad-except
-             handler_name = getattr(handler, "__qualname__", repr(handler))
-             _log.error(
-                 "evt=telemetry_sink_failed token=%s handler=%s",
-                 token,
-                 handler_name,
-                 exc_info=True,
-             )
- 
--    if event_type == "EVT_TTS_END" and sid_str:
-+    if event_type == EVT_TTS_END and sid_str:
-         note_tts_end(sid_str, _tts_current_utt.get(sid_str))
- 
- 
- def reset() -> None:
-     """Clear all subscriptions (primarily for testing)."""
-     _subscriptions.clear()
-     _event_index.clear()
-     _tts_current_utt.clear()
-     _tts_audio_totals.clear()
-diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
-index 724ee6c2436ff3c809427300150d700700896590..ca126f5decc2afc6546b7ad5388f33f9d452c627 100644
---- a/app/templates/admin_logs.html
-+++ b/app/templates/admin_logs.html
-@@ -102,55 +102,55 @@
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_TURN_BEGIN" checked />
-               <span>Turn begin</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_TURN_END" checked />
-               <span>Turn end</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_CHAT_USER" checked />
-               <span>User chat</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_JSON_SEND" checked />
-               <span>JSON send</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_SESSION_STEP" checked />
-               <span>Session steps</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_JSON_RECV" />
-               <span>JSON recv</span>
-             </label>
-             <label class="admin-logs__type">
--              <input type="checkbox" name="logType" value="EVT_TTS_START" />
-+              <input type="checkbox" name="logType" value="tts.start" />
-               <span>TTS start</span>
-             </label>
-             <label class="admin-logs__type">
--              <input type="checkbox" name="logType" value="EVT_TTS_END" />
-+              <input type="checkbox" name="logType" value="tts.end" />
-               <span>TTS end</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_RECV" />
-               <span>Audio recv</span>
-             </label>
-             <label class="admin-logs__type">
-               <input
-                 type="checkbox"
-                 name="logType"
-                 value=""
-                 data-filter-types="EVT_WS_AUDIO_RECV EVT_SESSION_STEP:audio.stream_started"
-               />
-               <span>Audio (server)</span>
-             </label>
-             <label class="admin-logs__type">
-               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_SEND" />
-               <span>Audio send</span>
-             </label>
-             <label class="admin-logs__type">
-               <input
-                 type="checkbox"
-                 name="logType"
-                 value=""
-                 data-filter-types="EVT_VAD EVT_VAD_DECISION"
-diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
-index 5d95eb99c4c3dcce30b44f69d3b65ebba58a4688..3ed800c7a6ba553485dfb25d61bbb8a2df2af0bf 100644
---- a/app/voice_v2/__init__.py
-+++ b/app/voice_v2/__init__.py
-@@ -1,38 +1,38 @@
- """Event constants for AskChip voice v2 telemetry."""
- 
- EVT_WS_OPEN = "EVT_WS_OPEN"
- EVT_WS_CLOSE = "EVT_WS_CLOSE"
- EVT_WS_JSON_RECV = "EVT_WS_JSON_RECV"
- EVT_WS_JSON_SEND = "EVT_WS_JSON_SEND"
- EVT_SESSION_STEP = "EVT_SESSION_STEP"
- EVT_WS_AUDIO_RECV = "EVT_WS_AUDIO_RECV"
- EVT_WS_AUDIO_SEND = "EVT_WS_AUDIO_SEND"
- EVT_CHAT_USER = "EVT_CHAT_USER"
- 
--EVT_TTS_START = "EVT_TTS_START"
--EVT_TTS_END = "EVT_TTS_END"
-+EVT_TTS_START = "tts.start"
-+EVT_TTS_END = "tts.end"
- EVT_TTS_MASK = "EVT_TTS_MASK"
- 
- EVT_TURN_STATE = "EVT_TURN_STATE"
- EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
- EVT_TURN_END = "EVT_TURN_END"
- EVT_TURN_ROLLUP = "EVT_TURN_ROLLUP"
- EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
- 
- EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
- EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
- 
- EVT_MIC_GATE = "EVT_MIC_GATE"
- EVT_BARGE_DETECTED = "EVT_BARGE_DETECTED"
- EVT_BARGE_CONFIRMED = "EVT_BARGE_CONFIRMED"
- EVT_BARGE_REJECTED = "EVT_BARGE_REJECTED"
- EVT_ACTION_SAY_END = "EVT_ACTION_SAY_END"
- 
- EVT_ASR_READY = "EVT_ASR_READY"
- EVT_ASR_OPEN = "EVT_ASR_OPEN"
- EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
- EVT_ASR_FINAL = "EVT_ASR_FINAL"
- EVT_ASR_FINAL_SUPPRESSED_DUP = "EVT_ASR_FINAL_SUPPRESSED_DUP"
- EVT_ASR_CLOSED = "EVT_ASR_CLOSED"
- EVT_NLU = "EVT_NLU"
- EVT_NLG = "EVT_NLG"
-diff --git a/app/voice_v2/rollup.py b/app/voice_v2/rollup.py
-index 9594acfaac9dc6bc966facd3f7d3d7ac0a536d15..9606759887df66e98096befa83d1c43f608155f6 100644
---- a/app/voice_v2/rollup.py
-+++ b/app/voice_v2/rollup.py
-@@ -130,70 +130,74 @@ class TurnRollupAggregator:
-             cost_est = self._coerce_float(usage.get("cost_est") or usage.get("cost"))
-             if prompt is not None:
-                 metrics.input_tokens = prompt
-             if completion is not None:
-                 metrics.output_tokens = completion
-             if cost_est is not None:
-                 metrics.cost_est = cost_est
- 
-         input_tokens = self._coerce_int(event.get("input_tokens"))
-         output_tokens = self._coerce_int(event.get("output_tokens"))
-         cost_est = self._coerce_float(event.get("cost_est"))
-         if input_tokens is not None:
-             metrics.input_tokens = input_tokens
-         if output_tokens is not None:
-             metrics.output_tokens = output_tokens
-         if cost_est is not None:
-             metrics.cost_est = cost_est
- 
-     def _handle_tts_start(self, event: Mapping[str, Any]) -> None:
-         sid, req_id = self._extract_ids(event)
-         if not sid or not req_id:
-             return
-         metrics = self._ensure_metrics(sid, req_id)
-         metrics.tts_start_ts = self._coerce_ms(event.get("ts_ms"), metrics.tts_start_ts)
-         utt_id = self._extract_utt_id(event.get("meta"))
-+        if not utt_id:
-+            utt_id = self._coerce_str(event.get("utt_id"), metrics.utt_id)
-         if utt_id:
-             metrics.utt_id = utt_id
-         self._active_req_by_sid[sid] = req_id
-         metrics.audio_bytes = 0
-         metrics.audio_total_bytes = 0
- 
-     def _handle_tts_end(self, event: Mapping[str, Any]) -> None:
-         sid, req_id = self._extract_ids(event)
-         if not sid:
-             return
-         if not req_id:
-             req_id = self._active_req_by_sid.get(sid)
-             if not req_id:
-                 return
-         metrics = self._ensure_metrics(sid, req_id)
-         metrics.tts_end_ts = self._coerce_ms(event.get("ts_ms"), metrics.tts_end_ts)
-         total_bytes = self._coerce_int(event.get("total_bytes"))
-         if total_bytes is not None and total_bytes > metrics.audio_total_bytes:
-             metrics.audio_total_bytes = total_bytes
-         utt_id = self._extract_utt_id(event.get("meta"))
-+        if not utt_id:
-+            utt_id = self._coerce_str(event.get("utt_id"), metrics.utt_id)
-         if utt_id:
-             metrics.utt_id = utt_id
-         self._active_req_by_sid.pop(sid, None)
- 
-     def _handle_audio_chunk(self, event: Mapping[str, Any]) -> None:
-         sid = self._coerce_str(event.get("sid"))
-         if not sid:
-             return
-         req_id = self._active_req_by_sid.get(sid)
-         if not req_id:
-             return
-         metrics = self._ensure_metrics(sid, req_id)
-         chunk_bytes = self._coerce_int(event.get("bytes"))
-         if chunk_bytes is not None and chunk_bytes > 0:
-             metrics.audio_bytes += chunk_bytes
-             if metrics.audio_bytes > metrics.audio_total_bytes:
-                 metrics.audio_total_bytes = metrics.audio_bytes
-         utt_id = self._coerce_str(event.get("utt_id"))
-         if utt_id:
-             metrics.utt_id = utt_id
- 
-     def _handle_say_end(self, event: Mapping[str, Any]) -> None:
-         sid, req_id = self._extract_ids(event)
-         if not sid:
-             return
-diff --git a/app/voice_v2/tts_runtime.py b/app/voice_v2/tts_runtime.py
-index 7cdfe468b358d182579acc8d8db81d0b89cfd23d..899a2bc6527b2f5709f85118bab81955a5927481 100644
---- a/app/voice_v2/tts_runtime.py
-+++ b/app/voice_v2/tts_runtime.py
-@@ -1,40 +1,40 @@
- """Runtime that bridges EVT_NLG events to ElevenLabs streaming synthesis."""
- from __future__ import annotations
- 
- import asyncio
- import logging
- import os
- import threading
- import time
- import uuid
- from concurrent.futures import Future as ThreadFuture, CancelledError as ThreadCancelledError
- from dataclasses import dataclass, field
- from typing import Any, Dict, Mapping, Optional
- 
- from app.telemetry import bus
--from app.voice_v2 import EVT_NLG, EVT_TTS_END
-+from app.voice_v2 import EVT_NLG, EVT_TTS_END, EVT_TTS_START
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_base import (
-     ProviderCircuitOpenError,
-     ProviderTimeoutError,
-     TTSProviderBase,
- )
- from app.services.tts.elevenlabs_client import ElevenLabsStream, ElevenLabsTTSProvider
- 
- _log = logging.getLogger(__name__)
- 
- _provider_ready_emitted = False
- _CHUNK_LOG_INTERVAL_S = 0.5
- _FIRST_CHUNK_TIMEOUT_S = 6.0
- _PCM_FRAME_BYTES = 2  # 16-bit mono => 2 bytes per PCM frame
- 
- 
  @dataclass
- class _SynthesisState:
-     """Track an in-flight synthesis task for a session."""
+ class _SessionStats:
+     """In-memory counters tracked for each active session."""
  
-     utt_id: str
-     post_hold_ms: int
-     emit_end: bool = True
-     task: asyncio.Task[Any] | ThreadFuture[Any] | None = None
-     stream: ElevenLabsStream | None = None
-@@ -210,52 +210,66 @@ class TTSRuntime:
+     directory: Path
+     events_path: Path
+     manifest_path: Path
+     logs_path: Path
++    logs_asr_path: Path
++    logs_ws_path: Path
++    logs_tts_path: Path
+     events_written: int = 0
+     by_type: Dict[str, int] = field(default_factory=dict)
+     started_ms: Optional[int] = None
+     ended_ms: Optional[int] = None
+     subscription_token: Optional[str] = None
+ 
+ 
+ class FileExporter:
+     """Write session telemetry to disk in a restart-friendly manner."""
+ 
+     def __init__(self, root: Path | str = "exports", *, bus=telemetry_bus) -> None:
+         self._root = Path(root)
+         self._bus = bus
+         self._sessions: Dict[str, _SessionStats] = {}
+ 
+     def begin(self, sid: str) -> None:
+         """Prepare an export directory and subscribe to telemetry for the session."""
+ 
+         if sid in self._sessions:
+             # Duplicate begin calls should not create additional subscriptions.
              return
-         except asyncio.CancelledError:
-             raise
-         except Exception as exc:  # pragma: no cover - defensive
-             reason = _safe_reason(exc)
-             _log.error(
-                 "evt=tts_synthesis_failed reason=provider_error sid=%s utt_id=%s detail=%s",
-                 sid,
-                 state.utt_id,
-                 reason,
-                 exc_info=True,
-             )
+ 
+         session_dir = self._root / sid
+         session_dir.mkdir(parents=True, exist_ok=True)
++        logs_dir = session_dir / "logs"
++        logs_dir.mkdir(parents=True, exist_ok=True)
++
+         stats = _SessionStats(
+             directory=session_dir,
+             events_path=session_dir / "events.ndjson",
+             manifest_path=session_dir / "manifest.json",
+             logs_path=session_dir / "logs.ndjson",
++            logs_asr_path=logs_dir / "asr.jsonl",
++            logs_ws_path=logs_dir / "ws.jsonl",
++            logs_tts_path=logs_dir / "tts.jsonl",
+             started_ms=_now_ms(),
+         )
+ 
+         # Reset the NDJSON log for the session.
+         stats.events_path.write_text("", encoding="utf-8")
+         stats.logs_path.write_text("", encoding="utf-8")
++        stats.logs_asr_path.write_text("", encoding="utf-8")
++        stats.logs_ws_path.write_text("", encoding="utf-8")
++        stats.logs_tts_path.write_text("", encoding="utf-8")
+ 
+         def _callback(event: Dict[str, Any]) -> None:
+             if event.get("sid") != sid:
+                 return
+             self._handle_event(sid, event)
+ 
+         token = self._bus.subscribe("*", _callback)
+         stats.subscription_token = token
+         self._sessions[sid] = stats
+ 
+         manifest = {
+             "sid": sid,
+             "schema_version": "1",
+             "started_ms": stats.started_ms,
+             "open": True,
+             "events_written": 0,
+             "by_type": {},
+         }
+         self._write_manifest(stats, manifest)
+ 
+     def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
+         """Finalize a session by writing manifest metadata and unsubscribing."""
+ 
+         stats = self._sessions.pop(sid, None)
+         if not stats:
+@@ -115,50 +159,65 @@ class FileExporter:
+     def _handle_event(self, sid: str, event: Dict[str, Any]) -> None:
+         stats = self._sessions.get(sid)
+         if not stats:
              return
  
-         if self._states.get(sid) is not state:
-             if stream is not None:
-                 await stream.aclose()
-             return
+         with stats.events_path.open("a", encoding="utf-8") as handle:
+             json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
+             handle.write("\n")
  
-         try:
-             self._engine.on_tts_start(sid, state.utt_id, state.post_hold_ms)
-             note_start = getattr(self._bus, "note_tts_start", None)
-             if callable(note_start):
-                 note_start(sid, state.utt_id)
-             start_time_ms = time.monotonic()
--            _log.info(
--                "evt=tts_start sid=%s utt_id=%s voice_id=%s text_chars=%d",
-+            self._bus.publish(
-+                {
-+                    "type": EVT_TTS_START,
-+                    "sid": sid,
-+                    "who": "server",
-+                    "source": "tts",
-+                    "meta": {
-+                        "provider": "elevenlabs",
-+                        "voice": voice_id,
-+                        "chars": text_chars,
-+                    },
-+                }
-+            )
-+            _log.info("evt=tts_start sid=%s provider=elevenlabs chars=%d", sid, text_chars)
-+            _log.debug(
-+                "evt=tts_start_details sid=%s utt_id=%s voice_id=%s text_chars=%d",
-                 sid,
-                 state.utt_id,
-                 voice_id,
-                 text_chars,
-             )
-             start_emitted = True
+         stats.events_written += 1
  
-             iterator = stream.__aiter__()
-             chunk_bytes = getattr(stream, "chunk_bytes", None)
-             if isinstance(chunk_bytes, int) and chunk_bytes > 0:
-                 chunk_bytes = chunk_bytes - (chunk_bytes % _PCM_FRAME_BYTES)
-                 if chunk_bytes <= 0:
-                     chunk_bytes = None
-             else:
-                 chunk_bytes = None
-             first_chunk_received = False
-             while True:
-                 try:
-                     next_chunk = await (
-                         asyncio.wait_for(anext(iterator), timeout=_FIRST_CHUNK_TIMEOUT_S)
-                         if not first_chunk_received
-                         else anext(iterator)
-                     )
-                 except StopAsyncIteration:
-                     break
-@@ -336,61 +350,74 @@ class TTSRuntime:
-                             total_bytes += chunk_len
-                             interval_bytes += chunk_len
-                             interval_chunks += 1
-                             _flush_chunk_log()
-                             first_chunk_received = True
-                     else:
-                         emitted = bytes(buffer[:frame_aligned])
-                         del buffer[:frame_aligned]
-                         self._engine.emit_tts_audio_chunk(sid, emitted)
-                         chunk_len = len(emitted)
-                         total_bytes += chunk_len
-                         interval_bytes += chunk_len
-                         interval_chunks += 1
-                         _flush_chunk_log()
-                         first_chunk_received = True
-                 remainder = len(buffer)
-                 if remainder:
-                     _log.warning(
-                         "evt=tts_pcm_bytes_dropped sid=%s utt_id=%s bytes=%d",
-                         sid,
-                         state.utt_id,
-                         remainder,
-                     )
-                 buffer.clear()
-             _flush_chunk_log(force=True)
-+            elapsed_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
-             if start_emitted and state.emit_end:
-                 self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
--                duration_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
--                _log.info(
--                    "evt=tts_end sid=%s utt_id=%s total_bytes=%d duration_ms=%d",
-+            if start_emitted:
-+                self._bus.publish(
-+                    {
-+                        "type": EVT_TTS_END,
-+                        "sid": sid,
-+                        "who": "server",
-+                        "source": "tts",
-+                        "meta": {
-+                            "ms_elapsed": elapsed_ms,
-+                            "provider": "elevenlabs",
-+                        },
-+                    }
-+                )
-+                _log.info("evt=tts_end sid=%s ms_elapsed=%d", sid, elapsed_ms)
-+                _log.debug(
-+                    "evt=tts_end_stats sid=%s utt_id=%s total_bytes=%d ms_elapsed=%d",
-                     sid,
-                     state.utt_id,
-                     total_bytes,
--                    duration_ms,
-+                    elapsed_ms,
-                 )
--            if start_emitted:
-                 note_end = getattr(self._bus, "note_tts_end", None)
-                 if callable(note_end):
-                     note_end(sid, state.utt_id)
+         event_type = event.get("type")
+         if isinstance(event_type, str) and event_type:
+             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
  
-     def _on_task_done(self, sid: str, state: _SynthesisState, task: asyncio.Task[Any]) -> None:
-         current = self._states.get(sid)
-         if current is state:
-             self._states.pop(sid, None)
+             if event_type == "EVT_LOG":
+                 log_entry: Dict[str, Any]
+                 if isinstance(event, dict):
+                     log_entry = dict(event)
+                 else:
+                     log_entry = {"type": event_type}
+                 with stats.logs_path.open("a", encoding="utf-8") as log_handle:
+                     json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
+                     log_handle.write("\n")
  
-         try:
-             task.result()
-         except (asyncio.CancelledError, ThreadCancelledError):
-             pass
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=tts_task_failed sid=%s", sid)
++            if event_type in _ASR_LOG_TYPES:
++                with stats.logs_asr_path.open("a", encoding="utf-8") as log_handle:
++                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
++                    log_handle.write("\n")
++
++            if event_type in _WS_LOG_TYPES:
++                with stats.logs_ws_path.open("a", encoding="utf-8") as log_handle:
++                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
++                    log_handle.write("\n")
++
++            if event_type in _TTS_LOG_TYPES:
++                with stats.logs_tts_path.open("a", encoding="utf-8") as log_handle:
++                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
++                    log_handle.write("\n")
++
+         ts_ms = event.get("ts_ms")
+         if isinstance(ts_ms, int):
+             candidate = ts_ms
+             if stats.started_ms is not None and candidate < stats.started_ms:
+                 candidate = stats.started_ms
+             stats.ended_ms = candidate
  
-     # ------------------------------------------------------------------
-     # Helpers
-     # ------------------------------------------------------------------
-     def _build_provider(self) -> TTSProviderBase | None:
-         api_key = os.getenv("ELEVENLABS_API_KEY")
-         if not api_key:
-             return None
-         try:
-             return ElevenLabsTTSProvider(telemetry_bus=self._bus)
+         manifest = {
+             "sid": sid,
+             "schema_version": "1",
+             "started_ms": stats.started_ms,
+             "open": True,
+             "events_written": stats.events_written,
+             "by_type": dict(stats.by_type),
+         }
+         self._write_manifest(stats, manifest)
+ 
+     def _write_manifest(self, stats: _SessionStats, manifest: Dict[str, Any]) -> None:
+         tmp_path = stats.manifest_path.with_name(stats.manifest_path.name + ".tmp")
+         tmp_path.write_text(
+             json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
+             encoding="utf-8",
+         )
+         os.replace(tmp_path, stats.manifest_path)
+ 

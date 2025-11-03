@@ -22,6 +22,9 @@ _TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
     "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
     "EVT_DIAG_FIRST_AUDIO_FRAME": ("EVT_AG_",),
     "EVT_DIAG_NO_AUDIO_FROM_CLIENT": ("EVT_AG_",),
+    "EVT_WS_JSON_SEND": ("ws.json.send_",),
+    "EVT_WS_JSON_RECV": ("ws.json.recv_",),
+    "EVT_WS_AUDIO_SEND": ("ws.audio.first_",),
 }
 
 
