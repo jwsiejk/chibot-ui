@@ -27,6 +27,7 @@ from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_ASR_PARTIAL,
     EVT_ASR_READY,
+    EVT_SESSION_STEP,
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
@@ -55,6 +56,22 @@ def _summarize_text(text: str, limit: int = 120) -> str:
     if limit <= 1:
         return sanitized[:limit]
     return f"{sanitized[: limit - 1]}…"
+
+
+def _count_tokens(metadata: Mapping[str, Any] | None, text: str) -> int:
+    if isinstance(metadata, Mapping):
+        for key in ("token_count", "tokens", "words", "items", "len_tokens"):
+            candidate = metadata.get(key)  # type: ignore[arg-type]
+            if isinstance(candidate, int):
+                return max(0, candidate)
+            if isinstance(candidate, (list, tuple, set)):
+                return len(candidate)
+            if isinstance(candidate, float):
+                return max(0, int(candidate))
+    if isinstance(text, str):
+        tokens = [tok for tok in text.strip().split() if tok]
+        return len(tokens)
+    return 0
 
 
 def _safe_url(url: str | None) -> str:
@@ -468,6 +485,13 @@ class ASRRuntime:
         if not utterance_id:
             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
         latency_ms = int(metadata.get("latency_ms") or 0)
+        speechmatics_tokens = 0
+        speechmatics_latency = 0
+        speechmatics_text = ""
+        if self._vendor == "speechmatics":
+            speechmatics_tokens = _count_tokens(metadata, text)
+            speechmatics_latency = self._ms_from_first_chunk(state)
+            speechmatics_text = _summarize_text(text)
 
         _log.info(
             "asr_final vendor=%s chars=%d latency_ms=%d",
@@ -551,6 +575,14 @@ class ASRRuntime:
             return
 
         self._bus.publish(event)
+        if self._vendor == "speechmatics":
+            _log.info(
+                "evt=asr_final sid=%s tokens=%d ms_from_first_chunk=%d text=%r",
+                sid,
+                speechmatics_tokens,
+                speechmatics_latency,
+                speechmatics_text,
+            )
         state.finals_delivered += 1
         _log.info(
             "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
@@ -972,6 +1004,55 @@ class ASRRuntime:
         except Exception:  # pragma: no cover - defensive
             _log.exception("evt=asr_emit_log_failed")
 
+    def _emit_session_step(
+        self,
+        sid: str,
+        step: str,
+        *,
+        summary: str | None = None,
+        meta: Mapping[str, Any] | None = None,
+        source: str = "asr.runtime",
+    ) -> None:
+        if not isinstance(sid, str) or not sid:
+            return
+        if not isinstance(step, str) or not step:
+            return
+        payload: Dict[str, Any] = {
+            "schema_version": "1",
+            "type": EVT_SESSION_STEP,
+            "sid": sid,
+            "who": "server",
+            "source": source,
+            "meta": {"step": step},
+        }
+        if isinstance(meta, Mapping):
+            try:
+                payload["meta"].update(meta)
+            except Exception:
+                payload["meta"]["detail"] = repr(dict(meta))
+        elif meta is not None:
+            payload["meta"]["detail"] = repr(meta)
+        if summary:
+            payload["summary"] = summary
+        try:
+            self._bus.publish(payload)
+        except Exception:  # pragma: no cover - defensive
+            _log.exception("evt=asr_emit_session_step_failed sid=%s step=%s", sid, step)
+
+    def _ms_from_first_chunk(self, state: _SessionState) -> int:
+        anchor = 0
+        first_ms = getattr(state, "first_ingress_ms", 0) or 0
+        if isinstance(first_ms, (int, float)) and first_ms > 0:
+            anchor = int(first_ms)
+        if anchor <= 0:
+            opened_ms = getattr(state, "opened_at_ms", 0) or 0
+            if isinstance(opened_ms, (int, float)) and opened_ms > 0:
+                anchor = int(opened_ms)
+        if anchor <= 0:
+            return 0
+        now_ms = int(time.time() * 1000)
+        return max(0, now_ms - anchor)
+
     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
         loop = self._loop
         if loop is not None:
@@ -1160,6 +1241,37 @@ class ASRRuntime:
                     self._vendor,
                     stream_id,
                 )
+                if self._vendor == "speechmatics":
+                    input_desc = state.input_desc or {}
+                    if not isinstance(input_desc, Mapping):
+                        input_desc = {}
+                    rate_value = input_desc.get("rate_hz")
+                    channel_value = input_desc.get("channels")
+                    try:
+                        rate_hz = int(rate_value) if rate_value is not None else 0
+                    except (TypeError, ValueError):
+                        rate_hz = 0
+                    try:
+                        channels = int(channel_value) if channel_value is not None else 0
+                    except (TypeError, ValueError):
+                        channels = 0
+                    _log.info(
+                        "evt=asr_opened sid=%s vendor=speechmatics rate=%d channels=%d",
+                        sid,
+                        rate_hz,
+                        channels,
+                    )
+                    self._emit_session_step(
+                        sid,
+                        "asr.opened",
+                        summary="Speechmatics upstream opened",
+                        meta={
+                            "vendor": "speechmatics",
+                            "sample_rate": rate_hz,
+                            "channels": channels,
+                        },
+                        source="asr.runtime",
+                    )
                 container = state.input_desc.get("container", "")
                 codec = state.input_desc.get("codec", "")
                 _log.info(
@@ -1533,6 +1645,7 @@ class ASRRuntime:
                 stream_id,
                 reason,
             )
+            is_error_close = reason == "error"
             if (
                 not state.unavailable_emitted
                 and (
@@ -1551,6 +1664,28 @@ class ASRRuntime:
                     detail,
                     state=state,
                 )
+            if self._vendor == "speechmatics":
+                code_str = str(_code) if _code is not None else ""
+                meta: Dict[str, Any] = {
+                    "vendor": "speechmatics",
+                    "upstream_code": code_str,
+                    "close_reason": reason,
+                }
+                if _reason:
+                    meta["upstream_reason"] = str(_reason)
+                self._emit_session_step(
+                    sid,
+                    "asr.closed",
+                    summary="Speechmatics upstream closed",
+                    meta=meta,
+                    source="asr.runtime",
+                )
+                if not is_error_close:
+                    _log.info(
+                        "evt=asr_closed sid=%s reason=normal upstream_code=%s",
+                        sid,
+                        code_str,
+                    )
             state.stream_id = None
             state.close_reason = None
             state.stream_open = False
@@ -1618,6 +1753,17 @@ class ASRRuntime:
                 len_chars,
                 latency_ms,
             )
+            if self._vendor == "speechmatics":
+                token_count = _count_tokens(metadata, text)
+                first_chunk_latency = self._ms_from_first_chunk(state)
+                text_short = _summarize_text(text)
+                _log.info(
+                    "evt=asr_partial sid=%s tokens=%d ms_from_first_chunk=%d text=%r",
+                    sid,
+                    token_count,
+                    first_chunk_latency,
+                    text_short,
+                )
 
         _log.debug(
             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
@@ -1757,6 +1903,13 @@ class ASRRuntime:
                 ),
             }
         )
+        if self._vendor == "speechmatics":
+            _log.warning(
+                "evt=asr_unavailable sid=%s reason=%s details=%s",
+                sid,
+                reason,
+                details_value,
+            )
 
         if state is not None:
             state.unavailable_emitted = True

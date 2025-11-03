@@ -1,79 +1,613 @@
-diff --git a/app/ws/validator.py b/app/ws/validator.py
-index 90144a0d9afc0d1c653ef0e649e77b45961af1ef..72166cacca84a89664f823f9c08ef99990ea827d 100644
---- a/app/ws/validator.py
-+++ b/app/ws/validator.py
-@@ -121,71 +121,50 @@ def validate_audio_header_against_policy(
-                 channels,
-             )
-             _emit_validator_log(
-                 "WARNING",
-                 "audio.header_rejected reason=vendor_requires_pcm vendor=speechmatics",
-             )
-             return "speechmatics requires pcm@16k mono"
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index acb89631de23ba1b3360756d44b2238a82444617..82e9063c290f47d680931392276c1277aae6bdcb 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -5,80 +5,97 @@ import asyncio
+ import logging
+ import math
+ import hashlib
+ import struct
+ import time
+ import uuid
+ from collections import OrderedDict, deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Optional
  
-     if policy is None:
-         return None
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_DEDUPE_NORMALIZE,
+     ASR_DUP_FINAL_SUPPRESS_MS,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.policy.model import Policy
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
+     EVT_ASR_FINAL_SUPPRESSED_DUP,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
++    EVT_SESSION_STEP,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
  
-     if isinstance(policy, Mapping):
-         media = policy.get("media")
-     else:
-         media = getattr(policy, "media", None)
+ _log = logging.getLogger(__name__)
  
-     if media is None:
-         return None
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+ _RMS_PROBE_WINDOW_MS = 2000
+ _STREAM_OPEN_TIMEOUT_S = 10.0
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
  
-     if isinstance(media, Mapping):
-         get_value = media.get
-     else:
-         get_value = lambda key, default=None: getattr(media, key, default)
  
-     asr_input = get_value("asr_input")
--    if asr_input == "webm_opus":
--        if fmt != "opus":
--            msg = "policy_violation: expected format=opus"
--            _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
--            return msg
--        expected_rate = get_value("asr_rate_hz")
--        if _is_int(expected_rate) and rate is not None and rate != expected_rate:
--            msg = (
--                "evt=audio_header_rate_mismatch expected=%s got=%s"
--                % (expected_rate, rate)
--            )
--            _logger.warning(msg)
--            _emit_validator_log("WARNING", msg)
--        expected_channels = get_value("asr_channels")
--        if _is_int(expected_channels) and channels is not None and channels != expected_channels:
--            msg = (
--                "evt=audio_header_channels_mismatch expected=%s got=%s"
--                % (expected_channels, channels)
--            )
--            _logger.warning(msg)
--            _emit_validator_log("WARNING", msg)
--    elif asr_input == "pcm_16k":
-+    if asr_input == "pcm_16k":
-         if fmt != "pcm":
-             msg = "policy_violation: expected format=pcm"
-             _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
-             return msg
-         if rate is not None and rate != 16000:
-             msg = f"evt=audio_header_rate_mismatch expected=16000 got={rate}"
-             _logger.warning(msg)
-             _emit_validator_log("WARNING", msg)
-         if channels is not None and channels != 1:
-             msg = f"evt=audio_header_channels_mismatch expected=1 got={channels}"
-             _logger.warning(msg)
-             _emit_validator_log("WARNING", msg)
-     else:
-         if asr_input:
--            detail = f"policy_violation: unsupported media.asr_input={asr_input}"
-+            detail = f"policy_violation: media.asr_input must be pcm_16k (got {asr_input})"
+ def _summarize_text(text: str, limit: int = 120) -> str:
+     if not isinstance(text, str):
+         return ""
+     sanitized = text.replace("\"", "\\\"")
+     if len(sanitized) <= limit:
+         return sanitized
+     if limit <= 1:
+         return sanitized[:limit]
+     return f"{sanitized[: limit - 1]}…"
+ 
+ 
++def _count_tokens(metadata: Mapping[str, Any] | None, text: str) -> int:
++    if isinstance(metadata, Mapping):
++        for key in ("token_count", "tokens", "words", "items", "len_tokens"):
++            candidate = metadata.get(key)  # type: ignore[arg-type]
++            if isinstance(candidate, int):
++                return max(0, candidate)
++            if isinstance(candidate, (list, tuple, set)):
++                return len(candidate)
++            if isinstance(candidate, float):
++                return max(0, int(candidate))
++    if isinstance(text, str):
++        tokens = [tok for tok in text.strip().split() if tok]
++        return len(tokens)
++    return 0
++
++
+ def _safe_url(url: str | None) -> str:
+     if not url:
+         return ""
+     try:
+         from urllib.parse import urlparse, urlunparse
+ 
+         u = urlparse(url)
+         # strip query to avoid leaking keys; keep scheme/host/path
+         return urlunparse((u.scheme, u.netloc, u.path, "", "", ""))
+     except Exception:
+         return ""
+ 
+ 
+ def _default_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "raw",
+         "codec": "pcm_s16le",
+         "rate_hz": 16000,
+         "channels": 1,
+     }
+ 
+ 
+ def _pcm_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "raw",
+@@ -446,50 +463,57 @@ class ASRRuntime:
+         metadata = metadata or {}
+         self._cancel_pending_final(state, log=False)
+         if state.stream_id is None:
+             meta_stream = metadata.get("stream_id")
+             if isinstance(meta_stream, str) and meta_stream:
+                 state.stream_id = meta_stream
+         stream_id = state.stream_id or ""
+         if not stream_id:
+             stream_id = self._generate_stream_id()
+             state.stream_id = stream_id
+         state.last_stream_id = stream_id
+         state.dg_msgs_final += 1
+         raw_len = metadata.get("len_chars") if isinstance(metadata, Mapping) else None
+         len_chars = len(text)
+         if raw_len:
+             try:
+                 candidate_len = int(raw_len)
+             except (TypeError, ValueError):
+                 candidate_len = None
+             if candidate_len is not None and candidate_len >= 0:
+                 len_chars = candidate_len
+         utterance_id = metadata.get("utterance_id") if isinstance(metadata, Mapping) else None
+         if not utterance_id:
+             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+         latency_ms = int(metadata.get("latency_ms") or 0)
++        speechmatics_tokens = 0
++        speechmatics_latency = 0
++        speechmatics_text = ""
++        if self._vendor == "speechmatics":
++            speechmatics_tokens = _count_tokens(metadata, text)
++            speechmatics_latency = self._ms_from_first_chunk(state)
++            speechmatics_text = _summarize_text(text)
+ 
+         _log.info(
+             "asr_final vendor=%s chars=%d latency_ms=%d",
+             self._vendor,
+             len_chars,
+             latency_ms,
+         )
+ 
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+         engine_session = ensure_session(sid) if callable(ensure_session) else None
+         engine_req_id = None
+         if engine_session is not None:
+             candidate = getattr(engine_session, "req_id", None)
+             if isinstance(candidate, str) and candidate:
+                 engine_req_id = candidate
+ 
+         if isinstance(engine_req_id, str) and engine_req_id:
+             req_id = engine_req_id
+         elif isinstance(state.req_id, str) and state.req_id:
+             req_id = state.req_id
+             if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
+                 engine_session.req_id = req_id
          else:
--            detail = "policy_violation: unsupported media.asr_input"
-+            detail = "policy_violation: media.asr_input must be pcm_16k"
-         _emit_validator_log("WARNING", f"evt=policy_violation detail={detail}")
-         return detail
+             req_id = f"req-{uuid.uuid4().hex}"
+             if engine_session is not None:
+@@ -529,50 +553,58 @@ class ASRRuntime:
+             diag_event = {
+                 "type": EVT_ASR_FINAL_SUPPRESSED_DUP,
+                 "sid": sid,
+                 "req_id": req_id,
+                 "vendor": self._vendor,
+                 "text_hash": text_hash,
+                 "delta_ms": delta_ms,
+                 "suppress_ms": suppress_ms,
+             }
+             self._bus.publish(diag_event)
+             _log.info(
+                 "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
+                 sid,
+                 req_id,
+                 self._vendor,
+                 text,
+                 text_hash,
+                 delta_ms,
+                 suppress_ms,
+             )
+             self._log_utterance(state, stream_id, req_id, metadata, text)
+             state.segment_started_ms = 0
+             return
  
-     return None
+         self._bus.publish(event)
++        if self._vendor == "speechmatics":
++            _log.info(
++                "evt=asr_final sid=%s tokens=%d ms_from_first_chunk=%d text=%r",
++                sid,
++                speechmatics_tokens,
++                speechmatics_latency,
++                speechmatics_text,
++            )
+         state.finals_delivered += 1
+         _log.info(
+             "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
+             sid,
+             req_id,
+             self._vendor,
+             text,
+             text_hash,
+         )
+         self._log_utterance(state, stream_id, req_id, metadata, text)
+         state.segment_started_ms = 0
  
+     # ------------------------------------------------------------------
+     # Websocket hooks
+     # ------------------------------------------------------------------
+     def on_ws_open(self, sid: str) -> None:
+         self._ensure_loop()
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+         _log.info("evt=asr_on_ws_open sid=%s", sid)
+         state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
+         state.listening = False
+         state.prearm_requested = False
+@@ -950,50 +982,99 @@ class ASRRuntime:
+         self._cancel_commit_timer(state)
  
- __all__ = ["validate_frame", "validate_audio_header_against_policy"]
+         if state.stream_open:
+             stream_id = state.stream_id or state.last_stream_id or ""
+             state.close_reason = reason or "stop_listening"
+             try:
+                 self._client.close_stream(sid)
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=asr_stop_listening_close_failed sid=%s", sid)
+             finally:
+                 self._finalize_rms_probe(sid, state)
+             state.stream_open = False
+             state.stream_id = None
+             state.req_id = None
+             _log.info("evt=asr_stop_listening sid=%s stream_id=%s", sid, stream_id)
+     def _emit_log(self, payload: Dict[str, Any]) -> None:
+         if not isinstance(payload, dict):
+             return
+         event = dict(payload)
+         event.setdefault("type", "EVT_LOG")
+         try:
+             self._bus.publish(event)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_emit_log_failed")
+ 
++    def _emit_session_step(
++        self,
++        sid: str,
++        step: str,
++        *,
++        summary: str | None = None,
++        meta: Mapping[str, Any] | None = None,
++        source: str = "asr.runtime",
++    ) -> None:
++        if not isinstance(sid, str) or not sid:
++            return
++        if not isinstance(step, str) or not step:
++            return
++        payload: Dict[str, Any] = {
++            "schema_version": "1",
++            "type": EVT_SESSION_STEP,
++            "sid": sid,
++            "who": "server",
++            "source": source,
++            "meta": {"step": step},
++        }
++        if isinstance(meta, Mapping):
++            try:
++                payload["meta"].update(meta)
++            except Exception:
++                payload["meta"]["detail"] = repr(dict(meta))
++        elif meta is not None:
++            payload["meta"]["detail"] = repr(meta)
++        if summary:
++            payload["summary"] = summary
++        try:
++            self._bus.publish(payload)
++        except Exception:  # pragma: no cover - defensive
++            _log.exception("evt=asr_emit_session_step_failed sid=%s step=%s", sid, step)
++
++    def _ms_from_first_chunk(self, state: _SessionState) -> int:
++        anchor = 0
++        first_ms = getattr(state, "first_ingress_ms", 0) or 0
++        if isinstance(first_ms, (int, float)) and first_ms > 0:
++            anchor = int(first_ms)
++        if anchor <= 0:
++            opened_ms = getattr(state, "opened_at_ms", 0) or 0
++            if isinstance(opened_ms, (int, float)) and opened_ms > 0:
++                anchor = int(opened_ms)
++        if anchor <= 0:
++            return 0
++        now_ms = int(time.time() * 1000)
++        return max(0, now_ms - anchor)
++
+     def _ensure_loop(self) -> asyncio.AbstractEventLoop | None:
+         loop = self._loop
+         if loop is not None:
+             return loop
+         try:
+             loop = asyncio.get_running_loop()
+         except RuntimeError:
+             loop = None
+         self._loop = loop
+         return loop
+ 
+     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
+         if _BACKPRESSURE_THRESHOLD <= 0:
+             return
+         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
+             return
+ 
+         dropped_chunks = 0
+         while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
+             removed = state.pending.popleft()
+             state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
+             dropped_chunks += 1
+ 
+         if dropped_chunks:
+             state.dropped_chunks += dropped_chunks
+@@ -1138,50 +1219,81 @@ class ASRRuntime:
+                 state.model = model_name if isinstance(model_name, str) and model_name else None
+                 _log.info(
+                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
+                     sid,
+                     self._vendor,
+                 )
+                 open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
+                 qs = await asyncio.wait_for(
+                     self._client.open_stream(
+                         sid,
+                         on_partial=self._make_partial_cb(sid),
+                         on_final=self._make_final_cb(sid),
+                         on_error=self._make_error_cb(sid),
+                         stream_id=stream_id,
+                         on_close=self._make_close_cb(sid, state),
+                         policy=policy_snapshot,
+                     ),
+                     timeout=open_timeout,
+                 )
+                 _log.info(
+                     "evt=asr_opened sid=%s vendor=%s stream_id=%s",
+                     sid,
+                     self._vendor,
+                     stream_id,
+                 )
++                if self._vendor == "speechmatics":
++                    input_desc = state.input_desc or {}
++                    if not isinstance(input_desc, Mapping):
++                        input_desc = {}
++                    rate_value = input_desc.get("rate_hz")
++                    channel_value = input_desc.get("channels")
++                    try:
++                        rate_hz = int(rate_value) if rate_value is not None else 0
++                    except (TypeError, ValueError):
++                        rate_hz = 0
++                    try:
++                        channels = int(channel_value) if channel_value is not None else 0
++                    except (TypeError, ValueError):
++                        channels = 0
++                    _log.info(
++                        "evt=asr_opened sid=%s vendor=speechmatics rate=%d channels=%d",
++                        sid,
++                        rate_hz,
++                        channels,
++                    )
++                    self._emit_session_step(
++                        sid,
++                        "asr.opened",
++                        summary="Speechmatics upstream opened",
++                        meta={
++                            "vendor": "speechmatics",
++                            "sample_rate": rate_hz,
++                            "channels": channels,
++                        },
++                        source="asr.runtime",
++                    )
+                 container = state.input_desc.get("container", "")
+                 codec = state.input_desc.get("codec", "")
+                 _log.info(
+                     "evt=asr_vendor_info sid=%s vendor=%s transport=ws container=%s codec=%s model=%s",
+                     sid,
+                     self._vendor,
+                     container,
+                     codec,
+                     state.model or "auto",
+                 )
+             except asyncio.CancelledError:
+                 raise
+             except asyncio.TimeoutError as err:
+                 last_url = getattr(self._client, "debug_last_url", None)
+                 self._emit_log(
+                     {
+                         "type": "EVT_LOG",
+                         "logger": "app.voice_v2.asr_runtime",
+                         "level": "ERROR",
+                         "sid": sid,
+                         "msg": (
+                             "evt=asr_open_failed_timeout sid=%s vendor=%s url=%s timeout_s=%s"
+                         )
+                         % (sid, self._vendor, _safe_url(last_url), open_timeout),
+                     }
+@@ -1511,68 +1623,91 @@ class ASRRuntime:
+         def _callback(code: str, reason: str | None = None) -> None:
+             error = code
+             if reason and reason != code:
+                 error = f"{code}: {reason}"
+             self._on_error(sid, error)
+ 
+         return _callback
+ 
+     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
+         def _callback(_code: int | None, _reason: str | None) -> None:
+             stream_id = state.stream_id
+             if not stream_id:
+                 return
+             self._cancel_pending_final(state, log=False)
+             state.segment_started_ms = 0
+             reason = state.close_reason
+             if reason is None:
+                 reason = "server_shutdown" if _code == 1001 else "error"
+             state.last_stream_id = stream_id
+             _log.info(
+                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
+                 sid,
+                 stream_id,
+                 reason,
+             )
++            is_error_close = reason == "error"
+             if (
+                 not state.unavailable_emitted
+                 and (
+                     _code == 1011
+                     or (_reason and "net0001" in str(_reason).lower())
+                 )
+             ):
+                 detail = "Deepgram closed stream"
+                 if _code is not None:
+                     detail += f" code={_code}"
+                 if _reason:
+                     detail += f" reason={_reason}"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "upstream_closed",
+                     detail,
+                     state=state,
+                 )
++            if self._vendor == "speechmatics":
++                code_str = str(_code) if _code is not None else ""
++                meta: Dict[str, Any] = {
++                    "vendor": "speechmatics",
++                    "upstream_code": code_str,
++                    "close_reason": reason,
++                }
++                if _reason:
++                    meta["upstream_reason"] = str(_reason)
++                self._emit_session_step(
++                    sid,
++                    "asr.closed",
++                    summary="Speechmatics upstream closed",
++                    meta=meta,
++                    source="asr.runtime",
++                )
++                if not is_error_close:
++                    _log.info(
++                        "evt=asr_closed sid=%s reason=normal upstream_code=%s",
++                        sid,
++                        code_str,
++                    )
+             state.stream_id = None
+             state.close_reason = None
+             state.stream_open = False
+             state.req_id = None
+             state.bytes_received = 0
+ 
+         return _callback
+ 
+     def _on_partial(
+         self, sid: str, text: str, metadata: Dict[str, object] | None = None
+     ) -> None:
+         if not isinstance(text, str) or not text.strip():
+             return
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+             if self._vendor == "speechmatics":
+                 snapshot = getattr(self._engine, "policy_snapshot", None)
+                 self._apply_speechmatics_policy(state, snapshot)
+ 
+         metadata = metadata or {}
+         if self._vendor == "speechmatics":
+             if state.segment_started_ms <= 0:
+                 state.segment_started_ms = int(time.time() * 1000)
+@@ -1596,50 +1731,61 @@ class ASRRuntime:
+                 candidate_len = int(raw_len)
+             except (TypeError, ValueError):
+                 candidate_len = None
+             if candidate_len is not None and candidate_len >= 0:
+                 len_chars = candidate_len
+         utterance_id = metadata.get("utterance_id")
+         if not utterance_id:
+             utterance_id = f"dg-utt-{uuid.uuid4().hex}"
+         latency_ms = int(metadata.get("latency_ms") or 0)
+ 
+         now_monotonic = time.monotonic()
+         should_log_partial = False
+         if not state.first_partial_logged:
+             should_log_partial = True
+         elif now_monotonic - state.last_partial_log >= 0.5:
+             should_log_partial = True
+         if should_log_partial:
+             state.first_partial_logged = True
+             state.last_partial_log = now_monotonic
+             _log.info(
+                 "asr_partial vendor=%s chars=%d latency_ms=%d",
+                 self._vendor,
+                 len_chars,
+                 latency_ms,
+             )
++            if self._vendor == "speechmatics":
++                token_count = _count_tokens(metadata, text)
++                first_chunk_latency = self._ms_from_first_chunk(state)
++                text_short = _summarize_text(text)
++                _log.info(
++                    "evt=asr_partial sid=%s tokens=%d ms_from_first_chunk=%d text=%r",
++                    sid,
++                    token_count,
++                    first_chunk_latency,
++                    text_short,
++                )
+ 
+         _log.debug(
+             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
+             "utterance_id=%s latency_ms=%d",
+             sid,
+             stream_id,
+             len_chars,
+             utterance_id,
+             latency_ms,
+         )
+ 
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+         engine_session = ensure_session(sid) if callable(ensure_session) else None
+         engine_req_id = None
+         if engine_session is not None:
+             candidate = getattr(engine_session, "req_id", None)
+             if isinstance(candidate, str) and candidate:
+                 engine_req_id = candidate
+ 
+         if isinstance(engine_req_id, str) and engine_req_id:
+             req_id = engine_req_id
+             state.req_id = req_id
+         else:
+             req_id = state.req_id
+             if not isinstance(req_id, str) or not req_id:
+@@ -1735,50 +1881,57 @@ class ASRRuntime:
+         if len(details_value) > 160:
+             details_value = f"{details_value[:157]}..."
+         payload = {
+             "type": "asr.unavailable",
+             "sid": sid,
+             "reason": reason,
+             "details": details_value,
+         }
+         try:
+             self._bus.publish(payload)
+         except Exception:  # pragma: no cover - defensive
+             _log.exception("evt=asr_unavailable_publish_failed sid=%s", sid)
+ 
+         level = "WARNING" if reason == "no_audio_timeout" else "ERROR"
+         self._emit_log(
+             {
+                 "type": "EVT_LOG",
+                 "logger": "app.voice_v2.asr_runtime",
+                 "level": level,
+                 "sid": sid,
+                 "msg": (
+                     f"evt=asr_unavailable sid={sid} reason={reason} details={details_value}"
+                 ),
+             }
+         )
++        if self._vendor == "speechmatics":
++            _log.warning(
++                "evt=asr_unavailable sid=%s reason=%s details=%s",
++                sid,
++                reason,
++                details_value,
++            )
+ 
+         if state is not None:
+             state.unavailable_emitted = True
+ 
+     def _log_asr_rearmed(self, sid: str, state: _SessionState | None = None) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
+         if state is None:
+             state = self._sessions.get(sid)
+         if state is None or not state.unavailable_emitted:
+             return
+ 
+         self._emit_log(
+             {
+                 "type": "EVT_LOG",
+                 "logger": "app.voice_v2.asr_runtime",
+                 "level": "INFO",
+                 "sid": sid,
+                 "msg": f"evt=asr_rearmed sid={sid}",
+             }
+         )
+         state.unavailable_emitted = False
+ 
+     def _cancel_idle_timer(self, state: _SessionState) -> None:
+         handle = state.idle_handle
