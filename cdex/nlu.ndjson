@@ -1,0 +1,1 @@
+{"type":"EVT_NLU","sid":"78a…3d5","req_id":"req…ace","turn_id":"045…0cc","intent":"chitchat.fallback","entities":{},"confidence":0.35,"ts_ms":1762196112376,"who":"server","source":"voice_engine","level":"debug","schema_version":"1"}
