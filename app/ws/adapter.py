@@ -77,6 +77,10 @@ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
 
 EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
 
+EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
+EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
+EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
+
 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
 
@@ -1267,11 +1271,19 @@ class ChatV2Adapter:
                     if key != "detail"
                 }
                 detail_payload = sanitized_log.get("detail")
+                stage_value: Optional[str] = None
+                vendor_value: Optional[str] = None
                 outcome = None
                 attempts = None
                 if isinstance(detail_payload, Mapping):
                     outcome = detail_payload.get("outcome")
                     attempts = detail_payload.get("attempts")
+                    stage_candidate = detail_payload.get("stage")
+                    if isinstance(stage_candidate, str) and stage_candidate.strip():
+                        stage_value = stage_candidate.strip().lower()
+                    vendor_candidate = detail_payload.get("vendor")
+                    if isinstance(vendor_candidate, str) and vendor_candidate.strip():
+                        vendor_value = vendor_candidate.strip().lower()
                 _log.info(
                     "evt=ws_client_log sid=%s label=%s outcome=%s attempts=%s",
                     ctx.sid,
@@ -1279,6 +1291,19 @@ class ChatV2Adapter:
                     outcome,
                     attempts,
                 )
+                if vendor_value == "speechmatics" and stage_value in {"ready", "started", "closed"}:
+                    bus.publish(
+                        {
+                            "type": EVT_WS_JSON_RECV_SUMMARY,
+                            "sid": ctx.sid,
+                            "who": "server",
+                            "source": "ws.adapter",
+                            "meta": {
+                                "kind": stage_value,
+                                "vendor": "speechmatics",
+                            },
+                        }
+                    )
                 bus.publish(
                     {
                         "type": EVT_CLIENT_LOG,
@@ -1554,6 +1579,25 @@ class ChatV2Adapter:
                 delta,
                 ready_delta_value,
                 buffer_bytes,
+            )
+            delta_ms = ready_delta_value
+            _log.info(
+                "evt=ws_audio_first_chunk sid=%s bytes=%d ms_since_asr_ready_bundle=%d",
+                ctx.sid,
+                pkt_len,
+                delta_ms,
+            )
+            bus.publish(
+                {
+                    "type": EVT_WS_AUDIO_FIRST_CHUNK,
+                    "sid": ctx.sid,
+                    "who": "server",
+                    "source": "ws.adapter",
+                    "meta": {
+                        "bytes": pkt_len,
+                        "ms_since_ready": delta_ms,
+                    },
+                }
             )
         elif ctx.ingress_packets % 50 == 0:
             _log.info(
@@ -1837,17 +1881,47 @@ class ChatV2Adapter:
                         channels_value = int(fallback_channels)
                     except (TypeError, ValueError, OverflowError):
                         channels_value = None
+            normalized_format = (format_value or "s16le")
+            normalized_rate = rate_value if rate_value is not None else 16000
+            normalized_channels = channels_value if channels_value is not None else 1
             _log.info(
                 "evt=ws_json_send_summary sid=%s kind=start vendor=speechmatics format=%s rate=%d channels=%d",
                 sid,
-                format_value or "",
-                0 if rate_value is None else rate_value,
-                0 if channels_value is None else channels_value,
+                normalized_format,
+                normalized_rate,
+                normalized_channels,
+            )
+            bus.publish(
+                {
+                    "type": EVT_WS_JSON_SEND_SUMMARY,
+                    "sid": sid,
+                    "who": "server",
+                    "source": "ws.adapter",
+                    "meta": {
+                        "kind": "start",
+                        "vendor": "speechmatics",
+                        "format": normalized_format,
+                        "rate": normalized_rate,
+                        "channels": normalized_channels,
+                    },
+                }
             )
         elif command == "stop":
             _log.info(
                 "evt=ws_json_send_summary sid=%s kind=stop vendor=speechmatics",
                 sid,
+            )
+            bus.publish(
+                {
+                    "type": EVT_WS_JSON_SEND_SUMMARY,
+                    "sid": sid,
+                    "who": "server",
+                    "source": "ws.adapter",
+                    "meta": {
+                        "kind": "stop",
+                        "vendor": "speechmatics",
+                    },
+                }
             )
         elif command in {"ping", "pong"}:
             _log.info(
