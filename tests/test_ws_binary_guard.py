@@ -30,9 +30,6 @@ class RecordingEngine:
     def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
         self.open_sid = sid
         bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
-        ctx = self.adapter._contexts.get(sid)
-        if ctx is not None:
-            ctx.asr_ready = True
         if not self.accept_audio:
             self.adapter.set_accepting_audio(sid, False)
 

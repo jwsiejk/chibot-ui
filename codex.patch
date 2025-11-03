@@ -1,310 +1,640 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 97a61dd5330f0fe8edc4612b5577fd38b627edb1..c81c801fc376387c127b3e657d3bd419c5ee2c32 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -6,197 +6,305 @@ import { WakeWord } from "./wake_word.js";
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index bc11d0c034506f203d014a15d5e73ac7b4e421f9..f4861e7b180fbe6920a51f640770f2b4500fe50e 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -278,50 +278,52 @@ class AdapterContext:
+     user_id: Optional[str] = None
+     is_admin: bool = False
+     principal: Dict[str, Any] = field(default_factory=dict)
+     audio_seq: int = 0
+     audio_expected_seq: int = 0
+     audio_highest_seq: int = -1
+     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+     audio_window: int = AUDIO_SEQ_WINDOW
+     audio_chunks_recv: int = 0
+     audio_bytes_recv: int = 0
+     ingress_packets: int = 0
+     ingress_bytes: int = 0
+     first_ingress_ms: Optional[int] = None
+     mic_armed_ms: Optional[int] = None
+     asr_ready_bundle_sent_ms: Optional[int] = None
+     last_pong_sent_ms: int = 0
+     last_client_activity_ms: int = 0
+     last_client_pong_ms: int = 0
+     last_server_ping_ms: int = 0
+     ip: Optional[str] = None
+     sid_bucket: Optional[TokenBucket] = None
+     ip_bucket: Optional[TokenBucket] = None
+     audio_profile: Optional[Dict[str, Any]] = None
+     accepting_audio: bool = True
+     audio_violation_count: int = 0
++    awaiting_asr_ready: bool = False
++    client_capture_armed: bool = False
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
+     audio_subscription_token: Optional[str] = None
+     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+     audio_send_closed: bool = False
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     asr_subscription_bus: Optional[Any] = None
+     asr_open_subscription_token: Optional[str] = None
+     asr_unavailable_subscription_token: Optional[str] = None
+     asr_partial_subscription_token: Optional[str] = None
+     asr_final_subscription_token: Optional[str] = None
+     asr_recovering_until: float = 0.0
+     asr_recovering_reason: Optional[str] = None
+     asr_recovering_audio_logged: bool = False
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     policy_snapshot: Optional[Dict[str, Any]] = None
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+     tts_end_ts: Optional[float] = None
+@@ -1413,85 +1415,102 @@ class ChatV2Adapter:
+             )
  
-   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
+         await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+         await self._invoke_engine("on_json", ctx.sid, frame)
+         return self._HandleResult(True)
  
-   // ---- Golden-path turn trace & mic outcomes (additive) ----
-   // ---- Telemetry (additive) ----
-   const MIC_OUTCOME = {
-     PERM_GRANTED: 'perm_granted',
-     ARMED: 'armed',
-     STREAMING: 'streaming',
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
-+  const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+     async def _handle_binary(
+         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> _HandleResult:
+         byte_count = len(data)
+         ctx.last_client_activity_ms = int(time.time() * 1000)
  
-   let __micAttempts = 0;
-   let __micChunks = 0;
-   let __micBytes = 0;
-   let __micArmedAt = 0;     // ms since epoch
-+  let __micPermissionGranted = false;
-+  let __micRecordingStartAt = null;
-+  let __micFirstChunkBreadcrumbSent = false;
-   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
+         if byte_count > self.binary_limit_bytes:
+             await self._publish(
+                 EVT_WS_AUDIO_RECV,
+                 ctx.sid,
+                 {
+                     "byte_count": byte_count,
+                     "error": "frame_too_large",
+                     "ws": {"dir": "in", "size": byte_count},
+                 },
+             )
+             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
+             return self._HandleResult(False, 1009, "frame_too_large")
  
-   if (typeof window !== "undefined") {
-     try {
-       Object.defineProperty(window, "__micAttempts", {
-         configurable: true,
-         get() { return __micAttempts; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micAttempts = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__micChunks", {
-         configurable: true,
-         get() { return __micChunks; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micChunks = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__micBytes", {
-         configurable: true,
-         get() { return __micBytes; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micBytes = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__micArmedAt", {
-         configurable: true,
-         get() { return __micArmedAt; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micArmedAt = value;
-           }
-         },
-       });
-+      Object.defineProperty(window, "__micPermGranted", {
-+        configurable: true,
-+        get() { return __micPermissionGranted; },
-+        set(value) {
-+          __micPermissionGranted = !!value;
-+        },
-+      });
-+      Object.defineProperty(window, "__micRecordingStartAt", {
-+        configurable: true,
-+        get() { return __micRecordingStartAt; },
-+        set(value) {
-+          if (Number.isFinite(value) || value === null) {
-+            __micRecordingStartAt = value;
-+          }
-+        },
-+      });
-       Object.defineProperty(window, "__turnTraceId", {
-         configurable: true,
-         get() { return __turnTraceId; },
-         set(value) {
-           if (typeof value === "string" || value === null) {
-             __turnTraceId = value;
-           }
-         },
-       });
-     } catch {}
-   }
- 
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
-   }
-   const P0 = AppState.policy || {};
-   AppState.policy = {
-     ...P0,
-     auto_record_after_greet: P0.auto_record_after_greet ?? true,
-     require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? true,
-     tts_gate_enabled: P0.tts_gate_enabled ?? true,
-     autostart_retry_on: Array.isArray(P0.autostart_retry_on)
-       ? P0.autostart_retry_on.slice()
-       : ["asrReady", "ttsEnded", "turnState:Ready"],
-     autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
-       ? P0.autostart_backoff_ms.slice()
-       : [0, 300, 1000],
-     autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
-     show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
-       ? P0.show_tap_to_speak_cta_after_ms
-       : 2000,
-     reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
-   };
- 
-   const appStateEventEmitter = createEventEmitter();
-   if (typeof AppState.on !== "function") {
-     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
-   }
-   if (typeof AppState.emit !== "function") {
-     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
-   }
-+  if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
-+    AppState.__pcmBreadcrumbHandlersInstalled = true;
-+    AppState.on("recordingStarted", () => {
-+      __micRecordingStartAt = Date.now();
-+      __micFirstChunkBreadcrumbSent = false;
-+      emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
-+    });
-+  }
- 
-   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
-   let autostartAttempts = 0;
-   let autostartTimer = null;
- 
-   const WSClient = window.WSClient = window.WSClient || {};
-   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
-     window.ws = null;
-   }
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-   const getAudioPlayer = () => window.AudioPlayer;
- 
-   function hubLog(label, detail) {
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-       try {
-         hub.log(label, detail);
-         return true;
-       } catch (err) {
-         console.warn("AppState.hub.log failed", err);
-       }
-     }
-     if (typeof window !== "undefined") {
-       try {
-         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
-         return true;
-       } catch (err) {
-         console.warn("client.log dispatch failed", err);
-       }
-     }
-     return false;
-   }
- 
-+  function getGateSnapshot() {
-+    let snapshot = null;
-+    try {
-+      snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
-+    } catch {}
-+    const asrValue = snapshot && typeof snapshot.asrReady === "boolean"
-+      ? snapshot.asrReady
-+      : Boolean(AppState?.asrReady);
-+    const ttsValue = snapshot && typeof snapshot.ttsActive === "boolean"
-+      ? snapshot.ttsActive
-+      : Boolean(AppState?.ttsActive);
-+    let micPermValue = __micPermissionGranted;
-+    if (snapshot && typeof snapshot.micPermissionGranted === "boolean") {
-+      micPermValue = snapshot.micPermissionGranted;
-+    } else if (typeof AppState?.micPermissionGranted === "boolean") {
-+      micPermValue = AppState.micPermissionGranted;
-+    }
-+    return {
-+      asrReady: Boolean(asrValue),
-+      micPerm: Boolean(micPermValue),
-+      ttsActive: Boolean(ttsValue),
-+    };
-+  }
++        if not ctx.client_capture_armed:
++            if ALLOW_AUDIO_WITHOUT_ASR:
++                _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
++            else:
++                meta = {
++                    "byte_count": byte_count,
++                    "error": "audio_not_expected",
++                    "ws": {"dir": "in", "size": byte_count},
++                }
++                await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
++                await self._send_error(send, ctx.sid, "audio_not_expected", "asr not ready")
++                return self._HandleResult(False, 1003, "audio_not_expected")
 +
-+  function emitMicBreadcrumb(detail = {}) {
-+    try {
-+      const payload = { ...detail };
-+      payload.gates = getGateSnapshot();
-+      hubLog('client.mic', payload);
-+    } catch (err) {
-+      try {
-+        console.warn("Mic breadcrumb log failed", err);
-+      } catch {}
-+    }
-+  }
-+
-   try {
-   if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
-     Object.defineProperty(AppState, "websocket", {
-       configurable: true, enumerable: false,
-       get() { try { return AppState.getState().websocket || null; } catch { return null; } }
-     });
-   }
- } catch {}
+         now = time.monotonic()
++        awaiting_ready = ctx.awaiting_asr_ready and not ctx.asr_ready
+         if not ctx.asr_ready:
+-            grace_deadline = getattr(ctx, "asr_recovering_until", 0.0) or 0.0
+-            if grace_deadline and now <= grace_deadline:
+-                if not ctx.asr_recovering_audio_logged:
+-                    remaining_ms = max(0, int((grace_deadline - now) * 1000.0))
+-                    reason_label = ctx.asr_recovering_reason or "unspecified"
+-                    _log.warning(
+-                        "evt=asr_guard_grace sid=%s remaining_ms=%s reason=%s",
+-                        ctx.sid,
+-                        remaining_ms,
+-                        reason_label,
+-                    )
+-                    ctx.asr_recovering_audio_logged = True
++            if awaiting_ready:
++                pass
+             else:
+-                if grace_deadline:
+-                    ctx.asr_recovering_until = 0.0
+-                    ctx.asr_recovering_reason = None
+-                    ctx.asr_recovering_audio_logged = False
+-                if ALLOW_AUDIO_WITHOUT_ASR:
+-                    _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
++                grace_deadline = getattr(ctx, "asr_recovering_until", 0.0) or 0.0
++                if grace_deadline and now <= grace_deadline:
++                    if not ctx.asr_recovering_audio_logged:
++                        remaining_ms = max(0, int((grace_deadline - now) * 1000.0))
++                        reason_label = ctx.asr_recovering_reason or "unspecified"
++                        _log.warning(
++                            "evt=asr_guard_grace sid=%s remaining_ms=%s reason=%s",
++                            ctx.sid,
++                            remaining_ms,
++                            reason_label,
++                        )
++                        ctx.asr_recovering_audio_logged = True
+                 else:
+-                    meta = {
+-                        "byte_count": byte_count,
+-                        "error": "audio_not_expected",
+-                        "ws": {"dir": "in", "size": byte_count},
+-                    }
+-                    await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+-                    await self._send_error(
+-                        send,
+-                        ctx.sid,
+-                        "audio_not_expected",
+-                        "asr not ready",
+-                    )
+-                    return self._HandleResult(False, 1003, "audio_not_expected")
++                    if grace_deadline:
++                        ctx.asr_recovering_until = 0.0
++                        ctx.asr_recovering_reason = None
++                        ctx.asr_recovering_audio_logged = False
++                    if ALLOW_AUDIO_WITHOUT_ASR:
++                        _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
++                    else:
++                        meta = {
++                            "byte_count": byte_count,
++                            "error": "audio_not_expected",
++                            "ws": {"dir": "in", "size": byte_count},
++                        }
++                        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
++                        await self._send_error(
++                            send,
++                            ctx.sid,
++                            "audio_not_expected",
++                            "asr not ready",
++                        )
++                        return self._HandleResult(False, 1003, "audio_not_expected")
  
-   function logMic(detail = {}) {
-     try {
-       const holdFlags = {
-         ttsActive: !!AppState?.ttsActive,
-         systemHold: !!AppState?.systemHold,
-         userMuted: !!AppState?.userMuted,
-       };
-       const base = {
-         trace_id: __turnTraceId || null,
-         attempts: __micAttempts,
-         chunks: __micChunks,
-         bytes: __micBytes,
-         phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
-         hold_flags: holdFlags,
-       };
-+      const outcome = typeof detail?.outcome === "string" ? detail.outcome : null;
-+      const permLabel = typeof detail?.perm === "string" ? detail.perm : null;
-+      if (permLabel !== null) {
-+        const granted = permLabel === "granted";
-+        __micPermissionGranted = granted;
-+        try { AppState.micPermissionGranted = granted; } catch {}
-+      } else if (outcome === MIC_OUTCOME.ERROR_DENIED) {
-+        __micPermissionGranted = false;
-+        try { AppState.micPermissionGranted = false; } catch {}
-+      }
-+      if (outcome === MIC_OUTCOME.PERM_GRANTED || permLabel === "granted") {
-+        emitMicBreadcrumb({ event: "armed" });
-+      }
-+      if (outcome === MIC_OUTCOME.STREAMING && !__micFirstChunkBreadcrumbSent) {
-+        __micFirstChunkBreadcrumbSent = true;
-+        let msSinceStart = 0;
-+        if (typeof __micRecordingStartAt === "number") {
-+          msSinceStart = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
-+        } else if (Number.isFinite(Number(detail?.first_chunk_ms))) {
-+          const fallback = Number(detail.first_chunk_ms);
-+          msSinceStart = Math.max(0, Math.round(fallback));
-+        }
-+        const bytesRaw = Number.isFinite(__micBytes) ? __micBytes : 0;
-+        const bytesSent = bytesRaw >= 0 ? bytesRaw : 0;
-+        emitMicBreadcrumb({
-+          event: "first_chunk_sent",
-+          bytes: bytesSent,
-+          ms_since_recording_start: msSinceStart,
-+        });
-+      }
-+      if (outcome === MIC_OUTCOME.STOPPED) {
-+        let totalMs = 0;
-+        if (typeof __micRecordingStartAt === "number") {
-+          totalMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
-+        }
-+        const reason = typeof detail?.reason === "string" && detail.reason ? detail.reason : null;
-+        emitMicBreadcrumb({
-+          event: "stopped",
-+          reason,
-+          ms_total_recording: totalMs,
-+        });
-+        __micRecordingStartAt = null;
-+        __micFirstChunkBreadcrumbSent = false;
-+      }
-       hubLog('client.mic', { ...base, ...detail });
-     } catch {}
-   }
+         if not ctx.accepting_audio:
+             ctx.audio_violation_count += 1
+             violation_meta = {
+                 "byte_count": byte_count,
+                 "error": "audio_not_expected_close"
+                 if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT
+                 else "audio_not_expected",
+                 "ws": {"dir": "in", "size": byte_count},
+                 "violations": ctx.audio_violation_count,
+             }
+             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
+             await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
+             if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
+                 return self._HandleResult(False, 1003, "audio_not_expected")
+             return self._HandleResult(True)
  
-   function logStage(label, detail = {}) {
-     try {
-       hubLog(label, { trace_id: __turnTraceId || null, ...detail });
-     } catch {}
-   }
+         ctx.audio_violation_count = 0
+         now_ms = int(time.time() * 1000)
+         if ctx.ingress_packets <= 0:
+             ctx.ingress_packets = 0
+             ctx.ingress_bytes = 0
+             ctx.first_ingress_ms = now_ms
+         ctx.ingress_packets += 1
+         pkt_len = byte_count
+@@ -1659,51 +1678,56 @@ class ChatV2Adapter:
  
-   if (typeof window !== "undefined") {
-     try { window.__logMic = logMic; } catch {}
-     try { window.__logStage = logStage; } catch {}
-     try { window.__MIC_OUTCOME = MIC_OUTCOME; } catch {}
-   }
+     def _compute_audio_gap(self, ctx: AdapterContext) -> Optional[tuple[int, int]]:
+         expected = ctx.audio_expected_seq
+         if expected in ctx.audio_buffer:
+             return None
+         if not ctx.audio_buffer:
+             return None
+         if ctx.audio_highest_seq - expected < ctx.audio_window:
+             return None
  
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
-   let autoResumeAttemptToken = null;
+         next_candidates = [seq for seq in ctx.audio_buffer if seq >= expected]
+         if not next_candidates:
+             return None
+ 
+         next_available = min(next_candidates)
+         if next_available <= expected:
+             return None
+ 
+         gap_from = expected
+         self._drop_buffer_before(ctx, next_available)
+         ctx.audio_expected_seq = next_available
+         return gap_from, next_available
+ 
+     async def _flush_audio_buffer(self, ctx: AdapterContext) -> None:
+         while True:
++            if not ctx.asr_ready and not ALLOW_AUDIO_WITHOUT_ASR:
++                return
+             seq = ctx.audio_expected_seq
++            chunk = ctx.audio_buffer.get(seq)
++            if chunk is None:
++                break
+             chunk = ctx.audio_buffer.pop(seq, None)
+             if chunk is None:
+                 break
+             await self._emit_audio_chunk(ctx, chunk, seq)
+             ctx.audio_expected_seq += 1
+         if ctx.audio_buffer:
+             ctx.audio_highest_seq = max(ctx.audio_buffer)
+         else:
+             ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+ 
+     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+         byte_count = len(chunk)
+         meta = {
+             "byte_count": byte_count,
+             "seq": seq,
+             "ws": {"dir": "in", "size": byte_count},
+         }
+         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+         if ctx.audio_chunks_recv == 1:
+             self._emit_session_step(
+                 ctx.sid,
+                 "audio.stream_started",
+                 summary="Received first audio chunk",
+                 meta={"byte_count": byte_count},
+                 source="ws.audio",
+@@ -2002,50 +2026,52 @@ class ChatV2Adapter:
+                 frame = self._coerce_asr_frame(ctx, event)
+                 if frame is None:
+                     return
+                 _enqueue(frame)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.asr_partial_subscription_token = bus.subscribe(
+             EVT_ASR_PARTIAL, _handle_asr_event
+         )
+         ctx.asr_final_subscription_token = bus.subscribe(
+             EVT_ASR_FINAL, _handle_asr_event
+         )
+ 
+         def _handle_asr_unavailable_event(event: dict) -> None:
+             if event.get("type") != "asr.unavailable":
+                 return
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 ctx.asr_ready = False
++                ctx.awaiting_asr_ready = False
++                ctx.client_capture_armed = False
+                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
+                 reason = event.get("reason")
+                 if isinstance(reason, str) and reason:
+                     payload["reason"] = reason
+                 details = event.get("details")
+                 detail_text = ""
+                 if details is not None:
+                     detail_text = details if isinstance(details, str) else str(details)
+                     payload["details"] = detail_text
+                 else:
+                     detail_text = ""
+                 lower_reason = reason.lower() if isinstance(reason, str) else ""
+                 lower_detail = detail_text.lower()
+                 concurrency_likely = False
+                 if ctx.asr_vendor == "speechmatics":
+                     if "concurrent_session" in lower_detail:
+                         concurrency_likely = True
+                     elif "concurrent_session" in lower_reason:
+                         concurrency_likely = True
+                 if concurrency_likely:
+                     ctx.asr_recovering_until = time.monotonic() + 3.0
+                     ctx.asr_recovering_reason = "concurrent_session"
+                     ctx.asr_recovering_audio_logged = False
+                 else:
+                     ctx.asr_recovering_until = 0.0
+@@ -2129,50 +2155,52 @@ class ChatV2Adapter:
+             ready_frame = {
+                 "type": "asr.ready",
+                 "input": dict(descriptor),
+             }
+             if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+                 ready_frame["vendor"] = ctx.asr_vendor
+             capture = dict(descriptor)
+             capture["timeslice_ms"] = timeslice_ms
+             capture["manual_gate"] = False
+             session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+             input_start = {
+                 "type": "input.start",
+                 "capture": capture,
+             }
+             if session_policy:
+                 input_start["policy"] = session_policy
+ 
+             _enqueue(ready_frame)
+             _enqueue(input_start)
+             ctx.ingress_packets = 0
+             ctx.ingress_bytes = 0
+             ctx.first_ingress_ms = None
+             mic_armed_now = int(time.time() * 1000)
+             ctx.mic_armed_ms = mic_armed_now
+             ctx.asr_ready_bundle_sent_ms = mic_armed_now
++            ctx.awaiting_asr_ready = True
++            ctx.client_capture_armed = True
+             start_payload: Dict[str, Any] = {"type": "start_listening"}
+             if session_policy:
+                 start_payload["policy"] = session_policy
+             _enqueue(start_payload)
+ 
+             if key is not None:
+                 ctx.listen_handoff_done.add(key)
+             self._clear_pending_for_key(ctx, key)
+             self._clear_after_mask_for_key(ctx, key)
+             current_key = self._turn_key(ctx, ctx.await_user_req_id)
+             if current_key == key:
+                 ctx.await_user_expected = False
+                 ctx.await_user_req_id = None
+             if ctx.last_tts_end_req_id == req_id:
+                 ctx.last_tts_end_req_id = None
+             ctx.client_mic_open = False
+             ctx.mic_nudge_sent = False
+ 
+             self._emit_hud_state(ctx, "Listening")
+             self._schedule_mic_open_guard(ctx, loop)
+             _log.info(
+                 "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
+                 ctx.sid,
+                 req_id,
+                 descriptor.get("mode", ""),
+@@ -2478,57 +2506,62 @@ class ChatV2Adapter:
+ 
+         if telemetry_bus is None:
+             telemetry_bus = bus
+ 
+         ctx.asr_subscription_bus = telemetry_bus
+         _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
+         self._emit_session_step(
+             ctx.sid,
+             "asr.ready_tracker_started",
+             summary="Subscribed to ASR ready events",
+             source="ws.asr",
+         )
+ 
+         loop = asyncio.get_running_loop()
+ 
+         def _handle(event: dict) -> None:
+             if event.get("type") != EVT_ASR_READY:
+                 return
+             if event.get("sid") != ctx.sid:
+                 return
+ 
+             def _mark_ready() -> None:
+                 if ctx.asr_ready:
+                     return
+                 ctx.asr_ready = True
++                ctx.awaiting_asr_ready = False
+                 ctx.asr_recovering_until = 0.0
+                 ctx.asr_recovering_reason = None
+                 ctx.asr_recovering_audio_logged = False
+                 frame: Dict[str, Any] = {"type": "asr.ready"}
+                 vendor = event.get("vendor")
+                 if isinstance(vendor, str) and vendor:
+                     frame["vendor"] = vendor
++                try:
++                    asyncio.create_task(self._flush_audio_buffer(ctx))
++                except RuntimeError:
++                    pass
+                 telemetry_bus.publish(
+                     {
+                         "type": EVT_WS_JSON_SEND,
+                         "sid": ctx.sid,
+                         "frame": frame,
+                         "payload": frame,
+                     }
+                 )
+ 
+             try:
+                 loop.call_soon_threadsafe(_mark_ready)
+             except RuntimeError:
+                 _mark_ready()
+ 
+         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
+ 
+     def _extract_outbound_payload(
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             payload = self._coerce_payload(event.get("frame"))
+ 
+         if payload is None:
+             meta = event.get("meta")
+@@ -3207,50 +3240,52 @@ class ChatV2Adapter:
+ 
+         prearm = getattr(runtime, "prearm", None)
+         if not callable(prearm):
+             return False
+ 
+         key = self._turn_key(ctx, req_id)
+         self._set_pending_for_key(ctx, key)
+         self._clear_after_mask_for_key(ctx, key)
+         try:
+             prearm(ctx.sid)
+         except Exception:  # pragma: no cover - defensive logging
+             self._clear_pending_for_key(ctx, key)
+             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
+             return False
+ 
+         return True
+ 
+     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+         token = ctx.asr_subscription_token
+         ctx.asr_subscription_token = None
+         telemetry_bus = ctx.asr_subscription_bus or bus
+         ctx.asr_subscription_bus = None
+         if token:
+             telemetry_bus.unsubscribe(token)
+         ctx.asr_ready = False
++        ctx.awaiting_asr_ready = False
++        ctx.client_capture_armed = False
+         ctx.asr_recovering_until = 0.0
+         ctx.asr_recovering_reason = None
+         ctx.asr_recovering_audio_logged = False
+         ctx.await_user_after_mask = False
+ 
+         open_token = ctx.asr_open_subscription_token
+         ctx.asr_open_subscription_token = None
+         if open_token:
+             bus.unsubscribe(open_token)
+         
+     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
+         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is None:
+             return
+ 
+         if not isinstance(queued, int):
+             try:
+                 queued = int(queued)
+             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+                 raise TypeError("queued must be an integer") from exc
+ 
+         await self._update_backpressure(ctx, max(0, queued))
+ 
+@@ -3687,51 +3722,52 @@ class ChatV2Adapter:
+         mode = ctx.audio_pipeline_mode or "pcm16"
+         descriptor = dict(self._input_descriptor_for_mode(mode))
+         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
+         ready_frame = {
+             "type": "asr.ready",
+             "input": dict(descriptor),
+         }
+         if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+             ready_frame["vendor"] = ctx.asr_vendor
+         capture = dict(descriptor)
+         capture["timeslice_ms"] = timeslice_ms
+         capture["manual_gate"] = False
+         session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+         input_start = {
+             "type": "input.start",
+             "capture": capture,
+         }
+         if session_policy:
+             input_start["policy"] = session_policy
+ 
+         start_payload: Dict[str, Any] = {"type": "start_listening"}
+         if session_policy:
+             start_payload["policy"] = session_policy
+ 
+         now_ms = int(time.time() * 1000)
+-        ctx.asr_ready = True
++        ctx.awaiting_asr_ready = True
++        ctx.client_capture_armed = True
+         ctx.asr_recovering_until = 0.0
+         ctx.asr_recovering_reason = None
+         ctx.asr_recovering_audio_logged = False
+         ctx.ingress_packets = 0
+         ctx.ingress_bytes = 0
+         ctx.first_ingress_ms = None
+         ctx.mic_armed_ms = now_ms
+         ctx.asr_ready_bundle_sent_ms = now_ms
+ 
+         await self._send_json(send, ctx.sid, ready_frame)
+         await self._send_json(send, ctx.sid, input_start)
+         await self._send_json(send, ctx.sid, start_payload)
+         _log.info(
+             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
+             ctx.sid,
+             mode,
+             descriptor.get("mime", ""),
+             timeslice_ms,
+             ctx.asr_vendor or "",
+         )
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+diff --git a/tests/test_asr_adapter_basic.py b/tests/test_asr_adapter_basic.py
+index 1b9469542ed121cde223ec19d46c828bbfbf84f2..0603e3fdcfa94412854e874bf0a8c90718e6126b 100644
+--- a/tests/test_asr_adapter_basic.py
++++ b/tests/test_asr_adapter_basic.py
+@@ -1,50 +1,52 @@
+ import asyncio
+ import json
+ import unittest
+ 
+ from app.telemetry import bus
+ from app.ws.adapter import AdapterContext, ChatV2Adapter
+ 
+ 
+ class TestASRAdapterBasic(unittest.TestCase):
+     def setUp(self) -> None:
+         bus.reset()
+ 
+     def tearDown(self) -> None:
+         bus.reset()
+ 
+     def test_ready_bundle_uses_pcm_policy(self) -> None:
+         adapter = ChatV2Adapter()
+         ctx = AdapterContext(sid="sid-ready-bundle", headers={})
+         ctx.asr_vendor = "speechmatics"
+         ctx.audio_pipeline_mode = "pcm16"
+         ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
+ 
+         sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
+ 
+-        self.assertTrue(ctx.asr_ready)
++        self.assertFalse(ctx.asr_ready)
++        self.assertTrue(ctx.awaiting_asr_ready)
++        self.assertTrue(ctx.client_capture_armed)
+         self.assertIsInstance(ctx.mic_armed_ms, int)
+ 
+         frames = [
+             json.loads(msg["text"])
+             for msg in sent
+             if msg.get("type") == "websocket.send" and msg.get("text")
+         ]
+ 
+         self.assertEqual(
+             [frame.get("type") for frame in frames],
+             ["asr.ready", "input.start", "start_listening"],
+         )
+ 
+         ready_frame = frames[0]
+         self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+         input_desc = ready_frame.get("input")
+         self.assertIsInstance(input_desc, dict)
+         self.assertEqual(input_desc.get("mode"), "pcm16")
+         self.assertEqual(input_desc.get("container"), "raw")
+         self.assertEqual(input_desc.get("codec"), "pcm_s16le")
+         self.assertEqual(input_desc.get("rate_hz"), 16000)
+         self.assertEqual(input_desc.get("channels"), 1)
+ 
+         input_start = frames[1]
+         capture = input_start.get("capture")
+diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
+index 2c861b54fcab7c9d16537bd1607e6373fb3d5099..7dd0460747e59667ef1607dbd11eab5d23b2c24a 100644
+--- a/tests/test_ws_binary_guard.py
++++ b/tests/test_ws_binary_guard.py
+@@ -8,53 +8,50 @@ import uuid
+ from typing import Any, Dict, List
+ 
+ import unittest
+ 
+ os.environ.setdefault("SECRET_KEY", "test-secret")
+ os.environ.setdefault("ALLOW_AUDIO_WITHOUT_ASR", "1")
+ 
+ from app.telemetry import bus
+ from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
+ from app.ws.adapter import ChatV2Adapter, RATE_LIMIT_CAPACITY
+ from app.security.jwt_utils import mint_ws_token
+ 
+ 
+ class RecordingEngine:
+     """Recording stub for the engine hooks."""
+ 
+     def __init__(self, adapter: ChatV2Adapter, accept_audio: bool = True) -> None:
+         self.adapter = adapter
+         self.accept_audio = accept_audio
+         self.open_sid: str | None = None
+         self.audio_calls: List[tuple[str, bytes, int]] = []
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
+         self.open_sid = sid
+         bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
+-        ctx = self.adapter._contexts.get(sid)
+-        if ctx is not None:
+-            ctx.asr_ready = True
+         if not self.accept_audio:
+             self.adapter.set_accepting_audio(sid, False)
+ 
+     def on_json(self, sid: str, frame: Dict[str, Any]) -> None:  # pragma: no cover - signature stub
+         return None
+ 
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
+         self.audio_calls.append((sid, chunk, seq))
+ 
+ 
+ class TestWebSocketBinaryGuard(unittest.TestCase):
+     """Integration tests for the binary audio guard behavior."""
+ 
+     def setUp(self) -> None:
+         bus.reset()
+ 
+     def tearDown(self) -> None:
+         bus.reset()
+ 
+     @staticmethod
+     def _make_scope() -> Dict[str, Any]:
+         sid = f"sid-{uuid.uuid4().hex}"
+         token = mint_ws_token("user-1", sid, False)
+         return {
+             "type": "websocket",

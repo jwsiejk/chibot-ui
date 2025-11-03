@@ -22,7 +22,9 @@ class TestASRAdapterBasic(unittest.TestCase):
 
         sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
 
-        self.assertTrue(ctx.asr_ready)
+        self.assertFalse(ctx.asr_ready)
+        self.assertTrue(ctx.awaiting_asr_ready)
+        self.assertTrue(ctx.client_capture_armed)
         self.assertIsInstance(ctx.mic_armed_ms, int)
 
         frames = [
