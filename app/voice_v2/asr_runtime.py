@@ -970,7 +970,15 @@ class ASRRuntime:
         state.last_partial_log = 0.0
         state.pending.clear()
         state.buffered_bytes = 0
-        state.prearm_requested = self._vendor != "speechmatics"
+        # Speechmatics gating requires the websocket adapter to receive an
+        # asr.ready signal before it will forward any client audio.  The previous
+        # behaviour intentionally skipped the proactive stream open for
+        # Speechmatics, assuming audio would trigger the open path.  In practice
+        # the adapter suppresses audio until it sees asr.ready, so the runtime
+        # never received audio and the conversation stalled immediately after the
+        # greet.  Always request a prearm so the stream opens and emits the
+        # asr.ready event before we wait on client audio.
+        state.prearm_requested = True
         state.utterance_active = False
         self._cancel_commit_timer(state)
         self._apply_commit_policy(state)

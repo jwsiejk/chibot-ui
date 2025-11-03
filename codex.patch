@@ -1,91 +1,65 @@
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 55817d8b7502b73827e924be7843d6c969f602bf..269331b37d5a6ecec43594ac3e2b68604781882c 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -343,68 +343,85 @@ import { WakeWord } from "./wake_word.js";
-       } catch (err) {
-         console.warn("AudioWorklet addModule failed", err);
-         return false;
-       }
-     }
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index d813e4e8b5e34796e6bb05244a822f22544faa02..55dde7e125ce05a54c1cd78480dfe4dcab2d12f6 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -948,51 +948,59 @@ class ASRRuntime:
+         state.stream_open_task = None
  
-     async _ensurePcmGraph() {
-       const context = await this._ensureAudioContext();
-       if (!this._stream) {
-         throw new Error("pcm_stream_unavailable");
-       }
-       this._resetPcmState();
-       if (context.state === "suspended") {
-         try {
-           await context.resume();
-         } catch {}
-       }
-       if (this._pcmSource && (this._pcmNode || this._pcmGainNode)) {
-         return;
-       }
-       const source = context.createMediaStreamSource(this._stream);
-       this._pcmSource = source;
-       let attached = false;
-       if (await this._loadPcmWorklet(context)) {
-         try {
--          const node = new AudioWorkletNode(context, "pcm16-capture-processor", { numberOfOutputs: 0 });
-+          const node = new AudioWorkletNode(
-+            context,
-+            "pcm16-capture-processor",
-+            {
-+              numberOfInputs: 1,
-+              numberOfOutputs: 1,
-+              outputChannelCount: [1],
-+            },
-+          );
-           node.port.onmessage = (event) => {
-             const data = event?.data;
-             if (!data || data.type !== "chunk") {
-               return;
-             }
-             const buffer = data.data;
-             if (!(buffer instanceof ArrayBuffer)) {
-               return;
-             }
-             this._handlePcmChunk(new Float32Array(buffer), Number(data.sampleRate) || context.sampleRate);
-           };
-           source.connect(node);
-+          const gain = context.createGain();
-+          gain.gain.value = 0;
-+          node.connect(gain);
-+          gain.connect(context.destination);
-           this._pcmNode = node;
-+          this._pcmGainNode = gain;
-           attached = true;
-         } catch (err) {
-           console.warn("AudioWorkletNode create failed", err);
-+          try {
-+            source.disconnect();
-+          } catch {}
-           this._pcmNode = null;
-+          this._pcmGainNode = null;
-         }
-       }
-       if (!attached) {
-         const script = context.createScriptProcessor(4096, Math.max(1, source.channelCount || 1), 1);
-         script.onaudioprocess = (event) => {
-           const input = event?.inputBuffer;
-           if (!input) {
-             return;
-           }
-           const frames = input.length;
-           const channels = input.numberOfChannels || 1;
-           const chunk = new Float32Array(frames);
-           for (let i = 0; i < frames; i += 1) {
-             let sample = 0;
-             for (let ch = 0; ch < channels; ch += 1) {
-               sample += input.getChannelData(ch)?.[i] ?? 0;
-             }
-             chunk[i] = channels > 0 ? sample / channels : 0;
-           }
-           this._handlePcmChunk(chunk, context.sampleRate);
-         };
-         const gain = context.createGain();
-         gain.gain.value = 0;
-         source.connect(script);
-         script.connect(gain);
+         if state.stream_open:
+             try:
+                 self._client.close_stream(sid)
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=asr_stream_close_failed sid=%s", sid)
+             finally:
+                 self._finalize_rms_probe(sid, state)
+             state.stream_open = False
+             state.stream_id = None
+ 
+         state.listening = True
+         state.bytes_received = 0
+         state.first_chunk_seen = False
+         state.rollup_window_start = 0.0
+         state.rollup_chunks = 0
+         state.rollup_bytes = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+         state.first_partial_logged = False
+         state.last_partial_log = 0.0
+         state.pending.clear()
+         state.buffered_bytes = 0
+-        state.prearm_requested = self._vendor != "speechmatics"
++        # Speechmatics gating requires the websocket adapter to receive an
++        # asr.ready signal before it will forward any client audio.  The previous
++        # behaviour intentionally skipped the proactive stream open for
++        # Speechmatics, assuming audio would trigger the open path.  In practice
++        # the adapter suppresses audio until it sees asr.ready, so the runtime
++        # never received audio and the conversation stalled immediately after the
++        # greet.  Always request a prearm so the stream opens and emits the
++        # asr.ready event before we wait on client audio.
++        state.prearm_requested = True
+         state.utterance_active = False
+         self._cancel_commit_timer(state)
+         self._apply_commit_policy(state)
+         self._ensure_stream(sid, state)
+ 
+     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             return
+ 
+         state.listening = False
+         state.prearm_requested = False
+         state.pending.clear()
+         state.buffered_bytes = 0
+         state.bytes_received = 0
+         state.first_chunk_seen = False
+         state.rollup_window_start = 0.0
+         state.rollup_chunks = 0
+         state.rollup_bytes = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
