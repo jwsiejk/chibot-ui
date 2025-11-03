@@ -2430,12 +2430,20 @@ class ChatV2Adapter:
                 return
             state = meta.get("state")
             reason = meta.get("reason")
-            if state != "Ready" or reason != "tts_end":
-                return
 
             def _on_loop() -> None:
-                policy = self._policy_snapshot()
-                self._maybe_emit_await_user(ctx, policy)
+                frame: Dict[str, Any] = {"type": "turn.state"}
+                if isinstance(state, str) and state:
+                    frame["state"] = state
+                if isinstance(reason, str) and reason:
+                    frame["reason"] = reason
+                frame_meta = {key: value for key, value in dict(meta).items() if key}
+                if frame_meta:
+                    frame["meta"] = frame_meta
+                _enqueue(frame)
+                if state == "Ready" and reason == "tts_end":
+                    policy = self._policy_snapshot()
+                    self._maybe_emit_await_user(ctx, policy)
 
             try:
                 loop.call_soon_threadsafe(_on_loop)

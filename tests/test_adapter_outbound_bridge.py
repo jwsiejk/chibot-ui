@@ -16,6 +16,7 @@ from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
+    EVT_TURN_STATE,
     EVT_TTS_MASK,
     EVT_WS_AUDIO_SEND,
     EVT_WS_JSON_SEND,
@@ -207,6 +208,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_asr_ready_frame_forwarded(self) -> None:
         asyncio.run(self._test_asr_ready_frame_forwarded())
 
+    def test_turn_state_forwarded(self) -> None:
+        asyncio.run(self._test_turn_state_forwarded())
+
     def test_mic_open_timeout_triggers_nudge(self) -> None:
         asyncio.run(self._test_mic_open_timeout_nudge())
 
@@ -253,6 +257,23 @@ class TestAdapterOutboundBridge(unittest.TestCase):
                 lambda data: data.get("type") == "asr.ready"
             )
             self.assertEqual(delivered, frame)
+        finally:
+            await harness.close()
+
+    async def _test_turn_state_forwarded(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        try:
+            meta = {"state": "Ready", "reason": "tts_end"}
+            bus.publish({"type": EVT_TURN_STATE, "sid": harness.sid, "meta": meta})
+
+            frame = await harness.wait_for_outbound(lambda data: data.get("type") == "turn.state")
+            self.assertEqual(frame.get("type"), "turn.state")
+            self.assertEqual(frame.get("state"), "Ready")
+            self.assertEqual(frame.get("reason"), "tts_end")
+            self.assertEqual(frame.get("meta"), meta)
         finally:
             await harness.close()
 
