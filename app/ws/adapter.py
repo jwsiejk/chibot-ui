@@ -2484,23 +2484,27 @@ class ChatV2Adapter:
                 return
             if event.get("sid") != ctx.sid:
                 return
-            meta = event.get("meta")
-            if not isinstance(meta, Mapping):
-                return
-            state = meta.get("state")
-            reason = meta.get("reason")
+
+            raw_meta = event.get("meta")
+            if isinstance(raw_meta, Mapping):
+                meta = {key: value for key, value in dict(raw_meta).items() if key}
+            else:
+                meta = {}
+
+            state = meta.get("state", event.get("state"))
+            reason = meta.get("reason", event.get("reason"))
+            state_text = state if isinstance(state, str) else None
+            reason_text = reason if isinstance(reason, str) else None
 
             def _on_loop() -> None:
-                frame: Dict[str, Any] = {"type": "turn.state"}
-                if isinstance(state, str) and state:
-                    frame["state"] = state
-                if isinstance(reason, str) and reason:
-                    frame["reason"] = reason
-                frame_meta = {key: value for key, value in dict(meta).items() if key}
-                if frame_meta:
-                    frame["meta"] = frame_meta
+                frame: Dict[str, Any] = {
+                    "type": "turn.state",
+                    "state": state,
+                    "reason": reason,
+                    "meta": meta,
+                }
                 _enqueue(frame)
-                if state == "Ready" and reason == "tts_end":
+                if state_text == "Ready" and reason_text == "tts_end":
                     policy = self._policy_snapshot()
                     self._maybe_emit_await_user(ctx, policy)
 
