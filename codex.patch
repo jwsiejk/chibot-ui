@@ -1,65 +1,11 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 8e1add9a816113a2d411a8e43f3d56795163a55e..31e0ae4b3db95d6b734e66a8ef3ac5bc0cafec9b 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -68,50 +68,52 @@ QUEUE_ON_THRESHOLD = 12
- QUEUE_OFF_THRESHOLD = 6
- 
- _DEFAULT_WS_PING_INTERVAL_MS = 20_000
- _HEARTBEAT_TIMEOUT_MS = 30_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
- EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
- EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
- 
- _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
- _MIC_OPEN_TIMEOUT_SECONDS = 2.5
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-+    "asr.input.start",
-+    "asr.input.stop",
-     "asr.partial",
-     "asr.final",
-     "asr.unavailable",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
- }
- 
- _RATE_LIMIT_EXEMPT_TYPES = {
-     "client.autostart",
-     "client.banner",
-     "client.diag",
-     "client.log",
-     "client.ping",
-     "client.telemetry",
- }
- 
- _OUTBOX_MAXSIZE = 256
- 
- _POLICY_STABLE_KEYS = (
-     "mode",
-     "allow_auto_vad",
-     "barge_in_enabled",
 diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index 6a2e2816d3eca74c4ad7ec8e3a9313e32152d309..39604676c3aa1fe3623505b885a5dc0d7b59af11 100644
+index 39604676c3aa1fe3623505b885a5dc0d7b59af11..f867bf5fc9b841b8cf809aa36b73d5f1682a18fd 100644
 --- a/tests/test_adapter_outbound_bridge.py
 +++ b/tests/test_adapter_outbound_bridge.py
-@@ -186,50 +186,53 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+@@ -183,50 +183,56 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+         asyncio.run(
+             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
+         )
  
      def test_allow_list_blocks_unknown_types(self) -> None:
          asyncio.run(self._test_allow_list())
@@ -82,12 +28,18 @@ index 6a2e2816d3eca74c4ad7ec8e3a9313e32152d309..39604676c3aa1fe3623505b885a5dc0d
      def test_audio_frames_forwarded_as_binary_messages(self) -> None:
          asyncio.run(self._test_audio_forwarding())
  
++    def test_audio_bus_publication_on_chunk(self) -> None:
++        asyncio.run(self._test_audio_bus_publication_on_chunk())
++
++    def test_audio_drop_when_masked(self) -> None:
++        asyncio.run(self._test_audio_drop_when_masked())
++
      def test_asr_ready_frame_forwarded(self) -> None:
          asyncio.run(self._test_asr_ready_frame_forwarded())
  
-+    def test_asr_input_frames_forwarded(self) -> None:
-+        asyncio.run(self._test_asr_input_frames_forwarded())
-+
+     def test_asr_input_frames_forwarded(self) -> None:
+         asyncio.run(self._test_asr_input_frames_forwarded())
+ 
      def test_turn_state_forwarded(self) -> None:
          asyncio.run(self._test_turn_state_forwarded())
  
@@ -107,92 +59,230 @@ index 6a2e2816d3eca74c4ad7ec8e3a9313e32152d309..39604676c3aa1fe3623505b885a5dc0d
              self.assertEqual(frame, payload)
  
              frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
-             self.assertEqual(len(frames), 1)
+@@ -577,50 +583,129 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+             self.assertEqual(len(mic_events), 1)
          finally:
+             bus.unsubscribe(token_order)
              await harness.close()
  
-     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
-         engine = RecordingEngine()
-@@ -238,57 +241,81 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-         await harness.start()
-         try:
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
- 
-             frame = await harness.wait_for_outbound(lambda data: data == payload)
-             self.assertEqual(frame, payload)
-         finally:
-             await harness.close()
- 
-     async def _test_asr_ready_frame_forwarded(self) -> None:
+     async def _test_audio_forwarding(self) -> None:
          engine = RecordingEngine()
          adapter = ChatV2Adapter(engine=engine)
          harness = OutboundHarness(adapter, engine)
          await harness.start()
          try:
-             frame = {"type": "asr.ready", "vendor": "speechmatics"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": frame})
+             chunk = b"\x01\x02" * 80
+             event = {
+                 "type": EVT_WS_AUDIO_SEND,
+                 "sid": harness.sid,
+                 "chunk": chunk,
+                 "meta": {"byte_count": len(chunk)},
+             }
+             bus.publish(event)
  
-             delivered = await harness.wait_for_outbound(
-                 lambda data: data.get("type") == "asr.ready"
-             )
-             self.assertEqual(delivered, frame)
+             received = await harness.wait_for_binary(lambda data: data == chunk)
+             self.assertEqual(received, chunk)
          finally:
              await harness.close()
  
-+    async def _test_asr_input_frames_forwarded(self) -> None:
++    async def _test_audio_bus_publication_on_chunk(self) -> None:
 +        engine = RecordingEngine()
 +        adapter = ChatV2Adapter(engine=engine)
 +        harness = OutboundHarness(adapter, engine)
 +        await harness.start()
++
++        chunk = b"\x04\x05" * 80
++        recorded: list[dict] = []
++        token = bus.subscribe(EVT_WS_AUDIO_SEND, recorded.append)
 +        try:
-+            start_frame = {"type": "asr.input.start"}
-+            stop_frame = {"type": "asr.input.stop"}
++            ctx = adapter._contexts.get(harness.sid)
++            self.assertIsNotNone(ctx)
++            assert ctx is not None
++            ctx.asr_ready = True
++            ctx.client_capture_armed = True
 +
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": start_frame})
-+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": stop_frame})
++            with self.assertLogs("app.ws.adapter", level="INFO") as logs:
++                await harness._inbound.put({"type": "websocket.receive", "bytes": chunk})
++                await harness.wait_for(lambda: bool(recorded))
 +
-+            delivered_start = await harness.wait_for_outbound(
-+                lambda data: data.get("type") == "asr.input.start"
++            self.assertEqual(len(recorded), 1)
++            event = recorded[0]
++            self.assertEqual(event.get("type"), EVT_WS_AUDIO_SEND)
++            self.assertEqual(event.get("sid"), harness.sid)
++            self.assertEqual(event.get("bytes"), len(chunk))
++            length = event.get("len")
++            if isinstance(length, int):
++                self.assertEqual(length, len(chunk))
++            self.assertTrue(
++                any(
++                    "evt=audio_ingress" in message and "gate_open=True" in message
++                    for message in logs.output
++                ),
++                msg=f"missing gate-open log: {logs.output}",
 +            )
-+            delivered_stop = await harness.wait_for_outbound(
-+                lambda data: data.get("type") == "asr.input.stop"
-+            )
-+
-+            self.assertEqual(delivered_start, start_frame)
-+            self.assertEqual(delivered_stop, stop_frame)
 +        finally:
++            bus.unsubscribe(token)
 +            await harness.close()
 +
-     async def _test_turn_state_forwarded(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
--            meta = {"state": "Ready", "reason": "tts_end"}
-+            meta = {"state": "Ready", "reason": "tts_end", "foo": {"bar": "baz"}}
-             bus.publish({"type": EVT_TURN_STATE, "sid": harness.sid, "meta": meta})
++    async def _test_audio_drop_when_masked(self) -> None:
++        engine = RecordingEngine()
++        adapter = ChatV2Adapter(engine=engine)
++        harness = OutboundHarness(adapter, engine)
++        await harness.start()
++
++        chunk = b"\x06\x07" * 80
++        recorded: list[dict] = []
++        token = bus.subscribe(EVT_WS_AUDIO_SEND, recorded.append)
++        try:
++            ctx = adapter._contexts.get(harness.sid)
++            self.assertIsNotNone(ctx)
++            assert ctx is not None
++            ctx.asr_ready = True
++            ctx.client_capture_armed = True
++
++            bus.publish({"type": EVT_TTS_MASK, "sid": harness.sid, "phase": "on"})
++            await harness.wait_for(lambda: ctx.tts_mask_phase != "off")
++
++            with self.assertLogs("app.ws.adapter", level="INFO") as logs:
++                await harness._inbound.put({"type": "websocket.receive", "bytes": chunk})
++                await harness.wait_for(
++                    lambda: any(
++                        "evt=audio_drop" in record.getMessage()
++                        for record in logs.records
++                    )
++                )
++
++            self.assertFalse(recorded)
++            self.assertTrue(
++                any(
++                    "evt=audio_drop" in message and "reason=mask" in message
++                    for message in logs.output
++                ),
++                msg=f"missing mask drop log: {logs.output}",
++            )
++        finally:
++            bus.unsubscribe(token)
++            await harness.close()
++
+     async def _test_mic_open_timeout_nudge(self) -> None:
+         with mock.patch("app.ws.adapter._MIC_OPEN_TIMEOUT_SECONDS", 0.05):
+             engine = RecordingEngine()
+             adapter = ChatV2Adapter(engine=engine)
+             runtime = _StubAsrRuntime()
+             adapter.asr_runtime = runtime
+             harness = OutboundHarness(adapter, engine)
+             await harness.start()
  
-             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "turn.state")
-             self.assertEqual(frame.get("type"), "turn.state")
-             self.assertEqual(frame.get("state"), "Ready")
-             self.assertEqual(frame.get("reason"), "tts_end")
-             self.assertEqual(frame.get("meta"), meta)
-         finally:
-             await harness.close()
+             sid = harness.sid
+             mic_events: list[dict] = []
+             token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
+             try:
+                 policy_payload = {
+                     "type": "policy.interaction",
+                     "interaction_id": "turn-1",
+                     "actions": ["assistant.say", "assistant.await_user"],
+                 }
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
+                 await asyncio.sleep(0.01)
  
-     async def _test_sid_isolation(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             payload = {"type": "policy.interaction", "interaction_id": "ignored"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
+                 tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
  
-             with self.assertRaises(TimeoutError):
-                 await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction", timeout=0.1)
-             self.assertEqual(len(harness.outbound_frames), 0)
-         finally:
-             await harness.close()
- 
+                 await harness.wait_for(lambda: bool(runtime.prearm_calls))
+diff --git a/tests/test_asr_runtime_vendor_logging.py b/tests/test_asr_runtime_vendor_logging.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f8729abc31ed822ad590adac753c13cf2a6637d8
+--- /dev/null
++++ b/tests/test_asr_runtime_vendor_logging.py
+@@ -0,0 +1,91 @@
++"""Tests covering ASR runtime vendor lifecycle logging."""
++from __future__ import annotations
++
++import unittest
++from unittest import mock
++
++from app.telemetry import bus
++from app.voice_v2.asr_runtime import ASRRuntime, _SessionState
++from app.voice_v2.engine import EngineV2
++
++
++class _StubClient:
++    """Stub speechmatics client that records audio writes."""
++
++    vendor = "speechmatics"
++
++    def __init__(self) -> None:
++        self.sent_audio: list[tuple[str, bytes]] = []
++        self.open_stream_calls: list[dict] = []
++        self.closed_sid: str | None = None
++
++    async def open_stream(
++        self,
++        sid: str,
++        *,
++        on_partial,
++        on_final,
++        on_error,
++        stream_id: str,
++        on_close,
++        policy,
++    ) -> object:
++        self.open_stream_calls.append({"sid": sid, "stream_id": stream_id})
++        return object()
++
++    def send_audio(self, sid: str, chunk: bytes) -> None:
++        self.sent_audio.append((sid, bytes(chunk)))
++
++    def close_stream(self, sid: str) -> None:  # pragma: no cover - defensive stub
++        self.closed_sid = sid
++
++
++class TestAsrRuntimeVendorLifecycle(unittest.TestCase):
++    """Runtime tests verifying vendor first-write and totals logging."""
++
++    def setUp(self) -> None:
++        bus.reset()
++
++    def tearDown(self) -> None:
++        bus.reset()
++
++    def test_logs_first_write_and_totals(self) -> None:
++        engine = mock.create_autospec(EngineV2, instance=True)
++        engine.policy_snapshot = None
++        client = _StubClient()
++        runtime = ASRRuntime(engine, client, telemetry_bus=bus)
++
++        sid = "sid-vendor-logging"
++        state = _SessionState(sid=sid)
++        state.listening = True
++        state.stream_open = True
++        state.stream_id = "stream-1"
++        runtime._sessions[sid] = state
++
++        chunk = b"\x10\x11" * 64
++
++        with self.assertLogs("app.voice_v2.asr_runtime", level="INFO") as ingest_logs:
++            runtime.on_ws_audio(sid, chunk)
++
++        self.assertTrue(
++            any("evt=asr_vendor_first_write" in message for message in ingest_logs.output),
++            msg=f"missing first-write log: {ingest_logs.output}",
++        )
++        self.assertTrue(state.vendor_first_write_logged)
++        self.assertEqual(client.sent_audio, [(sid, chunk)])
++        self.assertEqual(state.bytes_sent, len(chunk))
++
++        close_cb = runtime._make_close_cb(sid, state)
++        with self.assertLogs("app.voice_v2.asr_runtime", level="INFO") as close_logs:
++            close_cb(None, None)
++
++        totals = [msg for msg in close_logs.output if "evt=asr_vendor_bytes_total" in msg]
++        self.assertTrue(totals, msg=f"missing totals log: {close_logs.output}")
++        total_msg = totals[0]
++        self.assertIn(f"bytes_total={len(chunk)}", total_msg)
++        self.assertGreater(state.bytes_sent, 0)
++        self.assertTrue(state.vendor_totals_logged)
++
++
++if __name__ == "__main__":  # pragma: no cover - convenience
++    unittest.main()

@@ -205,6 +205,12 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
         asyncio.run(self._test_audio_forwarding())
 
+    def test_audio_bus_publication_on_chunk(self) -> None:
+        asyncio.run(self._test_audio_bus_publication_on_chunk())
+
+    def test_audio_drop_when_masked(self) -> None:
+        asyncio.run(self._test_audio_drop_when_masked())
+
     def test_asr_ready_frame_forwarded(self) -> None:
         asyncio.run(self._test_asr_ready_frame_forwarded())
 
@@ -597,6 +603,85 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             received = await harness.wait_for_binary(lambda data: data == chunk)
             self.assertEqual(received, chunk)
         finally:
+            await harness.close()
+
+    async def _test_audio_bus_publication_on_chunk(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+
+        chunk = b"\x04\x05" * 80
+        recorded: list[dict] = []
+        token = bus.subscribe(EVT_WS_AUDIO_SEND, recorded.append)
+        try:
+            ctx = adapter._contexts.get(harness.sid)
+            self.assertIsNotNone(ctx)
+            assert ctx is not None
+            ctx.asr_ready = True
+            ctx.client_capture_armed = True
+
+            with self.assertLogs("app.ws.adapter", level="INFO") as logs:
+                await harness._inbound.put({"type": "websocket.receive", "bytes": chunk})
+                await harness.wait_for(lambda: bool(recorded))
+
+            self.assertEqual(len(recorded), 1)
+            event = recorded[0]
+            self.assertEqual(event.get("type"), EVT_WS_AUDIO_SEND)
+            self.assertEqual(event.get("sid"), harness.sid)
+            self.assertEqual(event.get("bytes"), len(chunk))
+            length = event.get("len")
+            if isinstance(length, int):
+                self.assertEqual(length, len(chunk))
+            self.assertTrue(
+                any(
+                    "evt=audio_ingress" in message and "gate_open=True" in message
+                    for message in logs.output
+                ),
+                msg=f"missing gate-open log: {logs.output}",
+            )
+        finally:
+            bus.unsubscribe(token)
+            await harness.close()
+
+    async def _test_audio_drop_when_masked(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+
+        chunk = b"\x06\x07" * 80
+        recorded: list[dict] = []
+        token = bus.subscribe(EVT_WS_AUDIO_SEND, recorded.append)
+        try:
+            ctx = adapter._contexts.get(harness.sid)
+            self.assertIsNotNone(ctx)
+            assert ctx is not None
+            ctx.asr_ready = True
+            ctx.client_capture_armed = True
+
+            bus.publish({"type": EVT_TTS_MASK, "sid": harness.sid, "phase": "on"})
+            await harness.wait_for(lambda: ctx.tts_mask_phase != "off")
+
+            with self.assertLogs("app.ws.adapter", level="INFO") as logs:
+                await harness._inbound.put({"type": "websocket.receive", "bytes": chunk})
+                await harness.wait_for(
+                    lambda: any(
+                        "evt=audio_drop" in record.getMessage()
+                        for record in logs.records
+                    )
+                )
+
+            self.assertFalse(recorded)
+            self.assertTrue(
+                any(
+                    "evt=audio_drop" in message and "reason=mask" in message
+                    for message in logs.output
+                ),
+                msg=f"missing mask drop log: {logs.output}",
+            )
+        finally:
+            bus.unsubscribe(token)
             await harness.close()
 
     async def _test_mic_open_timeout_nudge(self) -> None:
