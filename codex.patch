@@ -1,201 +1,230 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index 048855e1f6b317e94738141535228207952c1094..3ce3996165568a82bf33810eefbc63f7305c9733 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -67,50 +67,67 @@ def _coerce_int(value: Any) -> int | None:
-     if isinstance(value, str):
-         stripped = value.strip()
-         if not stripped:
-             return None
-         try:
-             return int(stripped)
-         except ValueError:
-             return None
-     return None
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 9298031fd5f278e12e87111b6d249da15326884a..55817d8b7502b73827e924be7843d6c969f602bf 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -94,99 +94,135 @@ import { WakeWord } from "./wake_word.js";
+       try {
+         console.warn("AudioRecorder client.mic log failed", err);
+       } catch {}
+     }
+     if (typeof window !== "undefined") {
+       try {
+         window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail } }));
+         return true;
+       } catch {}
+     }
+     return false;
+   }
  
- 
- def _coerce_bool(value: Any) -> bool | None:
-     if isinstance(value, bool):
-         return value
-     if isinstance(value, (int, float)) and not isinstance(value, bool):
-         return bool(value)
-     if isinstance(value, str):
-         normalized = value.strip().lower()
-         if normalized in {"true", "1", "yes", "on"}:
-             return True
-         if normalized in {"false", "0", "no", "off"}:
-             return False
-     return None
- 
- 
-+def _coerce_max_delay_seconds(utterance_end_ms: int) -> float | None:
-+    """Convert policy utterance end latency to Speechmatics max_delay seconds.
-+
-+    Speechmatics expects ``max_delay`` to be expressed in seconds with an upper
-+    bound of 20s. Our policies use milliseconds (default 1200). Passing the raw
-+    millisecond value triggers a ``protocol_error`` ("max_delay must be less than
-+    or equal to 20").
-+    """
-+
-+    if utterance_end_ms < 0:
-+        return None
-+    seconds = utterance_end_ms / 1000.0
-+    if seconds > 20:
-+        seconds = 20
-+    return seconds
-+
-+
- def _resolve_asr_policy(policy: Mapping[str, Any] | None) -> Dict[str, int | bool]:
-     defaults: Dict[str, int | bool] = {
-         "utterance_end_ms": 1200,
-         "min_segment_ms": 800,
-         "final_guard_ms": 250,
-         "allow_word_finals": False,
+   class AudioRecorder {
+     constructor(ws, appState) {
+       this._ws = ws || null;
+       this._state = appState || null;
+       this._stream = null;
+       this._sendGate = false;
+       this._policy = {};
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
+       this._sendMuted = false;
+       this._headerSent = false;
++      this._audioHeaderSignature = null;
+       this._audioContext = null;
+       this._pcmSource = null;
+       this._pcmNode = null;
+       this._pcmGainNode = null;
+       this._pcmResampleBuffer = [];
+       this._pcmOutputBuffer = [];
+       this._pcmResampleCursor = 0;
+       this._pcmFrameSeq = 0;
+       this._pcmLastTelemetryAt = 0;
+       this._pcmUtteranceStartAt = null;
+       this._pcmLastVoiceAt = null;
+       this._pcmSilenceStartAt = null;
+       this._pcmCommitSent = false;
+       this._pcmWorkletLoaded = false;
+       this._armingPromise = null;
      }
  
-     candidates = [
-         ("policy", "asr"),
-         ("policy", "asr", "speechmatics"),
-         ("asr",),
-     ]
+     setSocket(ws) {
+       this._ws = ws || null;
+     }
  
-     for key in list(defaults.keys()):
-         for path in candidates:
-             block = _lookup_policy_path(policy, path)
-             if block is None:
-                 continue
-             if isinstance(block, Mapping):
-                 candidate = block.get(key)
-             else:
-                 candidate = getattr(block, key, None)
-             if key == "allow_word_finals":
-                 coerced = _coerce_bool(candidate)
-@@ -405,52 +422,53 @@ class SpeechmaticsClient:
-         language = _coerce_language(policy)
+     setPolicy(policy) {
+       const hasPayload = policy && typeof policy === "object" && Object.keys(policy).length > 0;
+       const snapshot = hasPayload
+         ? policy
+         : (this._policy && typeof this._policy === "object" ? this._policy : {});
+       if (hasPayload) {
+-        this._headerSent = false;
++        const nextSignature = this._deriveAudioHeaderSignature(snapshot);
++        if (this._audioHeaderSignature !== nextSignature) {
++          this._headerSent = false;
++        }
++        this._audioHeaderSignature = nextSignature;
+         this._resetStreamingTelemetry();
+       }
  
-         headers = {"Authorization": f"Bearer {self._api_key}"}
-         connect_kwargs = {
-             _CONNECT_HEADERS_ARG: headers,
-             "max_size": None,
-             "ping_interval": 20,
-             "ping_timeout": 10,
-         }
-         try:
-             websocket = await websockets.connect(self._url, **connect_kwargs)
-         except Exception as exc:
-             self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
-             raise
+       if (hasPayload || !this._policy || typeof this._policy !== "object") {
+         this._policy = snapshot;
+       }
  
-         vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
+       if (hasPayload) {
+         try {
+           const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
+           const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
+           const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
+           console.info(
+             "diag=recorder_policy format=pcm asr_input=%s pipeline=%s",
+             mediaPolicy?.asr_input ?? null,
+             pipeline?.mode ?? null,
+           );
+         } catch {}
+       }
+     }
  
-         asr_policy = _resolve_asr_policy(policy)
-         utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
-         allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
- 
-         transcription_config = {
-             "language": language,
-             "enable_partials": True,
-         }
--        if utterance_end_ms >= 0:
--            transcription_config["max_delay"] = utterance_end_ms
-+        max_delay_s = _coerce_max_delay_seconds(utterance_end_ms)
-+        if max_delay_s is not None:
-+            transcription_config["max_delay"] = max_delay_s
- 
-         start_payload = {
-             "message": "StartRecognition",
-             "transcription_config": transcription_config,
-             "audio_format": {
-                 "type": "raw",
-                 "encoding": "pcm_s16le",
-                 "sample_rate": sample_rate
-             },
-         }
- 
-         self._logger.info(
-             "evt=asr_vendor_opts vendor=speechmatics utterance_end_ms=%d allow_word_finals=%s",
-             utterance_end_ms,
-             "true" if allow_word_finals else "false",
-         )
-         await websocket.send(json.dumps(start_payload))
- 
-         self._logger.info(
-             "sm_ws_open encoding=%s sr=%d ch=1 interim=true lang=%s",
-             encoding,
-             sample_rate,
-             language,
-         )
- 
-diff --git a/tests/test_speechmatics_client.py b/tests/test_speechmatics_client.py
-index cd9887f5af0fbe523e230ef7fb6d65efaaff5010..c07659291b9edacb53b0046176287262bdbb2331 100644
---- a/tests/test_speechmatics_client.py
-+++ b/tests/test_speechmatics_client.py
-@@ -1,28 +1,29 @@
- import unittest
- 
- from app.services.streaming_asr.speechmatics_client import (
-+    _coerce_max_delay_seconds,
-     _coerce_transcript_text,
-     _extract_text,
-     _is_fatal_concurrency_notice,
- )
- 
- 
- class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
-     def test_info_notice_not_fatal(self) -> None:
-         payload = {"message": "Info", "type": "concurrent_session_usage"}
-         self.assertFalse(_is_fatal_concurrency_notice(payload))
- 
-     def test_warning_notice_not_fatal(self) -> None:
-         payload = {"message": "Warning", "severity": "warning", "type": "concurrent_session_limit"}
-         self.assertFalse(_is_fatal_concurrency_notice(payload))
- 
-     def test_error_notice_fatal(self) -> None:
-         payload = {"message": "Error", "type": "concurrent_session_usage"}
-         self.assertTrue(_is_fatal_concurrency_notice(payload))
- 
-     def test_explicit_severity_error_fatal(self) -> None:
-         payload = {"severity": "critical", "type": "concurrent_session_usage"}
-         self.assertTrue(_is_fatal_concurrency_notice(payload))
- 
- 
- class TestSpeechmaticsExtractText(unittest.TestCase):
-@@ -72,27 +73,38 @@ class TestSpeechmaticsExtractText(unittest.TestCase):
-                 ]
-             },
-         }
-         self.assertEqual(_extract_text(payload), "Hello/Pure")
- 
-     def test_coerce_transcript_text_handles_tokenized_results(self) -> None:
-         payload = {
-             "message": "AddTranscript",
-             "results": [
-                 {
-                     "alternatives": [
-                         {
-                             "content": [
-                                 {"type": "word", "text": "By"},
-                                 {"type": "punctuation", "text": "."},
-                             ],
-                         }
-                     ]
-                 }
-             ],
-         }
- 
-         self.assertEqual(_coerce_transcript_text(payload), "By.")
- 
- 
-+class TestSpeechmaticsMaxDelay(unittest.TestCase):
-+    def test_converts_milliseconds_to_seconds(self) -> None:
-+        self.assertAlmostEqual(_coerce_max_delay_seconds(1200), 1.2)
++    _deriveAudioHeaderSignature(policy) {
++      if (!policy || typeof policy !== "object") {
++        return null;
++      }
++      const media = policy && typeof policy.media === "object" ? policy.media : {};
++      const audio = policy && typeof policy.audio === "object" ? policy.audio : {};
++      const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : {};
++      const nested = policy && typeof policy.policy === "object" ? policy.policy : {};
++      const nestedMedia = nested && typeof nested.media === "object" ? nested.media : {};
++      const nestedAudio = nested && typeof nested.audio === "object" ? nested.audio : {};
++      const nestedPipeline = nestedAudio && typeof nestedAudio.pipeline === "object" ? nestedAudio.pipeline : {};
 +
-+    def test_clamps_above_20_seconds(self) -> None:
-+        self.assertEqual(_coerce_max_delay_seconds(25000), 20)
++      const signature = {
++        input: media.asr_input ?? nestedMedia.asr_input ?? null,
++        rate: Number.isFinite(media.asr_rate_hz) ? Number(media.asr_rate_hz)
++          : (Number.isFinite(nestedMedia.asr_rate_hz) ? Number(nestedMedia.asr_rate_hz) : null),
++        channels: Number.isFinite(media.asr_channels) ? Number(media.asr_channels)
++          : (Number.isFinite(nestedMedia.asr_channels) ? Number(nestedMedia.asr_channels) : null),
++        mode: typeof pipeline.mode === "string" && pipeline.mode
++          ? pipeline.mode
++          : (typeof nestedPipeline.mode === "string" && nestedPipeline.mode ? nestedPipeline.mode : null),
++      };
 +
-+    def test_negative_returns_none(self) -> None:
-+        self.assertIsNone(_coerce_max_delay_seconds(-1))
++      try {
++        return JSON.stringify(signature);
++      } catch (err) {
++        console.warn("AudioRecorder signature stringify failed", err);
++        return null;
++      }
++    }
 +
-+
- if __name__ == "__main__":
-     unittest.main()
+     get policy() {
+       return this._policy || {};
+     }
+ 
+     _recorderPolicy() {
+       const policy = this.policy;
+       if (!policy || typeof policy !== "object") {
+         return {};
+       }
+       const nested = policy.policy;
+       if (!nested || typeof nested !== "object") {
+         return {};
+       }
+       const recorder = nested.recorder;
+       return recorder && typeof recorder === "object" ? recorder : {};
+     }
+ 
+     _asrPolicy() {
+       const policy = this.policy;
+       if (!policy || typeof policy !== "object") {
+         return {};
+       }
+       const nested = policy.policy;
+       if (!nested || typeof nested !== "object") {
+         return {};
+@@ -813,86 +849,87 @@ import { WakeWord } from "./wake_word.js";
+     async startListening(policy = {}) {
+       this.setPolicy(policy);
+       await this._ensureArmed();
+       console.info("diag=recorder_mode mode=pcm16");
+       // Always send header now; _sendAudioHeader chooses pcm format
+       this._sendAudioHeader();
+       if (!this._sendGate) {
+         this._sendGate = true;
+         const reason = typeof policy?.reason === "string" && policy.reason ? policy.reason : "start_listening";
+         console.info("diag=send_gate_open reason=%s", reason);
+         this._updateRecorderState(true, reason);
+       }
+       this._setSendMuted(false, "start_listening");
+       return true;
+     }
+ 
+     stopListening(opts = {}) {
+       const reason = typeof opts?.reason === "string" && opts.reason ? opts.reason : "stop_listening";
+       if (this._sendGate) {
+         console.info("diag=send_gate_closed reason=%s", reason);
+       }
+       this._sendGate = false;
+       this._updateRecorderState(false, reason);
+       this._micOpenEmitted = false;
+       this._setSendMuted(false, reason);
+-      this._headerSent = false;
+       this._resetPcmState();
+     }
+ 
+     handleStopListening(opts = {}) {
+       this.stopListening(opts);
+     }
+ 
+     handleTtsStart() {
+       if (this._shouldStopOnTtsStart()) {
+         this.stopListening({ reason: "tts_active" });
+         return;
+       }
+       if (this._shouldMuteDuringTts()) {
+         this._setSendMuted(true, "tts_active");
+       }
+     }
+ 
+     handleTtsEnd() {
+       this._setSendMuted(false, "tts_end");
+     }
+ 
+     handleWsClose() {
+       this._headerSent = false;
++      this._audioHeaderSignature = null;
+       this.endSession();
+     }
+ 
+     stop() {
+       this.endSession();
+     }
+ 
+     endSession() {
+       this._sendGate = false;
+       this._setSendMuted(false, "session_end");
+       this._updateRecorderState(false, "session_end");
+       this._headerSent = false;
++      this._audioHeaderSignature = null;
+       if (this._pcmNode || this._pcmSource || this._pcmGainNode) {
+         try {
+           this._teardownPcmGraph();
+         } catch (err) {
+           console.warn("AudioRecorder pcm teardown failed", err);
+         }
+       }
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
+       if (this._audioContext) {
+         try {
+           if (this._audioContext.state !== "closed") {
+             this._audioContext.close();
+           }
+         } catch {}
+         this._audioContext = null;
+       }
+       if (this._stream) {
+         try {
+           this._stream.getTracks?.().forEach((track) => track.stop?.());
+         } catch {}
+         this._stream = null;
+       }
+     }

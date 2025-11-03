@@ -116,6 +116,7 @@ import { WakeWord } from "./wake_word.js";
       this._wakeInit = false;
       this._sendMuted = false;
       this._headerSent = false;
+      this._audioHeaderSignature = null;
       this._audioContext = null;
       this._pcmSource = null;
       this._pcmNode = null;
@@ -143,7 +144,11 @@ import { WakeWord } from "./wake_word.js";
         ? policy
         : (this._policy && typeof this._policy === "object" ? this._policy : {});
       if (hasPayload) {
-        this._headerSent = false;
+        const nextSignature = this._deriveAudioHeaderSignature(snapshot);
+        if (this._audioHeaderSignature !== nextSignature) {
+          this._headerSent = false;
+        }
+        this._audioHeaderSignature = nextSignature;
         this._resetStreamingTelemetry();
       }
 
@@ -162,6 +167,37 @@ import { WakeWord } from "./wake_word.js";
             pipeline?.mode ?? null,
           );
         } catch {}
+      }
+    }
+
+    _deriveAudioHeaderSignature(policy) {
+      if (!policy || typeof policy !== "object") {
+        return null;
+      }
+      const media = policy && typeof policy.media === "object" ? policy.media : {};
+      const audio = policy && typeof policy.audio === "object" ? policy.audio : {};
+      const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : {};
+      const nested = policy && typeof policy.policy === "object" ? policy.policy : {};
+      const nestedMedia = nested && typeof nested.media === "object" ? nested.media : {};
+      const nestedAudio = nested && typeof nested.audio === "object" ? nested.audio : {};
+      const nestedPipeline = nestedAudio && typeof nestedAudio.pipeline === "object" ? nestedAudio.pipeline : {};
+
+      const signature = {
+        input: media.asr_input ?? nestedMedia.asr_input ?? null,
+        rate: Number.isFinite(media.asr_rate_hz) ? Number(media.asr_rate_hz)
+          : (Number.isFinite(nestedMedia.asr_rate_hz) ? Number(nestedMedia.asr_rate_hz) : null),
+        channels: Number.isFinite(media.asr_channels) ? Number(media.asr_channels)
+          : (Number.isFinite(nestedMedia.asr_channels) ? Number(nestedMedia.asr_channels) : null),
+        mode: typeof pipeline.mode === "string" && pipeline.mode
+          ? pipeline.mode
+          : (typeof nestedPipeline.mode === "string" && nestedPipeline.mode ? nestedPipeline.mode : null),
+      };
+
+      try {
+        return JSON.stringify(signature);
+      } catch (err) {
+        console.warn("AudioRecorder signature stringify failed", err);
+        return null;
       }
     }
 
@@ -835,7 +871,6 @@ import { WakeWord } from "./wake_word.js";
       this._updateRecorderState(false, reason);
       this._micOpenEmitted = false;
       this._setSendMuted(false, reason);
-      this._headerSent = false;
       this._resetPcmState();
     }
 
@@ -859,6 +894,7 @@ import { WakeWord } from "./wake_word.js";
 
     handleWsClose() {
       this._headerSent = false;
+      this._audioHeaderSignature = null;
       this.endSession();
     }
 
@@ -871,6 +907,7 @@ import { WakeWord } from "./wake_word.js";
       this._setSendMuted(false, "session_end");
       this._updateRecorderState(false, "session_end");
       this._headerSent = false;
+      this._audioHeaderSignature = null;
       if (this._pcmNode || this._pcmSource || this._pcmGainNode) {
         try {
           this._teardownPcmGraph();
