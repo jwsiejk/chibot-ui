@@ -1,191 +1,227 @@
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index c7a0dd41a105da5bf59ffc1371fb6c72a9087ab1..9298031fd5f278e12e87111b6d249da15326884a 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -25,50 +25,107 @@ import { WakeWord } from "./wake_word.js";
-       }
-       if (typeof track.label === "string" && track.label) {
-         summary.label = track.label;
-       }
-       if (Number.isFinite(settings.sampleRate)) {
-         summary.sample_rate = settings.sampleRate;
-       }
-       if (Number.isFinite(settings.channelCount)) {
-         summary.channels = settings.channelCount;
-       }
-       return Object.keys(summary).length ? summary : null;
-     } catch (err) {
-       console.warn("AudioRecorder device summary failed", err);
-       return null;
-     }
-   }
+diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
+index a325c0890306178a77735ad7549f896aaa278776..f7a8e5837d2bb923cc8f8f354cce422e19774774 100644
+--- a/app/admin/flow_zip.py
++++ b/app/admin/flow_zip.py
+@@ -1,76 +1,82 @@
+ """Utilities for building deterministic flow export archives."""
  
-   function emitEvent(type, detail) {
-     try {
-       window.dispatchEvent(new CustomEvent(type, { detail }));
-     } catch (err) {
-       console.warn("AudioRecorder event dispatch failed", type, err);
-     }
-   }
+ from __future__ import annotations
  
-+  function getAppState() {
-+    if (typeof window === "undefined") {
-+      return null;
-+    }
-+    try {
-+      return window.AppState || null;
-+    } catch {
-+      return null;
-+    }
-+  }
+ import io
+ import json
++from copy import deepcopy
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Dict, Iterable, List, Tuple
+ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+ 
+ from app.telemetry import bus as telemetry_bus
+ from app.telemetry.exporter import compute_sha256
+ 
+ 
+ __all__ = ["build_flow_zip"]
+ 
+ 
+ _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+ _README_NAME = "README.txt"
+ _MANIFEST_NAME = "manifest.json"
+ _EVENTS_NAME = "events.ndjson"
+ _EVENTS_REDACTED_NAME = "events.redacted.ndjson"
+ _TIMELINE_NAME = "flow_timeline.ndjson"
+ _NLU_NAME = "nlu.ndjson"
+ _NLG_NAME = "nlg.ndjson"
+ _LOGS_NAME = "logs.ndjson"
+ 
+ _TIMELINE_TYPES = {
+     "EVT_TURN_BEGIN",
+     "EVT_TURN_END",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_TTS_MASK",
+     "EVT_MIC_GATE",
+     "EVT_POLICY_APPLIED",
+     "EVT_POLICY_SNAPSHOT",
+     "EVT_BARGE_IN",
+     "EVT_BARGE_DETECTED",
+     "EVT_BARGE_CONFIRMED",
+     "EVT_BARGE_REJECTED",
+     "EVT_ACTION_SAY_END",
+     "EVT_AUTH_DISABLED",
+     "EVT_DIAG_FIRST_AUDIO_FRAME",
+     "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
+     "EVT_DIAG_HUD",
++    "EVT_VAD",
++    "EVT_VAD_DECISION",
++    "EVT_CLIENT_LOG",
+ }
+ _WS_PREFIX = "EVT_WS_"
+ _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
+ _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
+ 
++_PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
 +
-+  function getGateSnapshot() {
-+    const appState = getAppState();
-+    let snapshot = null;
-+    try {
-+      snapshot = typeof appState?.getState === "function" ? appState.getState() : null;
-+    } catch {}
-+    const asrValue = typeof snapshot?.asrReady === "boolean"
-+      ? snapshot.asrReady
-+      : Boolean(appState?.asrReady);
-+    const ttsValue = typeof snapshot?.ttsActive === "boolean"
-+      ? snapshot.ttsActive
-+      : Boolean(appState?.ttsActive);
-+    let micPermValue = null;
-+    if (typeof snapshot?.micPermissionGranted === "boolean") {
-+      micPermValue = snapshot.micPermissionGranted;
-+    } else if (typeof appState?.micPermissionGranted === "boolean") {
-+      micPermValue = appState.micPermissionGranted;
-+    }
-+    return {
-+      asrReady: Boolean(asrValue),
-+      micPerm: Boolean(micPermValue),
-+      ttsActive: Boolean(ttsValue),
-+    };
-+  }
-+
-+  function logMicBreadcrumb(detail = {}) {
-+    const appState = getAppState();
-+    try {
-+      if (appState?.hub && typeof appState.hub.log === "function") {
-+        appState.hub.log("client.mic", detail);
-+        return true;
-+      }
-+    } catch (err) {
-+      try {
-+        console.warn("AudioRecorder client.mic log failed", err);
-+      } catch {}
-+    }
-+    if (typeof window !== "undefined") {
-+      try {
-+        window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail } }));
-+        return true;
-+      } catch {}
-+    }
-+    return false;
-+  }
-+
-   class AudioRecorder {
-     constructor(ws, appState) {
-       this._ws = ws || null;
-       this._state = appState || null;
-       this._stream = null;
-       this._sendGate = false;
-       this._policy = {};
-       this._micOpenEmitted = false;
-       this._active = false;
-       this._wakeInit = false;
-       this._sendMuted = false;
-       this._headerSent = false;
-       this._audioContext = null;
-       this._pcmSource = null;
-       this._pcmNode = null;
-       this._pcmGainNode = null;
-       this._pcmResampleBuffer = [];
-       this._pcmOutputBuffer = [];
-       this._pcmResampleCursor = 0;
-       this._pcmFrameSeq = 0;
-       this._pcmLastTelemetryAt = 0;
-       this._pcmUtteranceStartAt = null;
-       this._pcmLastVoiceAt = null;
-       this._pcmSilenceStartAt = null;
-       this._pcmCommitSent = false;
-@@ -446,62 +503,78 @@ import { WakeWord } from "./wake_word.js";
-       this._sendCommitControl(detail);
-     }
+ _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
  
-     _emitPcmFrame(frame) {
-       if (!Array.isArray(frame) || frame.length === 0) {
-         return;
-       }
-       const samples = frame.length;
-       const pcm = new Int16Array(samples);
-       let sumSquares = 0;
-       for (let i = 0; i < samples; i += 1) {
-         const value = Number.isFinite(frame[i]) ? frame[i] : 0;
-         const clipped = Math.max(-1, Math.min(1, value));
-         const intSample = Math.round(clipped * 32767);
-         pcm[i] = intSample;
-         sumSquares += intSample * intSample;
-       }
-       const rms = Math.sqrt(sumSquares / samples);
-       const threshold = this._resolveVadThreshold();
-       const silent = rms <= threshold;
-       const now = Date.now();
  
-       if (!silent) {
-         this._pcmLastVoiceAt = now;
-         if (!this._pcmUtteranceStartAt) {
-+          logMicBreadcrumb({ event: "vad_start", gates: getGateSnapshot() });
-           this._pcmUtteranceStartAt = now;
-           this._pcmCommitSent = false;
-         }
-         this._pcmSilenceStartAt = null;
-       } else if (this._pcmUtteranceStartAt && !this._pcmCommitSent) {
-         if (this._pcmSilenceStartAt === null) {
-           this._pcmSilenceStartAt = now;
-         }
-         if (this._shouldCommitOnVad()) {
-           const silenceMs = now - this._pcmSilenceStartAt;
-           if (silenceMs >= this._commitSilenceMs()) {
-             const utteranceDur = now - this._pcmUtteranceStartAt;
-+            const lastVoiceAt = this._pcmLastVoiceAt || now;
-+            const silenceSinceLastVoice = Math.max(0, now - lastVoiceAt);
-+            const gates = getGateSnapshot();
-+            logMicBreadcrumb({
-+              event: "vad_end",
-+              ms_silence: silenceSinceLastVoice,
-+              gates,
-+            });
-+            logMicBreadcrumb({
-+              event: "vad_commit",
-+              dur_ms: Math.max(0, now - (this._pcmUtteranceStartAt || now)),
-+              silence_ms: silenceSinceLastVoice,
-+              gates,
-+              policy: { input: "pcm_16k", mode: "pcm16" },
-+            });
-             this._emitVadCommit(utteranceDur, silenceMs);
-             this._pcmCommitSent = true;
-             this._pcmUtteranceStartAt = null;
-             this._pcmSilenceStartAt = null;
-             this._pcmLastVoiceAt = null;
-           }
-         }
-       }
+ class _EventWrapper(dict):
+     """Container storing a redacted event and its truncation category."""
  
-       if (silent || !this._sendGate || this._sendMuted) {
-         return;
-       }
+     __slots__ = ()
  
-       if (!this._headerSent) {
-         this._sendAudioHeader();
-         if (!this._headerSent) {
-           return;
-         }
-       }
+     @property
+     def event(self) -> Dict[str, object]:
+         return self["event"]
  
-       const socket = this._ws;
-       if (!socket || socket.readyState !== WebSocket.OPEN) {
-         return;
-       }
+     @property
+     def category(self) -> str:
+         return self["category"]
  
+ 
+ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
+     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
+ 
+     session_dir = Path(root) / sid
+     manifest_path = session_dir / _MANIFEST_NAME
+     events_path = session_dir / _EVENTS_NAME
+     logs_path = session_dir / _LOGS_NAME
+ 
+@@ -303,56 +309,65 @@ def _render_archive(entries: Dict[str, bytes]) -> bytes:
+ 
+ def _drop_next_event(events: List[_EventWrapper], drop_counts: Dict[str, int]) -> bool:
+     for category in ("vendor_debug", "partials"):
+         idx = _find_last_index(events, category)
+         if idx is not None:
+             events.pop(idx)
+             drop_counts[category] = drop_counts.get(category, 0) + 1
+             return True
+ 
+     if events:
+         events.pop()
+         drop_counts["events_tail"] = drop_counts.get("events_tail", 0) + 1
+         return True
+ 
+     return False
+ 
+ 
+ def _find_last_index(events: List[_EventWrapper], category: str) -> int | None:
+     for index in range(len(events) - 1, -1, -1):
+         if events[index].category == category:
+             return index
+     return None
+ 
+ 
+ def _redact_event(event: Dict[str, object]) -> Dict[str, object]:
++    event_type = event.get("type")
+     try:
+         redacted = telemetry_bus.redact_payload(event)
+         if isinstance(redacted, dict):
++            if isinstance(event_type, str) and event_type in _PRESERVE_META_TYPES:
++                if "meta" in event:
++                    redacted["meta"] = deepcopy(event.get("meta"))
+             return redacted
+     except Exception:  # pragma: no cover - redaction must not break packaging
+         pass
+ 
+     redacted_copy = dict(event)
+-    if "meta" in redacted_copy:
++    if (
++        "meta" in redacted_copy
++        and not (isinstance(event_type, str) and event_type in _PRESERVE_META_TYPES)
++    ):
+         try:
+             redacted_copy["meta"] = telemetry_bus._redact_meta(redacted_copy["meta"])
+         except Exception:  # pragma: no cover - redaction must not break packaging
+             redacted_copy["meta"] = redacted_copy["meta"]
++    elif isinstance(event_type, str) and event_type in _PRESERVE_META_TYPES and "meta" in event:
++        redacted_copy["meta"] = deepcopy(event.get("meta"))
+     return redacted_copy
+ 
+ 
+ def _load_events(path: Path) -> List[Dict[str, object]]:
+     events: List[Dict[str, object]] = []
+     with path.open("r", encoding="utf-8") as handle:
+         for idx, raw_line in enumerate(handle, start=1):
+             line = raw_line.strip()
+             if not line:
+                 continue
+             try:
+                 parsed = json.loads(line)
+             except json.JSONDecodeError as exc:
+                 raise ValueError(f"Invalid JSON on line {idx} of {path.name}") from exc
+             if not isinstance(parsed, dict):
+                 raise ValueError(f"Event on line {idx} of {path.name} must be a JSON object")
+             events.append(parsed)
+     return events
+diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
+index e48cf7ae643dbba279fb0ceffe049c864a04c4cb..724ee6c2436ff3c809427300150d700700896590 100644
+--- a/app/templates/admin_logs.html
++++ b/app/templates/admin_logs.html
+@@ -126,50 +126,68 @@
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_TTS_START" />
+               <span>TTS start</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_TTS_END" />
+               <span>TTS end</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_RECV" />
+               <span>Audio recv</span>
+             </label>
+             <label class="admin-logs__type">
+               <input
+                 type="checkbox"
+                 name="logType"
+                 value=""
+                 data-filter-types="EVT_WS_AUDIO_RECV EVT_SESSION_STEP:audio.stream_started"
+               />
+               <span>Audio (server)</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_WS_AUDIO_SEND" />
+               <span>Audio send</span>
+             </label>
++            <label class="admin-logs__type">
++              <input
++                type="checkbox"
++                name="logType"
++                value=""
++                data-filter-types="EVT_VAD EVT_VAD_DECISION"
++              />
++              <span>VAD</span>
++            </label>
++            <label class="admin-logs__type">
++              <input
++                type="checkbox"
++                name="logType"
++                value=""
++                data-filter-types="EVT_CLIENT_LOG:label=client.mic"
++              />
++              <span>Client mic</span>
++            </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_LOG" checked />
+               <span>Logs</span>
+             </label>
+             <label class="admin-logs__type" data-diabinds="audio">
+               <input type="checkbox" name="logType" value="EVT_DIAG_FIRST_AUDIO_FRAME" />
+               <span>Diag: first audio</span>
+             </label>
+             <label class="admin-logs__type" data-diabinds="audio">
+               <input type="checkbox" name="logType" value="EVT_DIAG_NO_AUDIO_FROM_CLIENT" />
+               <span>Diag: no audio</span>
+             </label>
+             <label class="admin-logs__type" data-diabinds="hud">
+               <input type="checkbox" name="logType" value="EVT_DIAG_HUD" />
+               <span>Diag: HUD</span>
+             </label>
+           </div>
+         </section>
+ 
+         <div class="admin-logs__main">
+           <div class="admin-logs__tabs" role="tablist" aria-label="Log views">
+             <button
+               id="liveTab"
+               class="admin-logs__tab"
+               role="tab"

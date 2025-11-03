@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -44,10 +45,15 @@ _TIMELINE_TYPES = {
     "EVT_DIAG_FIRST_AUDIO_FRAME",
     "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
     "EVT_DIAG_HUD",
+    "EVT_VAD",
+    "EVT_VAD_DECISION",
+    "EVT_CLIENT_LOG",
 }
 _WS_PREFIX = "EVT_WS_"
 _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
 _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
+
+_PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
 
 _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
 
@@ -325,19 +331,28 @@ def _find_last_index(events: List[_EventWrapper], category: str) -> int | None:
 
 
 def _redact_event(event: Dict[str, object]) -> Dict[str, object]:
+    event_type = event.get("type")
     try:
         redacted = telemetry_bus.redact_payload(event)
         if isinstance(redacted, dict):
+            if isinstance(event_type, str) and event_type in _PRESERVE_META_TYPES:
+                if "meta" in event:
+                    redacted["meta"] = deepcopy(event.get("meta"))
             return redacted
     except Exception:  # pragma: no cover - redaction must not break packaging
         pass
 
     redacted_copy = dict(event)
-    if "meta" in redacted_copy:
+    if (
+        "meta" in redacted_copy
+        and not (isinstance(event_type, str) and event_type in _PRESERVE_META_TYPES)
+    ):
         try:
             redacted_copy["meta"] = telemetry_bus._redact_meta(redacted_copy["meta"])
         except Exception:  # pragma: no cover - redaction must not break packaging
             redacted_copy["meta"] = redacted_copy["meta"]
+    elif isinstance(event_type, str) and event_type in _PRESERVE_META_TYPES and "meta" in event:
+        redacted_copy["meta"] = deepcopy(event.get("meta"))
     return redacted_copy
 
 

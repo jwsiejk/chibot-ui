@@ -149,6 +149,24 @@
               <span>Audio send</span>
             </label>
             <label class="admin-logs__type">
+              <input
+                type="checkbox"
+                name="logType"
+                value=""
+                data-filter-types="EVT_VAD EVT_VAD_DECISION"
+              />
+              <span>VAD</span>
+            </label>
+            <label class="admin-logs__type">
+              <input
+                type="checkbox"
+                name="logType"
+                value=""
+                data-filter-types="EVT_CLIENT_LOG:label=client.mic"
+              />
+              <span>Client mic</span>
+            </label>
+            <label class="admin-logs__type">
               <input type="checkbox" name="logType" value="EVT_LOG" checked />
               <span>Logs</span>
             </label>
