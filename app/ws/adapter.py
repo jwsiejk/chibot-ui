@@ -712,11 +712,11 @@ class ChatV2Adapter:
         snapshot_mapping = (
             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
         )
-        ctx.asr_vendor = selected_vendor
+        ctx.asr_vendor = selected_vendor or "speechmatics"
         allowed_display = ",".join(ctx.allowed_asr_vendors)
         _log.info(
             "asr_vendor_selected primary=%s allowed=%s reason=%s",
-            selected_vendor or "",
+            ctx.asr_vendor,
             allowed_display,
             selection_reason,
         )
@@ -766,7 +766,7 @@ class ChatV2Adapter:
                     from app.voice_v2.asr_runtime import ASRRuntime
 
                     engine = getattr(self, "engine", None)
-                    vendor = ctx.asr_vendor or ""
+                    vendor = ctx.asr_vendor or "speechmatics"
                     client = None
                     if engine is not None and vendor:
                         if vendor == "speechmatics":
@@ -2756,7 +2756,7 @@ class ChatV2Adapter:
                     ctx.allowed_asr_vendors,
                     log_selection=not ctx.asr_vendor_logged,
                 )
-                ctx.asr_vendor = selected_vendor
+                ctx.asr_vendor = selected_vendor or "speechmatics"
                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
                     snapshot_mapping
                 )
@@ -3520,12 +3520,31 @@ class ChatV2Adapter:
 
     def _allowed_asr_vendors(self) -> List[str]:
         allowed: List[str] = []
-        speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
-        if speechmatics_enabled:
-            api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
-            url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
-            if api_key and url:
-                allowed.append("speechmatics")
+        vendor = "speechmatics"
+        speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", True)
+        api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
+        url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
+
+        if not speechmatics_enabled:
+            _log.warning(
+                "evt=asr_vendor_disabled sid=%s vendor=%s scope=config",
+                current_sid.get(None),
+                vendor,
+            )
+        if not api_key:
+            _log.warning(
+                "evt=asr_vendor_missing sid=%s vendor=%s missing=api_key",
+                current_sid.get(None),
+                vendor,
+            )
+        if not url:
+            _log.warning(
+                "evt=asr_vendor_missing sid=%s vendor=%s missing=url",
+                current_sid.get(None),
+                vendor,
+            )
+
+        allowed.append(vendor)
         return allowed
 
     @staticmethod
@@ -3589,9 +3608,9 @@ class ChatV2Adapter:
                     ctx.sid,
                     secondary_policy,
                 )
-        if selected is None and allowed:
-            selected = allowed[0]
-            reason = "fallback"
+        if selected is None:
+            selected = "speechmatics"
+            reason = "forced"
 
         if log_selection:
             allowed_display = ",".join(allowed)
@@ -3819,12 +3838,12 @@ class ChatV2Adapter:
         mode = ctx.audio_pipeline_mode or "pcm16"
         descriptor = dict(self._input_descriptor_for_mode(mode))
         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
+        vendor = ctx.asr_vendor or "speechmatics"
         ready_frame = {
             "type": "asr.ready",
             "input": dict(descriptor),
+            "vendor": vendor,
         }
-        if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
-            ready_frame["vendor"] = ctx.asr_vendor
         capture = dict(descriptor)
         capture["timeslice_ms"] = timeslice_ms
         capture["manual_gate"] = False
@@ -3861,7 +3880,7 @@ class ChatV2Adapter:
             mode,
             descriptor.get("mime", ""),
             timeslice_ms,
-            ctx.asr_vendor or "",
+            vendor,
         )
 
     @staticmethod

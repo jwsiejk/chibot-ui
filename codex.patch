@@ -1,483 +1,775 @@
-diff --git a/app/admin/flow_api.py b/app/admin/flow_api.py
-index 1aa63f87377699a0dcec27be99a0e898c893573b..496e7a0b8d82d8463b3e227dfc0e0293781929ba 100644
---- a/app/admin/flow_api.py
-+++ b/app/admin/flow_api.py
-@@ -1,49 +1,52 @@
- """Admin HTTP endpoints exposing flow trace streams and ZIP archives."""
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 886ba2671979278a852a63112bccd00fd8ff542e..35ab44f28f7dfbf030555d2713de89e71cc1ad5a 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -7,50 +7,51 @@ import { WakeWord } from "./wake_word.js";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
  
- from __future__ import annotations
+   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
  
- import json
- from dataclasses import dataclass
- from io import BytesIO
- from pathlib import Path
- from typing import Any, Awaitable, Callable, Dict, List, Optional
- from urllib.parse import parse_qs
+   // ---- Golden-path turn trace & mic outcomes (additive) ----
+   // ---- Telemetry (additive) ----
+   const MIC_OUTCOME = {
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
++  const DEFAULT_ASR_VENDOR = 'speechmatics';
  
- from app.admin.flow_zip import build_flow_zip
+   let __micAttempts = 0;
+   let __micChunks = 0;
+   let __micBytes = 0;
+   let __micArmedAt = 0;     // ms since epoch
+   let __micPermissionGranted = false;
+   let __micRecordingStartAt = null;
+   let __micFirstChunkBreadcrumbSent = false;
+   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
  
+   if (typeof window !== "undefined") {
+     try {
+       Object.defineProperty(window, "__micAttempts", {
+         configurable: true,
+         get() { return __micAttempts; },
+         set(value) {
+           if (Number.isFinite(value)) {
+             __micAttempts = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__micChunks", {
+         configurable: true,
+         get() { return __micChunks; },
+         set(value) {
+@@ -412,63 +413,69 @@ import { WakeWord } from "./wake_word.js";
+           if (typeof listener !== "function") {
+             return;
+           }
+           try {
+             listener(detail);
+           } catch (err) {
+             console.warn("AppState listener error", err);
+           }
+         });
+       }
+     };
+   }
  
- EXPORT_ROOT = Path("exports")
- _EVENTS_FILENAME = "events.ndjson"
- _ARCHIVE_FILENAME = "flow.zip"
- _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
- _CONTENT_TYPE_ZIP = b"application/zip"
+   function ensureInitialAutostartState() {
+     if (!AppState || typeof AppState.getState !== "function") {
+       return;
+     }
+     const snapshot = AppState.getState();
+     const patch = {};
+     if (typeof snapshot.policy === "undefined") {
+       patch.policy = AppState.policy;
+     }
+     if (typeof snapshot.asrReady === "undefined") {
+       patch.asrReady = false;
+     }
++    if (typeof snapshot.asrVendor === "undefined") {
++      patch.asrVendor = null;
++    }
+     if (typeof snapshot.ttsActive === "undefined") {
+       patch.ttsActive = false;
+     }
+     if (typeof snapshot.turnState === "undefined") {
+       patch.turnState = null;
+     }
+     if (typeof snapshot.recorder === "undefined") {
+       patch.recorder = { active: false };
+     }
+     if (Object.keys(patch).length) {
+       updateState(patch);
+     }
+     AppState.asrReady = Boolean(snapshot.asrReady);
++    AppState.asrVendor = typeof snapshot.asrVendor === 'string' && snapshot.asrVendor
++      ? snapshot.asrVendor
++      : null;
+     AppState.ttsActive = Boolean(snapshot.ttsActive);
+     AppState.turnState = typeof snapshot.turnState === "string" ? snapshot.turnState : null;
+     AppState.recorder = snapshot.recorder && typeof snapshot.recorder === "object"
+       ? { active: Boolean(snapshot.recorder.active) }
+       : { active: false };
+   }
  
- _TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
-     "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
-     "EVT_DIAG_FIRST_AUDIO_FRAME": ("EVT_AG_",),
-     "EVT_DIAG_NO_AUDIO_FROM_CLIENT": ("EVT_AG_",),
-+    "EVT_WS_JSON_SEND": ("ws.json.send_",),
-+    "EVT_WS_JSON_RECV": ("ws.json.recv_",),
-+    "EVT_WS_AUDIO_SEND": ("ws.audio.first_",),
- }
- 
- 
- @dataclass(frozen=True)
- class Response:
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: object) -> Response:
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- async def handle_flow_trace(
-     scope: dict, receive: Callable[[], Awaitable[dict]], *, sid: str
- ):
-     """Stream filtered redacted events for the given session identifier."""
- 
-     if _method(scope) != "GET":
-diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
-index 12de3ea2eff78d08b3ab9eb8ab5bc1876fdcc622..48123972278554e0b7f753772a26412f35a4ea32 100644
---- a/app/admin/flow_zip.py
-+++ b/app/admin/flow_zip.py
-@@ -5,50 +5,53 @@ from __future__ import annotations
- import io
- import json
- from copy import deepcopy
- from datetime import datetime, timezone
- from pathlib import Path
- from typing import Dict, Iterable, List, Tuple
- from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
- 
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import compute_sha256
- from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
- 
- 
- __all__ = ["build_flow_zip"]
- 
- 
- _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
- _README_NAME = "README.txt"
- _MANIFEST_NAME = "manifest.json"
- _EVENTS_NAME = "events.ndjson"
- _EVENTS_REDACTED_NAME = "events.redacted.ndjson"
- _TIMELINE_NAME = "flow_timeline.ndjson"
- _NLU_NAME = "nlu.ndjson"
- _NLG_NAME = "nlg.ndjson"
- _LOGS_NAME = "logs.ndjson"
-+_LOGS_ASR_NAME = "logs/asr.jsonl"
-+_LOGS_WS_NAME = "logs/ws.jsonl"
-+_LOGS_TTS_NAME = "logs/tts.jsonl"
- 
- _TIMELINE_TYPES = {
-     "EVT_TURN_BEGIN",
-     "EVT_TURN_END",
-     EVT_TTS_START,
-     EVT_TTS_END,
-     "EVT_TTS_MASK",
-     "EVT_MIC_GATE",
-     "EVT_POLICY_APPLIED",
-     "EVT_POLICY_SNAPSHOT",
-     "EVT_BARGE_IN",
-     "EVT_BARGE_DETECTED",
-     "EVT_BARGE_CONFIRMED",
-     "EVT_BARGE_REJECTED",
-     "EVT_ACTION_SAY_END",
-     "EVT_AUTH_DISABLED",
-     "EVT_DIAG_FIRST_AUDIO_FRAME",
-     "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
-     "EVT_DIAG_HUD",
-     "EVT_VAD",
-     "EVT_VAD_DECISION",
-     "EVT_CLIENT_LOG",
- }
- _WS_PREFIX = "EVT_WS_"
- _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
-@@ -58,77 +61,87 @@ _PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
- 
- _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
- 
- 
- class _EventWrapper(dict):
-     """Container storing a redacted event and its truncation category."""
- 
-     __slots__ = ()
- 
-     @property
-     def event(self) -> Dict[str, object]:
-         return self["event"]
- 
-     @property
-     def category(self) -> str:
-         return self["category"]
- 
- 
- def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
-     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
- 
-     session_dir = Path(root) / sid
-     manifest_path = session_dir / _MANIFEST_NAME
-     events_path = session_dir / _EVENTS_NAME
-     logs_path = session_dir / _LOGS_NAME
-+    logs_dir = session_dir / "logs"
-+    logs_asr_path = logs_dir / "asr.jsonl"
-+    logs_ws_path = logs_dir / "ws.jsonl"
-+    logs_tts_path = logs_dir / "tts.jsonl"
- 
-     _assert_exists(manifest_path)
-     _assert_exists(events_path)
- 
-     manifest_data = _load_manifest(manifest_path.read_bytes())
-     created_label = _determine_created_label(manifest_data)
-     readme_bytes = _build_readme(sid, created_label)
- 
-     raw_events = _load_events(events_path)
-     wrapped_events = _wrap_events(raw_events)
- 
-     drop_counts = {"vendor_debug": 0, "partials": 0, "events_tail": 0}
-     archive_bytes: bytes = b""
-     payloads: Dict[str, bytes] = {}
-     manifest_bytes: bytes = b""
--    logs_bytes: bytes | None = None
-+    logs_payloads: Dict[str, bytes] = {}
-     if logs_path.is_file():
--        logs_bytes = logs_path.read_bytes()
-+        logs_payloads[_LOGS_NAME] = logs_path.read_bytes()
-+    if logs_asr_path.is_file():
-+        logs_payloads[_LOGS_ASR_NAME] = logs_asr_path.read_bytes()
-+    if logs_ws_path.is_file():
-+        logs_payloads[_LOGS_WS_NAME] = logs_ws_path.read_bytes()
-+    if logs_tts_path.is_file():
-+        logs_payloads[_LOGS_TTS_NAME] = logs_tts_path.read_bytes()
- 
-     while True:
-         payloads, manifest_bytes = _render_payloads(
-             wrapped_events,
-             manifest_data,
-             readme_bytes,
-             drop_counts,
-             cap_bytes,
--            logs_bytes=logs_bytes,
-+            logs_payloads=logs_payloads or None,
-         )
-         entries = dict(payloads)
-         entries[_MANIFEST_NAME] = manifest_bytes
-         archive_bytes = _render_archive(entries)
- 
-         if len(archive_bytes) <= cap_bytes:
-             break
- 
-         if not _drop_next_event(wrapped_events, drop_counts):
-             break
- 
-     archive_path = session_dir / "flow.zip"
-     archive_path.write_bytes(archive_bytes)
-     return archive_path
- 
- 
- def _assert_exists(path: Path) -> None:
-     if not path.is_file():
-         raise FileNotFoundError(path)
- 
- 
- def _load_manifest(raw: bytes) -> Dict[str, object]:
-     try:
-         return json.loads(raw.decode("utf-8"))
-     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-@@ -186,70 +199,70 @@ def _wrap_events(events: List[Dict[str, object]]) -> List[_EventWrapper]:
-     wrapped: List[_EventWrapper] = []
-     for event in events:
-         redacted = _redact_event(event)
-         event_type = redacted.get("type")
-         category = _categorize_event(event_type)
-         wrapped.append(_EventWrapper(event=redacted, category=category))
-     return wrapped
- 
- 
- def _categorize_event(event_type: object) -> str:
-     if isinstance(event_type, str):
-         if event_type in _VENDOR_DEBUG_TYPES:
-             return "vendor_debug"
-         if event_type in _PARTIAL_TYPES:
-             return "partials"
-     return "main"
- 
- 
- def _render_payloads(
-     events: List[_EventWrapper],
-     manifest_data: Dict[str, object],
-     readme_bytes: bytes,
-     drop_counts: Dict[str, int],
-     cap_bytes: int,
-     *,
--    logs_bytes: bytes | None = None,
-+    logs_payloads: Dict[str, bytes] | None = None,
- ) -> Tuple[Dict[str, bytes], bytes]:
-     redacted_events = [wrapper.event for wrapper in events]
- 
-     events_bytes = _dump_ndjson(redacted_events)
-     timeline_events = [evt for evt in redacted_events if _is_timeline_event(evt)]
-     timeline_bytes = _dump_ndjson(timeline_events)
-     nlu_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLU"]
-     nlg_events = [evt for evt in redacted_events if evt.get("type") == "EVT_NLG"]
- 
-     payloads = {
-         _README_NAME: readme_bytes,
-         _EVENTS_REDACTED_NAME: events_bytes,
-         _TIMELINE_NAME: timeline_bytes,
-         _NLU_NAME: _dump_ndjson(nlu_events),
-         _NLG_NAME: _dump_ndjson(nlg_events),
+   function attachUserGestureListeners() {
+     if (userGestureSatisfied || typeof window === "undefined") {
+       return;
+     }
+     if (gestureListenerCleanup) {
+       return;
+     }
+     const listeners = [];
+     const handler = (event) => {
+       const reason = event && typeof event.type === "string" ? event.type : "gesture";
+       markUserGestureSatisfied(reason);
+       maybeAutoStart("gesture");
+     };
+     USER_GESTURE_EVENTS.forEach((eventName) => {
+       try {
+         window.addEventListener(eventName, handler, { passive: true });
+         listeners.push({ eventName, handler });
+       } catch (err) {
+@@ -1600,57 +1607,60 @@ import { WakeWord } from "./wake_word.js";
+       "adapter_file",
+       "engine_file",
+       "asr_file"
+     ];
+     for (const key of stringKeys) {
+       if (typeof frame[key] === "string" && frame[key]) {
+         safe[key] = frame[key];
+       }
      }
  
--    if logs_bytes is not None:
--        payloads[_LOGS_NAME] = logs_bytes
-+    if logs_payloads:
-+        payloads.update(logs_payloads)
+     if (Number.isFinite(frame.pid)) {
+       safe.pid = frame.pid;
+     }
  
-     manifest_bytes = _build_manifest_payload(
-         manifest_data,
-         payloads,
-         drop_counts,
-         cap_bytes,
-     )
+     if (Array.isArray(frame.subprotocols_offered)) {
+       const subs = frame.subprotocols_offered.filter((value) => typeof value === "string" && value);
+       if (subs.length) {
+         safe.subprotocols_offered = subs;
+       }
+     }
  
-     return payloads, manifest_bytes
+     return safe;
+   }
  
+   function sanitizeAsrReadyFrame(frame) {
+-    const safe = { type: "asr.ready" };
++    const safe = { type: "asr.ready", vendor: DEFAULT_ASR_VENDOR };
+     if (!frame || typeof frame !== "object") {
+       return safe;
+     }
  
- def _is_timeline_event(event: Dict[str, object]) -> bool:
-     event_type = event.get("type")
-     if not isinstance(event_type, str):
-         return False
-     if event_type in _TIMELINE_TYPES:
-         return True
-     return event_type.startswith(_WS_PREFIX)
+     if (typeof frame.vendor === "string" && frame.vendor) {
+-      safe.vendor = frame.vendor;
++      const normalized = frame.vendor.trim().toLowerCase();
++      if (normalized === DEFAULT_ASR_VENDOR) {
++        safe.vendor = DEFAULT_ASR_VENDOR;
++      }
+     }
  
+     const rawInput = frame.input && typeof frame.input === "object" ? frame.input : null;
+     const input = {};
+     let hasInputField = false;
  
- def _dump_ndjson(events: Iterable[Dict[str, object]]) -> bytes:
-     lines = [json.dumps(event, separators=(",", ":"), ensure_ascii=False) for event in events]
-     if not lines:
-         return b""
-     return ("\n".join(lines) + "\n").encode("utf-8")
-diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
-index 2ac78597a8e65d1bb3329336ccb3422a8b9ff64e..4adff4d868a714858024cd86163c0b9306597535 100644
---- a/app/telemetry/exporter.py
-+++ b/app/telemetry/exporter.py
-@@ -1,88 +1,132 @@
- """Minimal NDJSON file exporter for session telemetry."""
- from __future__ import annotations
+     if (rawInput) {
+       if (typeof rawInput.container === "string" && rawInput.container) {
+         input.container = rawInput.container;
+         hasInputField = true;
+       }
+       if (typeof rawInput.codec === "string" && rawInput.codec) {
+         input.codec = rawInput.codec;
+         hasInputField = true;
+       }
+       if (typeof rawInput.mode === "string" && rawInput.mode) {
+         input.mode = rawInput.mode;
+         hasInputField = true;
+       }
+       if (typeof rawInput.mime === "string" && rawInput.mime) {
+         input.mime = rawInput.mime;
+         hasInputField = true;
+       }
  
- import hashlib
- import json
- import os
- import time
- from dataclasses import dataclass, field
- from pathlib import Path
- from typing import Any, Dict, Optional
+       if (Number.isFinite(rawInput.rate_hz)) {
+@@ -1696,61 +1706,62 @@ import { WakeWord } from "./wake_word.js";
+           input.timeslice_ms = parsedSlice;
+           hasInputField = true;
+           break;
+         }
+       }
+     }
  
- from app.telemetry import bus as telemetry_bus
-+from app.voice_v2 import (
-+    EVT_ASR_CLOSED,
-+    EVT_ASR_FINAL,
-+    EVT_ASR_OPEN,
-+    EVT_ASR_PARTIAL,
-+    EVT_TTS_END,
-+    EVT_TTS_START,
-+)
-+
-+
-+EVT_ASR_OPEN_ATTEMPT = "asr.open_attempt"
-+EVT_ASR_OPEN_FAILED = "asr.open_failed"
-+EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
-+EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
-+EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
-+
-+_ASR_LOG_TYPES = {
-+    EVT_ASR_OPEN,
-+    EVT_ASR_PARTIAL,
-+    EVT_ASR_FINAL,
-+    EVT_ASR_CLOSED,
-+    EVT_ASR_OPEN_ATTEMPT,
-+    EVT_ASR_OPEN_FAILED,
-+}
-+
-+_WS_LOG_TYPES = {
-+    EVT_WS_JSON_SEND_SUMMARY,
-+    EVT_WS_JSON_RECV_SUMMARY,
-+    EVT_WS_AUDIO_FIRST_CHUNK,
-+}
-+
-+_TTS_LOG_TYPES = {EVT_TTS_START, EVT_TTS_END}
+     if (!hasInputField) {
+       return safe;
+     }
  
+     safe.input = input;
+     return safe;
+   }
  
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
+   function handleServerBannerFrame(frame) {
+     const sanitized = sanitizeServerBannerFrame(frame);
+     updateState({ serverBanner: sanitized });
+     console.log("WS server banner", sanitized);
+     dispatchFrame(sanitized);
+   }
  
-     return int(time.time() * 1000)
+   function handleAsrReadyFrame(frame) {
+     const sanitized = sanitizeAsrReadyFrame(frame);
+     AppState.asrReady = true;
+-    updateState({ asrReady: true });
++    AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
++    updateState({ asrReady: true, asrVendor: AppState.asrVendor });
+     if (typeof AppState.emit === "function") {
+       AppState.emit("asrReady", {
+         ready: true,
+-        vendor: sanitized.vendor ?? null,
++        vendor: AppState.asrVendor,
+         input: sanitized.input ?? null,
+       });
+     }
+     logStage('client.asr', {
+       stage: 'ready',
+-      vendor: sanitized.vendor ?? null,
++      vendor: AppState.asrVendor,
+       input: sanitized.input ?? null,
+     });
+     return sanitized;
+   }
  
+   const ASR_VENDOR_OPTIONS = ['speechmatics'];
+   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
  
- @dataclass
- class _SessionStats:
-     """In-memory counters tracked for each active session."""
+   const DEFAULT_POLICY_FLAGS = {
+     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
+     input: { require_hotword_to_start: false },
+     asr: {
+       prearm_on_tts_end: true,
+       keep_stream_warm_ms: 30000,
+       commit_on_vad_silence: true,
+       commit_silence_ms: 900,
+       max_utterance_ms: 8000,
+       vendor: { primary: 'speechmatics', secondary: null },
+     },
+     routing: { ws_version: 'v2' },
+     audio: { pipeline: { mode: 'pcm16' } },
+   };
  
-     directory: Path
-     events_path: Path
-     manifest_path: Path
-     logs_path: Path
-+    logs_asr_path: Path
-+    logs_ws_path: Path
-+    logs_tts_path: Path
-     events_written: int = 0
-     by_type: Dict[str, int] = field(default_factory=dict)
-     started_ms: Optional[int] = None
-     ended_ms: Optional[int] = None
-     subscription_token: Optional[str] = None
- 
- 
- class FileExporter:
-     """Write session telemetry to disk in a restart-friendly manner."""
- 
-     def __init__(self, root: Path | str = "exports", *, bus=telemetry_bus) -> None:
-         self._root = Path(root)
-         self._bus = bus
-         self._sessions: Dict[str, _SessionStats] = {}
- 
-     def begin(self, sid: str) -> None:
-         """Prepare an export directory and subscribe to telemetry for the session."""
- 
-         if sid in self._sessions:
-             # Duplicate begin calls should not create additional subscriptions.
-             return
- 
-         session_dir = self._root / sid
-         session_dir.mkdir(parents=True, exist_ok=True)
-+        logs_dir = session_dir / "logs"
-+        logs_dir.mkdir(parents=True, exist_ok=True)
-+
-         stats = _SessionStats(
-             directory=session_dir,
-             events_path=session_dir / "events.ndjson",
-             manifest_path=session_dir / "manifest.json",
-             logs_path=session_dir / "logs.ndjson",
-+            logs_asr_path=logs_dir / "asr.jsonl",
-+            logs_ws_path=logs_dir / "ws.jsonl",
-+            logs_tts_path=logs_dir / "tts.jsonl",
-             started_ms=_now_ms(),
+   function sanitizePolicySnapshot(source) {
+     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
+@@ -2270,53 +2281,54 @@ import { WakeWord } from "./wake_word.js";
+         } else {
+           stopInputCapture({ reason: "server_requested" });
+         }
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
+     } else if (frame.type === "input.start") {
+       startInputCapture(frame);
+     } else if (frame.type === "input.stop") {
+       stopInputCapture({ reason: "input.stop" });
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
+     } else if (frame.type === "asr.partial") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.final") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details
+         : (frame && typeof frame.detail === "string" ? frame.detail : "");
+       console.warn("asr.unavailable", reason, details);
+       AppState.asrReady = false;
+-      updateState({ asrReady: false });
++      AppState.asrVendor = null;
++      updateState({ asrReady: false, asrVendor: null });
+       if (typeof AppState.emit === "function") {
+-        AppState.emit("asrReady", { ready: false, reason });
++        AppState.emit("asrReady", { ready: false, reason, vendor: null });
+       }
+       try {
+         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
+         hud?.setState?.("Chat");
+       } catch (err) {
+         console.warn("Failed to update HUD state after asr.unavailable", err);
+       }
+       try {
+         const view = window.TranscriptView;
+         view?.showSystemFromChip?.(
+           "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
+         );
+       } catch (err) {
+         console.warn("Failed to render Chip system message after asr.unavailable", err);
+       }
+       try {
+         window?.Banner?.show?.(
+           "Voice temporarily unavailable. You can continue via chat.",
+           { level: "warning", ttlMs: 10000 }
+         );
+       } catch (err) {
+         console.warn("Failed to show voice unavailable banner", err);
+       }
+     } else if (frame.type === "chat.message" || frame.type === "message") {
+       if (!transcriptFrameAllowed(frame)) {
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 7389fbbcc9695c6c7624e2a123a1a49aeda7184e..3570d31fe404a488f547a6058ce9c52a3645c8a3 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -690,105 +690,105 @@ class ChatV2Adapter:
+         if policy_snapshot:
+             self._log_policy_flags(sid, policy_snapshot)
+             info_frame["policy"] = policy_snapshot
+         await self._send_json(send, sid, info_frame)
+         _log.info("evt=ws_info_sent sid=%s", sid)
+         self._emit_session_step(
+             sid,
+             "ws.info_sent",
+             summary="Sent info frame",
+             meta={"has_policy": bool(policy_snapshot)},
          )
  
-         # Reset the NDJSON log for the session.
-         stats.events_path.write_text("", encoding="utf-8")
-         stats.logs_path.write_text("", encoding="utf-8")
-+        stats.logs_asr_path.write_text("", encoding="utf-8")
-+        stats.logs_ws_path.write_text("", encoding="utf-8")
-+        stats.logs_tts_path.write_text("", encoding="utf-8")
- 
-         def _callback(event: Dict[str, Any]) -> None:
-             if event.get("sid") != sid:
-                 return
-             self._handle_event(sid, event)
- 
-         token = self._bus.subscribe("*", _callback)
-         stats.subscription_token = token
-         self._sessions[sid] = stats
- 
-         manifest = {
-             "sid": sid,
-             "schema_version": "1",
-             "started_ms": stats.started_ms,
-             "open": True,
-             "events_written": 0,
-             "by_type": {},
-         }
-         self._write_manifest(stats, manifest)
- 
-     def end(self, sid: str, summary: Optional[Dict[str, Any]] = None) -> None:
-         """Finalize a session by writing manifest metadata and unsubscribing."""
- 
-         stats = self._sessions.pop(sid, None)
-         if not stats:
-@@ -115,50 +159,65 @@ class FileExporter:
-     def _handle_event(self, sid: str, event: Dict[str, Any]) -> None:
-         stats = self._sessions.get(sid)
-         if not stats:
-             return
- 
-         with stats.events_path.open("a", encoding="utf-8") as handle:
-             json.dump(event, handle, separators=(",", ":"), ensure_ascii=False)
-             handle.write("\n")
- 
-         stats.events_written += 1
- 
-         event_type = event.get("type")
-         if isinstance(event_type, str) and event_type:
-             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
- 
-             if event_type == "EVT_LOG":
-                 log_entry: Dict[str, Any]
-                 if isinstance(event, dict):
-                     log_entry = dict(event)
-                 else:
-                     log_entry = {"type": event_type}
-                 with stats.logs_path.open("a", encoding="utf-8") as log_handle:
-                     json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
-                     log_handle.write("\n")
- 
-+            if event_type in _ASR_LOG_TYPES:
-+                with stats.logs_asr_path.open("a", encoding="utf-8") as log_handle:
-+                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
-+                    log_handle.write("\n")
-+
-+            if event_type in _WS_LOG_TYPES:
-+                with stats.logs_ws_path.open("a", encoding="utf-8") as log_handle:
-+                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
-+                    log_handle.write("\n")
-+
-+            if event_type in _TTS_LOG_TYPES:
-+                with stats.logs_tts_path.open("a", encoding="utf-8") as log_handle:
-+                    json.dump(event, log_handle, separators=(",", ":"), ensure_ascii=False)
-+                    log_handle.write("\n")
-+
-         ts_ms = event.get("ts_ms")
-         if isinstance(ts_ms, int):
-             candidate = ts_ms
-             if stats.started_ms is not None and candidate < stats.started_ms:
-                 candidate = stats.started_ms
-             stats.ended_ms = candidate
- 
-         manifest = {
-             "sid": sid,
-             "schema_version": "1",
-             "started_ms": stats.started_ms,
-             "open": True,
-             "events_written": stats.events_written,
-             "by_type": dict(stats.by_type),
-         }
-         self._write_manifest(stats, manifest)
- 
-     def _write_manifest(self, stats: _SessionStats, manifest: Dict[str, Any]) -> None:
-         tmp_path = stats.manifest_path.with_name(stats.manifest_path.name + ".tmp")
-         tmp_path.write_text(
-             json.dumps(manifest, separators=(",", ":"), ensure_ascii=False),
-             encoding="utf-8",
+         ctx = AdapterContext(
+             sid=sid,
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
          )
-         os.replace(tmp_path, stats.manifest_path)
+         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+         ctx.last_client_activity_ms = now_ms
+         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
+         snapshot_mapping = (
+             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+         )
+-        ctx.asr_vendor = selected_vendor
++        ctx.asr_vendor = selected_vendor or "speechmatics"
+         allowed_display = ",".join(ctx.allowed_asr_vendors)
+         _log.info(
+             "asr_vendor_selected primary=%s allowed=%s reason=%s",
+-            selected_vendor or "",
++            ctx.asr_vendor,
+             allowed_display,
+             selection_reason,
+         )
+         ctx.asr_vendor_logged = True
+         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
+         if ctx.asr_vendor == "speechmatics":
+             ctx.audio_pipeline_mode = "pcm16"
+         mode = ctx.audio_pipeline_mode or "pcm16"
+         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
  
+         token = current_sid.set(ctx.sid)
+         try:
+             if not (
+                 inspect.iscoroutinefunction(self._on_open_and_greet)
+                 and inspect.iscoroutinefunction(self._invoke_engine)
+             ):
+                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+                 raise RuntimeError("WebSocket async contract violation")
+ 
+             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+             client = scope.get("client")
+             ctx.ip = client[0] if isinstance(client, tuple) and client else None
+             if ctx.ip:
+                 ctx.ip_bucket = self._ip_buckets.setdefault(
+                     ctx.ip,
+                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+                 )
+ 
+             had_active_contexts = bool(self._contexts)
+             self._contexts[ctx.sid] = ctx
+             current_runtime = getattr(self, "asr_runtime", None)
+             current_vendor = getattr(self, "_asr_runtime_vendor", None)
+             if (
+                 current_runtime is not None
+                 and isinstance(ctx.asr_vendor, str)
+                 and ctx.asr_vendor
+                 and current_vendor
+                 and ctx.asr_vendor != current_vendor
+                 and not had_active_contexts
+             ):
+                 self.asr_runtime = None
+                 current_runtime = None
+                 self._asr_runtime_vendor = None
+ 
+             if getattr(self, "asr_runtime", None) is None:
+                 try:
+                     from app.voice_v2.asr_runtime import ASRRuntime
+ 
+                     engine = getattr(self, "engine", None)
+-                    vendor = ctx.asr_vendor or ""
++                    vendor = ctx.asr_vendor or "speechmatics"
+                     client = None
+                     if engine is not None and vendor:
+                         if vendor == "speechmatics":
+                             sm_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
+                             sm_key = getattr(config, "SPEECHMATICS_API_KEY", "")
+                             sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", "")
+                             if sm_enabled and sm_key and sm_url:
+                                 client = SpeechmaticsClient(sm_key, sm_url, bus, _log)
+                             elif sm_enabled:
+                                 client = OfflineSpeechmaticsClient(bus, _log)
+                             else:
+                                 _log.warning(
+                                     "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s has_url=%s",
+                                     ctx.sid,
+                                     vendor,
+                                     bool(engine),
+                                     bool(sm_key),
+                                     bool(sm_url),
+                                 )
+                         else:
+                             _log.warning(
+                                 "evt=ws_asr_runtime_unsupported_vendor sid=%s vendor=%s",
+                                 ctx.sid,
+                                 vendor,
+                             )
+@@ -2734,51 +2734,51 @@ class ChatV2Adapter:
+             normalized = self._sanitize_policy_interaction(normalized)
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+             ctx.last_policy_interaction = json.loads(
+                 json.dumps(normalized, separators=(",", ":"))
+             )
+         if frame_type == "info":
+             meta = {}
+             source_meta = normalized.get("meta")
+             if isinstance(source_meta, dict):
+                 meta = dict(source_meta)
+             meta["sid"] = ctx.sid
+             normalized["meta"] = meta
+             policy_payload = normalized.get("policy")
+             if isinstance(policy_payload, dict):
+                 ctx.policy_snapshot = policy_payload
+                 ctx.allowed_asr_vendors = self._allowed_asr_vendors()
+                 snapshot_mapping = policy_payload
+                 selected_vendor, _ = self._select_asr_vendor(
+                     ctx,
+                     snapshot_mapping,
+                     ctx.allowed_asr_vendors,
+                     log_selection=not ctx.asr_vendor_logged,
+                 )
+-                ctx.asr_vendor = selected_vendor
++                ctx.asr_vendor = selected_vendor or "speechmatics"
+                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
+                     snapshot_mapping
+                 )
+                 if ctx.asr_vendor == "speechmatics":
+                     ctx.audio_pipeline_mode = "pcm16"
+                 mode = ctx.audio_pipeline_mode or "pcm16"
+                 ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
+         return normalized
+ 
+     @staticmethod
+     def _truncate_banner_string(value: str, limit: int = 240) -> str:
+         if not isinstance(value, str):
+             return ""
+         if limit <= 0:
+             return ""
+         if len(value) <= limit:
+             return value
+         return value[: limit - 1] + "\u2026"
+ 
+     @staticmethod
+     def _sanitize_banner_value(value: Any, depth: int = 0) -> Any:
+         if value is None:
+             return None
+         if isinstance(value, bool):
+             return value
+@@ -3498,56 +3498,75 @@ class ChatV2Adapter:
+             return {}
+         stable: Dict[str, Any] = {}
+         for key in _POLICY_STABLE_KEYS:
+             if key in snapshot:
+                 stable[key] = snapshot[key]
+         media = snapshot.get("media")
+         if isinstance(media, dict):
+             stable["media"] = {
+                 key: media[key]
+                 for key in ("asr_input", "asr_rate_hz", "asr_channels")
+                 if key in media
+             }
+         capture = snapshot.get("capture")
+         if isinstance(capture, dict):
+             stable["capture"] = dict(capture)
+         audio = snapshot.get("audio")
+         if isinstance(audio, dict):
+             stable["audio"] = dict(audio)
+         nested_policy = snapshot.get("policy")
+         if isinstance(nested_policy, dict):
+             stable["policy"] = json.loads(json.dumps(nested_policy))
+         return stable
+ 
+     def _allowed_asr_vendors(self) -> List[str]:
+         allowed: List[str] = []
+-        speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
+-        if speechmatics_enabled:
+-            api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
+-            url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
+-            if api_key and url:
+-                allowed.append("speechmatics")
++        vendor = "speechmatics"
++        speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", True)
++        api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
++        url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
++
++        if not speechmatics_enabled:
++            _log.warning(
++                "evt=asr_vendor_disabled sid=%s vendor=%s scope=config",
++                current_sid.get(None),
++                vendor,
++            )
++        if not api_key:
++            _log.warning(
++                "evt=asr_vendor_missing sid=%s vendor=%s missing=api_key",
++                current_sid.get(None),
++                vendor,
++            )
++        if not url:
++            _log.warning(
++                "evt=asr_vendor_missing sid=%s vendor=%s missing=url",
++                current_sid.get(None),
++                vendor,
++            )
++
++        allowed.append(vendor)
+         return allowed
+ 
+     @staticmethod
+     def _extract_policy_vendor(snapshot: Mapping[str, Any] | None) -> tuple[Optional[str], Optional[str]]:
+         if not isinstance(snapshot, Mapping):
+             return None, None
+         policy_block = snapshot.get("policy")
+         if not isinstance(policy_block, Mapping):
+             return None, None
+         asr_block = policy_block.get("asr")
+         if not isinstance(asr_block, Mapping):
+             return None, None
+         vendor_block = asr_block.get("vendor")
+         if not isinstance(vendor_block, Mapping):
+             return None, None
+         primary = vendor_block.get("primary")
+         secondary = vendor_block.get("secondary")
+         normalized_primary = (
+             primary.strip().lower()
+             if isinstance(primary, str) and primary.strip()
+             else None
+         )
+         normalized_secondary: Optional[str]
+         if secondary is None:
+             normalized_secondary = None
+@@ -3567,53 +3586,53 @@ class ChatV2Adapter:
+     ) -> tuple[Optional[str], str]:
+         primary_policy, secondary_policy = self._extract_policy_vendor(snapshot)
+         reason = "fallback"
+         selected: Optional[str] = None
+ 
+         if primary_policy:
+             if primary_policy in allowed:
+                 selected = primary_policy
+                 reason = "policy"
+             else:
+                 _log.warning(
+                     "evt=policy_violation sid=%s vendor=%s scope=asr.vendor.primary",
+                     ctx.sid,
+                     primary_policy,
+                 )
+         if selected is None and secondary_policy:
+             if secondary_policy in allowed:
+                 selected = secondary_policy
+                 reason = "policy"
+             else:
+                 _log.warning(
+                     "evt=policy_violation sid=%s vendor=%s scope=asr.vendor.secondary",
+                     ctx.sid,
+                     secondary_policy,
+                 )
+-        if selected is None and allowed:
+-            selected = allowed[0]
+-            reason = "fallback"
++        if selected is None:
++            selected = "speechmatics"
++            reason = "forced"
+ 
+         if log_selection:
+             allowed_display = ",".join(allowed)
+             _log.info(
+                 "asr_vendor_selected primary=%s allowed=%s reason=%s",
+                 selected or "",
+                 allowed_display,
+                 reason,
+             )
+             ctx.asr_vendor_logged = True
+         return selected, reason
+ 
+     @staticmethod
+     def _resolve_audio_pipeline_mode(snapshot: Mapping[str, Any] | None) -> str:
+         if isinstance(snapshot, Mapping):
+             audio_block = snapshot.get("audio")
+             if isinstance(audio_block, Mapping):
+                 pipeline = audio_block.get("pipeline")
+                 if isinstance(pipeline, Mapping):
+                     mode = pipeline.get("mode")
+                     if isinstance(mode, str) and mode.strip():
+                         normalized = mode.strip().lower()
+                         if normalized == "pcm16":
+                             return normalized
+         return "pcm16"
+@@ -3797,93 +3816,93 @@ class ChatV2Adapter:
+     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
+         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
+         policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+         if not isinstance(policy_block, Mapping):
+             return 0
+         asr_block = policy_block.get("asr")
+         if not isinstance(asr_block, Mapping):
+             return 0
+         value = asr_block.get("keep_stream_warm_ms")
+         try:
+             keep_warm = int(value)
+         except (TypeError, ValueError):
+             keep_warm = 0
+         if keep_warm < 0:
+             return 0
+         return keep_warm
+ 
+     async def _send_asr_ready_bundle(
+         self,
+         send: Callable[[dict], Awaitable[None]],
+         ctx: AdapterContext,
+     ) -> None:
+         mode = ctx.audio_pipeline_mode or "pcm16"
+         descriptor = dict(self._input_descriptor_for_mode(mode))
+         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
++        vendor = ctx.asr_vendor or "speechmatics"
+         ready_frame = {
+             "type": "asr.ready",
+             "input": dict(descriptor),
++            "vendor": vendor,
+         }
+-        if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
+-            ready_frame["vendor"] = ctx.asr_vendor
+         capture = dict(descriptor)
+         capture["timeslice_ms"] = timeslice_ms
+         capture["manual_gate"] = False
+         session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+         input_start = {
+             "type": "input.start",
+             "capture": capture,
+         }
+         if session_policy:
+             input_start["policy"] = session_policy
+ 
+         start_payload: Dict[str, Any] = {"type": "start_listening"}
+         if session_policy:
+             start_payload["policy"] = session_policy
+ 
+         now_ms = int(time.time() * 1000)
+         ctx.awaiting_asr_ready = True
+         ctx.client_capture_armed = True
+         ctx.asr_recovering_until = 0.0
+         ctx.asr_recovering_reason = None
+         ctx.asr_recovering_audio_logged = False
+         ctx.ingress_packets = 0
+         ctx.ingress_bytes = 0
+         ctx.first_ingress_ms = None
+         ctx.mic_armed_ms = now_ms
+         ctx.asr_ready_bundle_sent_ms = now_ms
+ 
+         await self._send_json(send, ctx.sid, ready_frame)
+         await self._send_json(send, ctx.sid, input_start)
+         await self._send_json(send, ctx.sid, start_payload)
+         _log.info(
+             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
+             ctx.sid,
+             mode,
+             descriptor.get("mime", ""),
+             timeslice_ms,
+-            ctx.asr_vendor or "",
++            vendor,
+         )
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
+ 
+     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
+         ctx.outbound_queue_depth = queued
+diff --git a/tests/test_asr_adapter_basic.py b/tests/test_asr_adapter_basic.py
+index 0603e3fdcfa94412854e874bf0a8c90718e6126b..d04f5694f5cc2e307ea203970fe3779cfb262303 100644
+--- a/tests/test_asr_adapter_basic.py
++++ b/tests/test_asr_adapter_basic.py
+@@ -50,39 +50,56 @@ class TestASRAdapterBasic(unittest.TestCase):
+ 
+         input_start = frames[1]
+         capture = input_start.get("capture")
+         self.assertIsInstance(capture, dict)
+         self.assertEqual(capture.get("mode"), "pcm16")
+         self.assertEqual(capture.get("container"), "raw")
+         self.assertEqual(capture.get("codec"), "pcm_s16le")
+         self.assertEqual(capture.get("rate_hz"), 16000)
+         self.assertEqual(capture.get("channels"), 1)
+         self.assertEqual(capture.get("timeslice_ms"), 50)
+         self.assertIs(capture.get("manual_gate"), False)
+ 
+         policy = input_start.get("policy")
+         self.assertIsInstance(policy, dict)
+         self.assertEqual(policy, ctx.session_capture_policy)
+         self.assertEqual(policy.get("media", {}).get("asr_input"), "pcm_16k")
+         self.assertEqual(policy.get("audio", {}).get("pipeline", {}).get("mode"), "pcm16")
+         self.assertEqual(policy.get("capture", {}).get("sample_rate"), 16000)
+         self.assertEqual(policy.get("capture", {}).get("channels"), 1)
+ 
+         start_listening = frames[2]
+         self.assertEqual(start_listening.get("policy"), policy)
+ 
+         self.assertEqual(len(sent), 3)
+ 
++    def test_ready_bundle_injects_default_vendor(self) -> None:
++        adapter = ChatV2Adapter()
++        ctx = AdapterContext(sid="sid-ready-default", headers={})
++        ctx.audio_pipeline_mode = "pcm16"
++        ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
++
++        sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
++
++        frames = [
++            json.loads(msg["text"])
++            for msg in sent
++            if msg.get("type") == "websocket.send" and msg.get("text")
++        ]
++        self.assertGreaterEqual(len(frames), 1)
++        ready_frame = frames[0]
++        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
++
+     async def _emit_ready_bundle(
+         self, adapter: ChatV2Adapter, ctx: AdapterContext
+     ) -> list[dict]:
+         sent: list[dict] = []
+ 
+         async def send(message: dict) -> None:
+             sent.append(message)
+ 
+         await adapter._send_asr_ready_bundle(send, ctx)
+         return sent
+ 
+ 
+ if __name__ == "__main__":  # pragma: no cover
+     unittest.main()

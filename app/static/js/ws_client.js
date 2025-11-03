@@ -29,6 +29,7 @@ import { WakeWord } from "./wake_word.js";
     ERROR_UNKNOWN: 'error_unknown',
   };
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+  const DEFAULT_ASR_VENDOR = 'speechmatics';
 
   let __micAttempts = 0;
   let __micChunks = 0;
@@ -434,6 +435,9 @@ import { WakeWord } from "./wake_word.js";
     if (typeof snapshot.asrReady === "undefined") {
       patch.asrReady = false;
     }
+    if (typeof snapshot.asrVendor === "undefined") {
+      patch.asrVendor = null;
+    }
     if (typeof snapshot.ttsActive === "undefined") {
       patch.ttsActive = false;
     }
@@ -447,6 +451,9 @@ import { WakeWord } from "./wake_word.js";
       updateState(patch);
     }
     AppState.asrReady = Boolean(snapshot.asrReady);
+    AppState.asrVendor = typeof snapshot.asrVendor === 'string' && snapshot.asrVendor
+      ? snapshot.asrVendor
+      : null;
     AppState.ttsActive = Boolean(snapshot.ttsActive);
     AppState.turnState = typeof snapshot.turnState === "string" ? snapshot.turnState : null;
     AppState.recorder = snapshot.recorder && typeof snapshot.recorder === "object"
@@ -1622,13 +1629,16 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function sanitizeAsrReadyFrame(frame) {
-    const safe = { type: "asr.ready" };
+    const safe = { type: "asr.ready", vendor: DEFAULT_ASR_VENDOR };
     if (!frame || typeof frame !== "object") {
       return safe;
     }
 
     if (typeof frame.vendor === "string" && frame.vendor) {
-      safe.vendor = frame.vendor;
+      const normalized = frame.vendor.trim().toLowerCase();
+      if (normalized === DEFAULT_ASR_VENDOR) {
+        safe.vendor = DEFAULT_ASR_VENDOR;
+      }
     }
 
     const rawInput = frame.input && typeof frame.input === "object" ? frame.input : null;
@@ -1718,17 +1728,18 @@ import { WakeWord } from "./wake_word.js";
   function handleAsrReadyFrame(frame) {
     const sanitized = sanitizeAsrReadyFrame(frame);
     AppState.asrReady = true;
-    updateState({ asrReady: true });
+    AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
+    updateState({ asrReady: true, asrVendor: AppState.asrVendor });
     if (typeof AppState.emit === "function") {
       AppState.emit("asrReady", {
         ready: true,
-        vendor: sanitized.vendor ?? null,
+        vendor: AppState.asrVendor,
         input: sanitized.input ?? null,
       });
     }
     logStage('client.asr', {
       stage: 'ready',
-      vendor: sanitized.vendor ?? null,
+      vendor: AppState.asrVendor,
       input: sanitized.input ?? null,
     });
     return sanitized;
@@ -2292,9 +2303,10 @@ import { WakeWord } from "./wake_word.js";
         : (frame && typeof frame.detail === "string" ? frame.detail : "");
       console.warn("asr.unavailable", reason, details);
       AppState.asrReady = false;
-      updateState({ asrReady: false });
+      AppState.asrVendor = null;
+      updateState({ asrReady: false, asrVendor: null });
       if (typeof AppState.emit === "function") {
-        AppState.emit("asrReady", { ready: false, reason });
+        AppState.emit("asrReady", { ready: false, reason, vendor: null });
       }
       try {
         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;

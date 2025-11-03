@@ -72,6 +72,23 @@ class TestASRAdapterBasic(unittest.TestCase):
 
         self.assertEqual(len(sent), 3)
 
+    def test_ready_bundle_injects_default_vendor(self) -> None:
+        adapter = ChatV2Adapter()
+        ctx = AdapterContext(sid="sid-ready-default", headers={})
+        ctx.audio_pipeline_mode = "pcm16"
+        ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
+
+        sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
+
+        frames = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text")
+        ]
+        self.assertGreaterEqual(len(frames), 1)
+        ready_frame = frames[0]
+        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+
     async def _emit_ready_bundle(
         self, adapter: ChatV2Adapter, ctx: AdapterContext
     ) -> list[dict]:
