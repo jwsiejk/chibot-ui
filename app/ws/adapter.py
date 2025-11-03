@@ -20,6 +20,7 @@ from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.services.streaming_asr.speechmatics_client import (
+    OfflineSpeechmaticsClient,
     SpeechmaticsClient,
 )
 from app.voice_v2 import (
@@ -752,6 +753,8 @@ class ChatV2Adapter:
                             sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", "")
                             if sm_enabled and sm_key and sm_url:
                                 client = SpeechmaticsClient(sm_key, sm_url, bus, _log)
+                            elif sm_enabled:
+                                client = OfflineSpeechmaticsClient(bus, _log)
                             else:
                                 _log.warning(
                                     "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s has_url=%s",

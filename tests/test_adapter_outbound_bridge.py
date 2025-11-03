@@ -246,7 +246,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         harness = OutboundHarness(adapter, engine)
         await harness.start()
         try:
-            frame = {"type": "asr.ready", "vendor": "deepgram"}
+            frame = {"type": "asr.ready", "vendor": "speechmatics"}
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": frame})
 
             delivered = await harness.wait_for_outbound(

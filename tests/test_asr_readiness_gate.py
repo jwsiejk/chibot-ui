@@ -89,7 +89,7 @@ class TestASRReadinessGate(unittest.TestCase):
                 sid = engine.open_sid
                 if sid is None:  # pragma: no cover - defensive
                     raise RuntimeError("sid not set")
-                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
+                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
 
             chunk = b"\x00" * 4
             await queue.put({"type": "websocket.receive", "bytes": chunk})

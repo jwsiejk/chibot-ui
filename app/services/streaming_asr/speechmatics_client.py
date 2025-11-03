@@ -949,5 +949,77 @@ class SpeechmaticsClient:
         return duration
 
 
-__all__ = ["SpeechmaticsClient"]
+__all__ = ["SpeechmaticsClient", "OfflineSpeechmaticsClient"]
 
+@dataclass
+class _OfflineStreamState:
+    sid: str
+    on_partial: Callable[[str, Dict[str, object]], None]
+    on_final: Callable[[str, Dict[str, object]], None]
+    on_close: Optional[Callable[[int | None, str | None], None]] = None
+    closed: bool = False
+
+
+class OfflineSpeechmaticsClient:
+    """In-memory Speechmatics stub used for tests and offline development."""
+
+    vendor = "speechmatics"
+
+    def __init__(self, telemetry_bus, logger) -> None:
+        self._streams: Dict[str, _OfflineStreamState] = {}
+        self._telemetry_bus = telemetry_bus
+        self._logger = logger
+        self.idle_close_ms = 15000
+
+    async def open_stream(
+        self,
+        sid: str,
+        on_partial: Callable[[str, Dict[str, object]], None],
+        on_final: Callable[[str, Dict[str, object]], None],
+        on_error: Callable[..., None],
+        *,
+        stream_id: str,
+        on_close: Optional[Callable[[int | None, str | None], None]] = None,
+        **_: Any,
+    ) -> str:
+        if not isinstance(sid, str) or not sid:
+            raise ValueError("sid must be a non-empty string")
+        state = _OfflineStreamState(
+            sid=sid,
+            on_partial=on_partial,
+            on_final=on_final,
+            on_close=on_close,
+        )
+        self._streams[sid] = state
+        return "offline"
+
+    def send_audio(self, sid: str, chunk: bytes) -> None:
+        _ = self._streams.get(sid)
+        return
+
+    def close_stream(self, sid: str) -> None:
+        state = self._streams.pop(sid, None)
+        if state is None:
+            return
+        if state.on_close is not None:
+            try:
+                state.on_close(None, "closed")
+            except Exception:  # pragma: no cover - defensive
+                self._logger.debug("evt=offline_sm_close_failed sid=%s", sid, exc_info=True)
+
+    def commit_stream(self, sid: str) -> None:
+        state = self._streams.get(sid)
+        if state is None or state.closed:
+            return
+        state.closed = True
+        try:
+            state.on_final(
+                "",
+                {
+                    "confidence": 1.0,
+                    "len_chars": 0,
+                    "stream_id": f"sm-offline-{sid}",
+                },
+            )
+        except Exception:  # pragma: no cover - defensive
+            self._logger.debug("evt=offline_sm_final_failed sid=%s", sid, exc_info=True)

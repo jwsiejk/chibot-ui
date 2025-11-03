@@ -5,7 +5,6 @@ import asyncio
 import logging
 import math
 import hashlib
-import os
 import struct
 import time
 import uuid
@@ -35,7 +34,6 @@ from app.voice_v2.engine import EngineV2
 
 _log = logging.getLogger(__name__)
 
-_DG_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
 _PARTIAL_CONFIDENCE = 0.55
 _FINAL_CONFIDENCE = 0.9
 _DEFAULT_IDLE_CLOSE_MS = 4000
@@ -43,20 +41,7 @@ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
 _TRACE_ENABLED = bool(ASR_TRACE)
 _EBML_MAGIC = b"\x1a\x45\xdf\xa3"
 _RMS_PROBE_WINDOW_MS = 2000
-def _resolve_stream_open_timeout(default: float = 10.0) -> float:
-    raw = os.getenv("DG_STREAM_OPEN_TIMEOUT_S")
-    if raw is None:
-        return default
-    try:
-        timeout = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if timeout <= 0:
-        return default
-    return timeout
-
-
-_STREAM_OPEN_TIMEOUT_S = _resolve_stream_open_timeout()
+_STREAM_OPEN_TIMEOUT_S = 10.0
 _NO_AUDIO_TIMEOUT_S = 9.0
 _LISTENING_STATE = "Listening"
 _READY_STATES = {"Ready", "Idle"}
@@ -209,8 +194,6 @@ class ASRRuntime:
         self._client = client
         self._vendor = self._detect_vendor(client)
         self._bus = telemetry_bus or bus
-        if self._vendor == "deepgram":
-            self._configure_client()
         self._sessions: Dict[str, _SessionState] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self.policy = Policy()
@@ -257,42 +240,18 @@ class ASRRuntime:
     @staticmethod
     def _detect_vendor(client: Any) -> str:
         vendor = getattr(client, "vendor", None)
-        if isinstance(vendor, str) and vendor.strip():
-            return vendor.strip().lower()
+        if isinstance(vendor, str):
+            normalized = vendor.strip().lower()
+            if normalized == "speechmatics":
+                return "speechmatics"
         class_name = type(client).__name__.lower()
         module_name = getattr(type(client), "__module__", "").lower()
         if "speechmatics" in class_name or "speechmatics" in module_name:
             return "speechmatics"
-        return "deepgram"
-
-    def _configure_client(self) -> None:
-        """Force the Deepgram client to use the containerized listen URL."""
-
-        target_url = _DG_LISTEN_URL
-        current_url = getattr(self._client, "_url", None)
-        if current_url == target_url:
-            return
-        try:
-            setattr(self._client, "_url", target_url)
-        except Exception:  # pragma: no cover - defensive
-            _log.debug(
-                "evt=asr_runtime_set_listen_url_failed target_url=%s", target_url,
-                exc_info=True,
-            )
-        else:
-            _log.debug(
-                "evt=asr_runtime_listen_url_set url=%s", target_url
-            )
+        return "speechmatics"
 
     def _generate_stream_id(self) -> str:
-        prefix = "dg"
-        if isinstance(self._vendor, str):
-            normalized = self._vendor.strip().lower()
-            if normalized.startswith("speechmatics"):
-                prefix = "sm"
-            elif normalized and normalized != "deepgram":
-                prefix = normalized[:2]
-        return f"{prefix}-stream-{uuid.uuid4().hex}"
+        return f"sm-stream-{uuid.uuid4().hex}"
 
     def _input_descriptor_from_policy(
         self, policy_snapshot: Mapping[str, Any] | Any | None

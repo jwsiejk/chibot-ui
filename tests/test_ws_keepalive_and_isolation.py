@@ -8,27 +8,10 @@ from unittest.mock import patch
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from app import config
-from app.services.streaming_asr.deepgram_client import DeepgramClient
 from app.telemetry import bus
 from app.voice_v2 import EVT_WS_JSON_SEND
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 from app.security.jwt_utils import mint_ws_token
-
-
-class FakeDeepgramWebSocket:
-    """Minimal websocket stub that records text frames."""
-
-    def __init__(self) -> None:
-        self.sent: list[str] = []
-        self.closed = False
-        self.close_code: int | None = None
-
-    async def send(self, message: str) -> None:
-        self.sent.append(message)
-
-    async def close(self) -> None:
-        self.closed = True
-        self.close_code = 1000
 
 
 class LabelRecordingEngine:
@@ -128,9 +111,6 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
     def tearDown(self) -> None:
         bus.reset()
 
-    def test_deepgram_keepalive_cadence(self) -> None:
-        asyncio.run(self._test_deepgram_keepalive_cadence())
-
     def test_server_keepalive_cadence(self) -> None:
         asyncio.run(self._test_server_keepalive_cadence())
 
@@ -145,19 +125,6 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
 
     def test_multi_session_isolation(self) -> None:
         asyncio.run(self._test_multi_session_isolation())
-
-    async def _test_deepgram_keepalive_cadence(self) -> None:
-        fake_ws = FakeDeepgramWebSocket()
-        with patch.dict(os.environ, {"DG_KEEPALIVE_INTERVAL_S": "0.05"}, clear=False):
-            client = DeepgramClient()
-            await client.connect(fake_ws)
-            await asyncio.sleep(0.12)
-            count_before_close = self._count_keepalives(fake_ws)
-            self.assertGreaterEqual(count_before_close, 2)
-            await client.close()
-            await asyncio.sleep(0.06)
-            self.assertEqual(count_before_close, self._count_keepalives(fake_ws))
-            self.assertTrue(fake_ws.closed)
 
     async def _test_server_keepalive_cadence(self) -> None:
         engine = LabelRecordingEngine()
@@ -247,9 +214,7 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             def on_ws_close(self, sid: str) -> None:
                 self.closed.append(sid)
 
-        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
-            config, "DEEPGRAM_API_KEY", None
-        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
+        with patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
         ), patch.object(
             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
@@ -339,8 +304,8 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                 self.api_key = api_key
                 self.url = url
 
-        class StubDeepgramClient:
-            vendor = "deepgram"
+        class StubLegacyClient:
+            vendor = "legacy"
 
         class StubASRRuntime:
             def __init__(self, engine, client, telemetry_bus=None) -> None:
@@ -360,9 +325,7 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             def on_ws_close(self, sid: str) -> None:
                 self.closed.append(sid)
 
-        with patch.object(config, "ASR_DEEPGRAM_ENABLED", False), patch.object(
-            config, "DEEPGRAM_API_KEY", None
-        ), patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
+        with patch.object(config, "ASR_SPEECHMATICS_ENABLED", True), patch.object(
             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
         ), patch.object(
             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
@@ -371,9 +334,9 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
         ), patch(
             "app.voice_v2.asr_runtime.ASRRuntime", StubASRRuntime
         ):
-            original_runtime = StubASRRuntime(engine, StubDeepgramClient())
+            original_runtime = StubASRRuntime(engine, StubLegacyClient())
             adapter.asr_runtime = original_runtime
-            adapter._asr_runtime_vendor = "deepgram"
+            adapter._asr_runtime_vendor = "legacy"
 
             harness = AdapterHarness(adapter, engine, label="sm-switch")
             await harness.start()
@@ -421,15 +384,6 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             finally:
                 await harness_a.close()
                 await harness_b.close()
-
-    @staticmethod
-    def _count_keepalives(fake_ws: FakeDeepgramWebSocket) -> int:
-        return sum(
-            1
-            for message in fake_ws.sent
-            if json.loads(message).get("type") == "KeepAlive"
-        )
-
 
 if __name__ == "__main__":  # pragma: no cover - convenience
     unittest.main()
