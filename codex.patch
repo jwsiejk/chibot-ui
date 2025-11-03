@@ -1,75 +1,91 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index f0e129058b73e4edfaa0fdd93fe1b0e186a00a7d..d813e4e8b5e34796e6bb05244a822f22544faa02 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -858,57 +858,67 @@ class ASRRuntime:
-         payload = event.get("payload")
-         meta: Mapping[str, Any] | None = None
-         if isinstance(payload, Mapping):
-             candidate = payload.get("meta")
-             if isinstance(candidate, Mapping):
-                 meta = candidate
-         frame_type = meta.get("frame_type") if meta is not None else None
-         if frame_type != "asr.rearm.request":
-             return
-         if state.stream_open:
-             return
-         try:
-             self.prearm(sid)
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=asr_runtime_rearm_failed sid=%s", sid)
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 55817d8b7502b73827e924be7843d6c969f602bf..269331b37d5a6ecec43594ac3e2b68604781882c 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -343,68 +343,85 @@ import { WakeWord } from "./wake_word.js";
+       } catch (err) {
+         console.warn("AudioWorklet addModule failed", err);
+         return false;
+       }
+     }
  
-     def _handle_ws_send_event(self, event: Mapping[str, Any]) -> None:
-         if not isinstance(event, Mapping):
-             return
-         if event.get("type") != EVT_WS_JSON_SEND:
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         payload = event.get("payload") or event.get("frame")
--        if not isinstance(payload, Mapping):
-+        frame: Mapping[str, Any] | None = None
-+        if isinstance(payload, Mapping):
-+            if isinstance(payload.get("type"), str):
-+                frame = payload
-+            else:
-+                candidate = payload.get("frame")
-+                if isinstance(candidate, Mapping):
-+                    frame = candidate
-+
-+        if frame is None:
-             return
--        frame_type = payload.get("type")
-+
-+        frame_type = frame.get("type")
-         if frame_type == "start_listening":
-             self._on_start_listening_frame(sid)
-         elif frame_type in {"stop_listening", "input.stop"}:
--            reason_value = payload.get("reason")
-+            reason_value = frame.get("reason")
-             reason = reason_value if isinstance(reason_value, str) else None
-             self._on_stop_listening_frame(sid, reason)
- 
-     def _handle_client_audio_event(self, event: Mapping[str, Any]) -> None:
-         if not isinstance(event, Mapping):
-             return
-         if event.get("type") != "EVT_AUDIO_CHUNK_SENT_CLIENT":
-             return
-         sid = event.get("sid")
-         if not isinstance(sid, str) or not sid:
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             return
-         meta = event.get("meta")
-         if not isinstance(meta, Mapping):
-             return
-         if not meta.get("commit"):
-             return
-         self._apply_commit_policy(state)
-         if not state.commit_on_vad_silence:
-             return
-         reason_val = meta.get("reason")
-         reason = reason_val if isinstance(reason_val, str) and reason_val else "vad_silence"
-         _log.info(
+     async _ensurePcmGraph() {
+       const context = await this._ensureAudioContext();
+       if (!this._stream) {
+         throw new Error("pcm_stream_unavailable");
+       }
+       this._resetPcmState();
+       if (context.state === "suspended") {
+         try {
+           await context.resume();
+         } catch {}
+       }
+       if (this._pcmSource && (this._pcmNode || this._pcmGainNode)) {
+         return;
+       }
+       const source = context.createMediaStreamSource(this._stream);
+       this._pcmSource = source;
+       let attached = false;
+       if (await this._loadPcmWorklet(context)) {
+         try {
+-          const node = new AudioWorkletNode(context, "pcm16-capture-processor", { numberOfOutputs: 0 });
++          const node = new AudioWorkletNode(
++            context,
++            "pcm16-capture-processor",
++            {
++              numberOfInputs: 1,
++              numberOfOutputs: 1,
++              outputChannelCount: [1],
++            },
++          );
+           node.port.onmessage = (event) => {
+             const data = event?.data;
+             if (!data || data.type !== "chunk") {
+               return;
+             }
+             const buffer = data.data;
+             if (!(buffer instanceof ArrayBuffer)) {
+               return;
+             }
+             this._handlePcmChunk(new Float32Array(buffer), Number(data.sampleRate) || context.sampleRate);
+           };
+           source.connect(node);
++          const gain = context.createGain();
++          gain.gain.value = 0;
++          node.connect(gain);
++          gain.connect(context.destination);
+           this._pcmNode = node;
++          this._pcmGainNode = gain;
+           attached = true;
+         } catch (err) {
+           console.warn("AudioWorkletNode create failed", err);
++          try {
++            source.disconnect();
++          } catch {}
+           this._pcmNode = null;
++          this._pcmGainNode = null;
+         }
+       }
+       if (!attached) {
+         const script = context.createScriptProcessor(4096, Math.max(1, source.channelCount || 1), 1);
+         script.onaudioprocess = (event) => {
+           const input = event?.inputBuffer;
+           if (!input) {
+             return;
+           }
+           const frames = input.length;
+           const channels = input.numberOfChannels || 1;
+           const chunk = new Float32Array(frames);
+           for (let i = 0; i < frames; i += 1) {
+             let sample = 0;
+             for (let ch = 0; ch < channels; ch += 1) {
+               sample += input.getChannelData(ch)?.[i] ?? 0;
+             }
+             chunk[i] = channels > 0 ? sample / channels : 0;
+           }
+           this._handlePcmChunk(chunk, context.sampleRate);
+         };
+         const gain = context.createGain();
+         gain.gain.value = 0;
+         source.connect(script);
+         script.connect(gain);

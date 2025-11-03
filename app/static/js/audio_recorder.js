@@ -365,7 +365,15 @@ import { WakeWord } from "./wake_word.js";
       let attached = false;
       if (await this._loadPcmWorklet(context)) {
         try {
-          const node = new AudioWorkletNode(context, "pcm16-capture-processor", { numberOfOutputs: 0 });
+          const node = new AudioWorkletNode(
+            context,
+            "pcm16-capture-processor",
+            {
+              numberOfInputs: 1,
+              numberOfOutputs: 1,
+              outputChannelCount: [1],
+            },
+          );
           node.port.onmessage = (event) => {
             const data = event?.data;
             if (!data || data.type !== "chunk") {
@@ -378,11 +386,20 @@ import { WakeWord } from "./wake_word.js";
             this._handlePcmChunk(new Float32Array(buffer), Number(data.sampleRate) || context.sampleRate);
           };
           source.connect(node);
+          const gain = context.createGain();
+          gain.gain.value = 0;
+          node.connect(gain);
+          gain.connect(context.destination);
           this._pcmNode = node;
+          this._pcmGainNode = gain;
           attached = true;
         } catch (err) {
           console.warn("AudioWorkletNode create failed", err);
+          try {
+            source.disconnect();
+          } catch {}
           this._pcmNode = null;
+          this._pcmGainNode = null;
         }
       }
       if (!attached) {
