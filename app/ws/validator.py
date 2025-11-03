@@ -143,28 +143,7 @@ def validate_audio_header_against_policy(
         get_value = lambda key, default=None: getattr(media, key, default)
 
     asr_input = get_value("asr_input")
-    if asr_input == "webm_opus":
-        if fmt != "opus":
-            msg = "policy_violation: expected format=opus"
-            _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
-            return msg
-        expected_rate = get_value("asr_rate_hz")
-        if _is_int(expected_rate) and rate is not None and rate != expected_rate:
-            msg = (
-                "evt=audio_header_rate_mismatch expected=%s got=%s"
-                % (expected_rate, rate)
-            )
-            _logger.warning(msg)
-            _emit_validator_log("WARNING", msg)
-        expected_channels = get_value("asr_channels")
-        if _is_int(expected_channels) and channels is not None and channels != expected_channels:
-            msg = (
-                "evt=audio_header_channels_mismatch expected=%s got=%s"
-                % (expected_channels, channels)
-            )
-            _logger.warning(msg)
-            _emit_validator_log("WARNING", msg)
-    elif asr_input == "pcm_16k":
+    if asr_input == "pcm_16k":
         if fmt != "pcm":
             msg = "policy_violation: expected format=pcm"
             _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
@@ -179,9 +158,9 @@ def validate_audio_header_against_policy(
             _emit_validator_log("WARNING", msg)
     else:
         if asr_input:
-            detail = f"policy_violation: unsupported media.asr_input={asr_input}"
+            detail = f"policy_violation: media.asr_input must be pcm_16k (got {asr_input})"
         else:
-            detail = "policy_violation: unsupported media.asr_input"
+            detail = "policy_violation: media.asr_input must be pcm_16k"
         _emit_validator_log("WARNING", f"evt=policy_violation detail={detail}")
         return detail
 

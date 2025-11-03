@@ -39,7 +39,6 @@ _FINAL_CONFIDENCE = 0.9
 _DEFAULT_IDLE_CLOSE_MS = 4000
 _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
 _TRACE_ENABLED = bool(ASR_TRACE)
-_EBML_MAGIC = b"\x1a\x45\xdf\xa3"
 _RMS_PROBE_WINDOW_MS = 2000
 _STREAM_OPEN_TIMEOUT_S = 10.0
 _NO_AUDIO_TIMEOUT_S = 9.0
@@ -73,9 +72,9 @@ def _safe_url(url: str | None) -> str:
 
 def _default_input_descriptor() -> Dict[str, Any]:
     return {
-        "container": "webm",
-        "codec": "opus",
-        "rate_hz": 48000,
+        "container": "raw",
+        "codec": "pcm_s16le",
+        "rate_hz": 16000,
         "channels": 1,
     }
 
@@ -90,9 +89,7 @@ def _pcm_input_descriptor() -> Dict[str, Any]:
 
 
 def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
-    if isinstance(vendor, str) and vendor.strip().lower() == "speechmatics":
-        return _pcm_input_descriptor()
-    return _default_input_descriptor()
+    return _pcm_input_descriptor()
 
 
 @dataclass
@@ -274,20 +271,6 @@ class ASRRuntime:
             get_value = lambda key, default=None: getattr(media, key, default)
 
         asr_input = get_value("asr_input")
-        if asr_input == "webm_opus":
-            rate = get_value("asr_rate_hz", 48000)
-            channels = get_value("asr_channels", 1)
-            rate_value = rate if isinstance(rate, int) and rate > 0 else 48000
-            channels_value = (
-                channels if isinstance(channels, int) and channels > 0 else 1
-            )
-            return {
-                "container": "webm",
-                "codec": "opus",
-                "rate_hz": rate_value,
-                "channels": channels_value,
-            }
-
         if asr_input == "pcm_16k":
             return _pcm_input_descriptor()
 
@@ -654,47 +637,11 @@ class ASRRuntime:
         input_desc = state.input_desc or {}
         if not isinstance(input_desc, Mapping):
             input_desc = {}
-        expected_codec = str(input_desc.get("codec") or "").strip().lower()
-        chunk_is_webm = data.startswith(_EBML_MAGIC)
-
-        if expected_codec == "pcm_s16le" and chunk_is_webm:
-            _log.warning(
-                "evt=asr_drop_incompatible_chunk sid=%s vendor=%s reason=unexpected_webm",
-                sid,
-                self._vendor,
-            )
-            return
 
         if state.ingress_packets == 0:
             state.first_ingress_ms = now_ms
         state.ingress_packets += 1
         state.ingress_bytes += chunk_len
-
-        if (
-            state.stream_open
-            and state.bytes_received > 0
-            and data.startswith(_EBML_MAGIC)
-        ):
-            stream_id = state.stream_id or state.last_stream_id or ""
-            _log.warning(
-                "evt=asr_midstream_header sid=%s stream_id=%s action=reopen_vendor",
-                sid,
-                stream_id,
-            )
-            state.close_reason = "midstream_header"
-            try:
-                self._client.close_stream(sid)
-            except Exception:  # pragma: no cover - defensive
-                _log.exception("evt=asr_midstream_close_failed sid=%s", sid)
-            finally:
-                self._finalize_rms_probe(sid, state)
-            state.stream_open = False
-            state.stream_id = None
-            state.bytes_received = 0
-            state.chunks_sent = 0
-            state.pending.clear()
-            state.buffered_bytes = 0
-            state.first_chunk_seen = False
 
         if not state.first_chunk_seen:
             state.first_chunk_seen = True
@@ -705,7 +652,7 @@ class ASRRuntime:
             if isinstance(codec_value, str) and codec_value:
                 codec_label = codec_value
             else:
-                codec_label = "webm_opus" if chunk_is_webm else "unknown"
+                codec_label = "unknown"
             _log.info(
                 "evt=audio_first_chunk sid=%s bytes=%d codec=%s",
                 sid,

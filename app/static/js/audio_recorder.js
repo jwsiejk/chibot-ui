@@ -1,9 +1,7 @@
 import { WakeWord } from "./wake_word.js";
 
-/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
+/** POLICY: PCM-only recorder; no PTT; no manual barge-in; wake-word only. */
 (() => {
-  const SEND_TIMESLICE_MS = 300;
-  const OPUS_MIME = "audio/webm;codecs=opus";
   const PCM_SAMPLE_RATE = 16000;
   const PCM_FRAME_SAMPLES = Math.round(PCM_SAMPLE_RATE * 0.05);
   const PCM_TELEMETRY_INTERVAL_MS = 1000;
@@ -54,7 +52,6 @@ import { WakeWord } from "./wake_word.js";
       this._ws = ws || null;
       this._state = appState || null;
       this._stream = null;
-      this._rec = null;
       this._sendGate = false;
       this._policy = {};
       this._micOpenEmitted = false;
@@ -62,7 +59,6 @@ import { WakeWord } from "./wake_word.js";
       this._wakeInit = false;
       this._sendMuted = false;
       this._headerSent = false;
-      this._usePCM = false;
       this._audioContext = null;
       this._pcmSource = null;
       this._pcmNode = null;
@@ -86,49 +82,25 @@ import { WakeWord } from "./wake_word.js";
 
     setPolicy(policy) {
       const hasPayload = policy && typeof policy === "object" && Object.keys(policy).length > 0;
-      const previousUsePCM = this._usePCM;
       const snapshot = hasPayload
         ? policy
         : (this._policy && typeof this._policy === "object" ? this._policy : {});
-      const nextUsePCM = this._resolveUsePCM(snapshot);
-
-      if (hasPayload && nextUsePCM && !previousUsePCM && this._rec) {
-        const recorder = this._rec;
-        try {
-          if (recorder.state !== "inactive") {
-            recorder.stop();
-          }
-        } catch (err) {
-          console.warn("AudioRecorder policy switch stop failed", err);
-        }
-        this._rec = null;
-      }
-      if (hasPayload && nextUsePCM && !previousUsePCM) {
+      if (hasPayload) {
         this._headerSent = false;
         this._resetStreamingTelemetry();
-      }
-      if (hasPayload && !nextUsePCM && previousUsePCM) {
-        this._headerSent = false;
-        try {
-          this._teardownPcmGraph();
-        } catch (err) {
-          console.warn("AudioRecorder pcm teardown failed", err);
-        }
       }
 
       if (hasPayload || !this._policy || typeof this._policy !== "object") {
         this._policy = snapshot;
       }
-      this._usePCM = nextUsePCM;
 
-      if (hasPayload || previousUsePCM !== nextUsePCM) {
+      if (hasPayload) {
         try {
           const mediaPolicy = snapshot && typeof snapshot.media === "object" ? snapshot.media : {};
           const audioPolicy = snapshot && typeof snapshot.audio === "object" ? snapshot.audio : {};
           const pipeline = audioPolicy && typeof audioPolicy.pipeline === "object" ? audioPolicy.pipeline : {};
           console.info(
-            "diag=recorder_policy usePCM=%s asr_input=%s pipeline=%s",
-            this._usePCM,
+            "diag=recorder_policy format=pcm asr_input=%s pipeline=%s",
             mediaPolicy?.asr_input ?? null,
             pipeline?.mode ?? null,
           );
@@ -138,22 +110,6 @@ import { WakeWord } from "./wake_word.js";
 
     get policy() {
       return this._policy || {};
-    }
-
-    _resolveUsePCM(policy) {
-      const source = policy && typeof policy === "object" ? policy : this._policy || {};
-      try {
-        const media = source.media && typeof source.media === "object" ? source.media : null;
-        if (media && typeof media.asr_input === "string" && media.asr_input === "pcm_16k") {
-          return true;
-        }
-        const audio = source.audio && typeof source.audio === "object" ? source.audio : null;
-        const pipeline = audio && typeof audio.pipeline === "object" ? audio.pipeline : null;
-        if (pipeline && typeof pipeline.mode === "string" && pipeline.mode === "pcm16") {
-          return true;
-        }
-      } catch {}
-      return false;
     }
 
     _recorderPolicy() {
@@ -298,9 +254,6 @@ import { WakeWord } from "./wake_word.js";
     }
 
     async _ensurePcmGraph() {
-      if (!this._usePCM) {
-        return;
-      }
       const context = await this._ensureAudioContext();
       if (!this._stream) {
         throw new Error("pcm_stream_unavailable");
@@ -657,41 +610,20 @@ import { WakeWord } from "./wake_word.js";
       if (socket.readyState !== WebSocket.OPEN) {
         return false;
       }
-      let payload;
-      if (this._usePCM) {
-        payload = {
-          type: "audio.header",
-          format: "pcm",
-          sample_rate: PCM_SAMPLE_RATE,
-          channels: 1,
-        };
-      } else {
-        const mediaPolicy = this.policy?.media && typeof this.policy.media === "object" ? this.policy.media : {};
-        const sampleRate = Number.isFinite(mediaPolicy?.sample_rate) ? mediaPolicy.sample_rate : 48000;
-        const channels = Number.isFinite(mediaPolicy?.channels) ? mediaPolicy.channels : 1;
-        payload = {
-          type: "audio.header",
-          format: "opus",
-          sample_rate: sampleRate,
-          channels,
-        };
-      }
+      const payload = {
+        type: "audio.header",
+        format: "pcm",
+        sample_rate: PCM_SAMPLE_RATE,
+        channels: 1,
+      };
       try {
         socket.send(JSON.stringify(payload));
         this._headerSent = true;
-        if (this._usePCM) {
-          console.info(
-            "diag=audio_header_sent format=pcm sample_rate=%d channels=%d",
-            payload.sample_rate,
-            payload.channels,
-          );
-        } else {
-          console.info(
-            "diag=audio_header_sent format=opus sample_rate=%d channels=%d",
-            payload.sample_rate,
-            payload.channels,
-          );
-        }
+        console.info(
+          "diag=audio_header_sent format=pcm sample_rate=%d channels=%d",
+          payload.sample_rate,
+          payload.channels,
+        );
         return true;
       } catch (err) {
         console.warn("diag=audio_header_send_failed %o", err);
@@ -708,15 +640,13 @@ import { WakeWord } from "./wake_word.js";
       }
       if (!this._stream) {
         if (!this._armingPromise) {
-          const constraints = this._usePCM
-            ? {
-                audio: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true,
-                },
-              }
-            : { audio: true };
+          const constraints = {
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          };
           this._armingPromise = (async () => {
             try {
               const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -752,101 +682,7 @@ import { WakeWord } from "./wake_word.js";
       if (!this._stream) {
         throw new Error("media_stream_unavailable");
       }
-      if (this._usePCM) {
-        await this._ensurePcmGraph();
-        return;
-      }
-      if (!window.MediaRecorder) {
-        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
-        const logMic = typeof window !== "undefined" ? window.__logMic : null;
-        const logStage = typeof window !== "undefined" ? window.__logStage : null;
-        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unavailable' });
-        logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unavailable' });
-        throw new Error("media_recorder_unavailable");
-      }
-      if (typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(OPUS_MIME)) {
-        const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
-        const logMic = typeof window !== "undefined" ? window.__logMic : null;
-        const logStage = typeof window !== "undefined" ? window.__logStage : null;
-        logMic?.({ outcome: (micOutcome && micOutcome.ERROR_GUM) || 'error_getuser_media', message: 'media_recorder_unsupported' });
-        logStage?.('client.audio', { outcome: 'error', message: 'media_recorder_unsupported' });
-        throw new Error("media_recorder_unsupported");
-      }
-      if (!this._rec) {
-        this._rec = new MediaRecorder(this._stream, { mimeType: OPUS_MIME });
-        const logStage = typeof window !== "undefined" ? window.__logStage : null;
-        logStage?.('client.audio', { outcome: 'encoder_ready', format: 'webm_opus', sr: 48000, channels: 1 });
-        this._rec.addEventListener("dataavailable", async (event) => {
-          if (this._usePCM) {
-            return;
-          }
-          if (!event?.data || event.data.size === 0) {
-            return;
-          }
-          const buf = await event.data.arrayBuffer();
-          if (!buf || buf.byteLength === 0) {
-            return;
-          }
-          if (!this._sendGate || this._sendMuted) {
-            return;
-          }
-          const socket = this._ws;
-          if (!socket || socket.readyState !== WebSocket.OPEN) {
-            return;
-          }
-          const packet = buf;
-          const globalWindow = typeof window !== "undefined" ? window : null;
-          const logMic = globalWindow?.__logMic;
-          const logStage = globalWindow?.__logStage;
-          const micOutcome = globalWindow?.__MIC_OUTCOME;
-          if (globalWindow && typeof globalWindow.__micChunks === "number") {
-            if (globalWindow.__micChunks === 0) {
-              globalWindow.__micChunks = 1;
-              globalWindow.__micBytes += (packet?.byteLength ?? 0);
-              const armedAt = globalWindow.__micArmedAt || 0;
-              const firstChunkMs = Math.max(0, Date.now() - armedAt);
-              logMic?.({ outcome: (micOutcome && micOutcome.STREAMING) || 'streaming', first_chunk_ms: firstChunkMs });
-              logStage?.('client.audio', { outcome: 'packet_sent', packet_bytes: packet?.byteLength ?? 0, send_q_len: socket.bufferedAmount });
-              if (armedAt && globalWindow.__micChunks === 1) {
-                logStage?.('client.perf', { outcome: 'mark', name: 'first_chunk_ms', t_ms: firstChunkMs });
-              }
-            } else {
-              globalWindow.__micChunks += 1;
-              globalWindow.__micBytes += (packet?.byteLength ?? 0);
-              if ((globalWindow.__micChunks % 50) === 0) {
-                logMic?.({ outcome: (micOutcome && micOutcome.STREAMING_HEARTBEAT) || 'streaming_heartbeat' });
-              }
-            }
-          }
-          try {
-            socket.send(packet);
-            console.info("diag=audio_chunk_sent bytes=%d", packet.byteLength);
-          } catch (err) {
-            logMic?.({ outcome: (micOutcome && micOutcome.ERROR_WS_SEND) || 'error_ws_send', message: err?.message });
-            logStage?.('client.audio', { outcome: 'error', message: err?.message });
-            console.warn("diag=audio_chunk_send_failed %o", err);
-          }
-        });
-        this._rec.addEventListener("stop", () => {
-          this._rec = null;
-          const logMic = typeof window !== "undefined" ? window.__logMic : null;
-          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
-          logMic?.({ outcome: (micOutcome && micOutcome.STOPPED) || 'stopped', reason: 'recorder_stop' });
-        });
-        this._rec.addEventListener("error", (event) => {
-          console.warn("diag=media_recorder_error %o", event);
-          const logMic = typeof window !== "undefined" ? window.__logMic : null;
-          const micOutcome = typeof window !== "undefined" ? window.__MIC_OUTCOME : null;
-          const logStage = typeof window !== "undefined" ? window.__logStage : null;
-          const message = event?.error?.message || event?.name || "recorder_error";
-          logMic?.({ outcome: (micOutcome && micOutcome.ERROR_UNKNOWN) || 'error_unknown', message });
-          logStage?.('client.audio', { outcome: 'error', message });
-        });
-      }
-      if (this._rec.state !== "recording") {
-        this._rec.start(SEND_TIMESLICE_MS);
-        console.info("diag=media_recorder_start timeslice_ms=%d", SEND_TIMESLICE_MS);
-      }
+      await this._ensurePcmGraph();
     }
 
     _updateRecorderState(active, reason) {
@@ -881,11 +717,10 @@ import { WakeWord } from "./wake_word.js";
       }
       if (nextActive && !this._micOpenEmitted) {
         this._micOpenEmitted = true;
-        const vendorLabel = this._usePCM ? "pcm16" : "webm_opus";
         emitEvent(CLIENT_MIC_OPEN_EVENT, {
           type: CLIENT_MIC_OPEN_EVENT,
           ts: Date.now(),
-          vendor: vendorLabel
+          vendor: "pcm16"
         });
       }
     }
@@ -905,8 +740,8 @@ import { WakeWord } from "./wake_word.js";
     async startListening(policy = {}) {
       this.setPolicy(policy);
       await this._ensureArmed();
-      console.info("diag=recorder_mode mode=%s", this._usePCM ? "pcm16" : "opus-webm");
-      // Always send header now; _sendAudioHeader chooses pcm or opus by _usePCM
+      console.info("diag=recorder_mode mode=pcm16");
+      // Always send header now; _sendAudioHeader chooses pcm format
       this._sendAudioHeader();
       if (!this._sendGate) {
         this._sendGate = true;
@@ -928,9 +763,7 @@ import { WakeWord } from "./wake_word.js";
       this._micOpenEmitted = false;
       this._setSendMuted(false, reason);
       this._headerSent = false;
-      if (this._usePCM) {
-        this._resetPcmState();
-      }
+      this._resetPcmState();
     }
 
     handleStopListening(opts = {}) {
@@ -972,14 +805,6 @@ import { WakeWord } from "./wake_word.js";
           console.warn("AudioRecorder pcm teardown failed", err);
         }
       }
-      try {
-        if (this._rec && this._rec.state !== "inactive") {
-          this._rec.stop();
-        }
-      } catch (err) {
-        console.warn("AudioRecorder stop error", err);
-      }
-      this._rec = null;
       this._micOpenEmitted = false;
       this._active = false;
       this._wakeInit = false;

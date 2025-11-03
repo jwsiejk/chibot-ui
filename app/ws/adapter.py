@@ -1109,29 +1109,13 @@ class ChatV2Adapter:
                 return self._HandleResult(True)
 
         if frame_type == "audio.header":
-            raw_format = frame.get("format")
-            effective_format: Optional[str] = None
-            snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-            media_block = snapshot.get("media") if isinstance(snapshot, Mapping) else None
-            if isinstance(media_block, Mapping):
-                media_format = media_block.get("asr_input")
-                if isinstance(media_format, str) and media_format:
-                    effective_format = media_format
-            if not isinstance(effective_format, str) or not effective_format:
-                if isinstance(raw_format, str):
-                    effective_format = "webm_opus" if raw_format == "opus" else raw_format
-                else:
-                    effective_format = None
-
             profile = {
-                "format": effective_format,
-                "codec": raw_format,
+                "format": "pcm",
+                "codec": "pcm_s16le",
                 "sample_rate": frame.get("sample_rate"),
                 "channels": frame.get("channels"),
+                "container": "raw",
             }
-            if effective_format == "webm_opus" or raw_format == "opus":
-                profile["container"] = "webm"
-                profile["mime"] = "audio/webm;codecs=opus"
             seq_start = frame.get("seq_start")
             if seq_start is not None:
                 if not isinstance(seq_start, int):
@@ -1529,20 +1513,6 @@ class ChatV2Adapter:
                 ctx.ingress_bytes,
             )
 
-        profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
-        runtime = getattr(self, "asr_runtime", None)
-        if runtime is not None and profile is not None:
-            fmt = str(profile.get("format") or "")
-            container = str(profile.get("container") or "")
-            codec = str(profile.get("codec") or "")
-            if fmt == "webm_opus" or (container == "webm" and codec == "opus"):
-                try:
-                    runtime.on_ws_audio(ctx.sid, data)
-                except Exception:  # pragma: no cover - defensive logging
-                    _log.warning(
-                        "evt=ws_asr_audio_forward_failed sid=%s", ctx.sid, exc_info=True
-                    )
-
         if (
             ctx.asr_vendor == "speechmatics"
             and ctx.audio_chunks_recv == 0
@@ -1726,9 +1696,8 @@ class ChatV2Adapter:
         if asr_runtime is not None:
             profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
             fmt = str(profile.get("format") or "") if profile else ""
-            container = str(profile.get("container") or "") if profile else ""
             codec = str(profile.get("codec") or "") if profile else ""
-            if not (fmt == "webm_opus" or (container == "webm" and codec == "opus")):
+            if fmt == "pcm" or codec.startswith("pcm"):
                 try:
                     asr_runtime.on_ws_audio(ctx.sid, chunk)
                 except Exception:  # pragma: no cover - defensive logging

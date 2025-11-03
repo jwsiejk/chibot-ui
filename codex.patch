@@ -1,375 +1,79 @@
-diff --git a/tests/test_asr_adapter_basic.py b/tests/test_asr_adapter_basic.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..1b9469542ed121cde223ec19d46c828bbfbf84f2
---- /dev/null
-+++ b/tests/test_asr_adapter_basic.py
-@@ -0,0 +1,86 @@
-+import asyncio
-+import json
-+import unittest
-+
-+from app.telemetry import bus
-+from app.ws.adapter import AdapterContext, ChatV2Adapter
-+
-+
-+class TestASRAdapterBasic(unittest.TestCase):
-+    def setUp(self) -> None:
-+        bus.reset()
-+
-+    def tearDown(self) -> None:
-+        bus.reset()
-+
-+    def test_ready_bundle_uses_pcm_policy(self) -> None:
-+        adapter = ChatV2Adapter()
-+        ctx = AdapterContext(sid="sid-ready-bundle", headers={})
-+        ctx.asr_vendor = "speechmatics"
-+        ctx.audio_pipeline_mode = "pcm16"
-+        ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
-+
-+        sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
-+
-+        self.assertTrue(ctx.asr_ready)
-+        self.assertIsInstance(ctx.mic_armed_ms, int)
-+
-+        frames = [
-+            json.loads(msg["text"])
-+            for msg in sent
-+            if msg.get("type") == "websocket.send" and msg.get("text")
-+        ]
-+
-+        self.assertEqual(
-+            [frame.get("type") for frame in frames],
-+            ["asr.ready", "input.start", "start_listening"],
-+        )
-+
-+        ready_frame = frames[0]
-+        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
-+        input_desc = ready_frame.get("input")
-+        self.assertIsInstance(input_desc, dict)
-+        self.assertEqual(input_desc.get("mode"), "pcm16")
-+        self.assertEqual(input_desc.get("container"), "raw")
-+        self.assertEqual(input_desc.get("codec"), "pcm_s16le")
-+        self.assertEqual(input_desc.get("rate_hz"), 16000)
-+        self.assertEqual(input_desc.get("channels"), 1)
-+
-+        input_start = frames[1]
-+        capture = input_start.get("capture")
-+        self.assertIsInstance(capture, dict)
-+        self.assertEqual(capture.get("mode"), "pcm16")
-+        self.assertEqual(capture.get("container"), "raw")
-+        self.assertEqual(capture.get("codec"), "pcm_s16le")
-+        self.assertEqual(capture.get("rate_hz"), 16000)
-+        self.assertEqual(capture.get("channels"), 1)
-+        self.assertEqual(capture.get("timeslice_ms"), 50)
-+        self.assertIs(capture.get("manual_gate"), False)
-+
-+        policy = input_start.get("policy")
-+        self.assertIsInstance(policy, dict)
-+        self.assertEqual(policy, ctx.session_capture_policy)
-+        self.assertEqual(policy.get("media", {}).get("asr_input"), "pcm_16k")
-+        self.assertEqual(policy.get("audio", {}).get("pipeline", {}).get("mode"), "pcm16")
-+        self.assertEqual(policy.get("capture", {}).get("sample_rate"), 16000)
-+        self.assertEqual(policy.get("capture", {}).get("channels"), 1)
-+
-+        start_listening = frames[2]
-+        self.assertEqual(start_listening.get("policy"), policy)
-+
-+        self.assertEqual(len(sent), 3)
-+
-+    async def _emit_ready_bundle(
-+        self, adapter: ChatV2Adapter, ctx: AdapterContext
-+    ) -> list[dict]:
-+        sent: list[dict] = []
-+
-+        async def send(message: dict) -> None:
-+            sent.append(message)
-+
-+        await adapter._send_asr_ready_bundle(send, ctx)
-+        return sent
-+
-+
-+if __name__ == "__main__":  # pragma: no cover
-+    unittest.main()
-diff --git a/tests/test_asr_readiness_gate.py b/tests/test_asr_readiness_gate.py
-index 00085ada1e56ed49c30e90a9796a8abafa13adf3..0b478d9b43c0d2f8c507b42eea34c48f42e2fb7f 100644
---- a/tests/test_asr_readiness_gate.py
-+++ b/tests/test_asr_readiness_gate.py
-@@ -178,77 +178,86 @@ class TestASRReadinessGate(unittest.TestCase):
- 
-         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-         self.assertEqual(len(accept_messages), 1)
- 
-         outbound_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text")
-         ]
-         error_frames = [payload for payload in outbound_payloads if payload.get("type") == "error"]
-         self.assertTrue(error_frames)
-         for payload in error_frames:
-             self.assertEqual(
-                 payload,
-                 {"type": "error", "code": "audio_not_expected", "detail": "asr not ready"},
+diff --git a/app/ws/validator.py b/app/ws/validator.py
+index 90144a0d9afc0d1c653ef0e649e77b45961af1ef..72166cacca84a89664f823f9c08ef99990ea827d 100644
+--- a/app/ws/validator.py
++++ b/app/ws/validator.py
+@@ -121,71 +121,50 @@ def validate_audio_header_against_policy(
+                 channels,
              )
+             _emit_validator_log(
+                 "WARNING",
+                 "audio.header_rejected reason=vendor_requires_pcm vendor=speechmatics",
+             )
+             return "speechmatics requires pcm@16k mono"
  
-         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
-         self.assertEqual(len(close_frames), 1)
-         self.assertEqual(close_frames[0].get("code"), 1003)
- 
-         self.assertFalse(engine.audio_calls)
-         self.assertEqual(len(audio_events), 1)
-         meta = audio_events[0]["meta"]
-         self.assertEqual(meta["error"], "audio_not_expected")
-+        self.assertEqual(meta["byte_count"], 4)
-         self.assertEqual(meta["ws"]["size"], 4)
- 
-     def test_binary_post_ready_accepted(self) -> None:
-         sent, engine, audio_events = asyncio.run(self._exercise(publish_ready=True))
- 
-         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-         self.assertEqual(len(accept_messages), 1)
- 
-         outbound_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text")
-         ]
-         error_frames = [payload for payload in outbound_payloads if payload.get("type") == "error"]
-         self.assertFalse(error_frames)
- 
-+        ready_frames = [
-+            payload for payload in outbound_payloads if payload.get("type") == "asr.ready"
-+        ]
-+        self.assertEqual(len(ready_frames), 1)
-+        ready_frame = ready_frames[0]
-+        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
-+
-         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
-         self.assertFalse(close_frames)
- 
-         self.assertEqual(len(engine.audio_calls), 1)
-         call = engine.audio_calls[0]
-         self.assertEqual(call[2], 0)
-         self.assertEqual(call[1], b"\x00" * 4)
- 
-         self.assertEqual(len(audio_events), 1)
-         self.assertNotIn("error", audio_events[0]["meta"])
-         self.assertEqual(audio_events[0]["meta"]["seq"], 0)
-+        self.assertEqual(audio_events[0]["meta"]["byte_count"], len(call[1]))
- 
-     @patch.object(ChatV2Adapter, "_allowed_asr_vendors", return_value=["speechmatics"])
-     def test_speechmatics_concurrency_sets_grace(self, _mock_allowed: Any) -> None:
-         sent, snapshot = asyncio.run(self._exercise_speechmatics_concurrency())
- 
-         self.assertEqual(snapshot["vendor"], "speechmatics")
-         self.assertEqual(snapshot["recovering_reason"], "concurrent_session")
-         self.assertTrue(snapshot["audio_logged"])
-         self.assertGreater(snapshot["recovering_until"], time.monotonic())
- 
-         outbound_payloads = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text")
-         ]
-         for payload in outbound_payloads:
-             self.assertNotEqual(payload.get("type"), "error")
- 
-         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
-         for frame in close_frames:
-             self.assertNotEqual(frame.get("code"), 1003)
- 
- 
- if __name__ == "__main__":  # pragma: no cover
-     unittest.main()
-diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
-index b5edd21b9f91cf2549ec4295c5819ecc871a396d..2c861b54fcab7c9d16537bd1607e6373fb3d5099 100644
---- a/tests/test_ws_binary_guard.py
-+++ b/tests/test_ws_binary_guard.py
-@@ -8,50 +8,53 @@ import uuid
- from typing import Any, Dict, List
- 
- import unittest
- 
- os.environ.setdefault("SECRET_KEY", "test-secret")
- os.environ.setdefault("ALLOW_AUDIO_WITHOUT_ASR", "1")
- 
- from app.telemetry import bus
- from app.voice_v2 import EVT_ASR_READY, EVT_WS_AUDIO_RECV
- from app.ws.adapter import ChatV2Adapter, RATE_LIMIT_CAPACITY
- from app.security.jwt_utils import mint_ws_token
- 
- 
- class RecordingEngine:
-     """Recording stub for the engine hooks."""
- 
-     def __init__(self, adapter: ChatV2Adapter, accept_audio: bool = True) -> None:
-         self.adapter = adapter
-         self.accept_audio = accept_audio
-         self.open_sid: str | None = None
-         self.audio_calls: List[tuple[str, bytes, int]] = []
- 
-     def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
-         self.open_sid = sid
-         bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
-+        ctx = self.adapter._contexts.get(sid)
-+        if ctx is not None:
-+            ctx.asr_ready = True
-         if not self.accept_audio:
-             self.adapter.set_accepting_audio(sid, False)
- 
-     def on_json(self, sid: str, frame: Dict[str, Any]) -> None:  # pragma: no cover - signature stub
+     if policy is None:
          return None
  
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-         self.audio_calls.append((sid, chunk, seq))
+     if isinstance(policy, Mapping):
+         media = policy.get("media")
+     else:
+         media = getattr(policy, "media", None)
+ 
+     if media is None:
+         return None
+ 
+     if isinstance(media, Mapping):
+         get_value = media.get
+     else:
+         get_value = lambda key, default=None: getattr(media, key, default)
+ 
+     asr_input = get_value("asr_input")
+-    if asr_input == "webm_opus":
+-        if fmt != "opus":
+-            msg = "policy_violation: expected format=opus"
+-            _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
+-            return msg
+-        expected_rate = get_value("asr_rate_hz")
+-        if _is_int(expected_rate) and rate is not None and rate != expected_rate:
+-            msg = (
+-                "evt=audio_header_rate_mismatch expected=%s got=%s"
+-                % (expected_rate, rate)
+-            )
+-            _logger.warning(msg)
+-            _emit_validator_log("WARNING", msg)
+-        expected_channels = get_value("asr_channels")
+-        if _is_int(expected_channels) and channels is not None and channels != expected_channels:
+-            msg = (
+-                "evt=audio_header_channels_mismatch expected=%s got=%s"
+-                % (expected_channels, channels)
+-            )
+-            _logger.warning(msg)
+-            _emit_validator_log("WARNING", msg)
+-    elif asr_input == "pcm_16k":
++    if asr_input == "pcm_16k":
+         if fmt != "pcm":
+             msg = "policy_violation: expected format=pcm"
+             _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
+             return msg
+         if rate is not None and rate != 16000:
+             msg = f"evt=audio_header_rate_mismatch expected=16000 got={rate}"
+             _logger.warning(msg)
+             _emit_validator_log("WARNING", msg)
+         if channels is not None and channels != 1:
+             msg = f"evt=audio_header_channels_mismatch expected=1 got={channels}"
+             _logger.warning(msg)
+             _emit_validator_log("WARNING", msg)
+     else:
+         if asr_input:
+-            detail = f"policy_violation: unsupported media.asr_input={asr_input}"
++            detail = f"policy_violation: media.asr_input must be pcm_16k (got {asr_input})"
+         else:
+-            detail = "policy_violation: unsupported media.asr_input"
++            detail = "policy_violation: media.asr_input must be pcm_16k"
+         _emit_validator_log("WARNING", f"evt=policy_violation detail={detail}")
+         return detail
+ 
+     return None
  
  
- class TestWebSocketBinaryGuard(unittest.TestCase):
-     """Integration tests for the binary audio guard behavior."""
- 
-     def setUp(self) -> None:
-         bus.reset()
- 
-     def tearDown(self) -> None:
-         bus.reset()
- 
-     @staticmethod
-     def _make_scope() -> Dict[str, Any]:
-         sid = f"sid-{uuid.uuid4().hex}"
-         token = mint_ws_token("user-1", sid, False)
-         return {
-             "type": "websocket",
-@@ -106,122 +109,128 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
-         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
-         try:
-             payload_one = b"\x01" * 4
-             payload_two = b"\x02" * 8
-             events = [
-                 {"type": "websocket.connect"},
-                 {"type": "websocket.receive", "bytes": payload_one},
-                 {"type": "websocket.receive", "bytes": payload_two},
-                 {"type": "websocket.disconnect", "code": 1000},
-             ]
- 
-             sent = self._drive(adapter, events)
-         finally:
-             bus.unsubscribe(token)
- 
-         accept_messages = [msg for msg in sent if msg.get("type") == "websocket.accept"]
-         self.assertEqual(len(accept_messages), 1)
- 
-         self.assertEqual(len(engine.audio_calls), 2)
-         self.assertEqual(engine.audio_calls[0][2], 0)
-         self.assertEqual(engine.audio_calls[1][2], 1)
- 
-         self.assertEqual(len(received_events), 2)
-         self.assertEqual(received_events[0]["meta"]["seq"], 0)
-         self.assertEqual(received_events[1]["meta"]["seq"], 1)
-+        self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload_one))
-+        self.assertEqual(received_events[1]["meta"]["byte_count"], len(payload_two))
-         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload_one))
-         self.assertEqual(received_events[1]["meta"]["ws"]["size"], len(payload_two))
- 
-     def test_audio_header_sets_profile_and_allows_audio(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine(adapter)
-         adapter.engine = engine
- 
-         received_events: List[dict] = []
-         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
-         try:
-             header = {
-                 "type": "audio.header",
-                 "format": "pcm",
-                 "sample_rate": 16000,
-                 "channels": 1,
-             }
-             payload = b"\x03" * 2
-             events = [
-                 {"type": "websocket.connect"},
-                 {"type": "websocket.receive", "text": json.dumps(header)},
-                 {"type": "websocket.receive", "bytes": payload},
-                 {"type": "websocket.disconnect", "code": 1000},
-             ]
- 
-             sent = self._drive(adapter, events)
-         finally:
-             bus.unsubscribe(token)
- 
-         self.assertEqual(len(engine.audio_calls), 1)
-         self.assertEqual(engine.audio_calls[0][2], 0)
- 
-         errors = self._extract_error_frames(sent)
-         self.assertFalse(errors)
- 
-         self.assertEqual(len(received_events), 1)
-+        self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload))
-         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
- 
-     def test_duplicate_audio_header_reports_error(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine(adapter)
-         adapter.engine = engine
- 
-         header_one = {
-             "type": "audio.header",
-             "format": "pcm",
-             "sample_rate": 16000,
-             "channels": 1,
-         }
-         header_two = {
-             "type": "audio.header",
-             "format": "pcm",
-             "sample_rate": 44100,
-             "channels": 1,
-         }
-         events = [
-             {"type": "websocket.connect"},
-             {"type": "websocket.receive", "text": json.dumps(header_one)},
-             {"type": "websocket.receive", "text": json.dumps(header_two)},
-             {"type": "websocket.disconnect", "code": 1000},
-         ]
- 
-         sent = self._drive(adapter, events)
- 
-         error_messages = self._extract_error_frames(sent)
-         self.assertEqual(len(error_messages), 1)
-         payload = error_messages[0]
--        self.assertEqual(payload, {
--            "type": "error",
--            "code": "schema_invalid",
--            "detail": "duplicate or conflicting audio.header",
--        })
-+        self.assertEqual(
-+            payload,
-+            {
-+                "type": "error",
-+                "code": "schema_invalid",
-+                "detail": "audio.header pcm requires sample_rate=16000 and channels=1",
-+            },
-+        )
- 
-         close_messages = [msg for msg in sent if msg.get("type") == "websocket.close"]
-         self.assertFalse(close_messages)
- 
-     def test_not_accepting_audio_triggers_policy_close(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine(adapter, accept_audio=False)
-         adapter.engine = engine
- 
-         received_events: List[dict] = []
-         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
-         try:
-             chunk = b"\x05" * 4
-             events = [
-                 {"type": "websocket.connect"},
-                 {"type": "websocket.receive", "bytes": chunk},
-                 {"type": "websocket.receive", "bytes": chunk},
-                 {"type": "websocket.receive", "bytes": chunk},
-             ]
- 
-             sent = self._drive(adapter, events)
-         finally:
-             bus.unsubscribe(token)
- 
-         self.assertFalse(engine.audio_calls)
+ __all__ = ["validate_frame", "validate_audio_header_against_policy"]
