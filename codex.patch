@@ -1,164 +1,198 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 922ae21b5412a9b06bbb05a8a08be8584d37ba51..8e1add9a816113a2d411a8e43f3d56795163a55e 100644
+index 8e1add9a816113a2d411a8e43f3d56795163a55e..31e0ae4b3db95d6b734e66a8ef3ac5bc0cafec9b 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -2507,69 +2507,74 @@ class ChatV2Adapter:
-                 if state_text == "Ready" and reason_text == "tts_end":
-                     policy = self._policy_snapshot()
-                     self._maybe_emit_await_user(ctx, policy)
+@@ -68,50 +68,52 @@ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
  
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 _on_loop()
+ _DEFAULT_WS_PING_INTERVAL_MS = 20_000
+ _HEARTBEAT_TIMEOUT_MS = 30_000
  
-         ctx.turn_state_subscription_token = bus.subscribe(
-             "EVT_TURN_STATE", _handle_turn_state_event
-         )
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
  
-         def _handle_audio_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
-             if ctx.audio_send_closed:
-                 return
-             chunk = event.get("chunk")
-             if isinstance(chunk, (bytes, bytearray, memoryview)):
-                 chunk_bytes = bytes(chunk)
-             else:
-                 return
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
  
-             def _deliver() -> None:
--                task = asyncio.create_task(self._send_audio_frame(ctx, send, chunk_bytes))
--                ctx.audio_tasks.add(task)
--
--                def _on_done(done: asyncio.Task[None]) -> None:
--                    ctx.audio_tasks.discard(done)
-+                async def _run_audio_task() -> None:
-+                    start = time.perf_counter()
-                     try:
--                        done.result()
-+                        await self._send_audio_frame(ctx, send, chunk_bytes)
-                     except asyncio.CancelledError:
--                        pass
-+                        return
-                     except ClientDisconnected:
-                         self._disable_audio_send(ctx, "client_disconnected")
--                    except RuntimeError:
--                        self._disable_audio_send(ctx, "send_failed")
--                        _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
-                     except Exception:  # pragma: no cover - defensive logging
-                         self._disable_audio_send(ctx, "send_failed")
-                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
-+                    finally:
-+                        duration_ms = max(0, int((time.perf_counter() - start) * 1000))
-+                        current = asyncio.current_task()
-+                        if current is not None:
-+                            ctx.audio_tasks.discard(current)
-+                        _log.info(
-+                            "evt=audio_task_complete sid=%s duration_ms=%d",
-+                            ctx.sid,
-+                            duration_ms,
-+                        )
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
  
--                task.add_done_callback(_on_done)
-+                task = asyncio.create_task(_run_audio_task())
-+                ctx.audio_tasks.add(task)
+ EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
+ EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
+ EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
  
-             try:
-                 loop.call_soon_threadsafe(_deliver)
-             except RuntimeError:
-                 pass
+ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+ _MIC_OPEN_TIMEOUT_SECONDS = 2.5
  
-         _handle_audio_event._telemetry_accepts_binary = True  # type: ignore[attr-defined]
-         ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
-         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
++    "asr.input.start",
++    "asr.input.stop",
+     "asr.partial",
+     "asr.final",
+     "asr.unavailable",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+     "hud.nudge",
+ }
  
-     def _offer_partial_frame(
-         self,
-         ctx: AdapterContext,
-         loop: asyncio.AbstractEventLoop,
-         payload: Dict[str, Any],
-         enqueue: Callable[[Dict[str, Any]], None],
-     ) -> None:
-         def _emit(frame: Dict[str, Any]) -> None:
-             prepared = self._prepare_partial_frame(ctx, frame)
-             enqueue(prepared)
+ _RATE_LIMIT_EXEMPT_TYPES = {
+     "client.autostart",
+     "client.banner",
+     "client.diag",
+     "client.log",
+     "client.ping",
+     "client.telemetry",
+ }
  
-         ctx.partial_coalescer.offer(
-             payload,
-             now_ms=self._now_ms(),
-             loop=loop,
-@@ -3165,55 +3170,69 @@ class ChatV2Adapter:
-         if turn_state_token:
-             bus.unsubscribe(turn_state_token)
+ _OUTBOX_MAXSIZE = 256
  
-         tts_end_token = ctx.tts_end_subscription_token
-         ctx.tts_end_subscription_token = None
-         if tts_end_token:
-             bus.unsubscribe(tts_end_token)
+ _POLICY_STABLE_KEYS = (
+     "mode",
+     "allow_auto_vad",
+     "barge_in_enabled",
+diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
+index 6a2e2816d3eca74c4ad7ec8e3a9313e32152d309..39604676c3aa1fe3623505b885a5dc0d7b59af11 100644
+--- a/tests/test_adapter_outbound_bridge.py
++++ b/tests/test_adapter_outbound_bridge.py
+@@ -186,50 +186,53 @@ class TestAdapterOutboundBridge(unittest.TestCase):
  
-         task = ctx.outbound_task
-         ctx.outbound_task = None
-         if task:
-             task.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await task
+     def test_allow_list_blocks_unknown_types(self) -> None:
+         asyncio.run(self._test_allow_list())
  
-         ctx.partial_coalescer.cancel()
+     def test_backpressure_reports_drops(self) -> None:
+         asyncio.run(self._test_backpressure())
  
-         pending_handoff = ctx.listen_handoff_task
-         ctx.listen_handoff_task = None
-         ctx.listen_handoff_task_key = None
-         if pending_handoff is not None:
-             pending_handoff.cancel()
-             with contextlib.suppress(asyncio.CancelledError):
-                 await pending_handoff
+     def test_start_listening_handoff_after_tts_end(self) -> None:
+         asyncio.run(self._test_start_listening_handoff())
  
--        for task in list(ctx.audio_tasks):
--            task.cancel()
--            with contextlib.suppress(asyncio.CancelledError):
--                await task
-+        pending_audio = list(ctx.audio_tasks)
-+        if pending_audio:
-+            for task in pending_audio:
-+                task.cancel()
-+            for task in pending_audio:
-+                with contextlib.suppress(asyncio.CancelledError):
-+                    await task
-+            completed = sum(1 for task in pending_audio if task.done())
-+            remaining = len(pending_audio) - completed
-+        else:
-+            completed = 0
-+            remaining = 0
-         ctx.audio_tasks.clear()
-+        _log.info(
-+            "evt=audio_task_shutdown_drain sid=%s completed=%d remaining=%d",
-+            ctx.sid,
-+            completed,
-+            remaining,
-+        )
+     def test_listen_handoff_waits_for_mask_off(self) -> None:
+         asyncio.run(self._test_listen_handoff_waits_for_mask_off())
  
-         ctx.outbox = None
-         ctx.await_user_expected = False
-         ctx.await_user_pending = False
-         ctx.await_user_pending_key = None
-         ctx.await_user_after_mask = False
-         ctx.await_user_after_mask_key = None
-         ctx.await_user_req_id = None
-         ctx.last_tts_end_req_id = None
-         ctx.await_user_cue_emitted = False
+     def test_client_ready_mic_open_confirms_listen(self) -> None:
+         asyncio.run(self._test_client_ready_mic_open())
  
-     def _handle_tts_end_diag(
-         self,
-         ctx: AdapterContext,
-         loop: asyncio.AbstractEventLoop,
-         payload: Optional[Dict[str, Any]] = None,
-     ) -> None:
-         if not config.DIAG_AUDIO_GUARD:
-             return
-         req_id = None
-         if isinstance(payload, dict):
-             candidate = payload.get("req_id")
-             if isinstance(candidate, str) and candidate:
-                 req_id = candidate
-         key = self._turn_key(ctx, req_id)
+     def test_emits_await_user_after_tts_end(self) -> None:
+         asyncio.run(self._test_emits_await_user_after_tts_end())
+ 
+     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
+         asyncio.run(self._test_audio_forwarding())
+ 
+     def test_asr_ready_frame_forwarded(self) -> None:
+         asyncio.run(self._test_asr_ready_frame_forwarded())
+ 
++    def test_asr_input_frames_forwarded(self) -> None:
++        asyncio.run(self._test_asr_input_frames_forwarded())
++
+     def test_turn_state_forwarded(self) -> None:
+         asyncio.run(self._test_turn_state_forwarded())
+ 
+     def test_mic_open_timeout_triggers_nudge(self) -> None:
+         asyncio.run(self._test_mic_open_timeout_nudge())
+ 
+     async def _test_happy_path(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+ 
+             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
+             self.assertEqual(frame, payload)
+ 
+             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
+             self.assertEqual(len(frames), 1)
+         finally:
+             await harness.close()
+ 
+     async def _test_payload_forwarded(self, payload: Dict[str, Any]) -> None:
+         engine = RecordingEngine()
+@@ -238,57 +241,81 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+         await harness.start()
+         try:
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+ 
+             frame = await harness.wait_for_outbound(lambda data: data == payload)
+             self.assertEqual(frame, payload)
+         finally:
+             await harness.close()
+ 
+     async def _test_asr_ready_frame_forwarded(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             frame = {"type": "asr.ready", "vendor": "speechmatics"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": frame})
+ 
+             delivered = await harness.wait_for_outbound(
+                 lambda data: data.get("type") == "asr.ready"
+             )
+             self.assertEqual(delivered, frame)
+         finally:
+             await harness.close()
+ 
++    async def _test_asr_input_frames_forwarded(self) -> None:
++        engine = RecordingEngine()
++        adapter = ChatV2Adapter(engine=engine)
++        harness = OutboundHarness(adapter, engine)
++        await harness.start()
++        try:
++            start_frame = {"type": "asr.input.start"}
++            stop_frame = {"type": "asr.input.stop"}
++
++            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": start_frame})
++            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": stop_frame})
++
++            delivered_start = await harness.wait_for_outbound(
++                lambda data: data.get("type") == "asr.input.start"
++            )
++            delivered_stop = await harness.wait_for_outbound(
++                lambda data: data.get("type") == "asr.input.stop"
++            )
++
++            self.assertEqual(delivered_start, start_frame)
++            self.assertEqual(delivered_stop, stop_frame)
++        finally:
++            await harness.close()
++
+     async def _test_turn_state_forwarded(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+-            meta = {"state": "Ready", "reason": "tts_end"}
++            meta = {"state": "Ready", "reason": "tts_end", "foo": {"bar": "baz"}}
+             bus.publish({"type": EVT_TURN_STATE, "sid": harness.sid, "meta": meta})
+ 
+             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "turn.state")
+             self.assertEqual(frame.get("type"), "turn.state")
+             self.assertEqual(frame.get("state"), "Ready")
+             self.assertEqual(frame.get("reason"), "tts_end")
+             self.assertEqual(frame.get("meta"), meta)
+         finally:
+             await harness.close()
+ 
+     async def _test_sid_isolation(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         try:
+             payload = {"type": "policy.interaction", "interaction_id": "ignored"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": "other", "payload": payload})
+ 
+             with self.assertRaises(TimeoutError):
+                 await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction", timeout=0.1)
+             self.assertEqual(len(harness.outbound_frames), 0)
+         finally:
+             await harness.close()
+ 

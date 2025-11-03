@@ -208,6 +208,9 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     def test_asr_ready_frame_forwarded(self) -> None:
         asyncio.run(self._test_asr_ready_frame_forwarded())
 
+    def test_asr_input_frames_forwarded(self) -> None:
+        asyncio.run(self._test_asr_input_frames_forwarded())
+
     def test_turn_state_forwarded(self) -> None:
         asyncio.run(self._test_turn_state_forwarded())
 
@@ -260,13 +263,37 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         finally:
             await harness.close()
 
+    async def _test_asr_input_frames_forwarded(self) -> None:
+        engine = RecordingEngine()
+        adapter = ChatV2Adapter(engine=engine)
+        harness = OutboundHarness(adapter, engine)
+        await harness.start()
+        try:
+            start_frame = {"type": "asr.input.start"}
+            stop_frame = {"type": "asr.input.stop"}
+
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": start_frame})
+            bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": stop_frame})
+
+            delivered_start = await harness.wait_for_outbound(
+                lambda data: data.get("type") == "asr.input.start"
+            )
+            delivered_stop = await harness.wait_for_outbound(
+                lambda data: data.get("type") == "asr.input.stop"
+            )
+
+            self.assertEqual(delivered_start, start_frame)
+            self.assertEqual(delivered_stop, stop_frame)
+        finally:
+            await harness.close()
+
     async def _test_turn_state_forwarded(self) -> None:
         engine = RecordingEngine()
         adapter = ChatV2Adapter(engine=engine)
         harness = OutboundHarness(adapter, engine)
         await harness.start()
         try:
-            meta = {"state": "Ready", "reason": "tts_end"}
+            meta = {"state": "Ready", "reason": "tts_end", "foo": {"bar": "baz"}}
             bus.publish({"type": EVT_TURN_STATE, "sid": harness.sid, "meta": meta})
 
             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "turn.state")

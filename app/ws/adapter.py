@@ -90,6 +90,8 @@ _OUTBOUND_ALLOWED_TYPES = {
     "tts.start",
     "tts.end",
     "asr.ready",
+    "asr.input.start",
+    "asr.input.stop",
     "asr.partial",
     "asr.final",
     "asr.unavailable",
