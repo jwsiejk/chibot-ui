@@ -1,1 +1,1 @@
-{"type":"EVT_NLU","sid":"78a…3d5","req_id":"req…ace","turn_id":"045…0cc","intent":"chitchat.fallback","entities":{},"confidence":0.35,"ts_ms":1762196112376,"who":"server","source":"voice_engine","level":"debug","schema_version":"1"}
+{"type":"EVT_NLU","sid":"c8d…4f8","req_id":"req…330","turn_id":"f00…f59","intent":"chitchat.fallback","entities":{},"confidence":0.35,"ts_ms":1762212100170,"who":"server","source":"voice_engine","level":"debug","schema_version":"1"}

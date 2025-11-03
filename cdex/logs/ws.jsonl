@@ -1,5 +1,6 @@
-{"type":"ws.json.recv_summary","sid":"78a898f2e2e9400793d3475a971eb3d5","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762196098575,"level":"debug"}
-{"type":"ws.json.recv_summary","sid":"78a898f2e2e9400793d3475a971eb3d5","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762196098578,"level":"debug"}
-{"type":"ws.audio.first_chunk","sid":"78a898f2e2e9400793d3475a971eb3d5","who":"server","source":"ws.adapter","meta":{"bytes":1600,"ms_since_ready":316},"schema_version":"1","ts_ms":1762196098766,"level":"debug"}
-{"type":"ws.json.recv_summary","sid":"78a898f2e2e9400793d3475a971eb3d5","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762196100287,"level":"debug"}
-{"type":"ws.audio.first_chunk","sid":"78a898f2e2e9400793d3475a971eb3d5","who":"server","source":"ws.adapter","meta":{"bytes":1600,"ms_since_ready":185},"schema_version":"1","ts_ms":1762196124871,"level":"debug"}
+{"type":"ws.json.recv_summary","sid":"c8d2eadd0b924598a944c1c5728ca4f8","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762212080070,"level":"debug"}
+{"type":"ws.json.recv_summary","sid":"c8d2eadd0b924598a944c1c5728ca4f8","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762212080072,"level":"debug"}
+{"type":"ws.audio.first_chunk","sid":"c8d2eadd0b924598a944c1c5728ca4f8","who":"server","source":"ws.adapter","meta":{"bytes":1600,"ms_since_ready":304},"schema_version":"1","ts_ms":1762212080174,"level":"debug"}
+{"type":"ws.json.recv_summary","sid":"c8d2eadd0b924598a944c1c5728ca4f8","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762212086500,"level":"debug"}
+{"type":"ws.json.recv_summary","sid":"c8d2eadd0b924598a944c1c5728ca4f8","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762212116370,"level":"debug"}
+{"type":"ws.audio.first_chunk","sid":"c8d2eadd0b924598a944c1c5728ca4f8","who":"server","source":"ws.adapter","meta":{"bytes":1600,"ms_since_ready":4},"schema_version":"1","ts_ms":1762212116672,"level":"debug"}
