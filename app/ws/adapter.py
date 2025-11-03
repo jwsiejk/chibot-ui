@@ -289,6 +289,7 @@ class AdapterContext:
     ingress_bytes: int = 0
     first_ingress_ms: Optional[int] = None
     mic_armed_ms: Optional[int] = None
+    asr_ready_bundle_sent_ms: Optional[int] = None
     last_pong_sent_ms: int = 0
     last_client_activity_ms: int = 0
     last_client_pong_ms: int = 0
@@ -1499,11 +1500,27 @@ class ChatV2Adapter:
         if ctx.ingress_packets == 1:
             armed_ms = ctx.mic_armed_ms if isinstance(ctx.mic_armed_ms, int) else None
             delta = (now_ms - armed_ms) if armed_ms is not None else None
+            ready_sent_ms = (
+                ctx.asr_ready_bundle_sent_ms
+                if isinstance(ctx.asr_ready_bundle_sent_ms, int)
+                else None
+            )
+            ready_delta = (now_ms - ready_sent_ms) if ready_sent_ms is not None else None
+            buffer_bytes = 0
+            if ctx.audio_buffer:
+                buffer_bytes = sum(
+                    len(chunk)
+                    for chunk in ctx.audio_buffer.values()
+                    if isinstance(chunk, (bytes, bytearray, memoryview))
+                )
+            ready_delta_value = ready_delta if ready_delta is not None else -1
             _log.info(
-                "evt=ws_audio_ingress sid=%s first_chunk=1 bytes=%s first_chunk_ms_since_mic_armed=%s",
+                "evt=ws_audio_ingress sid=%s first_chunk=1 bytes=%s first_chunk_ms_since_mic_armed=%s ms_since_asr_ready_bundle=%s buffer_bytes=%s",
                 ctx.sid,
                 pkt_len,
                 delta,
+                ready_delta_value,
+                buffer_bytes,
             )
         elif ctx.ingress_packets % 50 == 0:
             _log.info(
@@ -1716,6 +1733,91 @@ class ChatV2Adapter:
             else:
                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
 
+    def _log_speechmatics_control_summary(
+        self, sid: str, payload: Mapping[str, Any]
+    ) -> None:
+        if not isinstance(payload, Mapping):
+            return
+        vendor = payload.get("vendor")
+        if not (isinstance(vendor, str) and vendor.strip().lower() == "speechmatics"):
+            return
+        command_value = payload.get("command")
+        if not isinstance(command_value, str):
+            return
+        command = command_value.strip().lower()
+        if command == "start":
+            audio_block = payload.get("audio_format")
+            format_value: Optional[str] = None
+            rate_value: Optional[int] = None
+            channels_value: Optional[int] = None
+            if isinstance(audio_block, Mapping):
+                encoding = audio_block.get("encoding")
+                if isinstance(encoding, str) and encoding:
+                    normalized = encoding.strip()
+                    if normalized.lower().startswith("pcm_") and len(normalized) > 4:
+                        format_value = normalized.split("_", 1)[1]
+                    else:
+                        format_value = normalized
+                format_field = audio_block.get("format")
+                if isinstance(format_field, str) and format_field:
+                    format_value = format_field.strip()
+                sample_rate = (
+                    audio_block.get("sample_rate")
+                    or audio_block.get("rate")
+                    or audio_block.get("rate_hz")
+                )
+                if isinstance(sample_rate, (int, float)):
+                    try:
+                        rate_value = int(sample_rate)
+                    except (TypeError, ValueError, OverflowError):
+                        rate_value = None
+                channels = audio_block.get("channels")
+                if isinstance(channels, (int, float)):
+                    try:
+                        channels_value = int(channels)
+                    except (TypeError, ValueError, OverflowError):
+                        channels_value = None
+            if format_value is None:
+                fallback_format = payload.get("format")
+                if isinstance(fallback_format, str) and fallback_format:
+                    format_value = fallback_format.strip()
+            if rate_value is None:
+                fallback_rate = (
+                    payload.get("sample_rate")
+                    or payload.get("rate")
+                    or payload.get("rate_hz")
+                )
+                if isinstance(fallback_rate, (int, float)):
+                    try:
+                        rate_value = int(fallback_rate)
+                    except (TypeError, ValueError, OverflowError):
+                        rate_value = None
+            if channels_value is None:
+                fallback_channels = payload.get("channels")
+                if isinstance(fallback_channels, (int, float)):
+                    try:
+                        channels_value = int(fallback_channels)
+                    except (TypeError, ValueError, OverflowError):
+                        channels_value = None
+            _log.info(
+                "evt=ws_json_send_summary sid=%s kind=start vendor=speechmatics format=%s rate=%d channels=%d",
+                sid,
+                format_value or "",
+                0 if rate_value is None else rate_value,
+                0 if channels_value is None else channels_value,
+            )
+        elif command == "stop":
+            _log.info(
+                "evt=ws_json_send_summary sid=%s kind=stop vendor=speechmatics",
+                sid,
+            )
+        elif command in {"ping", "pong"}:
+            _log.info(
+                "evt=ws_json_send_summary sid=%s kind=%s vendor=speechmatics",
+                sid,
+                command,
+            )
+
     async def _send_json(
         self,
         send: Callable[[dict], Awaitable[None]],
@@ -1737,6 +1839,7 @@ class ChatV2Adapter:
         preview = self._make_preview_from_bytes(payload_bytes)
         if preview is not None:
             meta["ws"]["preview"] = preview
+        self._log_speechmatics_control_summary(sid, payload)
         await self._publish(EVT_WS_JSON_SEND, sid, meta, payload)
 
     async def _send_error(
@@ -2045,7 +2148,9 @@ class ChatV2Adapter:
             ctx.ingress_packets = 0
             ctx.ingress_bytes = 0
             ctx.first_ingress_ms = None
-            ctx.mic_armed_ms = int(time.time() * 1000)
+            mic_armed_now = int(time.time() * 1000)
+            ctx.mic_armed_ms = mic_armed_now
+            ctx.asr_ready_bundle_sent_ms = mic_armed_now
             start_payload: Dict[str, Any] = {"type": "start_listening"}
             if session_policy:
                 start_payload["policy"] = session_policy
@@ -3612,6 +3717,7 @@ class ChatV2Adapter:
         ctx.ingress_bytes = 0
         ctx.first_ingress_ms = None
         ctx.mic_armed_ms = now_ms
+        ctx.asr_ready_bundle_sent_ms = now_ms
 
         await self._send_json(send, ctx.sid, ready_frame)
         await self._send_json(send, ctx.sid, input_start)
