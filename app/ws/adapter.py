@@ -107,7 +107,21 @@ _RATE_LIMIT_EXEMPT_TYPES = {
 
 _OUTBOX_MAXSIZE = 256
 
-_POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
+_POLICY_STABLE_KEYS = (
+    "mode",
+    "allow_auto_vad",
+    "barge_in_enabled",
+    "auto_commit_when_ready",
+    "voice",
+    "greet",
+    "suggestions",
+    "actions",
+    "telemetry",
+    "media",
+    "capture",
+    "audio",
+    "policy",
+)
 
 _log = logging.getLogger(__name__)
 

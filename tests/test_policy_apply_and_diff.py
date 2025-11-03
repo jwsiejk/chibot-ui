@@ -78,6 +78,8 @@ class PolicyApplyAndDiffTests(unittest.TestCase):
             "actions",
             "media",
             "capture",
+            "audio",
+            "policy",
         }
         self.assertEqual(set(diff_meta.keys()), expected_keys)
 

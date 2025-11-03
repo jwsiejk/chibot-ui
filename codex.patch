@@ -1,309 +1,182 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index 82e9063c290f47d680931392276c1277aae6bdcb..c1ac00a69da358ba3f5c1015556ad56de7ebfd4c 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -1154,52 +1154,50 @@ class ASRRuntime:
-             log_template += " e2e_latency_ms=%d"
-             log_args.append(int(e2e_latency))
-         msg = log_template % tuple(log_args)
-         _log.info(msg)
-         self._emit_log(
-             {
-                 "type": "EVT_LOG",
-                 "logger": "app.voice_v2.asr_runtime",
-                 "level": "INFO",
-                 "sid": state.sid,
-                 "stream_id": stream_id,
-                 "req_id": req_id,
-                 "msg": msg,
-             }
-         )
- 
-     def _ensure_stream(self, sid: str, state: _SessionState) -> None:
-         loop = self._ensure_loop()
-         if loop is None:
-             _log.warning("evt=asr_no_loop sid=%s", sid)
-             return
-         if state.stream_open:
-             return
-         if not state.pending and not state.prearm_requested:
-             return
--        if self._vendor == "speechmatics" and not state.pending:
--            return
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             return
- 
-         async def _open() -> None:
-             if state.stream_id is None:
-                 state.stream_id = self._generate_stream_id()
-             stream_id = state.stream_id
-             state.last_stream_id = stream_id
-             state.close_reason = None
-             state.prearm_requested = False
-             try:
-                 policy_snapshot = None
-                 try:
-                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
-                 except Exception:  # pragma: no cover - defensive
-                     policy_snapshot = None
-                 if self._vendor == "speechmatics":
-                     self._apply_speechmatics_policy(state, policy_snapshot)
-                     input_desc = _pcm_input_descriptor()
-                 else:
-                     input_desc = self._input_descriptor_from_policy(policy_snapshot)
-                 state.input_desc = input_desc
-                 model_name = None
-                 if isinstance(policy_snapshot, Mapping):
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index f4861e7b180fbe6920a51f640770f2b4500fe50e..f25682d9f8e41151a1508eb0c9d3bdb25359b6cb 100644
+index f25682d9f8e41151a1508eb0c9d3bdb25359b6cb..6857a80f08ddf6600a073b8a96c117ca066202bb 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -1,33 +1,34 @@
- """chat.v2 WebSocket adapter for AskChip."""
+@@ -85,51 +85,65 @@ _OUTBOUND_ALLOWED_TYPES = {
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.partial",
+     "asr.final",
+     "asr.unavailable",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+     "hud.nudge",
+ }
+ 
+ _RATE_LIMIT_EXEMPT_TYPES = {
+     "client.autostart",
+     "client.banner",
+     "client.diag",
+     "client.log",
+     "client.ping",
+     "client.telemetry",
+ }
+ 
+ _OUTBOX_MAXSIZE = 256
+ 
+-_POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
++_POLICY_STABLE_KEYS = (
++    "mode",
++    "allow_auto_vad",
++    "barge_in_enabled",
++    "auto_commit_when_ready",
++    "voice",
++    "greet",
++    "suggestions",
++    "actions",
++    "telemetry",
++    "media",
++    "capture",
++    "audio",
++    "policy",
++)
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _ALLOWED_TEXT_FRAME_TYPES = {
+     "client.ready",
+     "audio.header",
+     "admin.toggle",
+     "chat.user",
+     "client.diag",
+     "client.log",
+     "client.autostart",
+     "client.telemetry",
+     "client.banner",
+     "asr.rearm.request",
+ }
+ 
+ _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
+     "EVT_RECORDER_STARTED",
+     "EVT_AUDIO_CHUNK_SENT_CLIENT",
+ }
+ 
+ _CLIENT_AUTOSTART_ALLOWED_EVENTS = {
+     "attempt",
+     "armed",
+     "blocked",
+diff --git a/tests/test_policy_apply_and_diff.py b/tests/test_policy_apply_and_diff.py
+index 582e4df71285c241ce01acfae9a0ba954d607b78..0b5e2bf7c3a8337239bf29afbae173e76abede93 100644
+--- a/tests/test_policy_apply_and_diff.py
++++ b/tests/test_policy_apply_and_diff.py
+@@ -56,50 +56,52 @@ class PolicyApplyAndDiffTests(unittest.TestCase):
+         engine = EngineV2(exporter)
+ 
+         engine.on_open("sid-1", headers={})
+ 
+         frames = self._policy_frames()
+         self.assertEqual(len(frames), 1)
+ 
+         applied_events = self._events_of_type(EVT_POLICY_APPLIED)
+         self.assertEqual(len(applied_events), 1)
+ 
+         diff_meta = applied_events[0].get("meta", {}).get("policy", {}).get("diff")
+         self.assertIsInstance(diff_meta, dict)
+ 
+         expected_keys = {
+             "mode",
+             "allow_auto_vad",
+             "barge_in_enabled",
+             "auto_commit_when_ready",
+             "telemetry",
+             "voice",
+             "greet",
+             "suggestions",
+             "actions",
+             "media",
+             "capture",
++            "audio",
++            "policy",
+         }
+         self.assertEqual(set(diff_meta.keys()), expected_keys)
+ 
+         defaults = load_interaction_policy()
+         for key in expected_keys:
+             before_after = diff_meta[key]
+             self.assertEqual(before_after[0], None)
+             self.assertEqual(before_after[1], defaults[key])
+ 
+     def test_policy_frame_includes_action_summary(self) -> None:
+         exporter = _FakeExporter()
+         engine = EngineV2(exporter)
+ 
+         engine.on_open("sid-1", headers={})
+ 
+         frames = self._policy_frames()
+         self.assertGreaterEqual(len(frames), 1)
+ 
+         payload = frames[0]["frame"]
+         self.assertIn("actions", payload)
+         actions = payload["actions"]
+         self.assertIsInstance(actions, list)
+ 
+         defaults = load_interaction_policy()
+         expected = (
+diff --git a/tests/test_policy_subset.py b/tests/test_policy_subset.py
+index abeff2f593dfa5466ab172a6bd94b3d212d8108b..58845a228c5065a2b5bef4b1a9c4d80f28b085d6 100644
+--- a/tests/test_policy_subset.py
++++ b/tests/test_policy_subset.py
+@@ -1,40 +1,49 @@
+ """Tests ensuring policy.interaction frames expose only the stable subset."""
  from __future__ import annotations
  
- import os
- import asyncio
- import contextlib
- import logging
- import math
-+import threading
- import time
- import sys, platform, socket, os, inspect
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
- 
  import json
- from urllib.parse import parse_qs
- 
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.exporter import FileExporter
- from app.services.streaming_asr.speechmatics_client import (
-     OfflineSpeechmaticsClient,
-     SpeechmaticsClient,
- )
- from app.voice_v2 import (
-     EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_CLIENT_BANNER,
-     EVT_CLIENT_AUTOSTART,
-@@ -757,51 +758,50 @@ class ChatV2Adapter:
-                             if sm_enabled and sm_key and sm_url:
-                                 client = SpeechmaticsClient(sm_key, sm_url, bus, _log)
-                             elif sm_enabled:
-                                 client = OfflineSpeechmaticsClient(bus, _log)
-                             else:
-                                 _log.warning(
-                                     "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s has_url=%s",
-                                     ctx.sid,
-                                     vendor,
-                                     bool(engine),
-                                     bool(sm_key),
-                                     bool(sm_url),
-                                 )
-                         else:
-                             _log.warning(
-                                 "evt=ws_asr_runtime_unsupported_vendor sid=%s vendor=%s",
-                                 ctx.sid,
-                                 vendor,
-                             )
- 
-                     if engine is not None and client is not None:
-                         self.asr_runtime = ASRRuntime(
-                             engine=engine,
-                             client=client,
-                             telemetry_bus=bus,
--                            metrics=ctx.metrics,
-                         )
-                         self._asr_runtime_vendor = vendor or None
-                     elif engine is None:
-                         _log.warning(
-                             "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s vendor=%s",
-                             ctx.sid,
-                             bool(engine),
-                             vendor or "",
-                         )
-                 except Exception:  # pragma: no cover - defensive logging
-                     _log.exception("evt=ws_asr_runtime_attach_failed sid=%s", ctx.sid)
- 
-             asr_runtime = getattr(self, "asr_runtime", None)
-             if asr_runtime is not None and hasattr(asr_runtime, "set_bus"):
-                 try:
-                     asr_runtime.set_bus(bus)
-                 except Exception:  # pragma: no cover - defensive logging
-                     _log.exception("evt=ws_asr_set_bus_failed sid=%s", ctx.sid)
- 
-             _log.info("evt=ws_open sid=%s", ctx.sid)
-             runtime_name = type(asr_runtime).__name__ if asr_runtime is not None else "None"
-             _log.info("evt=ws_open sid=%s asr_runtime=%s", ctx.sid, runtime_name)
-             if asr_runtime is not None:
-                 try:
-                     asr_runtime.on_ws_open(ctx.sid)
-@@ -2051,50 +2051,51 @@ class ChatV2Adapter:
-                 ctx.awaiting_asr_ready = False
-                 ctx.client_capture_armed = False
-                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
-                 reason = event.get("reason")
-                 if isinstance(reason, str) and reason:
-                     payload["reason"] = reason
-                 details = event.get("details")
-                 detail_text = ""
-                 if details is not None:
-                     detail_text = details if isinstance(details, str) else str(details)
-                     payload["details"] = detail_text
-                 else:
-                     detail_text = ""
-                 lower_reason = reason.lower() if isinstance(reason, str) else ""
-                 lower_detail = detail_text.lower()
-                 concurrency_likely = False
-                 if ctx.asr_vendor == "speechmatics":
-                     if "concurrent_session" in lower_detail:
-                         concurrency_likely = True
-                     elif "concurrent_session" in lower_reason:
-                         concurrency_likely = True
-                 if concurrency_likely:
-                     ctx.asr_recovering_until = time.monotonic() + 3.0
-                     ctx.asr_recovering_reason = "concurrent_session"
-                     ctx.asr_recovering_audio_logged = False
-+                    ctx.client_capture_armed = True
-                 else:
-                     ctx.asr_recovering_until = 0.0
-                     ctx.asr_recovering_reason = None
-                     ctx.asr_recovering_audio_logged = False
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.asr_unavailable_subscription_token = bus.subscribe(
-             "asr.unavailable", _handle_asr_unavailable_event
-         )
- 
-         async def _perform_listen_handoff(req_id: str) -> None:
-             key = self._turn_key(ctx, req_id)
-             runtime = getattr(self, "asr_runtime", None)
-             if runtime is None:
-                 self._clear_pending_for_key(ctx, key)
-                 return
-             open_if_needed = getattr(runtime, "open_if_needed", None)
-             should_wait_for_ready = callable(open_if_needed)
- 
-             if ctx.tts_mask_phase != "off":
-@@ -2495,86 +2496,94 @@ class ChatV2Adapter:
-             partial_seq = meta.get("partial_seq")
-             if isinstance(partial_seq, int):
-                 frame["partial_seq"] = partial_seq
- 
-         return frame
- 
-     def _start_asr_ready_tracker(
-         self, ctx: AdapterContext, telemetry_bus: Optional[Any] = None
-     ) -> None:
-         if ctx.asr_subscription_token is not None:
-             return
- 
-         if telemetry_bus is None:
-             telemetry_bus = bus
- 
-         ctx.asr_subscription_bus = telemetry_bus
-         _log.info("evt=asr_ready_tracker_start sid=%s", ctx.sid)
-         self._emit_session_step(
-             ctx.sid,
-             "asr.ready_tracker_started",
-             summary="Subscribed to ASR ready events",
-             source="ws.asr",
-         )
- 
-         loop = asyncio.get_running_loop()
-+        loop_thread = threading.current_thread()
- 
-         def _handle(event: dict) -> None:
-             if event.get("type") != EVT_ASR_READY:
-                 return
-             if event.get("sid") != ctx.sid:
-                 return
-+            if ctx.asr_ready:
-+                return
- 
--            def _mark_ready() -> None:
--                if ctx.asr_ready:
--                    return
--                ctx.asr_ready = True
--                ctx.awaiting_asr_ready = False
--                ctx.asr_recovering_until = 0.0
--                ctx.asr_recovering_reason = None
--                ctx.asr_recovering_audio_logged = False
--                frame: Dict[str, Any] = {"type": "asr.ready"}
--                vendor = event.get("vendor")
--                if isinstance(vendor, str) and vendor:
--                    frame["vendor"] = vendor
-+            ctx.asr_ready = True
-+            ctx.awaiting_asr_ready = False
-+            ctx.asr_recovering_until = 0.0
-+            ctx.asr_recovering_reason = None
-+            ctx.asr_recovering_audio_logged = False
-+            ctx.client_capture_armed = True
++import os
 +
-+            frame: Dict[str, Any] = {"type": "asr.ready"}
-+            vendor = event.get("vendor")
-+            if isinstance(vendor, str) and vendor:
-+                frame["vendor"] = vendor
-+
-+            def _publish_ready() -> None:
-                 try:
-                     asyncio.create_task(self._flush_audio_buffer(ctx))
-                 except RuntimeError:
-                     pass
-                 telemetry_bus.publish(
-                     {
-                         "type": EVT_WS_JSON_SEND,
-                         "sid": ctx.sid,
-                         "frame": frame,
-                         "payload": frame,
-                     }
-                 )
++os.environ.setdefault("SECRET_KEY", "test-secret")
  
-+            if threading.current_thread() is loop_thread:
-+                _publish_ready()
-+                return
-+
-             try:
--                loop.call_soon_threadsafe(_mark_ready)
-+                loop.call_soon_threadsafe(_publish_ready)
-             except RuntimeError:
--                _mark_ready()
-+                _publish_ready()
+ from app.ws.adapter import AdapterContext, ChatV2Adapter
  
-         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
  
-     def _extract_outbound_payload(
-         self, ctx: AdapterContext, event: dict
-     ) -> Optional[Dict[str, Any]]:
-         payload = self._coerce_payload(event.get("payload"))
-         if payload is None:
-             payload = self._coerce_payload(event.get("frame"))
+ def _make_context() -> AdapterContext:
+     return AdapterContext(sid="sid-1", headers={})
  
-         if payload is None:
-             meta = event.get("meta")
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
-                     payload = self._coerce_payload(ws_meta.get("frame"))
-                     if payload is None:
-                         payload = self._coerce_payload(ws_meta.get("preview"))
  
-         if payload is None:
-             return None
+ def test_policy_subset_is_sanitized() -> None:
+     adapter = ChatV2Adapter()
+     ctx = _make_context()
+     payload = {
+         "type": "policy.interaction",
+         "ts_ms": 1730000000123,
+         "level": "info",
+         "policy": {
+             "mode": "idle",
+             "allow_auto_vad": True,
+             "barge_in_enabled": False,
+             "telemetry": {"enabled": True},
+             "auto_commit_when_ready": True,
++            "capture": {"start_on_turn_ready": True},
++            "policy": {"asr": {"prearm_on_tts_end": True}},
+         },
+     }
  
-         frame_type = payload.get("type") if isinstance(payload, dict) else None
-         if frame_type == "policy.interaction" and isinstance(payload, dict):
-             prev_req_id = ctx.await_user_req_id
+     event = {"payload": payload}
+ 
+     sanitized = adapter._extract_outbound_payload(ctx, event)
+     assert sanitized is not None
+     assert sanitized["ts_ms"] == payload["ts_ms"]
+     assert sanitized["level"] == "info"
+     assert sanitized["policy"] == {
+         "mode": "idle",
+         "allow_auto_vad": True,
+         "barge_in_enabled": False,
++        "telemetry": {"enabled": True},
++        "auto_commit_when_ready": True,
++        "capture": {"start_on_turn_ready": True},
++        "policy": {"asr": {"prearm_on_tts_end": True}},
+     }
+     assert json.loads(json.dumps(sanitized)) == sanitized
