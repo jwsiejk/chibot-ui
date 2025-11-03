@@ -880,13 +880,23 @@ class ASRRuntime:
         if not isinstance(sid, str) or not sid:
             return
         payload = event.get("payload") or event.get("frame")
-        if not isinstance(payload, Mapping):
+        frame: Mapping[str, Any] | None = None
+        if isinstance(payload, Mapping):
+            if isinstance(payload.get("type"), str):
+                frame = payload
+            else:
+                candidate = payload.get("frame")
+                if isinstance(candidate, Mapping):
+                    frame = candidate
+
+        if frame is None:
             return
-        frame_type = payload.get("type")
+
+        frame_type = frame.get("type")
         if frame_type == "start_listening":
             self._on_start_listening_frame(sid)
         elif frame_type in {"stop_listening", "input.stop"}:
-            reason_value = payload.get("reason")
+            reason_value = frame.get("reason")
             reason = reason_value if isinstance(reason_value, str) else None
             self._on_stop_listening_frame(sid, reason)
 

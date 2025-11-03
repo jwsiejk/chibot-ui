@@ -1,288 +1,75 @@
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index 39604676c3aa1fe3623505b885a5dc0d7b59af11..f867bf5fc9b841b8cf809aa36b73d5f1682a18fd 100644
---- a/tests/test_adapter_outbound_bridge.py
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -183,50 +183,56 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-         asyncio.run(
-             self._test_payload_other_sid_drop({"type": "chat.message", "message_id": "ignored"})
-         )
- 
-     def test_allow_list_blocks_unknown_types(self) -> None:
-         asyncio.run(self._test_allow_list())
- 
-     def test_backpressure_reports_drops(self) -> None:
-         asyncio.run(self._test_backpressure())
- 
-     def test_start_listening_handoff_after_tts_end(self) -> None:
-         asyncio.run(self._test_start_listening_handoff())
- 
-     def test_listen_handoff_waits_for_mask_off(self) -> None:
-         asyncio.run(self._test_listen_handoff_waits_for_mask_off())
- 
-     def test_client_ready_mic_open_confirms_listen(self) -> None:
-         asyncio.run(self._test_client_ready_mic_open())
- 
-     def test_emits_await_user_after_tts_end(self) -> None:
-         asyncio.run(self._test_emits_await_user_after_tts_end())
- 
-     def test_audio_frames_forwarded_as_binary_messages(self) -> None:
-         asyncio.run(self._test_audio_forwarding())
- 
-+    def test_audio_bus_publication_on_chunk(self) -> None:
-+        asyncio.run(self._test_audio_bus_publication_on_chunk())
-+
-+    def test_audio_drop_when_masked(self) -> None:
-+        asyncio.run(self._test_audio_drop_when_masked())
-+
-     def test_asr_ready_frame_forwarded(self) -> None:
-         asyncio.run(self._test_asr_ready_frame_forwarded())
- 
-     def test_asr_input_frames_forwarded(self) -> None:
-         asyncio.run(self._test_asr_input_frames_forwarded())
- 
-     def test_turn_state_forwarded(self) -> None:
-         asyncio.run(self._test_turn_state_forwarded())
- 
-     def test_mic_open_timeout_triggers_nudge(self) -> None:
-         asyncio.run(self._test_mic_open_timeout_nudge())
- 
-     async def _test_happy_path(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index f0e129058b73e4edfaa0fdd93fe1b0e186a00a7d..d813e4e8b5e34796e6bb05244a822f22544faa02 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -858,57 +858,67 @@ class ASRRuntime:
+         payload = event.get("payload")
+         meta: Mapping[str, Any] | None = None
+         if isinstance(payload, Mapping):
+             candidate = payload.get("meta")
+             if isinstance(candidate, Mapping):
+                 meta = candidate
+         frame_type = meta.get("frame_type") if meta is not None else None
+         if frame_type != "asr.rearm.request":
+             return
+         if state.stream_open:
+             return
          try:
-             payload = {"type": "policy.interaction", "interaction_id": "abc123"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "payload": payload})
+             self.prearm(sid)
+         except Exception:  # pragma: no cover - defensive logging
+             _log.exception("evt=asr_runtime_rearm_failed sid=%s", sid)
  
-             frame = await harness.wait_for_outbound(lambda data: data.get("type") == "policy.interaction")
-             self.assertEqual(frame, payload)
+     def _handle_ws_send_event(self, event: Mapping[str, Any]) -> None:
+         if not isinstance(event, Mapping):
+             return
+         if event.get("type") != EVT_WS_JSON_SEND:
+             return
+         sid = event.get("sid")
+         if not isinstance(sid, str) or not sid:
+             return
+         payload = event.get("payload") or event.get("frame")
+-        if not isinstance(payload, Mapping):
++        frame: Mapping[str, Any] | None = None
++        if isinstance(payload, Mapping):
++            if isinstance(payload.get("type"), str):
++                frame = payload
++            else:
++                candidate = payload.get("frame")
++                if isinstance(candidate, Mapping):
++                    frame = candidate
++
++        if frame is None:
+             return
+-        frame_type = payload.get("type")
++
++        frame_type = frame.get("type")
+         if frame_type == "start_listening":
+             self._on_start_listening_frame(sid)
+         elif frame_type in {"stop_listening", "input.stop"}:
+-            reason_value = payload.get("reason")
++            reason_value = frame.get("reason")
+             reason = reason_value if isinstance(reason_value, str) else None
+             self._on_stop_listening_frame(sid, reason)
  
-             frames = [data for data in harness.outbound_frames if data.get("type") == "policy.interaction"]
-@@ -577,50 +583,129 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-             self.assertEqual(len(mic_events), 1)
-         finally:
-             bus.unsubscribe(token_order)
-             await harness.close()
- 
-     async def _test_audio_forwarding(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         try:
-             chunk = b"\x01\x02" * 80
-             event = {
-                 "type": EVT_WS_AUDIO_SEND,
-                 "sid": harness.sid,
-                 "chunk": chunk,
-                 "meta": {"byte_count": len(chunk)},
-             }
-             bus.publish(event)
- 
-             received = await harness.wait_for_binary(lambda data: data == chunk)
-             self.assertEqual(received, chunk)
-         finally:
-             await harness.close()
- 
-+    async def _test_audio_bus_publication_on_chunk(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+
-+        chunk = b"\x04\x05" * 80
-+        recorded: list[dict] = []
-+        token = bus.subscribe(EVT_WS_AUDIO_SEND, recorded.append)
-+        try:
-+            ctx = adapter._contexts.get(harness.sid)
-+            self.assertIsNotNone(ctx)
-+            assert ctx is not None
-+            ctx.asr_ready = True
-+            ctx.client_capture_armed = True
-+
-+            with self.assertLogs("app.ws.adapter", level="INFO") as logs:
-+                await harness._inbound.put({"type": "websocket.receive", "bytes": chunk})
-+                await harness.wait_for(lambda: bool(recorded))
-+
-+            self.assertEqual(len(recorded), 1)
-+            event = recorded[0]
-+            self.assertEqual(event.get("type"), EVT_WS_AUDIO_SEND)
-+            self.assertEqual(event.get("sid"), harness.sid)
-+            self.assertEqual(event.get("bytes"), len(chunk))
-+            length = event.get("len")
-+            if isinstance(length, int):
-+                self.assertEqual(length, len(chunk))
-+            self.assertTrue(
-+                any(
-+                    "evt=audio_ingress" in message and "gate_open=True" in message
-+                    for message in logs.output
-+                ),
-+                msg=f"missing gate-open log: {logs.output}",
-+            )
-+        finally:
-+            bus.unsubscribe(token)
-+            await harness.close()
-+
-+    async def _test_audio_drop_when_masked(self) -> None:
-+        engine = RecordingEngine()
-+        adapter = ChatV2Adapter(engine=engine)
-+        harness = OutboundHarness(adapter, engine)
-+        await harness.start()
-+
-+        chunk = b"\x06\x07" * 80
-+        recorded: list[dict] = []
-+        token = bus.subscribe(EVT_WS_AUDIO_SEND, recorded.append)
-+        try:
-+            ctx = adapter._contexts.get(harness.sid)
-+            self.assertIsNotNone(ctx)
-+            assert ctx is not None
-+            ctx.asr_ready = True
-+            ctx.client_capture_armed = True
-+
-+            bus.publish({"type": EVT_TTS_MASK, "sid": harness.sid, "phase": "on"})
-+            await harness.wait_for(lambda: ctx.tts_mask_phase != "off")
-+
-+            with self.assertLogs("app.ws.adapter", level="INFO") as logs:
-+                await harness._inbound.put({"type": "websocket.receive", "bytes": chunk})
-+                await harness.wait_for(
-+                    lambda: any(
-+                        "evt=audio_drop" in record.getMessage()
-+                        for record in logs.records
-+                    )
-+                )
-+
-+            self.assertFalse(recorded)
-+            self.assertTrue(
-+                any(
-+                    "evt=audio_drop" in message and "reason=mask" in message
-+                    for message in logs.output
-+                ),
-+                msg=f"missing mask drop log: {logs.output}",
-+            )
-+        finally:
-+            bus.unsubscribe(token)
-+            await harness.close()
-+
-     async def _test_mic_open_timeout_nudge(self) -> None:
-         with mock.patch("app.ws.adapter._MIC_OPEN_TIMEOUT_SECONDS", 0.05):
-             engine = RecordingEngine()
-             adapter = ChatV2Adapter(engine=engine)
-             runtime = _StubAsrRuntime()
-             adapter.asr_runtime = runtime
-             harness = OutboundHarness(adapter, engine)
-             await harness.start()
- 
-             sid = harness.sid
-             mic_events: list[dict] = []
-             token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
-             try:
-                 policy_payload = {
-                     "type": "policy.interaction",
-                     "interaction_id": "turn-1",
-                     "actions": ["assistant.say", "assistant.await_user"],
-                 }
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
-                 await asyncio.sleep(0.01)
- 
-                 tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
- 
-                 await harness.wait_for(lambda: bool(runtime.prearm_calls))
-diff --git a/tests/test_asr_runtime_vendor_logging.py b/tests/test_asr_runtime_vendor_logging.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..f8729abc31ed822ad590adac753c13cf2a6637d8
---- /dev/null
-+++ b/tests/test_asr_runtime_vendor_logging.py
-@@ -0,0 +1,91 @@
-+"""Tests covering ASR runtime vendor lifecycle logging."""
-+from __future__ import annotations
-+
-+import unittest
-+from unittest import mock
-+
-+from app.telemetry import bus
-+from app.voice_v2.asr_runtime import ASRRuntime, _SessionState
-+from app.voice_v2.engine import EngineV2
-+
-+
-+class _StubClient:
-+    """Stub speechmatics client that records audio writes."""
-+
-+    vendor = "speechmatics"
-+
-+    def __init__(self) -> None:
-+        self.sent_audio: list[tuple[str, bytes]] = []
-+        self.open_stream_calls: list[dict] = []
-+        self.closed_sid: str | None = None
-+
-+    async def open_stream(
-+        self,
-+        sid: str,
-+        *,
-+        on_partial,
-+        on_final,
-+        on_error,
-+        stream_id: str,
-+        on_close,
-+        policy,
-+    ) -> object:
-+        self.open_stream_calls.append({"sid": sid, "stream_id": stream_id})
-+        return object()
-+
-+    def send_audio(self, sid: str, chunk: bytes) -> None:
-+        self.sent_audio.append((sid, bytes(chunk)))
-+
-+    def close_stream(self, sid: str) -> None:  # pragma: no cover - defensive stub
-+        self.closed_sid = sid
-+
-+
-+class TestAsrRuntimeVendorLifecycle(unittest.TestCase):
-+    """Runtime tests verifying vendor first-write and totals logging."""
-+
-+    def setUp(self) -> None:
-+        bus.reset()
-+
-+    def tearDown(self) -> None:
-+        bus.reset()
-+
-+    def test_logs_first_write_and_totals(self) -> None:
-+        engine = mock.create_autospec(EngineV2, instance=True)
-+        engine.policy_snapshot = None
-+        client = _StubClient()
-+        runtime = ASRRuntime(engine, client, telemetry_bus=bus)
-+
-+        sid = "sid-vendor-logging"
-+        state = _SessionState(sid=sid)
-+        state.listening = True
-+        state.stream_open = True
-+        state.stream_id = "stream-1"
-+        runtime._sessions[sid] = state
-+
-+        chunk = b"\x10\x11" * 64
-+
-+        with self.assertLogs("app.voice_v2.asr_runtime", level="INFO") as ingest_logs:
-+            runtime.on_ws_audio(sid, chunk)
-+
-+        self.assertTrue(
-+            any("evt=asr_vendor_first_write" in message for message in ingest_logs.output),
-+            msg=f"missing first-write log: {ingest_logs.output}",
-+        )
-+        self.assertTrue(state.vendor_first_write_logged)
-+        self.assertEqual(client.sent_audio, [(sid, chunk)])
-+        self.assertEqual(state.bytes_sent, len(chunk))
-+
-+        close_cb = runtime._make_close_cb(sid, state)
-+        with self.assertLogs("app.voice_v2.asr_runtime", level="INFO") as close_logs:
-+            close_cb(None, None)
-+
-+        totals = [msg for msg in close_logs.output if "evt=asr_vendor_bytes_total" in msg]
-+        self.assertTrue(totals, msg=f"missing totals log: {close_logs.output}")
-+        total_msg = totals[0]
-+        self.assertIn(f"bytes_total={len(chunk)}", total_msg)
-+        self.assertGreater(state.bytes_sent, 0)
-+        self.assertTrue(state.vendor_totals_logged)
-+
-+
-+if __name__ == "__main__":  # pragma: no cover - convenience
-+    unittest.main()
+     def _handle_client_audio_event(self, event: Mapping[str, Any]) -> None:
+         if not isinstance(event, Mapping):
+             return
+         if event.get("type") != "EVT_AUDIO_CHUNK_SENT_CLIENT":
+             return
+         sid = event.get("sid")
+         if not isinstance(sid, str) or not sid:
+             return
+         state = self._sessions.get(sid)
+         if state is None:
+             return
+         meta = event.get("meta")
+         if not isinstance(meta, Mapping):
+             return
+         if not meta.get("commit"):
+             return
+         self._apply_commit_policy(state)
+         if not state.commit_on_vad_silence:
+             return
+         reason_val = meta.get("reason")
+         reason = reason_val if isinstance(reason_val, str) and reason_val else "vad_silence"
+         _log.info(
