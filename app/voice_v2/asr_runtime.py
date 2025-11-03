@@ -110,6 +110,15 @@ def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
     return _pcm_input_descriptor()
 
 
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class _PendingFinal:
     text: str
@@ -180,6 +189,8 @@ class _SessionState:
     final_guard_ms: int = 250
     min_segment_ms: int = 800
     allow_word_finals: bool = False
+    vendor_first_write_logged: bool = False
+    vendor_totals_logged: bool = False
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -1090,6 +1101,7 @@ class ASRRuntime:
             )
 
     def _log_session_rollup(self, state: _SessionState) -> None:
+        self._log_vendor_totals(state)
         stream_id = state.last_stream_id or state.stream_id or ""
         duration_ms = int(
             max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
@@ -1122,6 +1134,18 @@ class ASRRuntime:
                 "msg": msg,
             }
         )
+
+    def _log_vendor_totals(self, state: _SessionState, *, force: bool = False) -> None:
+        if state.vendor_totals_logged and not force:
+            return
+        _log.info(
+            "evt=asr_vendor_bytes_total sid=%s vendor=%s bytes_total=%d packets_total=%d",
+            state.sid,
+            self._vendor,
+            state.bytes_sent,
+            state.chunks_sent,
+        )
+        state.vendor_totals_logged = True
 
     def _log_utterance(
         self,
@@ -1440,6 +1464,8 @@ class ASRRuntime:
             state.rollup_bytes = 0
             state.unavailable_emitted = False
             state.bytes_received = 0
+            state.vendor_first_write_logged = False
+            state.vendor_totals_logged = False
             mp = getattr(self.policy, "media", None)
             cp = getattr(self.policy, "capture", None)
             if mp is not None and cp is not None:
@@ -1468,6 +1494,18 @@ class ASRRuntime:
                         ),
                     }
                 )
+            input_desc = state.input_desc or {}
+            if not isinstance(input_desc, Mapping):
+                input_desc = {}
+            rate_hz = _coerce_int(input_desc.get("rate_hz"), 16000)
+            channels = _coerce_int(input_desc.get("channels"), 1)
+            _log.info(
+                "evt=asr_vendor_open sid=%s vendor=%s sample_rate=%d channels=%d",
+                sid,
+                self._vendor,
+                rate_hz,
+                channels,
+            )
             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": self._vendor}
             if stream_id:
                 open_event["stream_id"] = stream_id
@@ -1653,6 +1691,14 @@ class ASRRuntime:
         _log.info("evt=asr_chunk sid=%s stream_id=%s bytes=%d", sid, stream_id, chunk_len)
         self._ingest_rms_probe(sid, state, chunk)
         self._client.send_audio(sid, chunk)
+        if not state.vendor_first_write_logged:
+            _log.info(
+                "evt=asr_vendor_first_write sid=%s vendor=%s bytes=%d",
+                sid,
+                self._vendor,
+                chunk_len,
+            )
+            state.vendor_first_write_logged = True
         state.bytes_received += chunk_len
 
     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
@@ -1693,6 +1739,7 @@ class ASRRuntime:
                 stream_id,
                 reason,
             )
+            self._log_vendor_totals(state)
             is_error_close = reason == "error"
             if (
                 not state.unavailable_emitted

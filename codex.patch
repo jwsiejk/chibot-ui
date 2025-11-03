@@ -1,102 +1,407 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 2250cb6784530c0deb1a789ca79aefb5b6c298fd..1a475446831c5a466823fd3feac572caaae93835 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1769,50 +1769,97 @@ class ChatV2Adapter:
-                 break
-             await self._emit_audio_chunk(ctx, chunk, seq)
-             ctx.audio_expected_seq += 1
-         if ctx.audio_buffer:
-             ctx.audio_highest_seq = max(ctx.audio_buffer)
-         else:
-             ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 96317a869e5258dc36f50fbfda17e4f89f78c788..f0e129058b73e4edfaa0fdd93fe1b0e186a00a7d 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -88,50 +88,59 @@ def _safe_url(url: str | None) -> str:
+         return ""
  
-     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
-         byte_count = len(chunk)
-         meta = {
-             "byte_count": byte_count,
-             "seq": seq,
-             "ws": {"dir": "in", "size": byte_count},
-         }
-         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-         if ctx.audio_chunks_recv == 1:
-             self._emit_session_step(
-                 ctx.sid,
-                 "audio.stream_started",
-                 summary="Received first audio chunk",
-                 meta={"byte_count": byte_count},
-                 source="ws.audio",
-             )
-         self._handle_client_audio_activity(ctx)
-+        mask_phase = ctx.tts_mask_phase or "off"
-+        mask_open = mask_phase == "off"
-+        ready_gate = ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR
-+        mic_open = ctx.client_mic_open
-+        send_open = not ctx.audio_send_closed
-+        backpressure_ok = ctx.backpressure_state != "on"
+ 
+ def _default_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "raw",
+         "codec": "pcm_s16le",
+         "rate_hz": 16000,
+         "channels": 1,
+     }
+ 
+ 
+ def _pcm_input_descriptor() -> Dict[str, Any]:
+     return {
+         "container": "raw",
+         "codec": "pcm_s16le",
+         "rate_hz": 16000,
+         "channels": 1,
+     }
+ 
+ 
+ def _default_input_descriptor_for_vendor(vendor: str) -> Dict[str, Any]:
+     return _pcm_input_descriptor()
+ 
+ 
++def _coerce_int(value: Any, default: int) -> int:
++    try:
++        if value is None:
++            return default
++        return int(value)
++    except (TypeError, ValueError):
++        return default
 +
-+        gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
-+        if gate_open:
-+            _log.info(
-+                "evt=audio_ingress sid=%s len=%d gate_open=%s tts_mask=%s client_mic_open=%s audio_send_closed=%s backpressure_state=%s",
-+                ctx.sid,
-+                byte_count,
-+                gate_open,
-+                mask_phase,
-+                mic_open,
-+                ctx.audio_send_closed,
-+                ctx.backpressure_state,
-+            )
-+            bus.publish(
-+                {
-+                    "type": EVT_WS_AUDIO_SEND,
-+                    "sid": ctx.sid,
-+                    "chunk": bytes(chunk),
-+                    "len": byte_count,
-+                    "who": "server",
-+                    "source": "ws_server",
-+                }
-+            )
-+        else:
-+            if not mask_open:
-+                reason = "mask"
-+            elif not ready_gate:
-+                reason = "not_ready"
-+            elif not mic_open:
-+                reason = "mic_closed"
-+            elif not send_open:
-+                reason = "send_closed"
-+            else:
-+                reason = "backpressure"
-+            _log.info(
-+                "evt=audio_drop sid=%s len=%d reason=%s",
-+                ctx.sid,
-+                byte_count,
-+                reason,
-+            )
++
+ @dataclass
+ class _PendingFinal:
+     text: str
+     metadata: Dict[str, object]
+     created_ms: int
+     segment_ms: int
+     guard_ms: int
+ 
+ 
+ @dataclass
+ class _SessionState:
+     """Track per-session streaming state."""
+ 
+     sid: str
+     pending: Deque[bytes] = field(default_factory=deque)
+     buffered_bytes: int = 0
+     req_id: Optional[str] = None
+     stream_open_task: Optional[asyncio.Task[None]] = None
+     stream_open: bool = False
+     last_audio_ts: float = 0.0
+     idle_handle: asyncio.TimerHandle | None = None
+     stream_id: Optional[str] = None
+     close_reason: Optional[str] = None
+     opened_at_ms: int = 0
+     opened_at_monotonic: float = 0.0
+@@ -158,50 +167,52 @@ class _SessionState:
+     ingress_bytes: int = 0
+     first_ingress_ms: int = 0
+     first_partial_logged: bool = False
+     last_partial_log: float = 0.0
+     model: Optional[str] = None
+     keep_warm_until: float = 0.0
+     probe_active: bool = False
+     probe_target_samples: int = 0
+     probe_samples_collected: int = 0
+     probe_sum_squares: float = 0.0
+     probe_peak: float = 0.0
+     probe_window_ms: int = _RMS_PROBE_WINDOW_MS
+     commit_on_vad_silence: bool = True
+     commit_silence_ms: int = 900
+     max_utterance_ms: int = 8000
+     commit_timer: asyncio.TimerHandle | None = None
+     utterance_active: bool = False
+     utterance_started_at: float = 0.0
+     final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
+     segment_started_ms: int = 0
+     pending_final: Optional[_PendingFinal] = None
+     pending_final_handle: asyncio.TimerHandle | None = None
+     final_guard_ms: int = 250
+     min_segment_ms: int = 800
+     allow_word_finals: bool = False
++    vendor_first_write_logged: bool = False
++    vendor_totals_logged: bool = False
+ 
+     def __post_init__(self) -> None:
+         now_monotonic = time.monotonic()
+         now_wall = time.time()
+         self.opened_at_monotonic = now_monotonic
+         self.opened_at_ms = int(now_wall * 1000)
+         self.last_audio_ts = now_monotonic
+         self.last_audio_ts_ms = int(now_wall * 1000)
+ 
+ 
+ class ASRRuntime:
+     """Bridge websocket audio to realtime transcription providers."""
+ 
+     def __init__(
+         self,
+         engine: EngineV2,
+         client: Any,
+         *,
+         telemetry_bus: Any | None = None,
+     ) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+             raise ValueError("client must be provided")
+ 
+@@ -1068,83 +1079,96 @@ class ASRRuntime:
+     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
+         if _BACKPRESSURE_THRESHOLD <= 0:
+             return
+         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
+             return
+ 
+         dropped_chunks = 0
+         while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
+             removed = state.pending.popleft()
+             state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
+             dropped_chunks += 1
+ 
+         if dropped_chunks:
+             state.dropped_chunks += dropped_chunks
+             stream_id = state.stream_id or state.last_stream_id or ""
+             _log.info(
+                 "evt=asr_backpressure sid=%s stream_id=%s buffered_bytes=%d threshold=%d action=drop_oldest dropped_chunks=%d",
+                 sid,
+                 stream_id,
+                 state.buffered_bytes,
+                 _BACKPRESSURE_THRESHOLD,
+                 dropped_chunks,
+             )
+ 
+     def _log_session_rollup(self, state: _SessionState) -> None:
++        self._log_vendor_totals(state)
+         stream_id = state.last_stream_id or state.stream_id or ""
+         duration_ms = int(
+             max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
+         )
+         msg = (
+             "asr_rollup vendor=%s partials=%d finals=%d bytes=%d duration_ms=%d"
+             % (
+                 self._vendor,
+                 state.dg_msgs_partial,
+                 state.dg_msgs_final,
+                 state.bytes_sent,
+                 duration_ms,
+             )
+         )
+         _log.info(msg)
+         if getattr(state, "ingress_packets", 0) >= 0:
+             _log.info(
+                 "evt=audio_wire_rollup sid=%s ingress_packets=%s ingress_bytes=%s",
+                 state.sid,
+                 state.ingress_packets,
+                 state.ingress_bytes,
+             )
+         self._emit_log(
+             {
+                 "type": "EVT_LOG",
+                 "logger": "app.voice_v2.asr_runtime",
+                 "level": "INFO",
+                 "sid": state.sid,
+                 "stream_id": stream_id,
+                 "msg": msg,
+             }
+         )
+ 
++    def _log_vendor_totals(self, state: _SessionState, *, force: bool = False) -> None:
++        if state.vendor_totals_logged and not force:
 +            return
-         asr_runtime = getattr(self, "asr_runtime", None)
-         if asr_runtime is not None:
-             profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
-             fmt = str(profile.get("format") or "") if profile else ""
-             codec = str(profile.get("codec") or "") if profile else ""
-             if fmt == "pcm" or codec.startswith("pcm"):
++        _log.info(
++            "evt=asr_vendor_bytes_total sid=%s vendor=%s bytes_total=%d packets_total=%d",
++            state.sid,
++            self._vendor,
++            state.bytes_sent,
++            state.chunks_sent,
++        )
++        state.vendor_totals_logged = True
++
+     def _log_utterance(
+         self,
+         state: _SessionState,
+         stream_id: str,
+         req_id: str,
+         metadata: Dict[str, object],
+         text: str,
+     ) -> None:
+         chars = int(metadata.get("len_chars") or len(text))
+         words_meta = metadata.get("words")
+         if isinstance(words_meta, (int, float)):
+             words = max(0, int(words_meta))
+         else:
+             words = len([w for w in text.strip().split() if w])
+         asr_latency_ms = int(metadata.get("latency_ms") or 0)
+         log_template = (
+             "evt=asr_utterance sid=%s stream_id=%s req_id=%s chars=%d words=%d "
+             "asr_latency_ms=%d"
+         )
+         log_args = [
+             state.sid,
+             stream_id,
+             req_id,
+             chars,
+             words,
+@@ -1418,78 +1442,92 @@ class ASRRuntime:
+                 state.stream_open = False
+                 state.stream_id = None
+                 state.stream_open_task = None
+                 detail_reason = reason or type(e).__name__
+                 if code is not None:
+                     detail_reason = f"{detail_reason} (code={code})"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "open_failed",
+                     f"stream open failed: {detail_reason}",
+                     state=state,
+                 )
+                 loop = self._ensure_loop()
+                 if loop is not None:
+                     loop.call_later(0.5, self._ensure_stream, sid, state)
+                 return
+ 
+             state.stream_open = True
+             self._configure_rms_probe(state)
+             state.first_chunk_seen = False
+             state.rollup_window_start = 0.0
+             state.rollup_chunks = 0
+             state.rollup_bytes = 0
+             state.unavailable_emitted = False
+             state.bytes_received = 0
++            state.vendor_first_write_logged = False
++            state.vendor_totals_logged = False
+             mp = getattr(self.policy, "media", None)
+             cp = getattr(self.policy, "capture", None)
+             if mp is not None and cp is not None:
+                 self._emit_log(
+                     {
+                         "type": "EVT_LOG",
+                         "logger": "app.voice_v2.asr_runtime",
+                         "level": "INFO",
+                         "sid": sid,
+                         "msg": (
+                             "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
+                             "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
+                             "mask_during_tts=%s mask_keepalive_enable=%s mask_keepalive_ms=%s"
+                         )
+                         % (
+                             getattr(mp, "asr_input", ""),
+                             getattr(mp, "asr_rate_hz", ""),
+                             getattr(mp, "asr_channels", ""),
+                             getattr(mp, "fallbacks_allowed", ""),
+                             getattr(cp, "start_on_asr_ready", ""),
+                             getattr(cp, "start_on_turn_ready", ""),
+                             getattr(cp, "timeslice_ms", ""),
+                             getattr(cp, "mask_during_tts", ""),
+                             getattr(cp, "mask_keepalive_enable", ""),
+                             getattr(cp, "mask_keepalive_ms", ""),
+                         ),
+                     }
+                 )
++            input_desc = state.input_desc or {}
++            if not isinstance(input_desc, Mapping):
++                input_desc = {}
++            rate_hz = _coerce_int(input_desc.get("rate_hz"), 16000)
++            channels = _coerce_int(input_desc.get("channels"), 1)
++            _log.info(
++                "evt=asr_vendor_open sid=%s vendor=%s sample_rate=%d channels=%d",
++                sid,
++                self._vendor,
++                rate_hz,
++                channels,
++            )
+             open_event = {"type": EVT_ASR_OPEN, "sid": sid, "vendor": self._vendor}
+             if stream_id:
+                 open_event["stream_id"] = stream_id
+             self._bus.publish(open_event)
+             stream_id_value = stream_id if isinstance(stream_id, str) and stream_id else ""
+             if not stream_id_value and isinstance(state.stream_id, str) and state.stream_id:
+                 stream_id_value = state.stream_id
+             _log.info(
+                 "evt=asr_open sid=%s stream_id=%s vendor=%s qs=%s",
+                 sid,
+                 stream_id_value,
+                 self._vendor,
+                 qs or "",
+             )
+             ready_kwargs = {
+                 "sid": sid,
+                 "vendor": self._vendor,
+                 "stream_id": stream_id_value,
+             }
+             emit = getattr(self._bus, "emit", None)
+             if callable(emit):
                  try:
-                     asr_runtime.on_ws_audio(ctx.sid, chunk)
-                 except Exception:  # pragma: no cover - defensive logging
-                     _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
-         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+                     emit(EVT_ASR_READY, **ready_kwargs)
+                 except TypeError:
+                     emit(EVT_ASR_READY, ready_kwargs)
+@@ -1631,90 +1669,99 @@ class ASRRuntime:
+         rms_avg = math.sqrt(state.probe_sum_squares / samples)
+         rms_peak = state.probe_peak
+         _log.info(
+             "asr_probe rms_avg=%.6f rms_peak=%.6f sample_ms=%d",
+             rms_avg,
+             rms_peak,
+             state.probe_window_ms,
+         )
  
-     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
-         removed = False
-         for key in list(ctx.audio_buffer):
-             if key < threshold:
-                 ctx.audio_buffer.pop(key, None)
-                 removed = True
-         if removed:
-             if ctx.audio_buffer:
-                 ctx.audio_highest_seq = max(ctx.audio_buffer)
-             else:
-                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+         state.probe_active = False
+         state.probe_target_samples = 0
+         state.probe_samples_collected = 0
+         state.probe_sum_squares = 0.0
+         state.probe_peak = 0.0
  
-     def _log_speechmatics_control_summary(
+     def _forward_chunk(self, sid: str, state: _SessionState, chunk: bytes) -> None:
+         if not chunk:
+             return
+         chunk_len = len(chunk)
+         state.chunks_sent += 1
+         state.bytes_sent += chunk_len
+         stream_id = state.stream_id or state.last_stream_id or ""
+         _log.info("evt=asr_chunk sid=%s stream_id=%s bytes=%d", sid, stream_id, chunk_len)
+         self._ingest_rms_probe(sid, state, chunk)
+         self._client.send_audio(sid, chunk)
++        if not state.vendor_first_write_logged:
++            _log.info(
++                "evt=asr_vendor_first_write sid=%s vendor=%s bytes=%d",
++                sid,
++                self._vendor,
++                chunk_len,
++            )
++            state.vendor_first_write_logged = True
+         state.bytes_received += chunk_len
+ 
+     def _make_partial_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_partial(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_final_cb(self, sid: str) -> Callable[[str, Dict[str, object]], None]:
+         def _callback(text: str, metadata: Dict[str, object] | None = None) -> None:
+             self._on_final(sid, text, metadata or {})
+ 
+         return _callback
+ 
+     def _make_error_cb(self, sid: str) -> Callable[[str, str | None], None]:
+         def _callback(code: str, reason: str | None = None) -> None:
+             error = code
+             if reason and reason != code:
+                 error = f"{code}: {reason}"
+             self._on_error(sid, error)
+ 
+         return _callback
+ 
+     def _make_close_cb(self, sid: str, state: _SessionState) -> Callable[[int | None, str | None], None]:
+         def _callback(_code: int | None, _reason: str | None) -> None:
+             stream_id = state.stream_id
+             if not stream_id:
+                 return
+             self._cancel_pending_final(state, log=False)
+             state.segment_started_ms = 0
+             reason = state.close_reason
+             if reason is None:
+                 reason = "server_shutdown" if _code == 1001 else "error"
+             state.last_stream_id = stream_id
+             _log.info(
+                 "evt=asr_session_close sid=%s stream_id=%s reason=%s",
+                 sid,
+                 stream_id,
+                 reason,
+             )
++            self._log_vendor_totals(state)
+             is_error_close = reason == "error"
+             if (
+                 not state.unavailable_emitted
+                 and (
+                     _code == 1011
+                     or (_reason and "net0001" in str(_reason).lower())
+                 )
+             ):
+                 detail = "Deepgram closed stream"
+                 if _code is not None:
+                     detail += f" code={_code}"
+                 if _reason:
+                     detail += f" reason={_reason}"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "upstream_closed",
+                     detail,
+                     state=state,
+                 )
+             if self._vendor == "speechmatics":
+                 code_str = str(_code) if _code is not None else ""
+                 meta: Dict[str, Any] = {
+                     "vendor": "speechmatics",
+                     "upstream_code": code_str,
+                     "close_reason": reason,
