@@ -119,6 +119,30 @@ def _coerce_int(value: Any, default: int) -> int:
         return default
 
 
+def _merge_transcripts(previous: str, new: str) -> str:
+    """Merge incremental transcript fragments with overlap awareness."""
+
+    prev = previous or ""
+    nxt = new or ""
+
+    if not prev:
+        return nxt
+    if not nxt:
+        return prev
+
+    if nxt.startswith(prev):
+        return nxt
+    if prev.endswith(nxt):
+        return prev
+
+    max_overlap = min(len(prev), len(nxt))
+    for overlap in range(max_overlap, 0, -1):
+        if prev[-overlap:] == nxt[:overlap]:
+            return prev + nxt[overlap:]
+
+    return prev + nxt
+
+
 @dataclass
 class _PendingFinal:
     text: str
@@ -189,6 +213,7 @@ class _SessionState:
     final_guard_ms: int = 250
     min_segment_ms: int = 800
     allow_word_finals: bool = False
+    final_accumulated: str = ""
     vendor_first_write_logged: bool = False
     vendor_totals_logged: bool = False
 
@@ -415,6 +440,9 @@ class ASRRuntime:
             state.segment_started_ms = now_ms
         segment_ms = max(0, now_ms - state.segment_started_ms)
 
+        combined_text = _merge_transcripts(state.final_accumulated, text)
+        state.final_accumulated = combined_text
+
         guard_ms = max(0, int(state.final_guard_ms))
         min_segment_ms = max(0, int(state.min_segment_ms))
         if segment_ms < min_segment_ms:
@@ -427,7 +455,7 @@ class ASRRuntime:
             self._cancel_pending_final(state, "too_short")
 
         candidate = _PendingFinal(
-            text=text,
+            text=combined_text,
             metadata=dict(metadata),
             created_ms=now_ms,
             segment_ms=segment_ms,
@@ -435,7 +463,7 @@ class ASRRuntime:
         )
         state.pending_final = candidate
 
-        summary = _summarize_text(text)
+        summary = _summarize_text(combined_text)
         _log.info(
             'evt=asr_final_candidate text="%s" len_ms=%d guard_ms=%d',
             summary,
@@ -584,6 +612,7 @@ class ASRRuntime:
             )
             self._log_utterance(state, stream_id, req_id, metadata, text)
             state.segment_started_ms = 0
+            state.final_accumulated = ""
             return
 
         self._bus.publish(event)
@@ -606,6 +635,7 @@ class ASRRuntime:
         )
         self._log_utterance(state, stream_id, req_id, metadata, text)
         state.segment_started_ms = 0
+        state.final_accumulated = ""
 
     # ------------------------------------------------------------------
     # Websocket hooks
@@ -633,6 +663,7 @@ class ASRRuntime:
         state.probe_peak = 0.0
         state.utterance_active = False
         state.segment_started_ms = 0
+        state.final_accumulated = ""
         self._cancel_pending_final(state, log=False)
         if self._vendor == "speechmatics":
             snapshot = getattr(self._engine, "policy_snapshot", None)
@@ -1747,6 +1778,7 @@ class ASRRuntime:
                 return
             self._cancel_pending_final(state, log=False)
             state.segment_started_ms = 0
+            state.final_accumulated = ""
             reason = state.close_reason
             if reason is None:
                 reason = "server_shutdown" if _code == 1001 else "error"
@@ -1835,6 +1867,7 @@ class ASRRuntime:
         if self._vendor == "speechmatics":
             if state.segment_started_ms <= 0:
                 state.segment_started_ms = int(time.time() * 1000)
+                state.final_accumulated = ""
             if state.pending_final is not None:
                 self._cancel_pending_final(state, "speech_resumed")
         self._cancel_commit_timer(state)
@@ -1962,12 +1995,15 @@ class ASRRuntime:
                 self._apply_speechmatics_policy(state, snapshot)
 
         metadata = metadata or {}
+        deliver_text = text
         if self._vendor == "speechmatics":
             if not state.allow_word_finals and self._handle_speechmatics_final_candidate(
                 sid, state, text, metadata
             ):
                 return
-        self._deliver_final(sid, text, metadata, state)
+            if state.final_accumulated:
+                deliver_text = state.final_accumulated
+        self._deliver_final(sid, deliver_text, metadata, state)
 
     def _on_error(self, sid: str, error: str) -> None:
         reason = error or "unknown"
@@ -1978,6 +2014,7 @@ class ASRRuntime:
             return
         self._cancel_pending_final(state, log=False)
         state.segment_started_ms = 0
+        state.final_accumulated = ""
         self._publish_asr_unavailable(
             sid,
             "upstream_closed",
