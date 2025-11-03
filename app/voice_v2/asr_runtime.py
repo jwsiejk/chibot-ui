@@ -1176,8 +1176,6 @@ class ASRRuntime:
             return
         if not state.pending and not state.prearm_requested:
             return
-        if self._vendor == "speechmatics" and not state.pending:
-            return
         task = state.stream_open_task
         if task is not None and not task.done():
             return

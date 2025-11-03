@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import threading
 import time
 import sys, platform, socket, os, inspect
 from dataclasses import dataclass, field
@@ -779,7 +780,6 @@ class ChatV2Adapter:
                             engine=engine,
                             client=client,
                             telemetry_bus=bus,
-                            metrics=ctx.metrics,
                         )
                         self._asr_runtime_vendor = vendor or None
                     elif engine is None:
@@ -2073,6 +2073,7 @@ class ChatV2Adapter:
                     ctx.asr_recovering_until = time.monotonic() + 3.0
                     ctx.asr_recovering_reason = "concurrent_session"
                     ctx.asr_recovering_audio_logged = False
+                    ctx.client_capture_armed = True
                 else:
                     ctx.asr_recovering_until = 0.0
                     ctx.asr_recovering_reason = None
@@ -2517,25 +2518,29 @@ class ChatV2Adapter:
         )
 
         loop = asyncio.get_running_loop()
+        loop_thread = threading.current_thread()
 
         def _handle(event: dict) -> None:
             if event.get("type") != EVT_ASR_READY:
                 return
             if event.get("sid") != ctx.sid:
                 return
+            if ctx.asr_ready:
+                return
 
-            def _mark_ready() -> None:
-                if ctx.asr_ready:
-                    return
-                ctx.asr_ready = True
-                ctx.awaiting_asr_ready = False
-                ctx.asr_recovering_until = 0.0
-                ctx.asr_recovering_reason = None
-                ctx.asr_recovering_audio_logged = False
-                frame: Dict[str, Any] = {"type": "asr.ready"}
-                vendor = event.get("vendor")
-                if isinstance(vendor, str) and vendor:
-                    frame["vendor"] = vendor
+            ctx.asr_ready = True
+            ctx.awaiting_asr_ready = False
+            ctx.asr_recovering_until = 0.0
+            ctx.asr_recovering_reason = None
+            ctx.asr_recovering_audio_logged = False
+            ctx.client_capture_armed = True
+
+            frame: Dict[str, Any] = {"type": "asr.ready"}
+            vendor = event.get("vendor")
+            if isinstance(vendor, str) and vendor:
+                frame["vendor"] = vendor
+
+            def _publish_ready() -> None:
                 try:
                     asyncio.create_task(self._flush_audio_buffer(ctx))
                 except RuntimeError:
@@ -2549,10 +2554,14 @@ class ChatV2Adapter:
                     }
                 )
 
+            if threading.current_thread() is loop_thread:
+                _publish_ready()
+                return
+
             try:
-                loop.call_soon_threadsafe(_mark_ready)
+                loop.call_soon_threadsafe(_publish_ready)
             except RuntimeError:
-                _mark_ready()
+                _publish_ready()
 
         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
 
