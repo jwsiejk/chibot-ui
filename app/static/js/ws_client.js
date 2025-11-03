@@ -28,11 +28,15 @@ import { WakeWord } from "./wake_word.js";
     ERROR_STATE_GUARD: 'error_state_guard',
     ERROR_UNKNOWN: 'error_unknown',
   };
+  const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
 
   let __micAttempts = 0;
   let __micChunks = 0;
   let __micBytes = 0;
   let __micArmedAt = 0;     // ms since epoch
+  let __micPermissionGranted = false;
+  let __micRecordingStartAt = null;
+  let __micFirstChunkBreadcrumbSent = false;
   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
 
   if (typeof window !== "undefined") {
@@ -70,6 +74,22 @@ import { WakeWord } from "./wake_word.js";
         set(value) {
           if (Number.isFinite(value)) {
             __micArmedAt = value;
+          }
+        },
+      });
+      Object.defineProperty(window, "__micPermGranted", {
+        configurable: true,
+        get() { return __micPermissionGranted; },
+        set(value) {
+          __micPermissionGranted = !!value;
+        },
+      });
+      Object.defineProperty(window, "__micRecordingStartAt", {
+        configurable: true,
+        get() { return __micRecordingStartAt; },
+        set(value) {
+          if (Number.isFinite(value) || value === null) {
+            __micRecordingStartAt = value;
           }
         },
       });
@@ -115,6 +135,14 @@ import { WakeWord } from "./wake_word.js";
   if (typeof AppState.emit !== "function") {
     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
   }
+  if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
+    AppState.__pcmBreadcrumbHandlersInstalled = true;
+    AppState.on("recordingStarted", () => {
+      __micRecordingStartAt = Date.now();
+      __micFirstChunkBreadcrumbSent = false;
+      emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
+    });
+  }
 
   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
   let autostartAttempts = 0;
@@ -151,6 +179,42 @@ import { WakeWord } from "./wake_word.js";
     return false;
   }
 
+  function getGateSnapshot() {
+    let snapshot = null;
+    try {
+      snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
+    } catch {}
+    const asrValue = snapshot && typeof snapshot.asrReady === "boolean"
+      ? snapshot.asrReady
+      : Boolean(AppState?.asrReady);
+    const ttsValue = snapshot && typeof snapshot.ttsActive === "boolean"
+      ? snapshot.ttsActive
+      : Boolean(AppState?.ttsActive);
+    let micPermValue = __micPermissionGranted;
+    if (snapshot && typeof snapshot.micPermissionGranted === "boolean") {
+      micPermValue = snapshot.micPermissionGranted;
+    } else if (typeof AppState?.micPermissionGranted === "boolean") {
+      micPermValue = AppState.micPermissionGranted;
+    }
+    return {
+      asrReady: Boolean(asrValue),
+      micPerm: Boolean(micPermValue),
+      ttsActive: Boolean(ttsValue),
+    };
+  }
+
+  function emitMicBreadcrumb(detail = {}) {
+    try {
+      const payload = { ...detail };
+      payload.gates = getGateSnapshot();
+      hubLog('client.mic', payload);
+    } catch (err) {
+      try {
+        console.warn("Mic breadcrumb log failed", err);
+      } catch {}
+    }
+  }
+
   try {
   if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
     Object.defineProperty(AppState, "websocket", {
@@ -175,6 +239,50 @@ import { WakeWord } from "./wake_word.js";
         phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
         hold_flags: holdFlags,
       };
+      const outcome = typeof detail?.outcome === "string" ? detail.outcome : null;
+      const permLabel = typeof detail?.perm === "string" ? detail.perm : null;
+      if (permLabel !== null) {
+        const granted = permLabel === "granted";
+        __micPermissionGranted = granted;
+        try { AppState.micPermissionGranted = granted; } catch {}
+      } else if (outcome === MIC_OUTCOME.ERROR_DENIED) {
+        __micPermissionGranted = false;
+        try { AppState.micPermissionGranted = false; } catch {}
+      }
+      if (outcome === MIC_OUTCOME.PERM_GRANTED || permLabel === "granted") {
+        emitMicBreadcrumb({ event: "armed" });
+      }
+      if (outcome === MIC_OUTCOME.STREAMING && !__micFirstChunkBreadcrumbSent) {
+        __micFirstChunkBreadcrumbSent = true;
+        let msSinceStart = 0;
+        if (typeof __micRecordingStartAt === "number") {
+          msSinceStart = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
+        } else if (Number.isFinite(Number(detail?.first_chunk_ms))) {
+          const fallback = Number(detail.first_chunk_ms);
+          msSinceStart = Math.max(0, Math.round(fallback));
+        }
+        const bytesRaw = Number.isFinite(__micBytes) ? __micBytes : 0;
+        const bytesSent = bytesRaw >= 0 ? bytesRaw : 0;
+        emitMicBreadcrumb({
+          event: "first_chunk_sent",
+          bytes: bytesSent,
+          ms_since_recording_start: msSinceStart,
+        });
+      }
+      if (outcome === MIC_OUTCOME.STOPPED) {
+        let totalMs = 0;
+        if (typeof __micRecordingStartAt === "number") {
+          totalMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
+        }
+        const reason = typeof detail?.reason === "string" && detail.reason ? detail.reason : null;
+        emitMicBreadcrumb({
+          event: "stopped",
+          reason,
+          ms_total_recording: totalMs,
+        });
+        __micRecordingStartAt = null;
+        __micFirstChunkBreadcrumbSent = false;
+      }
       hubLog('client.mic', { ...base, ...detail });
     } catch {}
   }
