@@ -1,232 +1,191 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index b596e5384c59b033ac20b15b67d66d5777dafd35..42c8e45bad8c6f964c588715211d04ad8d357a0f 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -23,51 +23,51 @@ from app.voice_v2 import (
-     EVT_ASR_FINAL,
-     EVT_ASR_PARTIAL,
-     EVT_ACTION_SAY_END,
-     EVT_BARGE_CONFIRMED,
-     EVT_BARGE_DETECTED,
-     EVT_BARGE_REJECTED,
-     EVT_NLG,
-     EVT_NLU,
-     EVT_DIALOG_PLAN,
-     EVT_POLICY_APPLIED,
-     EVT_TTS_END,
-     EVT_TTS_START,
-     EVT_TTS_MASK,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_CLOSE,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
-     EVT_WS_OPEN,
- )
- from app.voice_v2.nlu import NLUAdapter
- from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
- from app.voice_v2.llm import LLMAdapter
- from app.voice_v2.gate import GateController
- from app.voice_v2.conversation_buffer import ConversationBuffer
--from app.voice_v2.vad import VADAggregator
-+from app.voice_v2.vad import VADAggregator, rms_dbfs_from_pcm16
- from app.voice_v2.planner import _MODE_CHIPS, plan_turn
- from app.voice_v2.persona import default_chips_for_mode, load_persona
- from app.voice_v2.streaming import StreamingController
- from app.voice_v2.rollup import TurnRollupAggregator
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index c7a0dd41a105da5bf59ffc1371fb6c72a9087ab1..9298031fd5f278e12e87111b6d249da15326884a 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -25,50 +25,107 @@ import { WakeWord } from "./wake_word.js";
+       }
+       if (typeof track.label === "string" && track.label) {
+         summary.label = track.label;
+       }
+       if (Number.isFinite(settings.sampleRate)) {
+         summary.sample_rate = settings.sampleRate;
+       }
+       if (Number.isFinite(settings.channelCount)) {
+         summary.channels = settings.channelCount;
+       }
+       return Object.keys(summary).length ? summary : null;
+     } catch (err) {
+       console.warn("AudioRecorder device summary failed", err);
+       return null;
+     }
+   }
  
+   function emitEvent(type, detail) {
+     try {
+       window.dispatchEvent(new CustomEvent(type, { detail }));
+     } catch (err) {
+       console.warn("AudioRecorder event dispatch failed", type, err);
+     }
+   }
  
- _log = logging.getLogger(__name__)
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
- def _slugify_action_label(label: str) -> str:
-     """Normalize a suggestion label into a stable slug identifier."""
- 
-     normalized = re.sub(r"[^a-z0-9]+", "-", label.strip().lower())
-     slug = normalized.strip("-")
-     return slug or "action"
- 
- 
- READY = "Ready"
- LISTENING = "Listening"
- THINKING = "Thinking"
-@@ -386,51 +386,73 @@ class EngineV2:
-         turn_id = session.turn_id or str(uuid.uuid4())
-         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
-         session.turn_id = turn_id
-         session.req_id = req_id
- 
-         self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
-         self._set_state(sid, THINKING, reason="text_input")
- 
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-         """Capture an incoming audio chunk."""
-         session = self._ensure_session(sid)
-         if session.tts_mask_phase != "off":
-             self._publish_tts_mask(sid, "off")
-         if session.state == READY:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-             session = self._ensure_session(sid)
-         elif session.state == RESPONDING:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-             session = self._ensure_session(sid)
-         if session.state != LISTENING:
-             _log.warning(
-                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
-             )
-         else:
-             self._commit_turn_start(sid, "audio_rx")
++  function getAppState() {
++    if (typeof window === "undefined") {
++      return null;
++    }
++    try {
++      return window.AppState || null;
++    } catch {
++      return null;
++    }
++  }
 +
-+        if not isinstance(chunk, (bytes, bytearray)):
-+            _log.warning(
-+                "evt=audio_invalid_chunk type=%s", type(chunk).__name__, extra={"sid": sid}
-+            )
-+            return
++  function getGateSnapshot() {
++    const appState = getAppState();
++    let snapshot = null;
++    try {
++      snapshot = typeof appState?.getState === "function" ? appState.getState() : null;
++    } catch {}
++    const asrValue = typeof snapshot?.asrReady === "boolean"
++      ? snapshot.asrReady
++      : Boolean(appState?.asrReady);
++    const ttsValue = typeof snapshot?.ttsActive === "boolean"
++      ? snapshot.ttsActive
++      : Boolean(appState?.ttsActive);
++    let micPermValue = null;
++    if (typeof snapshot?.micPermissionGranted === "boolean") {
++      micPermValue = snapshot.micPermissionGranted;
++    } else if (typeof appState?.micPermissionGranted === "boolean") {
++      micPermValue = appState.micPermissionGranted;
++    }
++    return {
++      asrReady: Boolean(asrValue),
++      micPerm: Boolean(micPermValue),
++      ttsActive: Boolean(ttsValue),
++    };
++  }
 +
-         byte_count = len(chunk)
-+        frame_ms = int((byte_count / (2 * _PCM_CHANNELS * _PCM_RATE_HZ)) * 1000)
-+        if frame_ms <= 0:
-+            frame_ms = 20
-+        dbfs = rms_dbfs_from_pcm16(chunk)
-+        aggregator = self._aggregators.get(sid)
-+        if aggregator is not None:
-+            aggregator.feed_auto_energy(dbfs, frame_ms=frame_ms)
++  function logMicBreadcrumb(detail = {}) {
++    const appState = getAppState();
++    try {
++      if (appState?.hub && typeof appState.hub.log === "function") {
++        appState.hub.log("client.mic", detail);
++        return true;
++      }
++    } catch (err) {
++      try {
++        console.warn("AudioRecorder client.mic log failed", err);
++      } catch {}
++    }
++    if (typeof window !== "undefined") {
++      try {
++        window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail } }));
++        return true;
++      } catch {}
++    }
++    return false;
++  }
 +
-+        if session.perf_first_partial_ms is None and not getattr(
-+            session, "_vad_energy_logged", False
-+        ):
-+            _log.info(
-+                "evt=auto_vad_energy sid=%s dbfs=%.1f frame_ms=%d", sid, dbfs, frame_ms
-+            )
-+            session._vad_energy_logged = True
-         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
-         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
-         self._publish(event)
+   class AudioRecorder {
+     constructor(ws, appState) {
+       this._ws = ws || null;
+       this._state = appState || null;
+       this._stream = null;
+       this._sendGate = false;
+       this._policy = {};
+       this._micOpenEmitted = false;
+       this._active = false;
+       this._wakeInit = false;
+       this._sendMuted = false;
+       this._headerSent = false;
+       this._audioContext = null;
+       this._pcmSource = null;
+       this._pcmNode = null;
+       this._pcmGainNode = null;
+       this._pcmResampleBuffer = [];
+       this._pcmOutputBuffer = [];
+       this._pcmResampleCursor = 0;
+       this._pcmFrameSeq = 0;
+       this._pcmLastTelemetryAt = 0;
+       this._pcmUtteranceStartAt = null;
+       this._pcmLastVoiceAt = null;
+       this._pcmSilenceStartAt = null;
+       this._pcmCommitSent = false;
+@@ -446,62 +503,78 @@ import { WakeWord } from "./wake_word.js";
+       this._sendCommitControl(detail);
+     }
  
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-             self._last_sid = None
-             self._policy_snapshot = None
-         self.cancel_current_tts(sid, reason="ended")
-         self._streaming.close_session(sid)
-         self._gate.clear_all(sid=sid)
-         self._cancel_barge_confirmation(sid, reject_reason="session_closed")
-         self._aggregators.pop(sid, None)
-         if hasattr(self, "_turn_rollup"):
-             self._turn_rollup.clear_session(sid)
-         self._sessions.pop(sid, None)
-         buffers = getattr(self._conversation_buffer, "_buffers", None)
-         if isinstance(buffers, dict):
-             buffers.pop(sid, None)
+     _emitPcmFrame(frame) {
+       if (!Array.isArray(frame) || frame.length === 0) {
+         return;
+       }
+       const samples = frame.length;
+       const pcm = new Int16Array(samples);
+       let sumSquares = 0;
+       for (let i = 0; i < samples; i += 1) {
+         const value = Number.isFinite(frame[i]) ? frame[i] : 0;
+         const clipped = Math.max(-1, Math.min(1, value));
+         const intSample = Math.round(clipped * 32767);
+         pcm[i] = intSample;
+         sumSquares += intSample * intSample;
+       }
+       const rms = Math.sqrt(sumSquares / samples);
+       const threshold = this._resolveVadThreshold();
+       const silent = rms <= threshold;
+       const now = Date.now();
  
-     def on_tts_start(
-@@ -1279,98 +1301,100 @@ class EngineV2:
-             if session.tts_mask_phase != "off":
-                 _log.warning(
-                     "evt=state_transition_mask_blocked", extra={"sid": sid}
-                 )
-                 return
+       if (!silent) {
+         this._pcmLastVoiceAt = now;
+         if (!this._pcmUtteranceStartAt) {
++          logMicBreadcrumb({ event: "vad_start", gates: getGateSnapshot() });
+           this._pcmUtteranceStartAt = now;
+           this._pcmCommitSent = false;
+         }
+         this._pcmSilenceStartAt = null;
+       } else if (this._pcmUtteranceStartAt && !this._pcmCommitSent) {
+         if (this._pcmSilenceStartAt === null) {
+           this._pcmSilenceStartAt = now;
+         }
+         if (this._shouldCommitOnVad()) {
+           const silenceMs = now - this._pcmSilenceStartAt;
+           if (silenceMs >= this._commitSilenceMs()) {
+             const utteranceDur = now - this._pcmUtteranceStartAt;
++            const lastVoiceAt = this._pcmLastVoiceAt || now;
++            const silenceSinceLastVoice = Math.max(0, now - lastVoiceAt);
++            const gates = getGateSnapshot();
++            logMicBreadcrumb({
++              event: "vad_end",
++              ms_silence: silenceSinceLastVoice,
++              gates,
++            });
++            logMicBreadcrumb({
++              event: "vad_commit",
++              dur_ms: Math.max(0, now - (this._pcmUtteranceStartAt || now)),
++              silence_ms: silenceSinceLastVoice,
++              gates,
++              policy: { input: "pcm_16k", mode: "pcm16" },
++            });
+             this._emitVadCommit(utteranceDur, silenceMs);
+             this._pcmCommitSent = true;
+             this._pcmUtteranceStartAt = null;
+             this._pcmSilenceStartAt = null;
+             this._pcmLastVoiceAt = null;
+           }
+         }
+       }
  
-         now_ms = _now_ms()
+       if (silent || !this._sendGate || this._sendMuted) {
+         return;
+       }
  
-         if new_state == LISTENING:
-             session.turn_id = str(uuid.uuid4())
-             session.req_id = f"req-{uuid.uuid4().hex}"
-             session.nlu_req_id = None
-             session.turn_started_ms = now_ms
-             session.perf_first_partial_ms = None
-             session.perf_final_ms = None
-             session.perf_tts_start_ms = None
-             session.asr_final_emitted = False
-             session.nlu_emitted = False
-             session.policy_emitted = False
-             session.nlg_emitted = False
-             session.plan_emitted = False
-             session.suggestions_emitted = False
-             session.plan = None
-             session.tts_mask_phase = "off"
-             session.turn_committed = False
-+            session._vad_energy_logged = False
+       if (!this._headerSent) {
+         this._sendAudioHeader();
+         if (!this._headerSent) {
+           return;
+         }
+       }
  
-         if (
-             new_state == READY
-             and previous in {LISTENING, THINKING, RESPONDING}
-             and session.turn_id
-         ):
-             start_ms = session.turn_started_ms or now_ms
-             duration_ms = now_ms - start_ms
-             if duration_ms <= 0:
-                 duration_ms = 1
-             turn_id = session.turn_id
-             req_id = session.req_id
-             end_payload = {
-                 "turn_id": turn_id,
-                 "req_id": req_id,
-                 "meta": {
-                     "turn_id": turn_id,
-                     "req_id": req_id,
-                     "duration_ms": duration_ms,
-                 },
-             }
-             end_event = self._envelope(sid, EVT_TURN_END, end_payload)
-             self._publish(end_event)
-             summary_payload = {
-                 "turn_id": turn_id,
-                 "req_id": req_id,
-                 "t_first_partial_ms": session.perf_first_partial_ms,
-                 "t_final_ms": session.perf_final_ms,
-                 "t_tts_start_ms": session.perf_tts_start_ms,
-             }
-             perf_event = self._envelope(sid, EVT_PERF_SUMMARY, summary_payload)
-             self._publish(perf_event)
-             session.turn_id = None
-             session.turn_started_ms = None
-             session.tts_utt_id = None
-             session.req_id = None
-             session.nlu_req_id = None
-             session.perf_first_partial_ms = None
-             session.perf_final_ms = None
-             session.perf_tts_start_ms = None
-             session.asr_final_emitted = False
-             session.nlu_emitted = False
-             session.policy_emitted = False
-             session.nlg_emitted = False
-             session.plan_emitted = False
-             session.suggestions_emitted = False
-             session.plan = None
-             session.turn_committed = False
-+            session._vad_energy_logged = False
+       const socket = this._ws;
+       if (!socket || socket.readyState !== WebSocket.OPEN) {
+         return;
+       }
  
-         session.state = new_state
- 
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.on_engine_mode_change(new_state)
- 
-         breadcrumb_meta: Dict[str, Any] = {"state": new_state}
-         if reason is not None:
-             breadcrumb_meta["reason"] = reason
-         breadcrumb_payload = {"meta": breadcrumb_meta}
-         breadcrumb_event = self._envelope(sid, EVT_TURN_STATE, breadcrumb_payload)
-         self._publish(breadcrumb_event)
- 
-     def _commit_turn_start(self, sid: str, source: str) -> None:
-         """Emit EVT_TURN_BEGIN once authoritative speech evidence arrives."""
- 
-         session = self._sessions.get(sid)
-         if session is None or session.state != LISTENING:
-             return
-         if session.turn_committed:
-             return
- 
-         turn_id = session.turn_id
-         req_id = session.req_id

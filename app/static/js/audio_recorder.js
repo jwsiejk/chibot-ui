@@ -47,6 +47,63 @@ import { WakeWord } from "./wake_word.js";
     }
   }
 
+  function getAppState() {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    try {
+      return window.AppState || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getGateSnapshot() {
+    const appState = getAppState();
+    let snapshot = null;
+    try {
+      snapshot = typeof appState?.getState === "function" ? appState.getState() : null;
+    } catch {}
+    const asrValue = typeof snapshot?.asrReady === "boolean"
+      ? snapshot.asrReady
+      : Boolean(appState?.asrReady);
+    const ttsValue = typeof snapshot?.ttsActive === "boolean"
+      ? snapshot.ttsActive
+      : Boolean(appState?.ttsActive);
+    let micPermValue = null;
+    if (typeof snapshot?.micPermissionGranted === "boolean") {
+      micPermValue = snapshot.micPermissionGranted;
+    } else if (typeof appState?.micPermissionGranted === "boolean") {
+      micPermValue = appState.micPermissionGranted;
+    }
+    return {
+      asrReady: Boolean(asrValue),
+      micPerm: Boolean(micPermValue),
+      ttsActive: Boolean(ttsValue),
+    };
+  }
+
+  function logMicBreadcrumb(detail = {}) {
+    const appState = getAppState();
+    try {
+      if (appState?.hub && typeof appState.hub.log === "function") {
+        appState.hub.log("client.mic", detail);
+        return true;
+      }
+    } catch (err) {
+      try {
+        console.warn("AudioRecorder client.mic log failed", err);
+      } catch {}
+    }
+    if (typeof window !== "undefined") {
+      try {
+        window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail } }));
+        return true;
+      } catch {}
+    }
+    return false;
+  }
+
   class AudioRecorder {
     constructor(ws, appState) {
       this._ws = ws || null;
@@ -468,6 +525,7 @@ import { WakeWord } from "./wake_word.js";
       if (!silent) {
         this._pcmLastVoiceAt = now;
         if (!this._pcmUtteranceStartAt) {
+          logMicBreadcrumb({ event: "vad_start", gates: getGateSnapshot() });
           this._pcmUtteranceStartAt = now;
           this._pcmCommitSent = false;
         }
@@ -480,6 +538,21 @@ import { WakeWord } from "./wake_word.js";
           const silenceMs = now - this._pcmSilenceStartAt;
           if (silenceMs >= this._commitSilenceMs()) {
             const utteranceDur = now - this._pcmUtteranceStartAt;
+            const lastVoiceAt = this._pcmLastVoiceAt || now;
+            const silenceSinceLastVoice = Math.max(0, now - lastVoiceAt);
+            const gates = getGateSnapshot();
+            logMicBreadcrumb({
+              event: "vad_end",
+              ms_silence: silenceSinceLastVoice,
+              gates,
+            });
+            logMicBreadcrumb({
+              event: "vad_commit",
+              dur_ms: Math.max(0, now - (this._pcmUtteranceStartAt || now)),
+              silence_ms: silenceSinceLastVoice,
+              gates,
+              policy: { input: "pcm_16k", mode: "pcm16" },
+            });
             this._emitVadCommit(utteranceDur, silenceMs);
             this._pcmCommitSent = true;
             this._pcmUtteranceStartAt = null;
