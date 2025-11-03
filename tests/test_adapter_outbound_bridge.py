@@ -365,7 +365,11 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             frame = await harness.wait_for_outbound(
                 lambda data: data.get("type") == "start_listening"
             )
-            self.assertEqual(frame, {"type": "start_listening"})
+            self.assertEqual(frame.get("type"), "start_listening")
+            ctx = adapter._contexts.get(sid)
+            self.assertIsNotNone(ctx)
+            if ctx is not None:
+                self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
 
             ctx = adapter._contexts.get(sid)
             if ctx is not None:
@@ -483,7 +487,11 @@ class TestAdapterOutboundBridge(unittest.TestCase):
             frame = await harness.wait_for_outbound(
                 lambda data: data.get("type") == "start_listening"
             )
-            self.assertEqual(frame, {"type": "start_listening"})
+            self.assertEqual(frame.get("type"), "start_listening")
+            ctx = adapter._contexts.get(sid)
+            self.assertIsNotNone(ctx)
+            if ctx is not None:
+                self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
 
             ctx = adapter._contexts.get(sid)
             if ctx is not None:
@@ -573,7 +581,11 @@ class TestAdapterOutboundBridge(unittest.TestCase):
                 frame = await harness.wait_for_outbound(
                     lambda data: data.get("type") == "start_listening"
                 )
-                self.assertEqual(frame, {"type": "start_listening"})
+                self.assertEqual(frame.get("type"), "start_listening")
+                ctx = adapter._contexts.get(sid)
+                self.assertIsNotNone(ctx)
+                if ctx is not None:
+                    self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
 
                 nudge_frame = await harness.wait_for_outbound(
                     lambda data: data.get("type") == "hud.nudge"

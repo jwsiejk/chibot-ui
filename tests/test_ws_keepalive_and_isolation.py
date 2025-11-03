@@ -5,12 +5,14 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
+
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from app import config
 from app.telemetry import bus
 from app.voice_v2 import EVT_WS_JSON_SEND
-from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
+from app.ws.adapter import CHAT_V2_SUBPROTOCOL, AdapterContext, ChatV2Adapter
 from app.security.jwt_utils import mint_ws_token
 
 
@@ -189,15 +191,16 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
         engine = LabelRecordingEngine()
         adapter = ChatV2Adapter(engine=engine)
 
-        class StubSpeechmaticsClient:
+        class StubSpeechmaticsClient(SpeechmaticsClient):
             vendor = "speechmatics"
 
             def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
+                super().__init__(api_key, url, _bus, _logger)
                 self.api_key = api_key
                 self.url = url
 
         class StubASRRuntime:
-            def __init__(self, engine, client, telemetry_bus=None) -> None:
+            def __init__(self, engine, client, telemetry_bus=None, metrics=None) -> None:
                 self.engine = engine
                 self.client = client
                 self.telemetry_bus = telemetry_bus
@@ -218,6 +221,11 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
         ), patch.object(
             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
+        ), patch.object(
+            AdapterContext,
+            "metrics",
+            None,
+            create=True,
         ), patch(
             "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
         ), patch(
@@ -297,10 +305,11 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
         engine = LabelRecordingEngine()
         adapter = ChatV2Adapter(engine=engine)
 
-        class StubSpeechmaticsClient:
+        class StubSpeechmaticsClient(SpeechmaticsClient):
             vendor = "speechmatics"
 
             def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
+                super().__init__(api_key, url, _bus, _logger)
                 self.api_key = api_key
                 self.url = url
 
@@ -308,7 +317,7 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             vendor = "legacy"
 
         class StubASRRuntime:
-            def __init__(self, engine, client, telemetry_bus=None) -> None:
+            def __init__(self, engine, client, telemetry_bus=None, metrics=None) -> None:
                 self.engine = engine
                 self.client = client
                 self.telemetry_bus = telemetry_bus
@@ -329,6 +338,11 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             config, "SPEECHMATICS_API_KEY", "speechmatics-key"
         ), patch.object(
             config, "SPEECHMATICS_REALTIME_URL", "wss://speechmatics.example"
+        ), patch.object(
+            AdapterContext,
+            "metrics",
+            None,
+            create=True,
         ), patch(
             "app.ws.adapter.SpeechmaticsClient", StubSpeechmaticsClient
         ), patch(

@@ -30,6 +30,9 @@ class RecordingEngine:
     def on_open(self, sid: str, headers: Dict[str, str]) -> None:  # pragma: no cover - exercised via adapter
         self.open_sid = sid
         bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
+        ctx = self.adapter._contexts.get(sid)
+        if ctx is not None:
+            ctx.asr_ready = True
         if not self.accept_audio:
             self.adapter.set_accepting_audio(sid, False)
 
@@ -128,6 +131,8 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         self.assertEqual(len(received_events), 2)
         self.assertEqual(received_events[0]["meta"]["seq"], 0)
         self.assertEqual(received_events[1]["meta"]["seq"], 1)
+        self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload_one))
+        self.assertEqual(received_events[1]["meta"]["byte_count"], len(payload_two))
         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload_one))
         self.assertEqual(received_events[1]["meta"]["ws"]["size"], len(payload_two))
 
@@ -164,6 +169,7 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         self.assertFalse(errors)
 
         self.assertEqual(len(received_events), 1)
+        self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload))
         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
 
     def test_duplicate_audio_header_reports_error(self) -> None:
@@ -195,11 +201,14 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         error_messages = self._extract_error_frames(sent)
         self.assertEqual(len(error_messages), 1)
         payload = error_messages[0]
-        self.assertEqual(payload, {
-            "type": "error",
-            "code": "schema_invalid",
-            "detail": "duplicate or conflicting audio.header",
-        })
+        self.assertEqual(
+            payload,
+            {
+                "type": "error",
+                "code": "schema_invalid",
+                "detail": "audio.header pcm requires sample_rate=16000 and channels=1",
+            },
+        )
 
         close_messages = [msg for msg in sent if msg.get("type") == "websocket.close"]
         self.assertFalse(close_messages)

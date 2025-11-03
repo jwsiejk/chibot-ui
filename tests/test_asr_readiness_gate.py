@@ -200,6 +200,7 @@ class TestASRReadinessGate(unittest.TestCase):
         self.assertEqual(len(audio_events), 1)
         meta = audio_events[0]["meta"]
         self.assertEqual(meta["error"], "audio_not_expected")
+        self.assertEqual(meta["byte_count"], 4)
         self.assertEqual(meta["ws"]["size"], 4)
 
     def test_binary_post_ready_accepted(self) -> None:
@@ -216,6 +217,13 @@ class TestASRReadinessGate(unittest.TestCase):
         error_frames = [payload for payload in outbound_payloads if payload.get("type") == "error"]
         self.assertFalse(error_frames)
 
+        ready_frames = [
+            payload for payload in outbound_payloads if payload.get("type") == "asr.ready"
+        ]
+        self.assertEqual(len(ready_frames), 1)
+        ready_frame = ready_frames[0]
+        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+
         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
         self.assertFalse(close_frames)
 
@@ -227,6 +235,7 @@ class TestASRReadinessGate(unittest.TestCase):
         self.assertEqual(len(audio_events), 1)
         self.assertNotIn("error", audio_events[0]["meta"])
         self.assertEqual(audio_events[0]["meta"]["seq"], 0)
+        self.assertEqual(audio_events[0]["meta"]["byte_count"], len(call[1]))
 
     @patch.object(ChatV2Adapter, "_allowed_asr_vendors", return_value=["speechmatics"])
     def test_speechmatics_concurrency_sets_grace(self, _mock_allowed: Any) -> None:
