@@ -1,512 +1,102 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 7e82032de54d9d0645d304c30353b8a59d8f3611..ad44014fa496a84361753cfbf7f23ff7856b2002 100644
+index 2250cb6784530c0deb1a789ca79aefb5b6c298fd..1a475446831c5a466823fd3feac572caaae93835 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -607,51 +607,51 @@ class ChatV2Adapter:
+@@ -1769,50 +1769,97 @@ class ChatV2Adapter:
+                 break
+             await self._emit_audio_chunk(ctx, chunk, seq)
+             ctx.audio_expected_seq += 1
+         if ctx.audio_buffer:
+             ctx.audio_highest_seq = max(ctx.audio_buffer)
+         else:
+             ctx.audio_highest_seq = ctx.audio_expected_seq - 1
  
-             build_id = os.getenv("BUILD_ID", "") or os.getenv("SOURCE_VERSION", "") or "unknown"
-             host = socket.gethostname()
-             pid = os.getpid()
-             cwd = os.getcwd()
- 
-             offered = scope.get("subprotocols", [])
-             selected = "chat.v2"
- 
-             banner = {
-                 "type": "server.banner",
-                 "build_id": build_id,
-                 "host": host,
-                 "pid": pid,
-                 "cwd": cwd,
-                 "python": sys.version.split()[0],
-                 "platform": platform.platform(),
-                 "ws_path": scope.get("path"),
-                 "subprotocols_offered": offered,
-                 "subprotocol_selected": selected,
-                 "adapter_file": adapter_file,
-                 "engine_file": engine_file,
-                 "asr_file": asr_file,
-             }
- 
--            await send({"type": "websocket.send", "text": json.dumps(banner, separators=(",", ":"))})
-+            await self._send_json(send, sid, banner)
-             _log.info(
-                 "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s asr=%s",
-                 build_id,
-                 host,
-                 pid,
-                 scope.get("path"),
-                 selected,
-                 adapter_file,
-                 engine_file,
-                 asr_file,
-             )
-             self._emit_session_step(
-                 sid,
-                 "ws.banner_sent",
-                 summary="Sent server banner",
-                 meta={
-                     "build_id": build_id,
-                     "host": host,
-                     "pid": pid,
-                     "subprotocol": selected,
-                 },
-             )
-         except Exception:
-             _log.exception("evt=server_banner_emit_failed")
-         # ---- END RUNTIME BANNER ----
-@@ -1926,55 +1926,65 @@ class ChatV2Adapter:
-         elif command in {"ping", "pong"}:
-             _log.info(
-                 "evt=ws_json_send_summary sid=%s kind=%s vendor=speechmatics",
-                 sid,
-                 command,
-             )
- 
-     async def _send_json(
-         self,
-         send: Callable[[dict], Awaitable[None]],
-         sid: str,
-         payload: Dict[str, Any],
-     ) -> None:
-         text = json.dumps(payload, separators=(",", ":"))
-         await send({"type": "websocket.send", "text": text})
-         payload_bytes = text.encode("utf-8")
-         byte_count = len(payload_bytes)
-         meta: Dict[str, Any] = {
+     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+         byte_count = len(chunk)
+         meta = {
              "byte_count": byte_count,
-             "frame_type": payload.get("type"),
-             "ws": {
-                 "dir": "out",
-                 "size": byte_count,
-             },
+             "seq": seq,
+             "ws": {"dir": "in", "size": byte_count},
          }
-+        meta["ws"]["from_adapter"] = True
-         preview = self._make_preview_from_bytes(payload_bytes)
-         if preview is not None:
-             meta["ws"]["preview"] = preview
-+        try:
-+            parsed_frame = json.loads(text)
-+        except json.JSONDecodeError:
-+            parsed_frame = None
-+        frame_payload: Dict[str, Any]
-+        if isinstance(parsed_frame, Mapping):
-+            frame_payload = dict(parsed_frame)
+         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+         if ctx.audio_chunks_recv == 1:
+             self._emit_session_step(
+                 ctx.sid,
+                 "audio.stream_started",
+                 summary="Received first audio chunk",
+                 meta={"byte_count": byte_count},
+                 source="ws.audio",
+             )
+         self._handle_client_audio_activity(ctx)
++        mask_phase = ctx.tts_mask_phase or "off"
++        mask_open = mask_phase == "off"
++        ready_gate = ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR
++        mic_open = ctx.client_mic_open
++        send_open = not ctx.audio_send_closed
++        backpressure_ok = ctx.backpressure_state != "on"
++
++        gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
++        if gate_open:
++            _log.info(
++                "evt=audio_ingress sid=%s len=%d gate_open=%s tts_mask=%s client_mic_open=%s audio_send_closed=%s backpressure_state=%s",
++                ctx.sid,
++                byte_count,
++                gate_open,
++                mask_phase,
++                mic_open,
++                ctx.audio_send_closed,
++                ctx.backpressure_state,
++            )
++            bus.publish(
++                {
++                    "type": EVT_WS_AUDIO_SEND,
++                    "sid": ctx.sid,
++                    "chunk": bytes(chunk),
++                    "len": byte_count,
++                    "who": "server",
++                    "source": "ws_server",
++                }
++            )
 +        else:
-+            frame_payload = dict(payload)
-         self._log_speechmatics_control_summary(sid, payload)
--        await self._publish(EVT_WS_JSON_SEND, sid, meta, payload)
-+        await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
- 
-     async def _send_error(
-         self,
-         send: Callable[[dict], Awaitable[None]],
-         sid: str,
-         code: str,
-         detail: str,
-         *,
-         message: Optional[str] = None,
-         retryable: Optional[bool] = None,
-         retry_in_ms: Optional[int] = None,
-     ) -> None:
-         payload: Dict[str, Any] = {"type": "error", "code": code}
-         if detail:
-             payload["detail"] = detail
-         if message:
-             payload["message"] = message
-         if retryable is not None:
-             payload["retryable"] = bool(retryable)
-         if retry_in_ms is not None:
-             payload["retry_in_ms"] = int(retry_in_ms)
-         await self._send_json(send, sid, payload)
- 
-     def _start_server_keepalive(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-@@ -1994,56 +2004,53 @@ class ChatV2Adapter:
-                     last_pong = ctx.last_client_pong_ms or 0
-                     last_ping = ctx.last_server_ping_ms or 0
-                     timeout_threshold = now_ms - _HEARTBEAT_TIMEOUT_MS
-                     activity_missed = bool(last_activity) and last_activity <= timeout_threshold
-                     pong_missed = False
-                     if last_ping and last_ping <= timeout_threshold:
-                         pong_missed = last_pong == 0 or last_pong < last_ping
-                     if activity_missed or pong_missed:
-                         reason = "no_client_activity" if activity_missed else "no_client_pong"
-                         _log.warning(
-                             "evt=ws_heartbeat_missed sid=%s last_client_ms=%s last_client_pong_ms=%s last_server_ping_ms=%s reason=%s",
-                             ctx.sid,
-                             last_activity,
-                             last_pong,
-                             last_ping,
-                             reason,
-                         )
-                         await send(
-                             {
-                                 "type": "websocket.close",
-                                 "code": 1001,
-                                 "reason": "heartbeat_timeout",
-                             }
-                         )
-                         return
--                    payload = json.dumps(
--                        {"type": "server.ping", "ts": now_ms},
--                        separators=(",", ":"),
--                    )
-+                    ping_frame = {"type": "server.ping", "ts": now_ms}
-                     ctx.last_server_ping_ms = now_ms
--                    await send({"type": "websocket.send", "text": payload})
-+                    await self._send_json(send, ctx.sid, ping_frame)
-             except asyncio.CancelledError:
-                 raise
-             except Exception:  # pragma: no cover - defensive
-                 _log.exception("evt=ws_keepalive_failed sid=%s", ctx.sid)
-             finally:
-                 ctx.server_keepalive_task = None
- 
-         ctx.server_keepalive_task = asyncio.create_task(_run())
- 
-     async def _stop_server_keepalive(self, ctx: AdapterContext) -> None:
-         task = ctx.server_keepalive_task
-         ctx.server_keepalive_task = None
-         if task is None:
-             return
-         task.cancel()
-         with contextlib.suppress(asyncio.CancelledError):
-             await task
- 
-     def _start_outbound_bridge(
-         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-     ) -> None:
-         loop = asyncio.get_running_loop()
-         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
- 
-         def _queue_payload(payload: Dict[str, Any], *, clone: bool = True) -> None:
-@@ -2057,50 +2064,55 @@ class ChatV2Adapter:
++            if not mask_open:
++                reason = "mask"
++            elif not ready_gate:
++                reason = "not_ready"
++            elif not mic_open:
++                reason = "mic_closed"
++            elif not send_open:
++                reason = "send_closed"
++            else:
++                reason = "backpressure"
++            _log.info(
++                "evt=audio_drop sid=%s len=%d reason=%s",
++                ctx.sid,
++                byte_count,
++                reason,
++            )
++            return
+         asr_runtime = getattr(self, "asr_runtime", None)
+         if asr_runtime is not None:
+             profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
+             fmt = str(profile.get("format") or "") if profile else ""
+             codec = str(profile.get("codec") or "") if profile else ""
+             if fmt == "pcm" or codec.startswith("pcm"):
                  try:
-                     asyncio.create_task(
-                         self._publish(
-                             EVT_WS_OUTBOX_DROP,
-                             ctx.sid,
-                             {"sid": ctx.sid, "dropped": 1, "now": now},
-                         )
-                     )
-                 except RuntimeError:
-                     pass
+                     asr_runtime.on_ws_audio(ctx.sid, chunk)
+                 except Exception:  # pragma: no cover - defensive logging
+                     _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
+         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
  
-         def _enqueue(payload: Dict[str, Any]) -> None:
-             if payload.get("type") == "asr.partial":
-                 self._offer_partial_frame(
-                     ctx,
-                     loop,
-                     payload,
-                     lambda frame: _queue_payload(frame, clone=False),
-                 )
-                 return
-             _queue_payload(payload)
- 
-         def _handle_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
-+            meta_obj = event.get("meta")
-+            if isinstance(meta_obj, Mapping):
-+                ws_meta = meta_obj.get("ws")
-+                if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
-+                    return
-             payload = self._extract_outbound_payload(ctx, event)
-             if payload is None:
-                 return
- 
-             def _on_loop() -> None:
-                 frame_type = payload.get("type")
-                 if frame_type == "tts.end":
-                     self._handle_tts_end_diag(ctx, loop, payload)
-                     req_val = payload.get("req_id") if isinstance(payload, dict) else None
-                     req_value = req_val if isinstance(req_val, str) and req_val else None
-                     if req_value:
-                         ctx.last_tts_end_req_id = req_value
-                         ctx.await_user_req_id = req_value
-                     elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
-                         ctx.last_tts_end_req_id = ctx.await_user_req_id
-                     policy = self._policy_snapshot()
-                     self._maybe_emit_await_user(ctx, policy)
-                     _schedule_listen_handoff(req_value)
-                 _enqueue(payload)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-@@ -2623,50 +2635,53 @@ class ChatV2Adapter:
-                 return
-             if ctx.asr_ready:
-                 return
- 
-             ctx.asr_ready = True
-             ctx.awaiting_asr_ready = False
-             ctx.asr_recovering_until = 0.0
-             ctx.asr_recovering_reason = None
-             ctx.asr_recovering_audio_logged = False
-             ctx.client_capture_armed = True
- 
-             frame: Dict[str, Any] = {"type": "asr.ready"}
-             vendor = event.get("vendor")
-             if isinstance(vendor, str) and vendor:
-                 frame["vendor"] = vendor
- 
-             def _publish_ready() -> None:
-                 try:
-                     asyncio.create_task(self._flush_audio_buffer(ctx))
-                 except RuntimeError:
-                     pass
-                 telemetry_bus.publish(
-                     {
-                         "type": EVT_WS_JSON_SEND,
-                         "sid": ctx.sid,
-+                        "who": "server",
-+                        "source": "ws_server",
-+                        "meta": {"ws": {"from_adapter": True}},
-                         "frame": frame,
-                         "payload": frame,
-                     }
-                 )
- 
-             if threading.current_thread() is loop_thread:
-                 _publish_ready()
-                 return
- 
-             try:
-                 loop.call_soon_threadsafe(_publish_ready)
-             except RuntimeError:
-                 _publish_ready()
- 
-         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
- 
-     def _extract_outbound_payload(
-         self, ctx: AdapterContext, event: dict
-     ) -> Optional[Dict[str, Any]]:
-         payload = self._coerce_payload(event.get("payload"))
-         if payload is None:
-             payload = self._coerce_payload(event.get("frame"))
- 
-         if payload is None:
-             meta = event.get("meta")
-@@ -2984,64 +2999,63 @@ class ChatV2Adapter:
-                     break
-                 except Exception:  # pragma: no cover - defensive
-                     _log.exception("evt=ws_outbound_frame_failed sid=%s", ctx.sid)
-                 finally:
-                     queue.task_done()
-         except asyncio.CancelledError:
-             raise
-         finally:
-             ctx.outbox = None
- 
-     async def _send_outbound_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         payload: Dict[str, Any],
-     ) -> None:
-         if (
-             isinstance(payload, dict)
-             and "message" in payload
-             and isinstance(ctx.asr_vendor, str)
-             and ctx.asr_vendor.lower() == "speechmatics"
-         ):
-             return
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
--            text = json.dumps(payload, separators=(",", ":"))
-             frame_type = payload.get("type")
-             if frame_type in {"asr.partial", "asr.final"}:
-                 vendor = payload.get("vendor")
-                 if isinstance(vendor, str) and vendor.lower() == "speechmatics":
-                     log_event = (
-                         "evt=asr_partial_sent"
-                         if frame_type == "asr.partial"
-                         else "evt=asr_final_sent"
-                     )
-                     text_value = payload.get("text")
-                     text_len = len(text_value) if isinstance(text_value, str) else 0
-                     _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
--            await send({"type": "websocket.send", "text": text})
-+            await self._send_json(send, ctx.sid, payload)
- 
-     async def _send_audio_frame(
-         self,
-         ctx: AdapterContext,
-         send: Callable[[dict], Awaitable[None]],
-         chunk: bytes,
-     ) -> None:
-         lock = self._ensure_send_lock(ctx)
-         async with lock:
-             try:
-                 await send({"type": "websocket.send", "bytes": chunk})
-             except ClientDisconnected:
-                 _log.info(
-                     "evt=ws_outbound_client_disconnect sid=%s phase=audio",
-                     ctx.sid,
-                 )
-                 self._disable_audio_send(ctx, "client_disconnected")
-             except Exception:
-                 self._disable_audio_send(ctx, "send_failed")
-                 raise
- 
-     def _disable_audio_send(self, ctx: AdapterContext, reason: str) -> None:
-         if ctx.audio_send_closed:
-             return
-         ctx.audio_send_closed = True
-@@ -3407,51 +3421,55 @@ class ChatV2Adapter:
-                 "schema_version": "1",
-                 "type": EVT_SESSION_STEP,   # normalize type explicitly
-                 "sid": sid,
-                 "who": "server",
-                 "source": "ws_server",
-                 "meta": dict(meta),
-             }
-             bus.publish(event)
-             return
- 
-         event = {
-             "schema_version": "1",
-             "type": event_type,
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
-         }
-         if payload is not None:
-             if isinstance(payload, Mapping):
-                 frame_payload = dict(payload)
+     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
+         removed = False
+         for key in list(ctx.audio_buffer):
+             if key < threshold:
+                 ctx.audio_buffer.pop(key, None)
+                 removed = True
+         if removed:
+             if ctx.audio_buffer:
+                 ctx.audio_highest_seq = max(ctx.audio_buffer)
              else:
-                 frame_payload = payload
-             event["payload"] = frame_payload
-             if isinstance(frame_payload, Mapping):
--                event.setdefault("frame", dict(frame_payload))
-+                frame_copy = dict(frame_payload)
-+                if event_type == EVT_WS_JSON_SEND:
-+                    event["frame"] = frame_copy
-+                else:
-+                    event.setdefault("frame", frame_copy)
-         bus.publish(event)
+                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
  
-     def _emit_session_step(
-         self,
-         sid: str,
-         step: str,
-         *,
-         summary: Optional[str] = None,
-         meta: Optional[Mapping[str, Any]] = None,
-         source: str = "ws_server",
-         who: str = "server",
-     ) -> None:
-         payload: Dict[str, Any] = {
-             "schema_version": "1",
-             "type": EVT_SESSION_STEP,
-             "sid": sid,
-             "who": who,
-             "source": source,
-             "meta": {"step": step},
-         }
-         if meta:
-             try:
-                 payload["meta"].update(meta)
-             except Exception:
-                 payload["meta"]["detail"] = repr(meta)
-@@ -3656,92 +3674,92 @@ class ChatV2Adapter:
-                 "channels": 1,
-                 "mime": "audio/raw;rate=16000;channels=1;format=s16le",
-             }
-         return {
-             "mode": "pcm16",
-             "container": "raw",
-             "codec": "pcm_s16le",
-             "rate_hz": 16000,
-             "channels": 1,
-             "mime": "audio/raw;rate=16000;channels=1;format=s16le",
-         }
- 
-     @staticmethod
-     def _session_capture_policy_for_mode(mode: str) -> Dict[str, Any]:
-         if mode == "pcm16":
-             return {
-                 "media": {
-                     "asr_input": "pcm_16k",
-                     "asr_rate_hz": 16000,
-                     "asr_channels": 1,
-                 },
-                 "capture": {
-                     "asr_input": "pcm_16k",
-                     "sample_rate": 16000,
-                     "channels": 1,
--                    "timeslice_ms": 50,
-+                    "timeslice_ms": 50,
-                 },
-                 "audio": {"pipeline": {"mode": "pcm16"}},
-             }
-         return {
-             "media": {
-                 "asr_input": "pcm_16k",
-                 "asr_rate_hz": 16000,
-                 "asr_channels": 1,
-             },
-             "capture": {
-                 "asr_input": "pcm_16k",
-                 "sample_rate": 16000,
-                 "channels": 1,
--                "timeslice_ms": 50,
-+                "timeslice_ms": 50,
-             },
-             "audio": {"pipeline": {"mode": "pcm16"}},
-         }
- 
-     def _resolve_capture_timeslice(self, ctx: AdapterContext, mode: str) -> int:
-         candidates: List[Mapping[str, Any]] = []
-         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-         if isinstance(snapshot, Mapping):
-             capture_block = snapshot.get("capture")
-             if isinstance(capture_block, Mapping):
-                 candidates.append(capture_block)
-         session_policy = ctx.session_capture_policy
-         if isinstance(session_policy, Mapping):
-             capture_policy = session_policy.get("capture")
-             if isinstance(capture_policy, Mapping):
-                 candidates.append(capture_policy)
- 
-         for candidate in candidates:
-             raw_value = candidate.get("timeslice_ms")
-             try:
-                 parsed = int(raw_value)
-             except (TypeError, ValueError):
-                 continue
-             if parsed > 0:
-                 return parsed
- 
--        return 50 if mode == "pcm16" else 250
-+        return 50 if mode == "pcm16" else 250
- 
-     def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
-         if not isinstance(snapshot, Mapping):
-             return
-         policy_block = snapshot.get("policy")
-         if not isinstance(policy_block, Mapping):
-             return
- 
-         recorder_block = policy_block.get("recorder")
-         input_block = policy_block.get("input")
-         asr_block = policy_block.get("asr")
-         routing_block = policy_block.get("routing")
- 
-         stop_on_tts = bool(
-             recorder_block.get("stop_on_tts_start") if isinstance(recorder_block, Mapping) else False
-         )
-         mute_during_tts = bool(
-             recorder_block.get("mute_send_during_tts") if isinstance(recorder_block, Mapping) else False
-         )
-         require_hotword = bool(
-             input_block.get("require_hotword_to_start") if isinstance(input_block, Mapping) else False
-         )
-         prearm_on_tts_end = bool(
-             asr_block.get("prearm_on_tts_end") if isinstance(asr_block, Mapping) else False
-         )
+     def _log_speechmatics_control_summary(

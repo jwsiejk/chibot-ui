@@ -1791,6 +1791,53 @@ class ChatV2Adapter:
                 source="ws.audio",
             )
         self._handle_client_audio_activity(ctx)
+        mask_phase = ctx.tts_mask_phase or "off"
+        mask_open = mask_phase == "off"
+        ready_gate = ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR
+        mic_open = ctx.client_mic_open
+        send_open = not ctx.audio_send_closed
+        backpressure_ok = ctx.backpressure_state != "on"
+
+        gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
+        if gate_open:
+            _log.info(
+                "evt=audio_ingress sid=%s len=%d gate_open=%s tts_mask=%s client_mic_open=%s audio_send_closed=%s backpressure_state=%s",
+                ctx.sid,
+                byte_count,
+                gate_open,
+                mask_phase,
+                mic_open,
+                ctx.audio_send_closed,
+                ctx.backpressure_state,
+            )
+            bus.publish(
+                {
+                    "type": EVT_WS_AUDIO_SEND,
+                    "sid": ctx.sid,
+                    "chunk": bytes(chunk),
+                    "len": byte_count,
+                    "who": "server",
+                    "source": "ws_server",
+                }
+            )
+        else:
+            if not mask_open:
+                reason = "mask"
+            elif not ready_gate:
+                reason = "not_ready"
+            elif not mic_open:
+                reason = "mic_closed"
+            elif not send_open:
+                reason = "send_closed"
+            else:
+                reason = "backpressure"
+            _log.info(
+                "evt=audio_drop sid=%s len=%d reason=%s",
+                ctx.sid,
+                byte_count,
+                reason,
+            )
+            return
         asr_runtime = getattr(self, "asr_runtime", None)
         if asr_runtime is not None:
             profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
