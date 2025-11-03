@@ -629,7 +629,7 @@ class ChatV2Adapter:
                 "asr_file": asr_file,
             }
 
-            await send({"type": "websocket.send", "text": json.dumps(banner, separators=(",", ":"))})
+            await self._send_json(send, sid, banner)
             _log.info(
                 "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s asr=%s",
                 build_id,
@@ -1948,11 +1948,21 @@ class ChatV2Adapter:
                 "size": byte_count,
             },
         }
+        meta["ws"]["from_adapter"] = True
         preview = self._make_preview_from_bytes(payload_bytes)
         if preview is not None:
             meta["ws"]["preview"] = preview
+        try:
+            parsed_frame = json.loads(text)
+        except json.JSONDecodeError:
+            parsed_frame = None
+        frame_payload: Dict[str, Any]
+        if isinstance(parsed_frame, Mapping):
+            frame_payload = dict(parsed_frame)
+        else:
+            frame_payload = dict(payload)
         self._log_speechmatics_control_summary(sid, payload)
-        await self._publish(EVT_WS_JSON_SEND, sid, meta, payload)
+        await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
 
     async def _send_error(
         self,
@@ -2016,12 +2026,9 @@ class ChatV2Adapter:
                             }
                         )
                         return
-                    payload = json.dumps(
-                        {"type": "server.ping", "ts": now_ms},
-                        separators=(",", ":"),
-                    )
+                    ping_frame = {"type": "server.ping", "ts": now_ms}
                     ctx.last_server_ping_ms = now_ms
-                    await send({"type": "websocket.send", "text": payload})
+                    await self._send_json(send, ctx.sid, ping_frame)
             except asyncio.CancelledError:
                 raise
             except Exception:  # pragma: no cover - defensive
@@ -2079,6 +2086,11 @@ class ChatV2Adapter:
         def _handle_event(event: dict) -> None:
             if event.get("sid") != ctx.sid or ctx.outbox is None:
                 return
+            meta_obj = event.get("meta")
+            if isinstance(meta_obj, Mapping):
+                ws_meta = meta_obj.get("ws")
+                if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
+                    return
             payload = self._extract_outbound_payload(ctx, event)
             if payload is None:
                 return
@@ -2645,6 +2657,9 @@ class ChatV2Adapter:
                     {
                         "type": EVT_WS_JSON_SEND,
                         "sid": ctx.sid,
+                        "who": "server",
+                        "source": "ws_server",
+                        "meta": {"ws": {"from_adapter": True}},
                         "frame": frame,
                         "payload": frame,
                     }
@@ -3006,7 +3021,6 @@ class ChatV2Adapter:
             return
         lock = self._ensure_send_lock(ctx)
         async with lock:
-            text = json.dumps(payload, separators=(",", ":"))
             frame_type = payload.get("type")
             if frame_type in {"asr.partial", "asr.final"}:
                 vendor = payload.get("vendor")
@@ -3019,7 +3033,7 @@ class ChatV2Adapter:
                     text_value = payload.get("text")
                     text_len = len(text_value) if isinstance(text_value, str) else 0
                     _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
-            await send({"type": "websocket.send", "text": text})
+            await self._send_json(send, ctx.sid, payload)
 
     async def _send_audio_frame(
         self,
@@ -3429,7 +3443,11 @@ class ChatV2Adapter:
                 frame_payload = payload
             event["payload"] = frame_payload
             if isinstance(frame_payload, Mapping):
-                event.setdefault("frame", dict(frame_payload))
+                frame_copy = dict(frame_payload)
+                if event_type == EVT_WS_JSON_SEND:
+                    event["frame"] = frame_copy
+                else:
+                    event.setdefault("frame", frame_copy)
         bus.publish(event)
 
     def _emit_session_step(
