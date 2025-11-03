@@ -24,6 +24,7 @@ from app.telemetry import bus
 from app.voice_v2 import (
     EVT_ASR_FINAL,
     EVT_ASR_FINAL_SUPPRESSED_DUP,
+    EVT_ASR_CLOSED,
     EVT_ASR_OPEN,
     EVT_ASR_PARTIAL,
     EVT_ASR_READY,
@@ -1220,6 +1221,15 @@ class ASRRuntime:
                     sid,
                     self._vendor,
                 )
+                self._bus.publish(
+                    {
+                        "type": "asr.open_attempt",
+                        "sid": sid,
+                        "who": "server",
+                        "source": "asr.runtime",
+                        "meta": {"vendor": self._vendor},
+                    }
+                )
                 open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
                 qs = await asyncio.wait_for(
                     self._client.open_stream(
@@ -1258,6 +1268,20 @@ class ASRRuntime:
                         sid,
                         rate_hz,
                         channels,
+                    )
+                    self._bus.publish(
+                        {
+                            "type": EVT_ASR_OPEN,
+                            "sid": sid,
+                            "who": "server",
+                            "source": "asr.runtime",
+                            "meta": {
+                                "vendor": "speechmatics",
+                                "sample_rate": rate_hz,
+                                "channels": channels,
+                                "stream_id": stream_id,
+                            },
+                        }
                     )
                     self._emit_session_step(
                         sid,
@@ -1308,6 +1332,19 @@ class ASRRuntime:
                     self._vendor,
                     _safe_url(last_url),
                     open_timeout,
+                )
+                self._bus.publish(
+                    {
+                        "type": "asr.open_failed",
+                        "sid": sid,
+                        "who": "server",
+                        "source": "asr.runtime",
+                        "meta": {
+                            "vendor": self._vendor,
+                            "reason": "timeout_or_error",
+                            "url": _safe_url(last_url),
+                        },
+                    }
                 )
                 state.stream_id = None
                 state.stream_open = False
@@ -1364,6 +1401,19 @@ class ASRRuntime:
                     reason,
                     _safe_url(last_url),
                     last_error,
+                )
+                self._bus.publish(
+                    {
+                        "type": "asr.open_failed",
+                        "sid": sid,
+                        "who": "server",
+                        "source": "asr.runtime",
+                        "meta": {
+                            "vendor": self._vendor,
+                            "reason": "timeout_or_error",
+                            "url": _safe_url(last_url),
+                        },
+                    }
                 )
                 state.stream_open = False
                 state.stream_id = None
@@ -1671,12 +1721,23 @@ class ASRRuntime:
                 }
                 if _reason:
                     meta["upstream_reason"] = str(_reason)
+                meta["stream_id"] = stream_id
                 self._emit_session_step(
                     sid,
                     "asr.closed",
                     summary="Speechmatics upstream closed",
                     meta=meta,
                     source="asr.runtime",
+                )
+                meta_payload = dict(meta)
+                self._bus.publish(
+                    {
+                        "type": EVT_ASR_CLOSED,
+                        "sid": sid,
+                        "who": "server",
+                        "source": "asr.runtime",
+                        "meta": meta_payload,
+                    }
                 )
                 if not is_error_close:
                     _log.info(
@@ -1761,6 +1822,21 @@ class ASRRuntime:
                     token_count,
                     first_chunk_latency,
                     text_short,
+                )
+                self._bus.publish(
+                    {
+                        "type": EVT_ASR_PARTIAL,
+                        "sid": sid,
+                        "who": "server",
+                        "source": "asr.runtime",
+                        "meta": {
+                            "vendor": "speechmatics",
+                            "text": text,
+                            "tokens": token_count,
+                            "latency_ms": first_chunk_latency,
+                            "stream_id": stream_id,
+                        },
+                    }
                 )
 
         _log.debug(

@@ -1,182 +1,514 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index f25682d9f8e41151a1508eb0c9d3bdb25359b6cb..6857a80f08ddf6600a073b8a96c117ca066202bb 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -85,51 +85,65 @@ _OUTBOUND_ALLOWED_TYPES = {
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-     "asr.partial",
-     "asr.final",
-     "asr.unavailable",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
- }
+diff --git a/app/voice_v2/__init__.py b/app/voice_v2/__init__.py
+index 53c094f54b953d1855d3cb156863dd521fd0e6f1..5d95eb99c4c3dcce30b44f69d3b65ebba58a4688 100644
+--- a/app/voice_v2/__init__.py
++++ b/app/voice_v2/__init__.py
+@@ -11,76 +11,78 @@ EVT_CHAT_USER = "EVT_CHAT_USER"
  
- _RATE_LIMIT_EXEMPT_TYPES = {
-     "client.autostart",
-     "client.banner",
-     "client.diag",
-     "client.log",
-     "client.ping",
-     "client.telemetry",
- }
+ EVT_TTS_START = "EVT_TTS_START"
+ EVT_TTS_END = "EVT_TTS_END"
+ EVT_TTS_MASK = "EVT_TTS_MASK"
  
- _OUTBOX_MAXSIZE = 256
+ EVT_TURN_STATE = "EVT_TURN_STATE"
+ EVT_TURN_BEGIN = "EVT_TURN_BEGIN"
+ EVT_TURN_END = "EVT_TURN_END"
+ EVT_TURN_ROLLUP = "EVT_TURN_ROLLUP"
+ EVT_PERF_SUMMARY = "EVT_PERF_SUMMARY"
  
--_POLICY_STABLE_KEYS = ("mode", "allow_auto_vad", "barge_in_enabled")
-+_POLICY_STABLE_KEYS = (
-+    "mode",
-+    "allow_auto_vad",
-+    "barge_in_enabled",
-+    "auto_commit_when_ready",
-+    "voice",
-+    "greet",
-+    "suggestions",
-+    "actions",
-+    "telemetry",
-+    "media",
-+    "capture",
-+    "audio",
-+    "policy",
-+)
+ EVT_POLICY_APPLIED = "EVT_POLICY_APPLIED"
+ EVT_ACWR_RECOMPUTE = "EVT_ACWR_RECOMPUTE"
+ 
+ EVT_MIC_GATE = "EVT_MIC_GATE"
+ EVT_BARGE_DETECTED = "EVT_BARGE_DETECTED"
+ EVT_BARGE_CONFIRMED = "EVT_BARGE_CONFIRMED"
+ EVT_BARGE_REJECTED = "EVT_BARGE_REJECTED"
+ EVT_ACTION_SAY_END = "EVT_ACTION_SAY_END"
+ 
+ EVT_ASR_READY = "EVT_ASR_READY"
+ EVT_ASR_OPEN = "EVT_ASR_OPEN"
+ EVT_ASR_PARTIAL = "EVT_ASR_PARTIAL"
+ EVT_ASR_FINAL = "EVT_ASR_FINAL"
+ EVT_ASR_FINAL_SUPPRESSED_DUP = "EVT_ASR_FINAL_SUPPRESSED_DUP"
++EVT_ASR_CLOSED = "EVT_ASR_CLOSED"
+ EVT_NLU = "EVT_NLU"
+ EVT_NLG = "EVT_NLG"
+ EVT_LLM_RESPONSE_START = "EVT_LLM_RESPONSE_START"
+ EVT_LLM_RESPONSE_END = "EVT_LLM_RESPONSE_END"
+ EVT_DIALOG_PLAN = "EVT_DIALOG_PLAN"
+ EVT_HUD_STATE = "EVT_HUD_STATE"
+ EVT_CLIENT_MIC_OPEN = "EVT_CLIENT_MIC_OPEN"
+ EVT_CLIENT_BANNER = "EVT_CLIENT_BANNER"
+ EVT_CLIENT_LOG = "EVT_CLIENT_LOG"
+ EVT_CLIENT_AUTOSTART = "EVT_CLIENT_AUTOSTART"
+ 
+ __all__ = [
+     "EVT_WS_OPEN",
+     "EVT_WS_CLOSE",
+     "EVT_WS_JSON_RECV",
+     "EVT_WS_JSON_SEND",
+     "EVT_SESSION_STEP",
+     "EVT_WS_AUDIO_RECV",
+     "EVT_WS_AUDIO_SEND",
+     "EVT_CHAT_USER",
+     "EVT_TTS_START",
+     "EVT_TTS_END",
+     "EVT_TTS_MASK",
+     "EVT_TURN_STATE",
+     "EVT_TURN_BEGIN",
+     "EVT_TURN_END",
+     "EVT_TURN_ROLLUP",
+     "EVT_PERF_SUMMARY",
+     "EVT_POLICY_APPLIED",
+     "EVT_ACWR_RECOMPUTE",
+     "EVT_MIC_GATE",
+     "EVT_BARGE_DETECTED",
+     "EVT_BARGE_CONFIRMED",
+     "EVT_BARGE_REJECTED",
+     "EVT_ACTION_SAY_END",
+     "EVT_ASR_READY",
+     "EVT_ASR_OPEN",
+     "EVT_ASR_PARTIAL",
+     "EVT_ASR_FINAL",
+     "EVT_ASR_FINAL_SUPPRESSED_DUP",
++    "EVT_ASR_CLOSED",
+     "EVT_NLU",
+     "EVT_NLG",
+     "EVT_LLM_RESPONSE_START",
+     "EVT_LLM_RESPONSE_END",
+     "EVT_DIALOG_PLAN",
+     "EVT_HUD_STATE",
+     "EVT_CLIENT_MIC_OPEN",
+     "EVT_CLIENT_BANNER",
+     "EVT_CLIENT_LOG",
+     "EVT_CLIENT_AUTOSTART",
+ ]
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index c1ac00a69da358ba3f5c1015556ad56de7ebfd4c..96317a869e5258dc36f50fbfda17e4f89f78c788 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -2,50 +2,51 @@
+ from __future__ import annotations
+ 
+ import asyncio
+ import logging
+ import math
+ import hashlib
+ import struct
+ import time
+ import uuid
+ from collections import OrderedDict, deque
+ from dataclasses import dataclass, field
+ from typing import Any, Callable, Deque, Dict, Mapping, Optional
+ 
+ from app.config import (
+     ASR_BACKPRESSURE_THRESHOLD_BYTES,
+     ASR_DEDUPE_NORMALIZE,
+     ASR_DUP_FINAL_SUPPRESS_MS,
+     ASR_IDLE_CLOSE_MS,
+     ASR_TRACE,
+ )
+ from app.policy.model import Policy
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_FINAL,
+     EVT_ASR_FINAL_SUPPRESSED_DUP,
++    EVT_ASR_CLOSED,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_SESSION_STEP,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.voice_v2.engine import EngineV2
  
  _log = logging.getLogger(__name__)
  
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
-     "client.diag",
-     "client.log",
-     "client.autostart",
-     "client.telemetry",
-     "client.banner",
-     "asr.rearm.request",
- }
- 
- _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
-     "EVT_RECORDER_STARTED",
-     "EVT_AUDIO_CHUNK_SENT_CLIENT",
- }
- 
- _CLIENT_AUTOSTART_ALLOWED_EVENTS = {
-     "attempt",
-     "armed",
-     "blocked",
-diff --git a/tests/test_policy_apply_and_diff.py b/tests/test_policy_apply_and_diff.py
-index 582e4df71285c241ce01acfae9a0ba954d607b78..0b5e2bf7c3a8337239bf29afbae173e76abede93 100644
---- a/tests/test_policy_apply_and_diff.py
-+++ b/tests/test_policy_apply_and_diff.py
-@@ -56,50 +56,52 @@ class PolicyApplyAndDiffTests(unittest.TestCase):
-         engine = EngineV2(exporter)
- 
-         engine.on_open("sid-1", headers={})
- 
-         frames = self._policy_frames()
-         self.assertEqual(len(frames), 1)
- 
-         applied_events = self._events_of_type(EVT_POLICY_APPLIED)
-         self.assertEqual(len(applied_events), 1)
- 
-         diff_meta = applied_events[0].get("meta", {}).get("policy", {}).get("diff")
-         self.assertIsInstance(diff_meta, dict)
- 
-         expected_keys = {
-             "mode",
-             "allow_auto_vad",
-             "barge_in_enabled",
-             "auto_commit_when_ready",
-             "telemetry",
-             "voice",
-             "greet",
-             "suggestions",
-             "actions",
-             "media",
-             "capture",
-+            "audio",
-+            "policy",
-         }
-         self.assertEqual(set(diff_meta.keys()), expected_keys)
- 
-         defaults = load_interaction_policy()
-         for key in expected_keys:
-             before_after = diff_meta[key]
-             self.assertEqual(before_after[0], None)
-             self.assertEqual(before_after[1], defaults[key])
- 
-     def test_policy_frame_includes_action_summary(self) -> None:
-         exporter = _FakeExporter()
-         engine = EngineV2(exporter)
- 
-         engine.on_open("sid-1", headers={})
- 
-         frames = self._policy_frames()
-         self.assertGreaterEqual(len(frames), 1)
- 
-         payload = frames[0]["frame"]
-         self.assertIn("actions", payload)
-         actions = payload["actions"]
-         self.assertIsInstance(actions, list)
- 
-         defaults = load_interaction_policy()
-         expected = (
-diff --git a/tests/test_policy_subset.py b/tests/test_policy_subset.py
-index abeff2f593dfa5466ab172a6bd94b3d212d8108b..58845a228c5065a2b5bef4b1a9c4d80f28b085d6 100644
---- a/tests/test_policy_subset.py
-+++ b/tests/test_policy_subset.py
-@@ -1,40 +1,49 @@
- """Tests ensuring policy.interaction frames expose only the stable subset."""
- from __future__ import annotations
- 
- import json
-+import os
-+
-+os.environ.setdefault("SECRET_KEY", "test-secret")
- 
- from app.ws.adapter import AdapterContext, ChatV2Adapter
+ _PARTIAL_CONFIDENCE = 0.55
+ _FINAL_CONFIDENCE = 0.9
+ _DEFAULT_IDLE_CLOSE_MS = 4000
+ _BACKPRESSURE_THRESHOLD = max(0, ASR_BACKPRESSURE_THRESHOLD_BYTES)
+ _TRACE_ENABLED = bool(ASR_TRACE)
+ _RMS_PROBE_WINDOW_MS = 2000
+ _STREAM_OPEN_TIMEOUT_S = 10.0
+ _NO_AUDIO_TIMEOUT_S = 9.0
+ _LISTENING_STATE = "Listening"
+ _READY_STATES = {"Ready", "Idle"}
  
  
- def _make_context() -> AdapterContext:
-     return AdapterContext(sid="sid-1", headers={})
+ def _summarize_text(text: str, limit: int = 120) -> str:
+     if not isinstance(text, str):
+@@ -1198,139 +1199,175 @@ class ASRRuntime:
+                     input_desc = _pcm_input_descriptor()
+                 else:
+                     input_desc = self._input_descriptor_from_policy(policy_snapshot)
+                 state.input_desc = input_desc
+                 model_name = None
+                 if isinstance(policy_snapshot, Mapping):
+                     candidate = policy_snapshot.get("model")
+                     if isinstance(candidate, str) and candidate:
+                         model_name = candidate
+                     else:
+                         interaction = policy_snapshot.get("interaction")
+                         if isinstance(interaction, Mapping):
+                             maybe_model = interaction.get("model")
+                             if isinstance(maybe_model, str) and maybe_model:
+                                 model_name = maybe_model
+                 else:
+                     candidate_model = getattr(policy_snapshot, "model", None)
+                     if isinstance(candidate_model, str) and candidate_model:
+                         model_name = candidate_model
+                 state.model = model_name if isinstance(model_name, str) and model_name else None
+                 _log.info(
+                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
+                     sid,
+                     self._vendor,
+                 )
++                self._bus.publish(
++                    {
++                        "type": "asr.open_attempt",
++                        "sid": sid,
++                        "who": "server",
++                        "source": "asr.runtime",
++                        "meta": {"vendor": self._vendor},
++                    }
++                )
+                 open_timeout = max(5.0, float(_STREAM_OPEN_TIMEOUT_S))
+                 qs = await asyncio.wait_for(
+                     self._client.open_stream(
+                         sid,
+                         on_partial=self._make_partial_cb(sid),
+                         on_final=self._make_final_cb(sid),
+                         on_error=self._make_error_cb(sid),
+                         stream_id=stream_id,
+                         on_close=self._make_close_cb(sid, state),
+                         policy=policy_snapshot,
+                     ),
+                     timeout=open_timeout,
+                 )
+                 _log.info(
+                     "evt=asr_opened sid=%s vendor=%s stream_id=%s",
+                     sid,
+                     self._vendor,
+                     stream_id,
+                 )
+                 if self._vendor == "speechmatics":
+                     input_desc = state.input_desc or {}
+                     if not isinstance(input_desc, Mapping):
+                         input_desc = {}
+                     rate_value = input_desc.get("rate_hz")
+                     channel_value = input_desc.get("channels")
+                     try:
+                         rate_hz = int(rate_value) if rate_value is not None else 0
+                     except (TypeError, ValueError):
+                         rate_hz = 0
+                     try:
+                         channels = int(channel_value) if channel_value is not None else 0
+                     except (TypeError, ValueError):
+                         channels = 0
+                     _log.info(
+                         "evt=asr_opened sid=%s vendor=speechmatics rate=%d channels=%d",
+                         sid,
+                         rate_hz,
+                         channels,
+                     )
++                    self._bus.publish(
++                        {
++                            "type": EVT_ASR_OPEN,
++                            "sid": sid,
++                            "who": "server",
++                            "source": "asr.runtime",
++                            "meta": {
++                                "vendor": "speechmatics",
++                                "sample_rate": rate_hz,
++                                "channels": channels,
++                                "stream_id": stream_id,
++                            },
++                        }
++                    )
+                     self._emit_session_step(
+                         sid,
+                         "asr.opened",
+                         summary="Speechmatics upstream opened",
+                         meta={
+                             "vendor": "speechmatics",
+                             "sample_rate": rate_hz,
+                             "channels": channels,
+                         },
+                         source="asr.runtime",
+                     )
+                 container = state.input_desc.get("container", "")
+                 codec = state.input_desc.get("codec", "")
+                 _log.info(
+                     "evt=asr_vendor_info sid=%s vendor=%s transport=ws container=%s codec=%s model=%s",
+                     sid,
+                     self._vendor,
+                     container,
+                     codec,
+                     state.model or "auto",
+                 )
+             except asyncio.CancelledError:
+                 raise
+             except asyncio.TimeoutError as err:
+                 last_url = getattr(self._client, "debug_last_url", None)
+                 self._emit_log(
+                     {
+                         "type": "EVT_LOG",
+                         "logger": "app.voice_v2.asr_runtime",
+                         "level": "ERROR",
+                         "sid": sid,
+                         "msg": (
+                             "evt=asr_open_failed_timeout sid=%s vendor=%s url=%s timeout_s=%s"
+                         )
+                         % (sid, self._vendor, _safe_url(last_url), open_timeout),
+                     }
+                 )
+                 _log.error(
+                     "evt=asr_open_failed sid=%s vendor=%s err=%s",
+                     sid,
+                     self._vendor,
+                     str(err) or "timeout",
+                 )
+                 _log.error(
+                     "evt=asr_open_failed_timeout sid=%s vendor=%s url=%s timeout_s=%s",
+                     sid,
+                     self._vendor,
+                     _safe_url(last_url),
+                     open_timeout,
+                 )
++                self._bus.publish(
++                    {
++                        "type": "asr.open_failed",
++                        "sid": sid,
++                        "who": "server",
++                        "source": "asr.runtime",
++                        "meta": {
++                            "vendor": self._vendor,
++                            "reason": "timeout_or_error",
++                            "url": _safe_url(last_url),
++                        },
++                    }
++                )
+                 state.stream_id = None
+                 state.stream_open = False
+                 state.stream_open_task = None
+                 self._publish_asr_unavailable(
+                     sid,
+                     "open_failed",
+                     f"stream open timed out after {open_timeout:.1f}s",
+                     state=state,
+                 )
+                 loop = self._ensure_loop()
+                 if loop is not None:
+                     loop.call_later(0.1, self._ensure_stream, sid, state)
+                 return
+             except Exception as e:  # pragma: no cover - defensive
+                 # Surface DG status/close code & reason if the client exposes them
+                 code = getattr(e, "status", None) or getattr(e, "code", None)
+                 reason = (
+                     getattr(e, "reason", None)
+                     or getattr(e, "message", None)
+                     or type(e).__name__
+                 )
+                 last_url = getattr(self._client, "debug_last_url", None)
+                 last_error = getattr(self._client, "last_error", None)
+                 _log.error(
+                     "evt=asr_open_failed sid=%s vendor=%s err=%s",
+@@ -1343,50 +1380,63 @@ class ASRRuntime:
+                         "type": "EVT_LOG",
+                         "logger": "app.voice_v2.asr_runtime",
+                         "level": "ERROR",
+                         "sid": sid,
+                         "msg": (
+                             "evt=asr_stream_open_failed sid=%s vendor=%s code=%s reason=%s url=%s last_error=%s"
+                         )
+                         % (
+                             sid,
+                             self._vendor,
+                             code if code is not None else "",
+                             reason or "",
+                             _safe_url(last_url),
+                             last_error if last_error is not None else "",
+                         ),
+                     }
+                 )
+                 _log.exception(
+                     "evt=asr_stream_open_failed sid=%s code=%s reason=%s url=%s last_error=%s",
+                     sid,
+                     code,
+                     reason,
+                     _safe_url(last_url),
+                     last_error,
+                 )
++                self._bus.publish(
++                    {
++                        "type": "asr.open_failed",
++                        "sid": sid,
++                        "who": "server",
++                        "source": "asr.runtime",
++                        "meta": {
++                            "vendor": self._vendor,
++                            "reason": "timeout_or_error",
++                            "url": _safe_url(last_url),
++                        },
++                    }
++                )
+                 state.stream_open = False
+                 state.stream_id = None
+                 state.stream_open_task = None
+                 detail_reason = reason or type(e).__name__
+                 if code is not None:
+                     detail_reason = f"{detail_reason} (code={code})"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "open_failed",
+                     f"stream open failed: {detail_reason}",
+                     state=state,
+                 )
+                 loop = self._ensure_loop()
+                 if loop is not None:
+                     loop.call_later(0.5, self._ensure_stream, sid, state)
+                 return
  
+             state.stream_open = True
+             self._configure_rms_probe(state)
+             state.first_chunk_seen = False
+             state.rollup_window_start = 0.0
+             state.rollup_chunks = 0
+             state.rollup_bytes = 0
+             state.unavailable_emitted = False
+             state.bytes_received = 0
+@@ -1649,57 +1699,68 @@ class ASRRuntime:
+                 and (
+                     _code == 1011
+                     or (_reason and "net0001" in str(_reason).lower())
+                 )
+             ):
+                 detail = "Deepgram closed stream"
+                 if _code is not None:
+                     detail += f" code={_code}"
+                 if _reason:
+                     detail += f" reason={_reason}"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "upstream_closed",
+                     detail,
+                     state=state,
+                 )
+             if self._vendor == "speechmatics":
+                 code_str = str(_code) if _code is not None else ""
+                 meta: Dict[str, Any] = {
+                     "vendor": "speechmatics",
+                     "upstream_code": code_str,
+                     "close_reason": reason,
+                 }
+                 if _reason:
+                     meta["upstream_reason"] = str(_reason)
++                meta["stream_id"] = stream_id
+                 self._emit_session_step(
+                     sid,
+                     "asr.closed",
+                     summary="Speechmatics upstream closed",
+                     meta=meta,
+                     source="asr.runtime",
+                 )
++                meta_payload = dict(meta)
++                self._bus.publish(
++                    {
++                        "type": EVT_ASR_CLOSED,
++                        "sid": sid,
++                        "who": "server",
++                        "source": "asr.runtime",
++                        "meta": meta_payload,
++                    }
++                )
+                 if not is_error_close:
+                     _log.info(
+                         "evt=asr_closed sid=%s reason=normal upstream_code=%s",
+                         sid,
+                         code_str,
+                     )
+             state.stream_id = None
+             state.close_reason = None
+             state.stream_open = False
+             state.req_id = None
+             state.bytes_received = 0
  
- def test_policy_subset_is_sanitized() -> None:
-     adapter = ChatV2Adapter()
-     ctx = _make_context()
-     payload = {
-         "type": "policy.interaction",
-         "ts_ms": 1730000000123,
-         "level": "info",
-         "policy": {
-             "mode": "idle",
-             "allow_auto_vad": True,
-             "barge_in_enabled": False,
-             "telemetry": {"enabled": True},
-             "auto_commit_when_ready": True,
-+            "capture": {"start_on_turn_ready": True},
-+            "policy": {"asr": {"prearm_on_tts_end": True}},
-         },
-     }
+         return _callback
  
-     event = {"payload": payload}
+     def _on_partial(
+         self, sid: str, text: str, metadata: Dict[str, object] | None = None
+     ) -> None:
+         if not isinstance(text, str) or not text.strip():
+             return
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
+             if self._vendor == "speechmatics":
+                 snapshot = getattr(self._engine, "policy_snapshot", None)
+@@ -1740,50 +1801,65 @@ class ASRRuntime:
+         should_log_partial = False
+         if not state.first_partial_logged:
+             should_log_partial = True
+         elif now_monotonic - state.last_partial_log >= 0.5:
+             should_log_partial = True
+         if should_log_partial:
+             state.first_partial_logged = True
+             state.last_partial_log = now_monotonic
+             _log.info(
+                 "asr_partial vendor=%s chars=%d latency_ms=%d",
+                 self._vendor,
+                 len_chars,
+                 latency_ms,
+             )
+             if self._vendor == "speechmatics":
+                 token_count = _count_tokens(metadata, text)
+                 first_chunk_latency = self._ms_from_first_chunk(state)
+                 text_short = _summarize_text(text)
+                 _log.info(
+                     "evt=asr_partial sid=%s tokens=%d ms_from_first_chunk=%d text=%r",
+                     sid,
+                     token_count,
+                     first_chunk_latency,
+                     text_short,
+                 )
++                self._bus.publish(
++                    {
++                        "type": EVT_ASR_PARTIAL,
++                        "sid": sid,
++                        "who": "server",
++                        "source": "asr.runtime",
++                        "meta": {
++                            "vendor": "speechmatics",
++                            "text": text,
++                            "tokens": token_count,
++                            "latency_ms": first_chunk_latency,
++                            "stream_id": stream_id,
++                        },
++                    }
++                )
  
-     sanitized = adapter._extract_outbound_payload(ctx, event)
-     assert sanitized is not None
-     assert sanitized["ts_ms"] == payload["ts_ms"]
-     assert sanitized["level"] == "info"
-     assert sanitized["policy"] == {
-         "mode": "idle",
-         "allow_auto_vad": True,
-         "barge_in_enabled": False,
-+        "telemetry": {"enabled": True},
-+        "auto_commit_when_ready": True,
-+        "capture": {"start_on_turn_ready": True},
-+        "policy": {"asr": {"prearm_on_tts_end": True}},
-     }
-     assert json.loads(json.dumps(sanitized)) == sanitized
+         _log.debug(
+             "evt=dg_partial sid=%s stream_id=%s len_chars=%d is_final=false "
+             "utterance_id=%s latency_ms=%d",
+             sid,
+             stream_id,
+             len_chars,
+             utterance_id,
+             latency_ms,
+         )
+ 
+         ensure_session = getattr(self._engine, "_ensure_session", None)
+         engine_session = ensure_session(sid) if callable(ensure_session) else None
+         engine_req_id = None
+         if engine_session is not None:
+             candidate = getattr(engine_session, "req_id", None)
+             if isinstance(candidate, str) and candidate:
+                 engine_req_id = candidate
+ 
+         if isinstance(engine_req_id, str) and engine_req_id:
+             req_id = engine_req_id
+             state.req_id = req_id
+         else:
+             req_id = state.req_id
+             if not isinstance(req_id, str) or not req_id:
