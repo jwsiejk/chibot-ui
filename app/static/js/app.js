@@ -1156,6 +1156,74 @@
       window.__logClientMicString = logClientMicEventText;
     } catch (_) {}
 
+    const ASR_PARTIAL_WATCHDOG_MS = 1500;
+    let asrPartialWatchdogTimerId = null;
+
+    function isRecorderListening() {
+      if (runtimeState.isRecording) {
+        return true;
+      }
+      try {
+        return Boolean(AppState?.recorder?.active);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function cancelAsrPartialWatchdog() {
+      if (asrPartialWatchdogTimerId !== null) {
+        try {
+          clearTimeout(asrPartialWatchdogTimerId);
+        } catch (_) {}
+        asrPartialWatchdogTimerId = null;
+      }
+    }
+
+    function armAsrPartialWatchdog() {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      if (!isRecorderListening() || AppState?.ttsActive) {
+        cancelAsrPartialWatchdog();
+        return;
+      }
+      if (asrPartialWatchdogTimerId !== null) {
+        clearTimeout(asrPartialWatchdogTimerId);
+      }
+      asrPartialWatchdogTimerId = window.setTimeout(() => {
+        asrPartialWatchdogTimerId = null;
+        if (!isRecorderListening() || AppState?.ttsActive) {
+          return;
+        }
+        let stopAttempted = false;
+        let stopped = false;
+        try {
+          if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
+            stopAttempted = true;
+            AppState.hub.stopListening({ reason: 'watchdog' });
+            stopped = true;
+          }
+        } catch (err) {
+          console.warn('Hub stopListening watchdog failed', err);
+        }
+        if (!stopped) {
+          try {
+            if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
+              stopAttempted = true;
+              window.AudioRecorder.stopListening({ reason: 'watchdog' });
+              stopped = true;
+            }
+          } catch (err) {
+            console.warn('AudioRecorder stopListening watchdog failed', err);
+          }
+        }
+        if (!stopAttempted) {
+          return;
+        }
+        logClientMicEventText('evt=mic_stop reason=watchdog');
+      }, ASR_PARTIAL_WATCHDOG_MS);
+    }
+
     function resetMicSessionTelemetry() {
       micSessionTelemetry.micOpenLogged = false;
       micSessionTelemetry.firstChunkLogged = false;
@@ -1188,9 +1256,17 @@
           resetMicSessionTelemetry();
           noteRecordingBadgeOn(source);
         }
+        if (!AppState?.ttsActive) {
+          armAsrPartialWatchdog();
+        } else {
+          cancelAsrPartialWatchdog();
+        }
       } else if (previous) {
         endMicTelemetrySession();
         resetMicSessionTelemetry();
+        cancelAsrPartialWatchdog();
+      } else {
+        cancelAsrPartialWatchdog();
       }
       return next;
     }
@@ -2623,6 +2699,7 @@ window.addEventListener('tts.start', (event) => {
     updateVoiceState(extractVoiceLocale(detail));
   }
   runtimeState.audioPlaybackIdle = false;
+  cancelAsrPartialWatchdog();
   asrPrearmIssued = false;
   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
     try {
@@ -2707,6 +2784,18 @@ window.addEventListener('local_audio.ended', (event) => {
 
 const FINAL_REARM_COOLDOWN_MS = 1500;
 
+window.addEventListener('asr.partial', () => {
+  if (AppState?.ttsActive) {
+    cancelAsrPartialWatchdog();
+    return;
+  }
+  if (!isRecorderListening()) {
+    cancelAsrPartialWatchdog();
+    return;
+  }
+  armAsrPartialWatchdog();
+});
+
 window.addEventListener('asr.final', () => {
   if (runtimeState.finalSeenThisTurn) {
     return;
@@ -2755,6 +2844,7 @@ window.addEventListener('assistant.await_user', (event) => {
 });
 
 window.addEventListener('asr.unavailable', (event) => {
+  cancelAsrPartialWatchdog();
   runtimeState.asrReady = false;
   const detail = event && typeof event === 'object' ? event.detail : undefined;
   let reason = null;

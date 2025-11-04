@@ -1,904 +1,330 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index ff513d9b288f2ec59819970e7ae0653aeca40e9c..c97f636c314ca3d0377dc5bcb521f1398944821f 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -194,58 +194,73 @@ class _SessionState:
-     last_partial_log: float = 0.0
-     model: Optional[str] = None
-     keep_warm_until: float = 0.0
-     probe_active: bool = False
-     probe_target_samples: int = 0
-     probe_samples_collected: int = 0
-     probe_sum_squares: float = 0.0
-     probe_peak: float = 0.0
-     probe_window_ms: int = _RMS_PROBE_WINDOW_MS
-     commit_on_vad_silence: bool = True
-     commit_silence_ms: int = 900
-     max_utterance_ms: int = 8000
-     commit_timer: asyncio.TimerHandle | None = None
-     utterance_active: bool = False
-     utterance_started_at: float = 0.0
-     final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
-     segment_started_ms: int = 0
-     pending_final: Optional[_PendingFinal] = None
-     pending_final_handle: asyncio.TimerHandle | None = None
-     final_guard_ms: int = 250
-     min_segment_ms: int = 800
-     allow_word_finals: bool = False
-     final_accumulated: str = ""
-     vendor_first_write_logged: bool = False
-     vendor_totals_logged: bool = False
-+    base_utterance_end_ms: int = 1200
-+    base_commit_silence_ms: int = 900
-+    adaptive_utterance_end_ms: int = 0
-+    adaptive_commit_silence_ms: int = 0
-+    adaptive_extended_once: bool = False
-+    turn_final_count: int = 0
-+    turn_first_final_seen: bool = False
-+    turn_post_final_chunks: int = 0
-+    turn_no_partial_ms: int = 0
-+    turn_gap_start_ms: int = 0
-+    turn_speech_evidence: bool = False
-+    turn_first_audio_ms: int = 0
-+    turn_last_partial_ms: int = 0
- 
-     def __post_init__(self) -> None:
-         now_monotonic = time.monotonic()
-         now_wall = time.time()
-         self.opened_at_monotonic = now_monotonic
-         self.opened_at_ms = int(now_wall * 1000)
-         self.last_audio_ts = now_monotonic
-         self.last_audio_ts_ms = int(now_wall * 1000)
-+        self.adaptive_utterance_end_ms = self.base_utterance_end_ms
-+        self.adaptive_commit_silence_ms = self.base_commit_silence_ms
- 
- 
- class ASRRuntime:
-     """Bridge websocket audio to realtime transcription providers."""
- 
-     def __init__(
-         self,
-         engine: EngineV2,
-         client: Any,
-         *,
-         telemetry_bus: Any | None = None,
-     ) -> None:
-         if engine is None:
-             raise ValueError("engine must be provided")
-         if client is None:
-             raise ValueError("client must be provided")
- 
-         self._engine = engine
-         self._client = client
-         self._vendor = self._detect_vendor(client)
-         self._bus = telemetry_bus or bus
-         self._sessions: Dict[str, _SessionState] = {}
-         self._loop: asyncio.AbstractEventLoop | None = None
-         self.policy = Policy()
-         configured_idle = ASR_IDLE_CLOSE_MS
-@@ -378,50 +393,56 @@ class ASRRuntime:
-                 else:
-                     candidate = getattr(current, key, None)
-                 if candidate is None:
-                     continue
-                 if key == "allow_word_finals":
-                     defaults[key] = self._coerce_policy_bool(
-                         candidate, bool(defaults[key])
-                     )
-                 else:
-                     defaults[key] = self._coerce_policy_int(
-                         candidate, int(defaults[key])
-                     )
-                 break
- 
-         return defaults
- 
-     def _apply_speechmatics_policy(
-         self,
-         state: _SessionState,
-         policy_snapshot: Mapping[str, Any] | Any | None,
-     ) -> None:
-         values = self._resolve_speechmatics_policy_values(policy_snapshot)
-         state.final_guard_ms = int(values.get("final_guard_ms", 250))
-         state.min_segment_ms = int(values.get("min_segment_ms", 800))
-         state.allow_word_finals = bool(values.get("allow_word_finals", False))
-+        base_ue = int(values.get("utterance_end_ms", state.base_utterance_end_ms))
-+        if base_ue <= 0:
-+            base_ue = 1200
-+        state.base_utterance_end_ms = base_ue
-+        current_adapt = state.adaptive_utterance_end_ms or base_ue
-+        state.adaptive_utterance_end_ms = min(2600, max(base_ue, current_adapt))
- 
-     def _cancel_pending_final(
-         self,
-         state: _SessionState,
-         reason: str | None = None,
-         *,
-         log: bool = True,
-     ) -> None:
-         handle = state.pending_final_handle
-         if handle is not None:
-             try:
-                 handle.cancel()
-             except Exception:  # pragma: no cover - defensive
-                 pass
-         state.pending_final_handle = None
-         if state.pending_final is None:
-             return
-         if log and reason in {"speech_resumed", "too_short"}:
-             _log.info("evt=asr_final_canceled reason=%s", reason)
-         state.pending_final = None
- 
-     def _handle_speechmatics_final_candidate(
-         self,
-         sid: str,
-         state: _SessionState,
-@@ -603,50 +624,54 @@ class ASRRuntime:
-             _log.info(
-                 "evt=asr_final_suppressed_dup sid=%s req_id=%s vendor=%s text=%s text_hash=%s delta_ms=%d suppress_ms=%d",
-                 sid,
-                 req_id,
-                 self._vendor,
-                 text,
-                 text_hash,
-                 delta_ms,
-                 suppress_ms,
-             )
-             self._log_utterance(state, stream_id, req_id, metadata, text)
-             state.segment_started_ms = 0
-             state.final_accumulated = ""
-             return
- 
-         self._bus.publish(event)
-         if self._vendor == "speechmatics":
-             _log.info(
-                 "evt=asr_final sid=%s tokens=%d ms_from_first_chunk=%d text=%r",
-                 sid,
-                 speechmatics_tokens,
-                 speechmatics_latency,
-                 speechmatics_text,
-             )
-         state.finals_delivered += 1
-+        state.turn_final_count += 1
-+        if not state.turn_first_final_seen:
-+            state.turn_first_final_seen = True
-+            state.turn_post_final_chunks = 0
-         _log.info(
-             "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
-             sid,
-             req_id,
-             self._vendor,
-             text,
-             text_hash,
-         )
-         self._log_utterance(state, stream_id, req_id, metadata, text)
-         state.segment_started_ms = 0
-         state.final_accumulated = ""
- 
-     # ------------------------------------------------------------------
-     # Websocket hooks
-     # ------------------------------------------------------------------
-     def on_ws_open(self, sid: str) -> None:
-         self._ensure_loop()
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-         _log.info("evt=asr_on_ws_open sid=%s", sid)
-         state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
-         state.listening = False
-         state.prearm_requested = False
-@@ -683,50 +708,58 @@ class ASRRuntime:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-             if self._vendor == "speechmatics":
-                 snapshot = getattr(self._engine, "policy_snapshot", None)
-                 self._apply_speechmatics_policy(state, snapshot)
- 
-         if self._vendor == "speechmatics":
-             state.input_desc = _pcm_input_descriptor()
-         elif not state.input_desc:
-             state.input_desc = _default_input_descriptor_for_vendor(self._vendor)
- 
-         if not state.listening:
-             return
- 
-         if not state.utterance_active:
-             state.utterance_active = True
-             self._apply_commit_policy(state)
-             self._start_commit_timer(sid, state)
- 
-         state.unavailable_emitted = False
- 
-         now_monotonic = time.monotonic()
-         state.last_audio_ts = now_monotonic
-         now_ms = int(time.time() * 1000)
-         state.last_audio_ts_ms = now_ms
-+        if not state.turn_speech_evidence:
-+            state.turn_speech_evidence = True
-+        if state.turn_first_audio_ms <= 0:
-+            state.turn_first_audio_ms = now_ms
-+        if state.turn_gap_start_ms <= 0:
-+            state.turn_gap_start_ms = now_ms
-+        if state.turn_first_final_seen:
-+            state.turn_post_final_chunks += 1
-         if state.ready_watchdog is not None and state.ready_armed_at:
-             self._cancel_ready_watchdog(state)
-         chunk_len = len(data)
- 
-         input_desc = state.input_desc or {}
-         if not isinstance(input_desc, Mapping):
-             input_desc = {}
- 
-         if state.ingress_packets == 0:
-             state.first_ingress_ms = now_ms
-         state.ingress_packets += 1
-         state.ingress_bytes += chunk_len
- 
-         if not state.first_chunk_seen:
-             state.first_chunk_seen = True
-             state.rollup_window_start = now_monotonic
-             state.rollup_chunks = 0
-             state.rollup_bytes = 0
-             codec_value = input_desc.get("codec")
-             if isinstance(codec_value, str) and codec_value:
-                 codec_label = codec_value
-             else:
-                 codec_label = "unknown"
-             _log.info(
-                 "evt=audio_first_chunk sid=%s bytes=%d codec=%s",
-@@ -990,93 +1023,168 @@ class ASRRuntime:
- 
-         state.listening = True
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.pending.clear()
-         state.buffered_bytes = 0
-         # Speechmatics gating requires the websocket adapter to receive an
-         # asr.ready signal before it will forward any client audio.  The previous
-         # behaviour intentionally skipped the proactive stream open for
-         # Speechmatics, assuming audio would trigger the open path.  In practice
-         # the adapter suppresses audio until it sees asr.ready, so the runtime
-         # never received audio and the conversation stalled immediately after the
-         # greet.  Always request a prearm so the stream opens and emits the
-         # asr.ready event before we wait on client audio.
-         state.prearm_requested = True
-         state.utterance_active = False
-         self._cancel_commit_timer(state)
-+        state.turn_final_count = 0
-+        state.turn_first_final_seen = False
-+        state.turn_post_final_chunks = 0
-+        state.turn_no_partial_ms = 0
-+        state.turn_gap_start_ms = 0
-+        state.turn_speech_evidence = False
-+        state.turn_first_audio_ms = 0
-+        state.turn_last_partial_ms = 0
-+        session_supplier = getattr(self._engine, "_ensure_session", None)
-+        if callable(session_supplier):
-+            try:
-+                engine_session = session_supplier(sid)
-+            except Exception:  # pragma: no cover - defensive
-+                engine_session = None
-+            if engine_session is not None:
-+                ue_override = getattr(engine_session, "adaptive_utterance_end_ms", None)
-+                cs_override = getattr(engine_session, "adaptive_commit_silence_ms", None)
-+                if isinstance(ue_override, (int, float)) and ue_override > 0:
-+                    state.adaptive_utterance_end_ms = int(ue_override)
-+                if isinstance(cs_override, (int, float)) and cs_override > 0:
-+                    state.adaptive_commit_silence_ms = int(cs_override)
-+                if getattr(engine_session, "adaptive_extended_once", False):
-+                    state.adaptive_extended_once = True
-         self._apply_commit_policy(state)
-         self._ensure_stream(sid, state)
- 
-     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             return
- 
-+        now_ms = int(time.time() * 1000)
-+        if state.turn_speech_evidence and state.turn_gap_start_ms > 0:
-+            trailing_gap = max(0, now_ms - state.turn_gap_start_ms)
-+            if trailing_gap > state.turn_no_partial_ms:
-+                state.turn_no_partial_ms = trailing_gap
-+        final_count = state.turn_final_count
-+        post_final_chunks = state.turn_post_final_chunks
-+        no_partial_ms = state.turn_no_partial_ms
-+        current_ue = self._effective_utterance_end_ms(state)
-+        current_cs = self._effective_commit_silence_ms(state)
-+        new_ue = current_ue
-+        new_cs = current_cs
-+        extended_once = state.adaptive_extended_once
-+        if final_count > 2 and new_ue < 2600:
-+            new_ue = min(2600, new_ue + 200)
-+        if post_final_chunks > 120 and new_cs < 1800:
-+            new_cs = min(1800, new_cs + 200)
-+        if state.turn_speech_evidence and no_partial_ms > 7000 and not extended_once:
-+            new_ue = min(2600, new_ue + 500)
-+            extended_once = True
-+        state.adaptive_utterance_end_ms = new_ue
-+        state.adaptive_commit_silence_ms = new_cs
-+        state.adaptive_extended_once = extended_once
-+        ensure_session = getattr(self._engine, "_ensure_session", None)
-+        engine_session = None
-+        if callable(ensure_session):
-+            try:
-+                engine_session = ensure_session(sid)
-+            except Exception:  # pragma: no cover - defensive
-+                engine_session = None
-+        if engine_session is not None:
-+            engine_session.adaptive_utterance_end_ms = new_ue
-+            engine_session.adaptive_commit_silence_ms = new_cs
-+            engine_session.adaptive_extended_once = extended_once
-+        _log.info(
-+            "evt=turn_metrics finals=%d post_final_chunks=%d ue_ms=%d cs_ms=%d extended_once=%d",
-+            final_count,
-+            post_final_chunks,
-+            new_ue,
-+            new_cs,
-+            1 if extended_once else 0,
-+        )
-+
-         state.listening = False
-         state.prearm_requested = False
-         state.pending.clear()
-         state.buffered_bytes = 0
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.utterance_active = False
-+        state.turn_final_count = 0
-+        state.turn_first_final_seen = False
-+        state.turn_post_final_chunks = 0
-+        state.turn_no_partial_ms = 0
-+        state.turn_gap_start_ms = 0
-+        state.turn_speech_evidence = False
-+        state.turn_first_audio_ms = 0
-+        state.turn_last_partial_ms = 0
-         self._cancel_ready_watchdog(state)
-         self._cancel_idle_timer(state)
-         self._cancel_commit_timer(state)
- 
-         if state.stream_open:
-             stream_id = state.stream_id or state.last_stream_id or ""
-             state.close_reason = reason or "stop_listening"
-             try:
-                 self._client.close_stream(sid)
-             except Exception:  # pragma: no cover - defensive
-                 _log.exception("evt=asr_stop_listening_close_failed sid=%s", sid)
-             finally:
-                 self._finalize_rms_probe(sid, state)
-             state.stream_open = False
-             state.stream_id = None
-             state.req_id = None
-             _log.info("evt=asr_stop_listening sid=%s stream_id=%s", sid, stream_id)
-+        self._apply_commit_policy(state)
-     def _emit_log(self, payload: Dict[str, Any]) -> None:
-         if not isinstance(payload, dict):
-             return
-         event = dict(payload)
-         event.setdefault("type", "EVT_LOG")
-         try:
-             self._bus.publish(event)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_emit_log_failed")
- 
-     def _emit_session_step(
-         self,
-         sid: str,
-         step: str,
-         *,
-         summary: str | None = None,
-         meta: Mapping[str, Any] | None = None,
-         source: str = "asr.runtime",
-     ) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
-         if not isinstance(step, str) or not step:
-             return
-         payload: Dict[str, Any] = {
-             "schema_version": "1",
-@@ -1251,50 +1359,53 @@ class ASRRuntime:
-         if not state.pending and not state.prearm_requested:
-             return
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             return
- 
-         async def _open() -> None:
-             if state.stream_id is None:
-                 state.stream_id = self._generate_stream_id()
-             stream_id = state.stream_id
-             state.last_stream_id = stream_id
-             state.close_reason = None
-             state.prearm_requested = False
-             try:
-                 policy_snapshot = None
-                 try:
-                     policy_snapshot = getattr(self._engine, "policy_snapshot", None)
-                 except Exception:  # pragma: no cover - defensive
-                     policy_snapshot = None
-                 if self._vendor == "speechmatics":
-                     self._apply_speechmatics_policy(state, policy_snapshot)
-                     input_desc = _pcm_input_descriptor()
-                 else:
-                     input_desc = self._input_descriptor_from_policy(policy_snapshot)
-                 state.input_desc = input_desc
-+                policy_snapshot = self._apply_adaptive_overrides_to_policy(
-+                    state, policy_snapshot
-+                )
-                 model_name = None
-                 if isinstance(policy_snapshot, Mapping):
-                     candidate = policy_snapshot.get("model")
-                     if isinstance(candidate, str) and candidate:
-                         model_name = candidate
-                     else:
-                         interaction = policy_snapshot.get("interaction")
-                         if isinstance(interaction, Mapping):
-                             maybe_model = interaction.get("model")
-                             if isinstance(maybe_model, str) and maybe_model:
-                                 model_name = maybe_model
-                 else:
-                     candidate_model = getattr(policy_snapshot, "model", None)
-                     if isinstance(candidate_model, str) and candidate_model:
-                         model_name = candidate_model
-                 state.model = model_name if isinstance(model_name, str) and model_name else None
-                 _log.info(
-                     "evt=asr_open_attempt sid=%s vendor=%s trigger=first_ingress_packet",
-                     sid,
-                     self._vendor,
-                 )
-                 self._bus.publish(
-                     {
-                         "type": "asr.open_attempt",
-                         "sid": sid,
-@@ -1958,50 +2069,57 @@ class ASRRuntime:
-         if isinstance(engine_req_id, str) and engine_req_id:
-             req_id = engine_req_id
-             state.req_id = req_id
-         else:
-             req_id = state.req_id
-             if not isinstance(req_id, str) or not req_id:
-                 req_id = f"dg-{uuid.uuid4().hex}"
-                 state.req_id = req_id
-             if engine_session is not None and getattr(engine_session, "req_id", None) != req_id:
-                 engine_session.req_id = req_id
- 
-         try:
-             self._engine.on_asr_partial(sid, req_id, _PARTIAL_CONFIDENCE, text)
-         except Exception:  # pragma: no cover - defensive
-             _log.exception("evt=asr_engine_partial_failed sid=%s", sid)
- 
-         event = {
-             "type": EVT_ASR_PARTIAL,
-             "sid": sid,
-             "req_id": req_id,
-             "text": text,
-             "confidence": _PARTIAL_CONFIDENCE,
-             "vendor": self._vendor,
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 71a611756fbfdce0f8f31403da6e02e5367f3a3f..32b594234a0da03844b5d7c8620a7dcd463577b3 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1134,85 +1134,161 @@
+       const payload = payloadSource && typeof payloadSource === 'object' ? { ...payloadSource } : {};
+       if (text) {
+         try {
+           console.log(text);
+         } catch (_) {}
+         if (!payload.message) {
+           payload.message = text.slice(0, 256);
          }
-         self._bus.publish(event)
-+        now_ms_partial = int(time.time() * 1000)
-+        if state.turn_speech_evidence and state.turn_gap_start_ms > 0:
-+            gap_ms = max(0, now_ms_partial - state.turn_gap_start_ms)
-+            if gap_ms > state.turn_no_partial_ms:
-+                state.turn_no_partial_ms = gap_ms
-+        state.turn_gap_start_ms = 0
-+        state.turn_last_partial_ms = now_ms_partial
+       }
+       if (!sendClientLog('client.mic', payload)) {
+         enqueueDeferredClientLog('client.mic', payload);
+       }
+     }
  
-     def _on_final(
-         self, sid: str, text: str, metadata: Dict[str, object] | None = None
-     ) -> None:
-         if not isinstance(text, str) or not text.strip():
-             return
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
-             if self._vendor == "speechmatics":
-                 snapshot = getattr(self._engine, "policy_snapshot", None)
-                 self._apply_speechmatics_policy(state, snapshot)
+     function logClientMicEventText(text) {
+       if (typeof text !== 'string' || !text) {
+         return;
+       }
+       logClient('client.mic', text);
+     }
  
-         metadata = metadata or {}
-         deliver_text = text
-         if self._vendor == "speechmatics":
-             if not state.allow_word_finals and self._handle_speechmatics_final_candidate(
-                 sid, state, text, metadata
-             ):
-                 return
-             if state.final_accumulated:
-                 deliver_text = state.final_accumulated
-         self._deliver_final(sid, deliver_text, metadata, state)
+     try {
+       window.__logClientMicString = logClientMicEventText;
+     } catch (_) {}
  
-@@ -2310,52 +2428,57 @@ class ASRRuntime:
-                 state.close_reason = "idle_timeout"
-                 try:
-                     stream_id = state.stream_id or state.last_stream_id or ""
-                     idle_ms = int(max(0.0, (now - state.last_audio_ts) * 1000))
-                     _log.info(
-                         "evt=asr_idle_close sid=%s stream_id=%s idle_ms=%d",
-                         sid,
-                         stream_id,
-                         idle_ms,
-                     )
-                     self._client.close_stream(sid)
-                 except Exception:  # pragma: no cover - defensive
-                     _log.exception("evt=asr_idle_close_failed sid=%s", sid)
-                 finally:
-                     self._finalize_rms_probe(sid, state)
-                 self._cancel_commit_timer(state)
-                 state.stream_open = False
-                 state.last_stream_id = state.stream_id or state.last_stream_id
-                 state.stream_id = None
-                 state.req_id = None
-                 state.bytes_received = 0
-                 state.utterance_active = False
- 
-     def _apply_commit_policy(self, state: _SessionState) -> None:
-         commit_on_vad, commit_silence_ms, max_utterance_ms = self._resolve_commit_policy()
-+        base_commit = max(0, int(commit_silence_ms))
-+        state.base_commit_silence_ms = base_commit or state.base_commit_silence_ms
-+        current_adapt = state.adaptive_commit_silence_ms or state.base_commit_silence_ms
-+        effective_commit = min(1800, max(state.base_commit_silence_ms, current_adapt, base_commit))
-+        state.adaptive_commit_silence_ms = effective_commit
-         state.commit_on_vad_silence = commit_on_vad
--        state.commit_silence_ms = commit_silence_ms
-+        state.commit_silence_ms = effective_commit
-         state.max_utterance_ms = max_utterance_ms
- 
-     def _resolve_commit_policy(self) -> tuple[bool, int, int]:
-         asr_policy = getattr(self.policy, "asr", None)
-         commit_on_vad = True
-         commit_silence_ms = 900
-         max_utterance_ms = 8000
-         if asr_policy is not None:
-             commit_on_vad = bool(
-                 getattr(asr_policy, "commit_on_vad_silence", commit_on_vad)
-             )
-             commit_silence_ms = self._coerce_policy_int(
-                 getattr(asr_policy, "commit_silence_ms", commit_silence_ms),
-                 commit_silence_ms,
-             )
-             max_utterance_ms = self._coerce_policy_int(
-                 getattr(asr_policy, "max_utterance_ms", max_utterance_ms),
-                 max_utterance_ms,
-             )
- 
-         snapshot = getattr(self._engine, "policy_snapshot", None)
-         if isinstance(snapshot, Mapping):
-             policy_block = snapshot.get("policy")
-             if isinstance(policy_block, Mapping):
-                 asr_block = policy_block.get("asr")
-@@ -2372,50 +2495,91 @@ class ASRRuntime:
-                         )
-         return commit_on_vad, commit_silence_ms, max_utterance_ms
- 
-     @staticmethod
-     def _coerce_policy_int(value: Any, default: int) -> int:
-         try:
-             candidate = int(value)
-         except (TypeError, ValueError):
-             return max(0, int(default))
-         return max(0, candidate)
- 
-     @staticmethod
-     def _coerce_policy_bool(value: Any, default: bool) -> bool:
-         if isinstance(value, bool):
-             return value
-         if isinstance(value, (int, float)) and not isinstance(value, bool):
-             return bool(value)
-         if isinstance(value, str):
-             normalized = value.strip().lower()
-             if normalized in {"true", "1", "yes", "on"}:
-                 return True
-             if normalized in {"false", "0", "no", "off"}:
-                 return False
-         return bool(default)
- 
-+    def _effective_utterance_end_ms(self, state: _SessionState) -> int:
-+        base = state.base_utterance_end_ms or 1200
-+        if base <= 0:
-+            base = 1200
-+        adapt = state.adaptive_utterance_end_ms or base
-+        return min(2600, max(base, adapt))
++    const ASR_PARTIAL_WATCHDOG_MS = 1500;
++    let asrPartialWatchdogTimerId = null;
 +
-+    def _effective_commit_silence_ms(self, state: _SessionState) -> int:
-+        base = state.base_commit_silence_ms or 900
-+        if base <= 0:
-+            base = 900
-+        adapt = state.adaptive_commit_silence_ms or base
-+        return min(1800, max(base, adapt))
++    function isRecorderListening() {
++      if (runtimeState.isRecording) {
++        return true;
++      }
++      try {
++        return Boolean(AppState?.recorder?.active);
++      } catch (_) {
++        return false;
++      }
++    }
 +
-+    def _apply_adaptive_overrides_to_policy(
-+        self, state: _SessionState, snapshot: Mapping[str, Any] | Any | None
-+    ) -> Mapping[str, Any] | Any | None:
-+        if not isinstance(snapshot, Mapping):
-+            return snapshot
-+        policy_block = snapshot.get("policy")
-+        if isinstance(policy_block, Mapping):
-+            asr_block = policy_block.get("asr")
-+        else:
-+            asr_block = None
-+        result: Dict[str, Any] = dict(snapshot)
-+        policy_copy: Dict[str, Any]
-+        if isinstance(policy_block, Mapping):
-+            policy_copy = dict(policy_block)
-+        else:
-+            policy_copy = {}
-+        asr_copy: Dict[str, Any]
-+        if isinstance(asr_block, Mapping):
-+            asr_copy = dict(asr_block)
-+        else:
-+            asr_copy = {}
-+        asr_copy["utterance_end_ms"] = self._effective_utterance_end_ms(state)
-+        asr_copy["commit_silence_ms"] = self._effective_commit_silence_ms(state)
-+        policy_copy["asr"] = asr_copy
-+        result["policy"] = policy_copy
-+        return result
++    function cancelAsrPartialWatchdog() {
++      if (asrPartialWatchdogTimerId !== null) {
++        try {
++          clearTimeout(asrPartialWatchdogTimerId);
++        } catch (_) {}
++        asrPartialWatchdogTimerId = null;
++      }
++    }
 +
-     def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
-         asr_policy = getattr(self.policy, "asr", None)
-         suppress_ms = self._coerce_policy_int(
-             getattr(asr_policy, "dup_final_suppress_ms", ASR_DUP_FINAL_SUPPRESS_MS),
-             ASR_DUP_FINAL_SUPPRESS_MS,
-         )
-         normalize = bool(
-             getattr(asr_policy, "dedupe_normalize", ASR_DEDUPE_NORMALIZE)
-         )
- 
-         snapshot = getattr(self._engine, "policy_snapshot", None)
-         if isinstance(snapshot, Mapping):
-             policy_block = snapshot.get("policy")
-             if isinstance(policy_block, Mapping):
-                 asr_block = policy_block.get("asr")
-                 if isinstance(asr_block, Mapping):
-                     if "dup_final_suppress_ms" in asr_block:
-                         suppress_ms = self._coerce_policy_int(
-                             asr_block.get("dup_final_suppress_ms"), suppress_ms
-                         )
-                     if "dedupe_normalize" in asr_block:
-                         normalize = bool(asr_block.get("dedupe_normalize"))
- 
-         suppress_ms = self._coerce_policy_int(suppress_ms, ASR_DUP_FINAL_SUPPRESS_MS)
-         return suppress_ms, normalize
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index 42c8e45bad8c6f964c588715211d04ad8d357a0f..45181ce3c6577b4df7c3a5354c6932b483e0f475 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -138,50 +138,53 @@ class _Envelope:
-         return data
- 
- 
- @dataclass
- class _TurnSession:
-     state: str = READY
-     turn_id: Optional[str] = None
-     turn_started_ms: Optional[int] = None
-     tts_utt_id: Optional[str] = None
-     tts_mask_phase: str = "off"
-     req_id: Optional[str] = None
-     nlu_req_id: Optional[str] = None
-     perf_first_partial_ms: Optional[int] = None
-     perf_final_ms: Optional[int] = None
-     perf_tts_start_ms: Optional[int] = None
-     asr_final_emitted: bool = False
-     nlu_emitted: bool = False
-     policy_emitted: bool = False
-     nlg_emitted: bool = False
-     plan_emitted: bool = False
-     greet_emitted: bool = False
-     plan: Optional[Dict[str, Any]] = None
-     suggestions_emitted: bool = False
-     turn_committed: bool = False
-     policy_actions_mismatch_logged: bool = False
-+    adaptive_utterance_end_ms: Optional[int] = None
-+    adaptive_commit_silence_ms: Optional[int] = None
-+    adaptive_extended_once: bool = False
- 
- 
- class _NullExporter:
-     """Exporter stub used when no exporter is provided."""
- 
-     def write(self, sid: str, event: Dict[str, Any]) -> None:  # pragma: no cover - noop
-         return
- 
- 
- class EngineV2:
-     """Engine shell that exposes WS hooks, telemetry taps, and exporting."""
- 
-     def __init__(
-         self,
-         exporter: FileExporter | None = None,
-         *,
-         telemetry_bus=bus,
-         fake_exporter: FileExporter | None = None,
-     ) -> None:
-         if exporter is None:
-             exporter = fake_exporter
-         if exporter is None:
-             exporter = _NullExporter()
-         self._exporter = exporter
-         self._bus = telemetry_bus
-@@ -394,50 +397,55 @@ class EngineV2:
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-         """Capture an incoming audio chunk."""
-         session = self._ensure_session(sid)
-         if session.tts_mask_phase != "off":
-             self._publish_tts_mask(sid, "off")
-         if session.state == READY:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-             session = self._ensure_session(sid)
-         elif session.state == RESPONDING:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-             session = self._ensure_session(sid)
-         if session.state != LISTENING:
-             _log.warning(
-                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
-             )
-         else:
-             self._commit_turn_start(sid, "audio_rx")
- 
-         if not isinstance(chunk, (bytes, bytearray)):
-             _log.warning(
-                 "evt=audio_invalid_chunk type=%s", type(chunk).__name__, extra={"sid": sid}
-             )
-             return
- 
-         byte_count = len(chunk)
-+        if byte_count % _PCM_SAMPLE_BYTES != 0:
-+            _log.warning(
-+                "evt=audio_invalid_chunk_size bytes=%d", byte_count, extra={"sid": sid}
-+            )
-+            return
-         frame_ms = int((byte_count / (2 * _PCM_CHANNELS * _PCM_RATE_HZ)) * 1000)
-         if frame_ms <= 0:
-             frame_ms = 20
-         dbfs = rms_dbfs_from_pcm16(chunk)
-         aggregator = self._aggregators.get(sid)
-         if aggregator is not None:
-             aggregator.feed_auto_energy(dbfs, frame_ms=frame_ms)
- 
-         if session.perf_first_partial_ms is None and not getattr(
-             session, "_vad_energy_logged", False
-         ):
-             _log.info(
-                 "evt=auto_vad_energy sid=%s dbfs=%.1f frame_ms=%d", sid, dbfs, frame_ms
-             )
-             session._vad_energy_logged = True
-         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
-         event = self._envelope(sid, EVT_WS_AUDIO_RECV, {"meta": meta})
-         self._publish(event)
- 
-     def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
-         """Capture the WebSocket closing handshake."""
-         meta = {"code": code, "reason": reason}
-         event = self._envelope(sid, EVT_WS_CLOSE, {"meta": meta})
-         self._publish(event)
-         if self._last_sid == sid:
-@@ -1525,70 +1533,105 @@ class EngineV2:
-         self._publish(event)
- 
-         if reason:
-             self._publish_action_say_end(
-                 sid,
-                 utt_id,
-                 reason=reason,
-                 req_id=req_id_value,
-             )
- 
-         self._publish_tts_mask(sid, "off", force=was_active)
-         self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
- 
-         if transition_to_ready:
-             if post_hold_ms > 0:
-                 self._gate.set_reason(
-                     "system_hold",
-                     True,
-                     sid=sid,
-                     meta={"tts": {"utt_id": utt_id, "post_hold_ms": post_hold_ms}},
-                 )
-                 asyncio.create_task(self._release_system_hold_after(sid, post_hold_ms))
-             else:
-                 self._set_state(sid, READY, reason="tts_end")
- 
-+    def _snapshot_with_adaptive_overrides(
-+        self, snapshot: Mapping[str, Any], session: _TurnSession
-+    ) -> Dict[str, Any]:
-+        result = dict(snapshot)
-+        ue_override = getattr(session, "adaptive_utterance_end_ms", None)
-+        cs_override = getattr(session, "adaptive_commit_silence_ms", None)
-+        if not any(
-+            isinstance(value, (int, float)) and value > 0
-+            for value in (ue_override, cs_override)
-+        ):
-+            return result
++    function armAsrPartialWatchdog() {
++      if (typeof window === 'undefined') {
++        return;
++      }
++      if (!isRecorderListening() || AppState?.ttsActive) {
++        cancelAsrPartialWatchdog();
++        return;
++      }
++      if (asrPartialWatchdogTimerId !== null) {
++        clearTimeout(asrPartialWatchdogTimerId);
++      }
++      asrPartialWatchdogTimerId = window.setTimeout(() => {
++        asrPartialWatchdogTimerId = null;
++        if (!isRecorderListening() || AppState?.ttsActive) {
++          return;
++        }
++        let stopAttempted = false;
++        let stopped = false;
++        try {
++          if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
++            stopAttempted = true;
++            AppState.hub.stopListening({ reason: 'watchdog' });
++            stopped = true;
++          }
++        } catch (err) {
++          console.warn('Hub stopListening watchdog failed', err);
++        }
++        if (!stopped) {
++          try {
++            if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
++              stopAttempted = true;
++              window.AudioRecorder.stopListening({ reason: 'watchdog' });
++              stopped = true;
++            }
++          } catch (err) {
++            console.warn('AudioRecorder stopListening watchdog failed', err);
++          }
++        }
++        if (!stopAttempted) {
++          return;
++        }
++        logClientMicEventText('evt=mic_stop reason=watchdog');
++      }, ASR_PARTIAL_WATCHDOG_MS);
++    }
 +
-+        policy_block = snapshot.get("policy")
-+        if isinstance(policy_block, Mapping):
-+            policy_copy: Dict[str, Any] = dict(policy_block)
-+        else:
-+            policy_copy = {}
-+        asr_block = policy_copy.get("asr") if isinstance(policy_copy, Mapping) else None
-+        if isinstance(asr_block, Mapping):
-+            asr_copy: Dict[str, Any] = dict(asr_block)
-+        else:
-+            asr_copy = {}
-+        if isinstance(ue_override, (int, float)) and ue_override > 0:
-+            asr_copy["utterance_end_ms"] = int(ue_override)
-+        if isinstance(cs_override, (int, float)) and cs_override > 0:
-+            asr_copy["commit_silence_ms"] = int(cs_override)
-+        policy_copy["asr"] = asr_copy
-+        result["policy"] = policy_copy
-+        return result
-+
-     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
-         session = self._ensure_session(sid)
+     function resetMicSessionTelemetry() {
+       micSessionTelemetry.micOpenLogged = false;
+       micSessionTelemetry.firstChunkLogged = false;
+       micSessionTelemetry.recBadgeLogged = false;
+     }
  
-+        if isinstance(snapshot, Mapping):
-+            snapshot_for_frame = self._snapshot_with_adaptive_overrides(snapshot, session)
-+        else:
-+            snapshot_for_frame = dict(snapshot)
-+
-         nested_sequence: list[Any] | None = None
--        actions_block = snapshot.get("actions")
-+        actions_block = snapshot_for_frame.get("actions")
-         if isinstance(actions_block, Mapping):
-             candidate = actions_block.get("assistant_turn_sequence")
-             if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
-                 nested_sequence = list(candidate)
+     function noteRecordingBadgeOn(source) {
+       if (micSessionTelemetry.recBadgeLogged) {
+         return;
+       }
+       micSessionTelemetry.recBadgeLogged = true;
+       const detail = { event: 'ui_rec_badge_on' };
+       if (source) {
+         detail.source = String(source).slice(0, 32);
+       }
+       logClient('evt=ui_rec_badge_on', detail);
+     }
  
--        derived_actions = assistant_turn_actions(snapshot)
-+        derived_actions = assistant_turn_actions(snapshot_for_frame)
-         summary_actions = (
-             list(nested_sequence)
-             if nested_sequence is not None
-             else list(derived_actions)
-         )
- 
-         frame = {
-             "type": "policy.interaction",
--            "policy": snapshot,
-+            "policy": snapshot_for_frame,
-             "actions": summary_actions,
+     function updateRecordingState(active, source) {
+       const previous = runtimeState.isRecording;
+       const next = !!active;
+       runtimeState.isRecording = next;
+       if (next) {
+         if (!previous) {
+           runtimeState.finalSeenThisTurn = false;
+           if (AppState && typeof AppState.__no_rearm_until === 'number') {
+             AppState.__no_rearm_until = 0;
+           }
+           beginMicTelemetrySession();
+           resetMicSessionTelemetry();
+           noteRecordingBadgeOn(source);
          }
++        if (!AppState?.ttsActive) {
++          armAsrPartialWatchdog();
++        } else {
++          cancelAsrPartialWatchdog();
++        }
+       } else if (previous) {
+         endMicTelemetrySession();
+         resetMicSessionTelemetry();
++        cancelAsrPartialWatchdog();
++      } else {
++        cancelAsrPartialWatchdog();
+       }
+       return next;
+     }
  
-         mismatch = nested_sequence is None or summary_actions != nested_sequence
-         if mismatch and not session.policy_actions_mismatch_logged:
-             _log.warning(
-                 "evt=policy_actions_mismatch nested=%s summary=%s derived=%s",
-                 nested_sequence,
-                 summary_actions,
-                 derived_actions,
-                 extra={"sid": sid},
-             )
-             session.policy_actions_mismatch_logged = True
+     function noteMicOpen(source) {
+       if (micSessionTelemetry.micOpenLogged) {
+         return;
+       }
+       micSessionTelemetry.micOpenLogged = true;
+       const detail = { event: 'mic_open' };
+       if (source) {
+         detail.source = String(source).slice(0, 32);
+       }
+       logClient('evt=mic_open', detail);
+     }
  
-         preview = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
-         meta = {"ws": {"dir": "out", "size": len(preview.encode("utf-8")), "preview": preview}}
-         payload = {"meta": meta, "frame": frame}
-         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
-         self._publish(event)
+     function setMicPermissionGranted(granted, source) {
+       const next = !!granted;
+       runtimeState.micPermissionGranted = next;
+       if (next) {
+         if (!micPermissionTelemetryLogged) {
+           micPermissionTelemetryLogged = true;
+           const detail = { event: 'mic_perm_granted' };
+           if (source) {
+             detail.source = String(source).slice(0, 32);
+@@ -2601,50 +2677,51 @@
+       const payload = { type: 'asr.rearm.request' };
+       const keepWarm = getKeepWarmMs();
+       try {
+         const client = window.WSClient;
+         if (client && typeof client.send === 'function') {
+           client.send(payload);
+         } else {
+           const ws = window.WS;
+           if (ws && typeof ws.send === 'function') {
+             ws.send(payload);
+           }
+         }
+       } catch (err) {
+         console.warn('Failed to send asr.rearm.request', err);
+       }
+       const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+       logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
+     }
  
-     def _emit_dialog_plan(
-         self,
-         sid: str,
-         session: _TurnSession,
-         req_id: str,
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
+   runtimeState.audioPlaybackIdle = false;
++  cancelAsrPartialWatchdog();
+   asrPrearmIssued = false;
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
+       window.AudioRecorder.handleTtsStart();
+     } catch (err) {
+       console.warn('AudioRecorder handleTtsStart failed', err);
+     }
+   }
+ });
+ 
+ window.addEventListener('policy.snapshot', (event) => {
+   const frame = event && event.detail;
+   try {
+     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
+     runtimeState.policy = policy && typeof policy === 'object' ? policy : null;
+     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
+       audioRecorder.setPolicy(policy);
+     }
+   } catch (err) {
+     console.warn('AudioRecorder setPolicy failed', err);
+   }
+ });
+ 
+ // Turn becomes Ready → hand control to user
+ window.addEventListener('turn.state', (event) => {
+@@ -2685,98 +2762,111 @@ window.addEventListener('tts.end', () => {
+     if (shouldPrearmOnTtsEnd()) {
+       try {
+         requestAsrPrearm('tts_end');
+       } catch (err) {
+         console.warn('requestAsrPrearm failed after tts.end', err);
+       }
+     }
+   };
+ 
+   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+     setTimeout(release, POST_TTS_RELEASE_MS);
+   } else {
+     release();
+   }
+ });
+ 
+ window.addEventListener('local_audio.ended', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const detail = event && event.detail;
+   const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
+   maybeAutoStartCapture(trigger, 'tts_end');
+ });
+ 
+ const FINAL_REARM_COOLDOWN_MS = 1500;
+ 
++window.addEventListener('asr.partial', () => {
++  if (AppState?.ttsActive) {
++    cancelAsrPartialWatchdog();
++    return;
++  }
++  if (!isRecorderListening()) {
++    cancelAsrPartialWatchdog();
++    return;
++  }
++  armAsrPartialWatchdog();
++});
++
+ window.addEventListener('asr.final', () => {
+   if (runtimeState.finalSeenThisTurn) {
+     return;
+   }
+   runtimeState.finalSeenThisTurn = true;
+   const now = Date.now();
+   if (AppState && typeof AppState === 'object') {
+     AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
+   }
+   try {
+     const recorder = window.AudioRecorder;
+     recorder?.stopListening?.({ reason: 'final' });
+   } catch (err) {
+     console.warn('AudioRecorder stopListening on asr.final failed', err);
+   }
+   if (runtimeState.isRecording) {
+     updateRecordingState(false, 'final');
+   }
+   logClientMicEventText('evt=mic_stop reason=final');
+ });
+ 
+ window.addEventListener('assistant.await_user', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const frame = event && event.detail;
+   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
+   maybeAutoStartCapture('await_user', reason);
+   if (shouldPrearmOnTtsEnd()) {
+     try {
+       requestAsrPrearm('await_user');
+     } catch (err) {
+       console.warn('requestAsrPrearm failed after assistant.await_user', err);
+     }
+   }
+   try {
+     if (AppState && typeof AppState === 'object') {
+       const policy = AppState.policy && typeof AppState.policy === 'object'
+         ? AppState.policy
+         : (AppState.policy = {});
+       const currentVad = policy.vad && typeof policy.vad === 'object' ? policy.vad : {};
+       policy.vad = { ...currentVad, auto_vad_active: true };
+     }
+   } catch (err) {
+     console.warn('Failed to mark auto_vad_active on policy', err);
+   }
+   logClient('diag=vad_active state=Listening');
+ });
+ 
+ window.addEventListener('asr.unavailable', (event) => {
++  cancelAsrPartialWatchdog();
+   runtimeState.asrReady = false;
+   const detail = event && typeof event === 'object' ? event.detail : undefined;
+   let reason = null;
+   if (detail && typeof detail === 'object') {
+     if (typeof detail.reason === 'string') {
+       reason = detail.reason;
+     } else if (typeof detail.details === 'string') {
+       reason = detail.details;
+     } else if (typeof detail.detail === 'string') {
+       reason = detail.detail;
+     } else if (detail.detail && typeof detail.detail === 'object') {
+       const nested = detail.detail;
+       if (typeof nested.reason === 'string') {
+         reason = nested.reason;
+       } else if (typeof nested.details === 'string') {
+         reason = nested.details;
+       }
+     }
+   }
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+     console.warn('diag=asr_unavailable', reasonText);
+     setBadge('asr:down');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_UNAVAILABLE',
