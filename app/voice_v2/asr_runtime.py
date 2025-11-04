@@ -231,6 +231,8 @@ class _SessionState:
     turn_speech_evidence: bool = False
     turn_first_audio_ms: int = 0
     turn_last_partial_ms: int = 0
+    early_audio_dropped: bool = False
+    early_audio_dropped_bytes: int = 0
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -1271,6 +1273,46 @@ class ASRRuntime:
                 dropped_chunks,
             )
 
+    def _drain_pre_ready_audio(
+        self, sid: str, state: _SessionState, stream_id: str | None
+    ) -> int:
+        if not state.pending:
+            return 0
+
+        pending_chunks = len(state.pending)
+        pending_bytes = 0
+        for chunk in state.pending:
+            if isinstance(chunk, (bytes, bytearray, memoryview)):
+                pending_bytes += len(chunk)
+
+        state.pending.clear()
+        state.buffered_bytes = 0
+        if pending_chunks:
+            state.dropped_chunks += pending_chunks
+            state.early_audio_dropped = True
+            state.early_audio_dropped_bytes += pending_bytes
+            stream_label = stream_id or state.stream_id or state.last_stream_id or ""
+            _log.warning(
+                "evt=audio_dropped_before_asr_open sid=%s stream_id=%s chunks=%d bytes=%d",
+                sid,
+                stream_label,
+                pending_chunks,
+                pending_bytes,
+            )
+            self._emit_log(
+                {
+                    "type": "EVT_LOG",
+                    "logger": "app.voice_v2.asr_runtime",
+                    "level": "WARNING",
+                    "sid": sid,
+                    "msg": (
+                        "evt=audio_dropped_before_asr_open sid=%s stream_id=%s chunks=%d bytes=%d"
+                    )
+                    % (sid, stream_label, pending_chunks, pending_bytes),
+                }
+            )
+        return pending_bytes
+
     def _log_session_rollup(self, state: _SessionState) -> None:
         self._log_vendor_totals(state)
         stream_id = state.last_stream_id or state.stream_id or ""
@@ -1694,6 +1736,8 @@ class ASRRuntime:
             state.bytes_received = 0
             state.vendor_first_write_logged = False
             state.vendor_totals_logged = False
+            state.early_audio_dropped = False
+            state.early_audio_dropped_bytes = 0
             mp = getattr(self.policy, "media", None)
             cp = getattr(self.policy, "capture", None)
             if mp is not None and cp is not None:
@@ -1791,11 +1835,8 @@ class ASRRuntime:
                     int(self._idle_close_ms),
                 )
             pre_chunks_sent = state.chunks_sent
-            while state.pending:
-                chunk = state.pending.popleft()
-                chunk_len = len(chunk)
-                state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
-                self._forward_chunk(sid, state, chunk)
+            if state.pending:
+                self._drain_pre_ready_audio(sid, state, stream_id_value)
             if state.chunks_sent == pre_chunks_sent:
                 self._start_ready_watchdog(sid, state)
             else:

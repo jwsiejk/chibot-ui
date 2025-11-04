@@ -4,7 +4,7 @@ import asyncio
 import unittest
 
 from app.services.streaming_asr.speechmatics_client import SpeechmaticsConfigError
-from app.voice_v2.asr_runtime import ASRRuntime
+from app.voice_v2.asr_runtime import ASRRuntime, _SessionState
 
 
 class _StubBus:
@@ -164,6 +164,48 @@ class SpeechmaticsOpenValidationTest(unittest.TestCase):
         payload = error_events[-1]["payload"]
         self.assertEqual(payload.get("code"), "asr_open_invalid")
         self.assertIsInstance(payload.get("detail"), str)
+
+
+class SpeechmaticsPreReadyAudioTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bus = _StubBus()
+        self.engine = _StubEngine()
+        self.client = _StubClient()
+        self.runtime = ASRRuntime(self.engine, self.client, telemetry_bus=self.bus)
+
+    def test_drops_pending_audio_logs_warning(self) -> None:
+        sid = "sid-pre-ready"
+        state = _SessionState(sid=sid)
+        state.stream_id = "stream-pre"
+        chunk_a = b"\x00" * 1600
+        chunk_b = b"\x01" * 800
+        state.pending.append(chunk_a)
+        state.pending.append(chunk_b)
+        state.buffered_bytes = len(chunk_a) + len(chunk_b)
+        self.runtime._sessions[sid] = state
+
+        dropped = self.runtime._drain_pre_ready_audio(sid, state, state.stream_id)
+
+        self.assertEqual(dropped, len(chunk_a) + len(chunk_b))
+        self.assertFalse(state.pending)
+        self.assertEqual(state.buffered_bytes, 0)
+        self.assertEqual(state.dropped_chunks, 2)
+        self.assertTrue(state.early_audio_dropped)
+        self.assertEqual(state.early_audio_dropped_bytes, dropped)
+
+        log_events = [
+            evt
+            for evt in self.bus.events
+            if evt.get("type") == "EVT_LOG"
+            and evt.get("sid") == sid
+            and isinstance(evt.get("msg"), str)
+        ]
+        self.assertTrue(
+            any(
+                event["msg"].startswith("evt=audio_dropped_before_asr_open")
+                for event in log_events
+            )
+        )
 
 
 if __name__ == "__main__":

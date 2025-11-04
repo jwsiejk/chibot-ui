@@ -39,6 +39,7 @@ import { WakeWord } from "./wake_word.js";
   let __micRecordingStartAt = null;
   let __micFirstChunkBreadcrumbSent = false;
   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
+  let __pendingAsrReadyStart = null;
 
   if (typeof window !== "undefined") {
     try {
@@ -103,6 +104,15 @@ import { WakeWord } from "./wake_word.js";
           }
         },
       });
+      Object.defineProperty(window, "__pendingAsrReadyStart", {
+        configurable: true,
+        get() { return __pendingAsrReadyStart; },
+        set(value) {
+          if (value === null || (value && typeof value === "object" && !Array.isArray(value))) {
+            __pendingAsrReadyStart = value;
+          }
+        },
+      });
     } catch {}
   }
 
@@ -154,6 +164,133 @@ import { WakeWord } from "./wake_word.js";
       __micFirstChunkBreadcrumbSent = false;
       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
     });
+  }
+
+  function clonePolicySnapshot(source) {
+    if (!source || typeof source !== "object") {
+      return {};
+    }
+    return { ...source };
+  }
+
+  function setPendingAsrReadyStart(detail) {
+    if (!detail || typeof detail !== "object") {
+      __pendingAsrReadyStart = null;
+      return;
+    }
+    const policy = clonePolicySnapshot(detail.policy);
+    const frame = detail.frame && typeof detail.frame === "object" ? { ...detail.frame } : null;
+    const reason = typeof detail.reason === "string" && detail.reason
+      ? detail.reason
+      : (typeof detail.source === "string" && detail.source ? detail.source : "start_listening");
+    __pendingAsrReadyStart = {
+      policy,
+      frame,
+      reason,
+      ts: Date.now(),
+    };
+    try {
+      console.info("diag=awaiting_asr_ready reason=%s", reason);
+    } catch {}
+  }
+
+  function clearPendingAsrReadyStart(reason) {
+    if (!__pendingAsrReadyStart) {
+      return;
+    }
+    try {
+      const label = typeof reason === "string" && reason ? reason : "unknown";
+      console.info("diag=awaiting_asr_ready_clear reason=%s", label);
+    } catch {}
+    __pendingAsrReadyStart = null;
+  }
+
+  async function startStreamingAfterAsrReady(trigger) {
+    const pending = __pendingAsrReadyStart;
+    if (!pending) {
+      return false;
+    }
+    __pendingAsrReadyStart = null;
+    const reason = typeof trigger === "string" && trigger
+      ? trigger
+      : (typeof pending.reason === "string" && pending.reason ? pending.reason : "asr_ready");
+    const policy = clonePolicySnapshot(pending.policy);
+    const ar = window.AudioRecorder || null;
+    if (ar && typeof ar.startListening === "function") {
+      try {
+        const startPolicy = { ...policy };
+        if (!startPolicy.reason && typeof reason === "string" && reason) {
+          startPolicy.reason = reason;
+        }
+        const maybe = ar.startListening(startPolicy);
+        if (maybe && typeof maybe.then === "function") {
+          await maybe;
+        }
+        try {
+          console.info("diag=mic_start_streaming trigger=%s", reason);
+        } catch {}
+        return true;
+      } catch (err) {
+        console.error("AudioRecorder startListening on asr.ready failed", err);
+        try {
+          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+          logMic({
+            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
+            message: err?.message,
+          });
+        } catch {}
+        __pendingAsrReadyStart = pending;
+        return false;
+      }
+    }
+
+    const hub = AppState?.hub;
+    if (hub && typeof hub.startListening === "function") {
+      try {
+        const maybe = hub.startListening(policy);
+        if (maybe && typeof maybe.then === "function") {
+          await maybe;
+        }
+        try {
+          console.info("diag=hub_start_listening trigger=%s", reason);
+        } catch {}
+        return true;
+      } catch (err) {
+        console.warn("Hub startListening deferred start failed", err);
+        try {
+          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+          logMic({
+            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
+            message: err?.message,
+          });
+        } catch {}
+        __pendingAsrReadyStart = pending;
+        return false;
+      }
+    }
+
+    if (pending.frame) {
+      try {
+        startInputCapture(pending.frame);
+        try {
+          console.info("diag=legacy_input_start trigger=%s", reason);
+        } catch {}
+        return true;
+      } catch (err) {
+        console.warn("Legacy input start on asr.ready failed", err);
+        try {
+          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+          logMic({
+            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
+            message: err?.message,
+          });
+        } catch {}
+        __pendingAsrReadyStart = pending;
+        return false;
+      }
+    }
+
+    return false;
   }
 
   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
@@ -1528,6 +1665,7 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function stopInputCapture(options = {}) {
+    clearPendingAsrReadyStart(options && typeof options.reason === "string" ? options.reason : "stop_input_capture");
     const hub = AppState?.hub;
     if (hub && typeof hub.stopListening === "function") {
       try {
@@ -2187,9 +2325,10 @@ import { WakeWord } from "./wake_word.js";
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
       const ar = window.AudioRecorder || null;
+      const policy = frame?.policy || {};
       let unifiedArmed = false;
       try {
-        if (ar?.setPolicy) ar.setPolicy(frame?.policy || {});
+        if (ar?.setPolicy) ar.setPolicy(policy);
         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
         const asrInput = frame?.policy?.media?.asr_input ?? null;
@@ -2199,8 +2338,8 @@ import { WakeWord } from "./wake_word.js";
           pipeline,
           asrInput,
         );
-        if (ar?.startListening) {
-          await ar.startListening(frame?.policy || {});
+        if (ar?.start) {
+          await ar.start(policy);
           unifiedArmed = true;
         }
       } catch (err) {
@@ -2216,28 +2355,44 @@ import { WakeWord } from "./wake_word.js";
         }
         logMic({ outcome: MIC_OUTCOME.ARMED });
       } catch {}
-      // If unified recorder exists, do not arm any legacy capture
-      if (unifiedArmed) return;
-      try {
-        const hub = AppState?.hub;
-        const maybePromise = hub && typeof hub.startListening === "function"
-          ? hub.startListening(frame?.policy || {})
-          : null;
-        if (!hub || typeof hub.startListening !== "function") {
-          startInputCapture(frame);
-          return;
+
+      setPendingAsrReadyStart({ frame, policy, reason: frame?.reason || frame?.type || "start_listening" });
+      if (AppState?.asrReady) {
+        try {
+          await startStreamingAfterAsrReady("start_listening_asr_ready");
+        } catch (err) {
+          console.error("Deferred mic start after start_listening failed", err);
         }
-        if (maybePromise && typeof maybePromise.then === "function") {
-          maybePromise.catch((err) => {
-            const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-            logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-          });
+      }
+
+      if (unifiedArmed) return;
+
+      let hub;
+      try {
+        hub = AppState?.hub;
+        if (hub && typeof hub.setPolicy === "function") {
+          hub.setPolicy(policy);
         }
       } catch (err) {
-        console.warn("Hub start_listening handler error", err);
-        const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-        logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+        console.warn("Hub setPolicy during start_listening failed", err);
       }
+
+      if (hub && typeof hub.prearmListening === "function") {
+        try {
+          hub.prearmListening(policy);
+        } catch (err) {
+          console.warn("Hub prearmListening failed", err);
+        }
+        return;
+      }
+
+      if (hub && typeof hub.startListening === "function") {
+        // Defer actual streaming until asr.ready fires.
+        return;
+      }
+
+      console.warn('Legacy input capture deferred until asr.ready', frame);
+      return;
     } else if (frame.type === "stop_listening") {
       try {
         const hub = AppState?.hub;
@@ -2251,12 +2406,19 @@ import { WakeWord } from "./wake_word.js";
         console.warn("Hub stop_listening handler error", err);
         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
       }
+      clearPendingAsrReadyStart("stop_listening");
     } else if (frame.type === "input.start") {
       startInputCapture(frame);
     } else if (frame.type === "input.stop") {
       stopInputCapture({ reason: "input.stop" });
+      clearPendingAsrReadyStart("input.stop");
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
+      try {
+        await startStreamingAfterAsrReady("asr.ready");
+      } catch (err) {
+        console.error("Deferred mic start on asr.ready failed", err);
+      }
     } else if (frame.type === "asr.partial") {
       transcriptFrameAllowed(frame);
     } else if (frame.type === "asr.final") {
@@ -2273,6 +2435,7 @@ import { WakeWord } from "./wake_word.js";
       if (typeof AppState.emit === "function") {
         AppState.emit("asrReady", { ready: false, reason, vendor: null });
       }
+      clearPendingAsrReadyStart("asr_unavailable");
       try {
         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
         hud?.setState?.("Chat");

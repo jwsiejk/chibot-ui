@@ -1,804 +1,1100 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 345d41cab5e3b08ad877a5d88186550200a30192..436cda9d75e9d1f646b3c6f0343ad80ebffcb5fe 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -336,50 +336,51 @@ class AdapterContext:
-     asr_subscription_bus: Optional[Any] = None
-     asr_open_subscription_token: Optional[str] = None
-     asr_unavailable_subscription_token: Optional[str] = None
-     asr_partial_subscription_token: Optional[str] = None
-     asr_final_subscription_token: Optional[str] = None
-     asr_recovering_until: float = 0.0
-     asr_recovering_reason: Optional[str] = None
-     asr_recovering_audio_logged: bool = False
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-     policy_snapshot: Optional[Dict[str, Any]] = None
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-     send_lock: asyncio.Lock | None = None
-     tts_end_ts: Optional[float] = None
-     diag_audio_seen: bool = False
-     diag_timer: asyncio.TimerHandle | None = None
-     diag_timer_key: Optional[str] = None
-     await_user_expected: bool = False
-     await_user_pending: bool = False
-     await_user_pending_key: Optional[str] = None
-     await_user_after_mask: bool = False
-     await_user_after_mask_key: Optional[str] = None
-     tts_mask_phase: str = "off"
-     mask_subscription_token: Optional[str] = None
-+    pending_start_listening: Optional[Dict[str, Any]] = None
-     tts_end_subscription_token: Optional[str] = None
-     turn_state_subscription_token: Optional[str] = None
-     hud_state: Optional[str] = None
-     client_mic_open: bool = False
-     mic_open_timer: asyncio.TimerHandle | None = None
-     mic_nudge_sent: bool = False
-     await_user_req_id: Optional[str] = None
-     last_tts_end_req_id: Optional[str] = None
-     await_user_cue_emitted: bool = False
-     await_user_vad_check_pending: bool = False
-     listen_handoff_done: set[str] = field(default_factory=set)
-     listen_handoff_task: asyncio.Task[None] | None = None
-     listen_handoff_task_key: Optional[str] = None
-     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-     client_banner_info: Optional[Dict[str, Any]] = None
-     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
-     allowed_asr_vendors: List[str] = field(default_factory=list)
-     asr_vendor: Optional[str] = None
-     audio_pipeline_mode: Optional[str] = None
-     asr_vendor_logged: bool = False
-     session_capture_policy: Optional[Dict[str, Any]] = None
+diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
+index 7816c90128842b537f86fd8bb28b19843a29bbf5..cc41233e38c3b506f338913efb147c296d700384 100644
+--- a/app/services/streaming_asr/speechmatics_client.py
++++ b/app/services/streaming_asr/speechmatics_client.py
+@@ -349,50 +349,51 @@ class _StreamState:
+     on_final: Callable[[str, Dict[str, object]], None]
+     on_error: Callable[..., None]
+     on_close: Optional[Callable[[int | None, str | None], None]]
+     language: str
+     encoding: str
+     sample_rate: int
+     opened_monotonic: float = field(default_factory=time.monotonic)
+     opened_wall: float = field(default_factory=time.time)
+     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_event_loop)
+     audio_queue: "asyncio.Queue[bytes | object]" = field(default_factory=asyncio.Queue)
+     sender_task: Optional[asyncio.Task[None]] = None
+     receiver_task: Optional[asyncio.Task[None]] = None
+     closing: bool = False
+     closed: bool = False
+     partial_count: int = 0
+     final_count: int = 0
+     bytes_sent: int = 0
+     first_audio_ts: float | None = None
+     last_audio_ts: float | None = None
+     last_partial_log: float = 0.0
+     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
+     ready_error: Optional[str] = None
+     ready_error_detail: Optional[str] = None
+     vendor_notices: set[str] = field(default_factory=set)
+     end_of_stream_sent: bool = False
++    recognition_started: bool = False
  
  
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
-@@ -456,60 +457,88 @@ class ChatV2Adapter:
+ class SpeechmaticsClient:
+     """Client wrapper responsible for Speechmatics realtime streams."""
+ 
+     def __init__(self, api_key: str, url: str, bus: Any, logger: logging.Logger) -> None:
+         self._api_key = api_key
+         self._url = url
+         self._bus = bus
+         self._logger = logger or logging.getLogger(__name__)
+         self._streams: Dict[str, _StreamState] = {}
+ 
+     async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
+         if not self._streams:
              return
-         payload: Dict[str, Any] = {
-             "type": "assistant.await_user",
-             "reason": "tts_end",
-             "ts": self._now_ms(),
-         }
-         req_value = getattr(ctx, "await_user_req_id", None)
-         if isinstance(req_value, str) and req_value:
-             payload["req_id"] = req_value
-         try:
-             outbox.put_nowait(payload)
-         except asyncio.QueueFull:
-             now = outbox.qsize()
-             try:
-                 asyncio.create_task(
-                     self._publish(
-                         EVT_WS_OUTBOX_DROP,
-                         sid,
-                         {"sid": sid, "dropped": 1, "now": now},
-                     )
-                 )
-             except RuntimeError:
-                 pass
-             return
-         ctx.await_user_cue_emitted = True
--        ctx.await_user_vad_check_pending = True
--        _log.info(
--            "evt=turn_listen_cue sid=%s reason=tts_end policy_start=%s",
--            sid,
--            "true" if start_on_ready else "false",
--        )
--        if isinstance(req_value, str) and req_value:
--            _log.info("evt=await_user_emit sid=%s req_id=%s", sid, req_value)
+ 
+         deadline = time.monotonic() + max(0.0, timeout)
+         while self._streams:
+             active_sids = [sid for sid in self._streams if sid != new_sid]
+             if not active_sids:
+                 break
+ 
+             for existing_sid in active_sids:
+                 state = self._streams.get(existing_sid)
+                 if state is None:
+@@ -668,119 +669,122 @@ class SpeechmaticsClient:
+ 
+                 notice_type = ""
+                 if isinstance(payload, Mapping):
+                     raw_notice = payload.get("type") or payload.get("notice")
+                     if isinstance(raw_notice, str):
+                         notice_type = raw_notice.strip().lower()
+ 
+                 if notice_type.startswith("concurrent_session"):
+                     if _is_fatal_concurrency_notice(payload):
+                         self._logger.error(
+                             "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
+                             state.sid,
+                             state.stream_id,
+                             notice_type,
+                         )
+                         self._handle_error(state, "concurrent_session", notice_type)
+                     else:
+                         self._logger.warning(
+                             "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s severity=benign",
+                             state.sid,
+                             state.stream_id,
+                             notice_type,
+                         )
+                     continue
+ 
+-                if isinstance(message_name, str) and message_name in {
+-                    "Info",
+-                    "RecognitionStarted",
+-                    "AudioAdded",
+-                }:
++                normalized_message = ""
++                if isinstance(message_name, str):
++                    normalized_message = message_name.strip().lower()
 +
-+    def _publish_pending_start_listening(
-+        self, ctx: AdapterContext, telemetry_bus: Any
++                if normalized_message in {"info", "audioadded"}:
+                     if message_name not in state.vendor_notices:
+-                        self._logger.info("evt=sm_notice message=%s", message_name.lower())
++                        self._logger.info("evt=sm_notice message=%s", normalized_message)
+                         state.vendor_notices.add(message_name)
+-                    # Treat vendor notices as sufficient to consider the stream ready so
+-                    # that the sender loop can proceed with audio transmission.
+-                    self._mark_stream_ready(state, payload)
++                    continue
++
++                if normalized_message == "recognitionstarted":
++                    if message_name not in state.vendor_notices:
++                        self._logger.info("evt=sm_notice message=recognitionstarted")
++                        state.vendor_notices.add(message_name)
++                    self._handle_recognition_started(state, payload)
+                     continue
+ 
+                 self._handle_payload(state, payload)
+         except asyncio.CancelledError:
+             raise
+         except websockets.ConnectionClosedOK as exc:
+             await self._finalize_close(state, exc.code, exc.reason)
+         except websockets.ConnectionClosedError as exc:
+             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
+             await self._finalize_close(state, exc.code, exc.reason)
+         except Exception as exc:
+             self._logger.exception(
+                 "evt=sm_recv_failed sid=%s stream_id=%s err=%s",
+                 state.sid,
+                 state.stream_id,
+                 exc,
+             )
+             self._handle_error(state, "recv_failed", str(exc))
+             await self._finalize_close(state, None, None)
+         finally:
+             await self._finalize_receiver(state)
+ 
+-    def _mark_stream_ready(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
++    def _handle_recognition_started(
++        self, state: _StreamState, payload: Mapping[str, Any]
 +    ) -> None:
-+        payload = ctx.pending_start_listening
-+        if not isinstance(payload, dict):
-+            return
-+        frame = dict(payload)
-+        ctx.pending_start_listening = None
-+        outbox = ctx.outbox
-+        if outbox is not None:
-+            try:
-+                outbox.put_nowait(frame)
-+            except asyncio.QueueFull:
-+                now = outbox.qsize()
-+                try:
-+                    asyncio.create_task(
-+                        self._publish(
-+                            EVT_WS_OUTBOX_DROP,
-+                            ctx.sid,
-+                            {"sid": ctx.sid, "dropped": 1, "now": now},
-+                        )
-+                    )
-+                except RuntimeError:
-+                    pass
-         else:
--            _log.info("evt=await_user_emit sid=%s", sid)
-+            telemetry_bus.publish(
-+                {
-+                    "type": EVT_WS_JSON_SEND,
-+                    "sid": ctx.sid,
-+                    "who": "server",
-+                    "source": "ws_server",
-+                    "meta": {"ws": {"from_adapter": True}},
-+                    "frame": frame,
-+                    "payload": frame,
-+                }
-+            )
-+        ctx.await_user_vad_check_pending = True
- 
-     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-         if scope.get("type") != "websocket":
-             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
- 
-         connect_event = await receive()
-         if connect_event.get("type") != "websocket.connect":
++        if not state.recognition_started:
++            state.recognition_started = True
++        self._mark_stream_ready(state, payload, recognition_started=True)
++
++    def _mark_stream_ready(
++        self,
++        state: _StreamState,
++        payload: Mapping[str, Any],
++        *,
++        recognition_started: bool = False,
++    ) -> None:
+         if state.ready_event.is_set():
              return
  
-         raw_path = scope.get("raw_path")
-         if isinstance(raw_path, bytes):
-             try:
-                 path = raw_path.decode("utf-8")
-             except UnicodeDecodeError:  # pragma: no cover - defensive fallback
-                 path = raw_path.decode("latin-1", errors="ignore")
-         else:
-             path = scope.get("path", "")
+         message_type_raw = None
+         if isinstance(payload, Mapping):
+             message_type_raw = payload.get("type") or payload.get("message")
+         message_type = str(message_type_raw).lower() if message_type_raw else ""
  
-         query_bytes = scope.get("query_string") or b""
+         if message_type in {"error", "error_message"}:
+             code = payload.get("code") or payload.get("error_code") or "error"
+             reason = payload.get("reason") or payload.get("message") or ""
+             state.ready_error = str(code)
+             state.ready_error_detail = str(reason)
+             state.ready_event.set()
+             return
+ 
+-        if message_type and message_type not in {
+-            "partial",
+-            "partial_transcript",
+-            "addpartialtranscript",
+-            "final",
+-            "transcript",
+-            "addtranscript",
+-            "endoftranscript",
+-        }:
++        if recognition_started or state.recognition_started:
+             state.ready_event.set()
+             return
+ 
+-        # Fallback: treat informational payloads with a message or status as ready.
+-        message_value = payload.get("message") if isinstance(payload, Mapping) else None
+-        status_value = payload.get("status") if isinstance(payload, Mapping) else None
+-        if isinstance(message_value, str) and message_value:
+-            state.ready_event.set()
+-        elif isinstance(status_value, str) and status_value:
+-            state.ready_event.set()
++        # Ignore other payloads until the vendor confirms recognition has started.
+ 
+     def _emit_transcript_event(
+         self, state: _StreamState, text: str, is_final: bool
+     ) -> None:
+         # Drop vendor sentinel names if they ever slip through
+         if text.strip().lower() in ("addpartialtranscript", "addtranscript"):
+             return
+         event_type = EVT_ASR_FINAL if is_final else EVT_ASR_PARTIAL
+         meta: Dict[str, Any] = {
+             "text": text,
+             "vendor": "speechmatics",
+         }
+         if state.stream_id:
+             meta["stream_id"] = state.stream_id
+         event = {
+             "type": event_type,
+             "sid": state.sid,
+             "text": text,
+             "vendor": "speechmatics",
+             "meta": meta,
+             "source": "speechmatics_client",
+         }
          try:
-             query_string = query_bytes.decode("utf-8")
-         except UnicodeDecodeError:  # pragma: no cover - defensive fallback
-             query_string = query_bytes.decode("latin-1", errors="ignore")
-         path_qs = path
-         if query_string:
-@@ -2190,50 +2219,51 @@ class ChatV2Adapter:
-                     return
-                 _enqueue(frame)
+             self._bus.publish(event)
+         except Exception:
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 55f68a6042de8c4bad6ab9dc3654c08b9b33f03a..82892cebce0b104889f5d2dde6a49c2d789d940e 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -17,50 +17,51 @@ import { WakeWord } from "./wake_word.js";
+   const MIC_OUTCOME = {
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+   const DEFAULT_ASR_VENDOR = 'speechmatics';
  
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
+   let __micAttempts = 0;
+   let __micChunks = 0;
+   let __micBytes = 0;
+   let __micArmedAt = 0;     // ms since epoch
+   let __micPermissionGranted = false;
+   let __micRecordingStartAt = null;
+   let __micFirstChunkBreadcrumbSent = false;
+   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
++  let __pendingAsrReadyStart = null;
  
-         ctx.asr_partial_subscription_token = bus.subscribe(
-             EVT_ASR_PARTIAL, _handle_asr_event
-         )
-         ctx.asr_final_subscription_token = bus.subscribe(
-             EVT_ASR_FINAL, _handle_asr_event
-         )
+   if (typeof window !== "undefined") {
+     try {
+       Object.defineProperty(window, "__micAttempts", {
+         configurable: true,
+         get() { return __micAttempts; },
+         set(value) {
+           if (Number.isFinite(value)) {
+             __micAttempts = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__micChunks", {
+         configurable: true,
+         get() { return __micChunks; },
+         set(value) {
+           if (Number.isFinite(value)) {
+             __micChunks = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__micBytes", {
+         configurable: true,
+         get() { return __micBytes; },
+         set(value) {
+@@ -81,50 +82,59 @@ import { WakeWord } from "./wake_word.js";
+       Object.defineProperty(window, "__micPermGranted", {
+         configurable: true,
+         get() { return __micPermissionGranted; },
+         set(value) {
+           __micPermissionGranted = !!value;
+         },
+       });
+       Object.defineProperty(window, "__micRecordingStartAt", {
+         configurable: true,
+         get() { return __micRecordingStartAt; },
+         set(value) {
+           if (Number.isFinite(value) || value === null) {
+             __micRecordingStartAt = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__turnTraceId", {
+         configurable: true,
+         get() { return __turnTraceId; },
+         set(value) {
+           if (typeof value === "string" || value === null) {
+             __turnTraceId = value;
+           }
+         },
+       });
++      Object.defineProperty(window, "__pendingAsrReadyStart", {
++        configurable: true,
++        get() { return __pendingAsrReadyStart; },
++        set(value) {
++          if (value === null || (value && typeof value === "object" && !Array.isArray(value))) {
++            __pendingAsrReadyStart = value;
++          }
++        },
++      });
+     } catch {}
+   }
  
-         def _handle_asr_unavailable_event(event: dict) -> None:
-             if event.get("type") != "asr.unavailable":
-                 return
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
+   const AppState = window.AppState;
+   if (!AppState) {
+     throw new Error("AppState store is required before loading WSClient");
+   }
+   const P0 = AppState.policy || {};
+   const P0Policy = P0 && typeof P0.policy === "object" && P0.policy
+     ? { ...P0.policy }
+     : {};
+   AppState.policy = {
+     ...P0,
+     auto_record_after_greet: P0.auto_record_after_greet ?? true,
+     require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
+     tts_gate_enabled: P0.tts_gate_enabled ?? true,
+     autostart_retry_on: Array.isArray(P0.autostart_retry_on)
+       ? P0.autostart_retry_on.slice()
+       : ["asrReady", "ttsEnded", "turnState:Ready"],
+     autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
+       ? P0.autostart_backoff_ms.slice()
+       : [0, 300, 1000],
+     autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
+     show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
+       ? P0.show_tap_to_speak_cta_after_ms
+@@ -134,50 +144,177 @@ import { WakeWord } from "./wake_word.js";
+       ...P0Policy,
+       input: {
+         ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
+         require_hotword_to_start: false,
+         require_user_gesture_first_visit: false,
+       },
+     },
+   };
  
-             def _on_loop() -> None:
-                 ctx.asr_ready = False
-                 ctx.awaiting_asr_ready = False
-                 ctx.client_capture_armed = False
-+                ctx.pending_start_listening = None
-                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
-                 reason = event.get("reason")
-                 if isinstance(reason, str) and reason:
-                     payload["reason"] = reason
-                 details = event.get("details")
-                 detail_text = ""
-                 if details is not None:
-                     detail_text = details if isinstance(details, str) else str(details)
-                     payload["details"] = detail_text
-                 else:
-                     detail_text = ""
-                 lower_reason = reason.lower() if isinstance(reason, str) else ""
-                 lower_detail = detail_text.lower()
-                 concurrency_likely = False
-                 if ctx.asr_vendor == "speechmatics":
-                     if "concurrent_session" in lower_detail:
-                         concurrency_likely = True
-                     elif "concurrent_session" in lower_reason:
-                         concurrency_likely = True
-                 if concurrency_likely:
-                     ctx.asr_recovering_until = time.monotonic() + 3.0
-                     ctx.asr_recovering_reason = "concurrent_session"
-                     ctx.asr_recovering_audio_logged = False
-                     ctx.client_capture_armed = True
-                 else:
-@@ -2323,51 +2353,54 @@ class ChatV2Adapter:
-                 ready_frame["vendor"] = ctx.asr_vendor
-             capture = dict(descriptor)
-             capture["timeslice_ms"] = timeslice_ms
-             capture["manual_gate"] = False
-             session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
-             input_start = {
-                 "type": "input.start",
-                 "capture": capture,
-             }
-             if session_policy:
-                 input_start["policy"] = session_policy
+   const appStateEventEmitter = createEventEmitter();
+   if (typeof AppState.on !== "function") {
+     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
+   }
+   if (typeof AppState.emit !== "function") {
+     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+   }
+   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
+     AppState.__pcmBreadcrumbHandlersInstalled = true;
+     AppState.on("recordingStarted", () => {
+       __micRecordingStartAt = Date.now();
+       __micFirstChunkBreadcrumbSent = false;
+       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
+     });
+   }
  
-             _enqueue(ready_frame)
-             _enqueue(input_start)
-             ctx.ingress_packets = 0
-             ctx.ingress_bytes = 0
-             ctx.first_ingress_ms = None
-             mic_armed_now = int(time.time() * 1000)
-             ctx.mic_armed_ms = mic_armed_now
-             ctx.asr_ready_bundle_sent_ms = mic_armed_now
-             ctx.awaiting_asr_ready = True
-             ctx.client_capture_armed = True
-             start_payload: Dict[str, Any] = {"type": "start_listening"}
-             if session_policy:
-                 start_payload["policy"] = session_policy
--            _enqueue(start_payload)
-+            ctx.pending_start_listening = dict(start_payload)
-+            if ctx.asr_ready:
-+                _enqueue(start_payload)
-+                ctx.pending_start_listening = None
++  function clonePolicySnapshot(source) {
++    if (!source || typeof source !== "object") {
++      return {};
++    }
++    return { ...source };
++  }
++
++  function setPendingAsrReadyStart(detail) {
++    if (!detail || typeof detail !== "object") {
++      __pendingAsrReadyStart = null;
++      return;
++    }
++    const policy = clonePolicySnapshot(detail.policy);
++    const frame = detail.frame && typeof detail.frame === "object" ? { ...detail.frame } : null;
++    const reason = typeof detail.reason === "string" && detail.reason
++      ? detail.reason
++      : (typeof detail.source === "string" && detail.source ? detail.source : "start_listening");
++    __pendingAsrReadyStart = {
++      policy,
++      frame,
++      reason,
++      ts: Date.now(),
++    };
++    try {
++      console.info("diag=awaiting_asr_ready reason=%s", reason);
++    } catch {}
++  }
++
++  function clearPendingAsrReadyStart(reason) {
++    if (!__pendingAsrReadyStart) {
++      return;
++    }
++    try {
++      const label = typeof reason === "string" && reason ? reason : "unknown";
++      console.info("diag=awaiting_asr_ready_clear reason=%s", label);
++    } catch {}
++    __pendingAsrReadyStart = null;
++  }
++
++  async function startStreamingAfterAsrReady(trigger) {
++    const pending = __pendingAsrReadyStart;
++    if (!pending) {
++      return false;
++    }
++    __pendingAsrReadyStart = null;
++    const reason = typeof trigger === "string" && trigger
++      ? trigger
++      : (typeof pending.reason === "string" && pending.reason ? pending.reason : "asr_ready");
++    const policy = clonePolicySnapshot(pending.policy);
++    const ar = window.AudioRecorder || null;
++    if (ar && typeof ar.startListening === "function") {
++      try {
++        const startPolicy = { ...policy };
++        if (!startPolicy.reason && typeof reason === "string" && reason) {
++          startPolicy.reason = reason;
++        }
++        const maybe = ar.startListening(startPolicy);
++        if (maybe && typeof maybe.then === "function") {
++          await maybe;
++        }
++        try {
++          console.info("diag=mic_start_streaming trigger=%s", reason);
++        } catch {}
++        return true;
++      } catch (err) {
++        console.error("AudioRecorder startListening on asr.ready failed", err);
++        try {
++          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
++          logMic({
++            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
++            message: err?.message,
++          });
++        } catch {}
++        __pendingAsrReadyStart = pending;
++        return false;
++      }
++    }
++
++    const hub = AppState?.hub;
++    if (hub && typeof hub.startListening === "function") {
++      try {
++        const maybe = hub.startListening(policy);
++        if (maybe && typeof maybe.then === "function") {
++          await maybe;
++        }
++        try {
++          console.info("diag=hub_start_listening trigger=%s", reason);
++        } catch {}
++        return true;
++      } catch (err) {
++        console.warn("Hub startListening deferred start failed", err);
++        try {
++          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
++          logMic({
++            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
++            message: err?.message,
++          });
++        } catch {}
++        __pendingAsrReadyStart = pending;
++        return false;
++      }
++    }
++
++    if (pending.frame) {
++      try {
++        startInputCapture(pending.frame);
++        try {
++          console.info("diag=legacy_input_start trigger=%s", reason);
++        } catch {}
++        return true;
++      } catch (err) {
++        console.warn("Legacy input start on asr.ready failed", err);
++        try {
++          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
++          logMic({
++            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
++            message: err?.message,
++          });
++        } catch {}
++        __pendingAsrReadyStart = pending;
++        return false;
++      }
++    }
++
++    return false;
++  }
++
+   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+   let autostartAttempts = 0;
+   let autostartTimer = null;
  
-             if key is not None:
-                 ctx.listen_handoff_done.add(key)
-             self._clear_pending_for_key(ctx, key)
-             self._clear_after_mask_for_key(ctx, key)
-             current_key = self._turn_key(ctx, ctx.await_user_req_id)
-             if current_key == key:
-                 ctx.await_user_expected = False
-                 ctx.await_user_req_id = None
-             if ctx.last_tts_end_req_id == req_id:
-                 ctx.last_tts_end_req_id = None
-             ctx.client_mic_open = False
-             ctx.mic_nudge_sent = False
+   const WSClient = window.WSClient = window.WSClient || {};
+   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
+     window.ws = null;
+   }
+   WSClient._ws = WSClient._ws || null;
+   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+   const getAudioPlayer = () => window.AudioPlayer;
  
-             self._emit_hud_state(ctx, "Listening")
-             self._schedule_mic_open_guard(ctx, loop)
+   function hubLog(label, detail) {
+     const state = typeof window !== "undefined" ? window.AppState : null;
+     const hub = state && state.hub;
+     if (hub && typeof hub.log === "function") {
+       try {
+         hub.log(label, detail);
+         return true;
+       } catch (err) {
+         console.warn("AppState.hub.log failed", err);
+       }
+     }
+     if (typeof window !== "undefined") {
+@@ -1506,50 +1643,51 @@ import { WakeWord } from "./wake_word.js";
+     const source = frame?.type || 'input.start';
+     const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
+ 
+     if (unifiedRecorder) {
+       try {
+         logStage('client.input.capture', { source, hasPolicy, skipped: 'unified_recorder' });
+       } catch {}
+       return;
+     }
+ 
+     const hub = AppState?.hub;
+     if (hub && typeof hub.startListening === "function") {
+       try {
+         try {
+           logStage('client.input.capture', { source, hasPolicy });
+         } catch {}
+         return hub.startListening(policy);
+       } catch (err) {
+         console.warn("Hub startListening (legacy input) failed", err);
+       }
+     }
+     console.warn('Legacy input capture is disabled; recorder hub missing.', frame);
+   }
+ 
+   function stopInputCapture(options = {}) {
++    clearPendingAsrReadyStart(options && typeof options.reason === "string" ? options.reason : "stop_input_capture");
+     const hub = AppState?.hub;
+     if (hub && typeof hub.stopListening === "function") {
+       try {
+         const reason = options && typeof options === "object" && options.reason
+           ? options.reason
+           : "legacy_input";
+         hub.stopListening(reason);
+       } catch (err) {
+         console.warn("Hub stopListening (legacy input) failed", err);
+       }
+       return;
+     }
+     void options;
+   }
+ 
+   function handleInputStartFrame(frame) {
+     startInputCapture(frame);
+   }
+ 
+   function handleInputStopFrame() {
+     stopInputCapture({ reason: 'input.stop' });
+   }
+ 
+   function sanitizeServerBannerFrame(frame) {
+     const safe = { type: "server.banner" };
+@@ -2165,136 +2303,161 @@ import { WakeWord } from "./wake_word.js";
+       logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
+     } else if (frame.type === "tts.end") {
+       AppState.ttsActive = false;
+       updateState({ ttsActive: false });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: false });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+       logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
+     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+       const uttId = frame?.utt_id || 'utt-00001';
+       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+       logStage('client.tts', {
+         outcome: 'ended',
+         utt_id: uttId,
+         dur_ms: frame?.dur_ms,
+         reason,
+       });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
+     } else if (frame.type === "start_listening") {
+       const ar = window.AudioRecorder || null;
++      const policy = frame?.policy || {};
+       let unifiedArmed = false;
+       try {
+-        if (ar?.setPolicy) ar.setPolicy(frame?.policy || {});
++        if (ar?.setPolicy) ar.setPolicy(policy);
+         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
+         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
+         const asrInput = frame?.policy?.media?.asr_input ?? null;
+         console.info(
+           "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
+           vendor,
+           pipeline,
+           asrInput,
+         );
+-        if (ar?.startListening) {
+-          await ar.startListening(frame?.policy || {});
++        if (ar?.start) {
++          await ar.start(policy);
+           unifiedArmed = true;
+         }
+       } catch (err) {
+         console.warn("AudioRecorder start_listening preflight failed", err);
+       }
+       try {
+         __micAttempts += 1;
+         __micChunks = 0;
+         __micBytes = 0;
+         __micArmedAt = Date.now();
+         if (!__turnTraceId) {
+           __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
+         }
+         logMic({ outcome: MIC_OUTCOME.ARMED });
+       } catch {}
+-      // If unified recorder exists, do not arm any legacy capture
++
++      setPendingAsrReadyStart({ frame, policy, reason: frame?.reason || frame?.type || "start_listening" });
++      if (AppState?.asrReady) {
++        try {
++          await startStreamingAfterAsrReady("start_listening_asr_ready");
++        } catch (err) {
++          console.error("Deferred mic start after start_listening failed", err);
++        }
++      }
++
+       if (unifiedArmed) return;
++
++      let hub;
+       try {
+-        const hub = AppState?.hub;
+-        const maybePromise = hub && typeof hub.startListening === "function"
+-          ? hub.startListening(frame?.policy || {})
+-          : null;
+-        if (!hub || typeof hub.startListening !== "function") {
+-          startInputCapture(frame);
+-          return;
+-        }
+-        if (maybePromise && typeof maybePromise.then === "function") {
+-          maybePromise.catch((err) => {
+-            const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+-            logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
+-          });
++        hub = AppState?.hub;
++        if (hub && typeof hub.setPolicy === "function") {
++          hub.setPolicy(policy);
+         }
+       } catch (err) {
+-        console.warn("Hub start_listening handler error", err);
+-        const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+-        logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
++        console.warn("Hub setPolicy during start_listening failed", err);
+       }
++
++      if (hub && typeof hub.prearmListening === "function") {
++        try {
++          hub.prearmListening(policy);
++        } catch (err) {
++          console.warn("Hub prearmListening failed", err);
++        }
++        return;
++      }
++
++      if (hub && typeof hub.startListening === "function") {
++        // Defer actual streaming until asr.ready fires.
++        return;
++      }
++
++      console.warn('Legacy input capture deferred until asr.ready', frame);
++      return;
+     } else if (frame.type === "stop_listening") {
+       try {
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+         } else {
+           stopInputCapture({ reason: "server_requested" });
+         }
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
++      clearPendingAsrReadyStart("stop_listening");
+     } else if (frame.type === "input.start") {
+       startInputCapture(frame);
+     } else if (frame.type === "input.stop") {
+       stopInputCapture({ reason: "input.stop" });
++      clearPendingAsrReadyStart("input.stop");
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
++      try {
++        await startStreamingAfterAsrReady("asr.ready");
++      } catch (err) {
++        console.error("Deferred mic start on asr.ready failed", err);
++      }
+     } else if (frame.type === "asr.partial") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.final") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details
+         : (frame && typeof frame.detail === "string" ? frame.detail : "");
+       console.warn("asr.unavailable", reason, details);
+       AppState.asrReady = false;
+       AppState.asrVendor = null;
+       updateState({ asrReady: false, asrVendor: null });
+       if (typeof AppState.emit === "function") {
+         AppState.emit("asrReady", { ready: false, reason, vendor: null });
+       }
++      clearPendingAsrReadyStart("asr_unavailable");
+       try {
+         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
+         hud?.setState?.("Chat");
+       } catch (err) {
+         console.warn("Failed to update HUD state after asr.unavailable", err);
+       }
+       try {
+         const view = window.TranscriptView;
+         view?.showSystemFromChip?.(
+           "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
+         );
+       } catch (err) {
+         console.warn("Failed to render Chip system message after asr.unavailable", err);
+       }
+       try {
+         window?.Banner?.show?.(
+           "Voice temporarily unavailable. You can continue via chat.",
+           { level: "warning", ttlMs: 10000 }
+         );
+       } catch (err) {
+         console.warn("Failed to show voice unavailable banner", err);
+       }
+     } else if (frame.type === "chat.message" || frame.type === "message") {
+       if (!transcriptFrameAllowed(frame)) {
+         // Keep frame flowing to other listeners without rendering in transcript.
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index 6f5bcf1ce0587f161df872a2ca8056dcb329c299..f01659e6a3e1a8c66335b6ca30bfcc58948e42fd 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -209,50 +209,52 @@ class _SessionState:
+     utterance_active: bool = False
+     utterance_started_at: float = 0.0
+     final_dedupe_cache: "OrderedDict[str, int]" = field(default_factory=OrderedDict)
+     segment_started_ms: int = 0
+     pending_final: Optional[_PendingFinal] = None
+     pending_final_handle: asyncio.TimerHandle | None = None
+     final_guard_ms: int = 250
+     min_segment_ms: int = 800
+     allow_word_finals: bool = False
+     final_accumulated: str = ""
+     vendor_first_write_logged: bool = False
+     vendor_totals_logged: bool = False
+     base_utterance_end_ms: int = 1200
+     base_commit_silence_ms: int = 900
+     adaptive_utterance_end_ms: int = 0
+     adaptive_commit_silence_ms: int = 0
+     adaptive_extended_once: bool = False
+     turn_final_count: int = 0
+     turn_first_final_seen: bool = False
+     turn_post_final_chunks: int = 0
+     turn_no_partial_ms: int = 0
+     turn_gap_start_ms: int = 0
+     turn_speech_evidence: bool = False
+     turn_first_audio_ms: int = 0
+     turn_last_partial_ms: int = 0
++    early_audio_dropped: bool = False
++    early_audio_dropped_bytes: int = 0
+ 
+     def __post_init__(self) -> None:
+         now_monotonic = time.monotonic()
+         now_wall = time.time()
+         self.opened_at_monotonic = now_monotonic
+         self.opened_at_ms = int(now_wall * 1000)
+         self.last_audio_ts = now_monotonic
+         self.last_audio_ts_ms = int(now_wall * 1000)
+         self.adaptive_utterance_end_ms = self.base_utterance_end_ms
+         self.adaptive_commit_silence_ms = self.base_commit_silence_ms
+ 
+ 
+ class ASRRuntime:
+     """Bridge websocket audio to realtime transcription providers."""
+ 
+     def __init__(
+         self,
+         engine: EngineV2,
+         client: Any,
+         *,
+         telemetry_bus: Any | None = None,
+     ) -> None:
+         if engine is None:
+             raise ValueError("engine must be provided")
+         if client is None:
+@@ -1249,50 +1251,90 @@ class ASRRuntime:
+ 
+     def _apply_backpressure(self, sid: str, state: _SessionState) -> None:
+         if _BACKPRESSURE_THRESHOLD <= 0:
+             return
+         if state.buffered_bytes <= _BACKPRESSURE_THRESHOLD:
+             return
+ 
+         dropped_chunks = 0
+         while state.pending and state.buffered_bytes > _BACKPRESSURE_THRESHOLD:
+             removed = state.pending.popleft()
+             state.buffered_bytes = max(0, state.buffered_bytes - len(removed))
+             dropped_chunks += 1
+ 
+         if dropped_chunks:
+             state.dropped_chunks += dropped_chunks
+             stream_id = state.stream_id or state.last_stream_id or ""
              _log.info(
-                 "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
-                 ctx.sid,
-                 req_id,
-                 descriptor.get("mode", ""),
-                 descriptor.get("mime", ""),
+                 "evt=asr_backpressure sid=%s stream_id=%s buffered_bytes=%d threshold=%d action=drop_oldest dropped_chunks=%d",
+                 sid,
+                 stream_id,
+                 state.buffered_bytes,
+                 _BACKPRESSURE_THRESHOLD,
+                 dropped_chunks,
              )
  
-         def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
-@@ -2722,50 +2755,51 @@ class ChatV2Adapter:
-             ctx.asr_recovering_reason = None
-             ctx.asr_recovering_audio_logged = False
-             ctx.client_capture_armed = True
- 
-             frame: Dict[str, Any] = {"type": "asr.ready"}
-             vendor = event.get("vendor")
-             if isinstance(vendor, str) and vendor:
-                 frame["vendor"] = vendor
- 
-             def _publish_ready() -> None:
-                 try:
-                     asyncio.create_task(self._flush_audio_buffer(ctx))
-                 except RuntimeError:
-                     pass
-                 telemetry_bus.publish(
-                     {
-                         "type": EVT_WS_JSON_SEND,
-                         "sid": ctx.sid,
-                         "who": "server",
-                         "source": "ws_server",
-                         "meta": {"ws": {"from_adapter": True}},
-                         "frame": frame,
-                         "payload": frame,
-                     }
++    def _drain_pre_ready_audio(
++        self, sid: str, state: _SessionState, stream_id: str | None
++    ) -> int:
++        if not state.pending:
++            return 0
++
++        pending_chunks = len(state.pending)
++        pending_bytes = 0
++        for chunk in state.pending:
++            if isinstance(chunk, (bytes, bytearray, memoryview)):
++                pending_bytes += len(chunk)
++
++        state.pending.clear()
++        state.buffered_bytes = 0
++        if pending_chunks:
++            state.dropped_chunks += pending_chunks
++            state.early_audio_dropped = True
++            state.early_audio_dropped_bytes += pending_bytes
++            stream_label = stream_id or state.stream_id or state.last_stream_id or ""
++            _log.warning(
++                "evt=audio_dropped_before_asr_open sid=%s stream_id=%s chunks=%d bytes=%d",
++                sid,
++                stream_label,
++                pending_chunks,
++                pending_bytes,
++            )
++            self._emit_log(
++                {
++                    "type": "EVT_LOG",
++                    "logger": "app.voice_v2.asr_runtime",
++                    "level": "WARNING",
++                    "sid": sid,
++                    "msg": (
++                        "evt=audio_dropped_before_asr_open sid=%s stream_id=%s chunks=%d bytes=%d"
++                    )
++                    % (sid, stream_label, pending_chunks, pending_bytes),
++                }
++            )
++        return pending_bytes
++
+     def _log_session_rollup(self, state: _SessionState) -> None:
+         self._log_vendor_totals(state)
+         stream_id = state.last_stream_id or state.stream_id or ""
+         duration_ms = int(
+             max(0.0, (time.monotonic() - state.opened_at_monotonic) * 1000)
+         )
+         msg = (
+             "asr_rollup vendor=%s partials=%d finals=%d bytes=%d duration_ms=%d"
+             % (
+                 self._vendor,
+                 state.dg_msgs_partial,
+                 state.dg_msgs_final,
+                 state.bytes_sent,
+                 duration_ms,
+             )
+         )
+         _log.info(msg)
+         if getattr(state, "ingress_packets", 0) >= 0:
+             _log.info(
+                 "evt=audio_wire_rollup sid=%s ingress_packets=%s ingress_bytes=%s",
+                 state.sid,
+                 state.ingress_packets,
+                 state.ingress_bytes,
+             )
+         self._emit_log(
+@@ -1672,50 +1714,52 @@ class ASRRuntime:
+                 state.stream_open_task = None
+                 detail_reason = reason or type(e).__name__
+                 if code is not None:
+                     detail_reason = f"{detail_reason} (code={code})"
+                 self._publish_asr_unavailable(
+                     sid,
+                     "open_failed",
+                     f"stream open failed: {detail_reason}",
+                     state=state,
                  )
-+                self._publish_pending_start_listening(ctx, telemetry_bus)
- 
-             if threading.current_thread() is loop_thread:
-                 _publish_ready()
+                 loop = self._ensure_loop()
+                 if loop is not None:
+                     loop.call_later(0.5, self._ensure_stream, sid, state)
                  return
  
+             state.stream_open = True
+             self._configure_rms_probe(state)
+             state.first_chunk_seen = False
+             state.rollup_window_start = 0.0
+             state.rollup_chunks = 0
+             state.rollup_bytes = 0
+             state.unavailable_emitted = False
+             state.bytes_received = 0
+             state.vendor_first_write_logged = False
+             state.vendor_totals_logged = False
++            state.early_audio_dropped = False
++            state.early_audio_dropped_bytes = 0
+             mp = getattr(self.policy, "media", None)
+             cp = getattr(self.policy, "capture", None)
+             if mp is not None and cp is not None:
+                 self._emit_log(
+                     {
+                         "type": "EVT_LOG",
+                         "logger": "app.voice_v2.asr_runtime",
+                         "level": "INFO",
+                         "sid": sid,
+                         "msg": (
+                             "evt=asr_policy input=%s rate_hz=%s ch=%s fallbacks=%s "
+                             "start_on_asr_ready=%s start_on_turn_ready=%s timeslice_ms=%s "
+                             "mask_during_tts=%s mask_keepalive_enable=%s mask_keepalive_ms=%s"
+                         )
+                         % (
+                             getattr(mp, "asr_input", ""),
+                             getattr(mp, "asr_rate_hz", ""),
+                             getattr(mp, "asr_channels", ""),
+                             getattr(mp, "fallbacks_allowed", ""),
+                             getattr(cp, "start_on_asr_ready", ""),
+                             getattr(cp, "start_on_turn_ready", ""),
+                             getattr(cp, "timeslice_ms", ""),
+                             getattr(cp, "mask_during_tts", ""),
+                             getattr(cp, "mask_keepalive_enable", ""),
+                             getattr(cp, "mask_keepalive_ms", ""),
+@@ -1769,55 +1813,52 @@ class ASRRuntime:
+             )
+             self._log_asr_rearmed(sid, state)
+ 
+             asr_ready_frame = {
+                 "type": "asr.ready",
+                 "vendor": self._vendor,
+                 "input": dict(state.input_desc),
+             }
+             self._bus.publish(
+                 {
+                     "type": EVT_WS_JSON_SEND,
+                     "sid": sid,
+                     "frame": asr_ready_frame,
+                     "payload": asr_ready_frame,
+                 }
+             )
+             if stream_id:
+                 _log.info(
+                     'evt=asr_session_open sid=%s stream_id=%s content_type="%s" idle_close_ms=%d',
+                     sid,
+                     stream_id,
+                     "(not set)",
+                     int(self._idle_close_ms),
+                 )
+             pre_chunks_sent = state.chunks_sent
+-            while state.pending:
+-                chunk = state.pending.popleft()
+-                chunk_len = len(chunk)
+-                state.buffered_bytes = max(0, state.buffered_bytes - chunk_len)
+-                self._forward_chunk(sid, state, chunk)
++            if state.pending:
++                self._drain_pre_ready_audio(sid, state, stream_id_value)
+             if state.chunks_sent == pre_chunks_sent:
+                 self._start_ready_watchdog(sid, state)
+             else:
+                 self._cancel_ready_watchdog(state)
+             state.stream_open_task = None
+             self._reset_idle_timer(sid, state)
+ 
+         def _on_done(_task: asyncio.Task[None]) -> None:
+             if state.stream_open_task is _task:
+                 state.stream_open_task = None
+ 
+         state.stream_open_task = loop.create_task(_open(), name=f"asr-stream-open-{sid}")
+         state.stream_open_task.add_done_callback(_on_done)
+ 
+     def _configure_rms_probe(self, state: _SessionState) -> None:
+         desc: Mapping[str, Any] | None
+         if isinstance(state.input_desc, Mapping):
+             desc = state.input_desc
+         else:
              try:
-                 loop.call_soon_threadsafe(_publish_ready)
-             except RuntimeError:
-                 _publish_ready()
- 
-         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
- 
-     def _extract_outbound_payload(
-         self, ctx: AdapterContext, event: dict
-     ) -> Optional[Dict[str, Any]]:
-         payload = self._coerce_payload(event.get("payload"))
-         if payload is None:
-             payload = self._coerce_payload(event.get("frame"))
- 
-         if payload is None:
-             meta = event.get("meta")
-             if isinstance(meta, dict):
-                 ws_meta = meta.get("ws")
-                 if isinstance(ws_meta, dict):
-                     payload = self._coerce_payload(ws_meta.get("frame"))
-@@ -3457,50 +3491,51 @@ class ChatV2Adapter:
-         if not callable(prearm):
-             return False
- 
-         key = self._turn_key(ctx, req_id)
-         self._set_pending_for_key(ctx, key)
-         self._clear_after_mask_for_key(ctx, key)
-         try:
-             prearm(ctx.sid)
-         except Exception:  # pragma: no cover - defensive logging
-             self._clear_pending_for_key(ctx, key)
-             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
-             return False
- 
-         return True
- 
-     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
-         token = ctx.asr_subscription_token
-         ctx.asr_subscription_token = None
-         telemetry_bus = ctx.asr_subscription_bus or bus
-         ctx.asr_subscription_bus = None
-         if token:
-             telemetry_bus.unsubscribe(token)
-         ctx.asr_ready = False
-         ctx.awaiting_asr_ready = False
-         ctx.client_capture_armed = False
-+        ctx.pending_start_listening = None
-         ctx.asr_recovering_until = 0.0
-         ctx.asr_recovering_reason = None
-         ctx.asr_recovering_audio_logged = False
-         ctx.await_user_after_mask = False
- 
-         open_token = ctx.asr_open_subscription_token
-         ctx.asr_open_subscription_token = None
-         if open_token:
-             bus.unsubscribe(open_token)
-         
-     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
-         """Record the estimated outbound queue depth and emit diagnostics if needed."""
- 
-         ctx = self._contexts.get(sid)
-         if ctx is None:
-             return
- 
-         if not isinstance(queued, int):
-             try:
-                 queued = int(queued)
-             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-                 raise TypeError("queued must be an integer") from exc
- 
-         await self._update_backpressure(ctx, max(0, queued))
- 
-@@ -4157,51 +4192,54 @@ class ChatV2Adapter:
-         input_start = {
-             "type": "input.start",
-             "capture": capture,
-         }
-         if session_policy:
-             input_start["policy"] = session_policy
- 
-         start_payload: Dict[str, Any] = {"type": "start_listening"}
-         if session_policy:
-             start_payload["policy"] = session_policy
- 
-         now_ms = int(time.time() * 1000)
-         ctx.awaiting_asr_ready = True
-         ctx.client_capture_armed = True
-         ctx.asr_recovering_until = 0.0
-         ctx.asr_recovering_reason = None
-         ctx.asr_recovering_audio_logged = False
-         ctx.ingress_packets = 0
-         ctx.ingress_bytes = 0
-         ctx.first_ingress_ms = None
-         ctx.mic_armed_ms = now_ms
-         ctx.asr_ready_bundle_sent_ms = now_ms
- 
-         await self._send_json(send, ctx.sid, ready_frame)
-         await self._send_json(send, ctx.sid, input_start)
--        await self._send_json(send, ctx.sid, start_payload)
-+        ctx.pending_start_listening = dict(start_payload)
-+        if ctx.asr_ready:
-+            await self._send_json(send, ctx.sid, start_payload)
-+            ctx.pending_start_listening = None
-         _log.info(
-             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
-             ctx.sid,
-             mode,
-             descriptor.get("mime", ""),
-             timeslice_ms,
-             vendor,
-         )
- 
-     @staticmethod
-     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
-         decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
- 
-     @staticmethod
-     def _now_ms() -> int:
-         return int(time.time() * 1000)
- 
-     @staticmethod
-     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
-         if not payload:
-             return None
-         preview = payload.decode("utf-8", "replace")
-diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
-index f867bf5fc9b841b8cf809aa36b73d5f1682a18fd..ee4417ff9ea2cebd78bb133c0c2eb8b964992e18 100644
---- a/tests/test_adapter_outbound_bridge.py
-+++ b/tests/test_adapter_outbound_bridge.py
-@@ -1,41 +1,42 @@
- """Tests for the outbound WebSocket bridge in the chat.v2 adapter."""
+                 desc = dict(state.input_desc)  # type: ignore[arg-type]
+             except Exception:
+                 desc = None
+         codec = str(desc.get("codec") or "") if isinstance(desc, Mapping) else ""
+         if codec != "pcm_s16le":
+diff --git a/tests/test_asr_runtime_speechmatics.py b/tests/test_asr_runtime_speechmatics.py
+index ef4bbb438cc4b9417dbef233a786cfba4ba8f0c4..f8d382651fbc40262e7a682836b9abc4a6de5e7f 100644
+--- a/tests/test_asr_runtime_speechmatics.py
++++ b/tests/test_asr_runtime_speechmatics.py
+@@ -1,32 +1,32 @@
  from __future__ import annotations
  
  import asyncio
- import json
- import os
  import unittest
- from unittest import mock
- import uuid
- from typing import Any, Callable, Dict
  
- os.environ.setdefault("SECRET_KEY", "test-secret")
- 
- from app.telemetry import bus
- from app.voice_v2 import (
-     EVT_ASR_OPEN,
-+    EVT_ASR_READY,
-     EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-     EVT_TURN_STATE,
-     EVT_TTS_MASK,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_SEND,
- )
- from app.security.jwt_utils import mint_ws_token
- from app.ws.adapter import (
-     CHAT_V2_SUBPROTOCOL,
-     EVT_WS_OUTBOX_DROP,
-     ChatV2Adapter,
- )
+ from app.services.streaming_asr.speechmatics_client import SpeechmaticsConfigError
+-from app.voice_v2.asr_runtime import ASRRuntime
++from app.voice_v2.asr_runtime import ASRRuntime, _SessionState
  
  
- class RecordingEngine:
-     """Engine stub that captures the opened session identifier."""
- 
+ class _StubBus:
      def __init__(self) -> None:
-         self.open_sid: str | None = None
+         self.events: list[dict] = []
  
-     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
-         self.open_sid = sid
+     def publish(self, event: dict) -> None:
+         self.events.append(dict(event))
+ 
+     def subscribe(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+         return object()
  
  
-@@ -394,62 +395,69 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-         adapter.asr_runtime = runtime
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         hud_events: list[dict] = []
-         mic_events: list[dict] = []
-         token = bus.subscribe(EVT_HUD_STATE, hud_events.append)
-         mic_token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
-         try:
-             sid = harness.sid
-             policy_payload = {
-                 "type": "policy.interaction",
-                 "interaction_id": "turn-1",
-                 "actions": ["assistant.say", "assistant.await_user"],
-             }
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
-             await asyncio.sleep(0.01)
+ class _StubEngine:
+     def __init__(self) -> None:
+         self.policy_snapshot = {}
+         self.partial_calls: list[tuple[str, str, float, str]] = []
+         self.final_calls: list[tuple[str, str, str | None]] = []
  
-             tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
-             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
+     def on_asr_partial(
+         self, sid: str, req_id: str, confidence: float, text: str
+     ) -> None:
+         self.partial_calls.append((sid, req_id, confidence, text))
  
-             await harness.wait_for(lambda: bool(runtime.prearm_calls))
-             self.assertEqual(runtime.prearm_calls, [sid])
+     def on_asr_final(self, sid: str, text: str, req_id: str | None = None) -> None:
+@@ -144,27 +144,69 @@ class SpeechmaticsOpenValidationTest(unittest.TestCase):
+         async def _exercise() -> None:
+             await runtime.open_if_needed("sid-invalid")
  
-             bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
+         asyncio.run(_exercise())
  
-+            ctx = adapter._contexts.get(sid)
-+            self.assertIsNotNone(ctx)
-+            if ctx is None:  # pragma: no cover - satisfy type checkers
-+                raise AssertionError("context missing")
-+
-+            await harness.wait_for(lambda: bool(ctx.pending_start_listening), timeout=2.0)
-+
-+            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
-+
-+            await harness.wait_for(lambda: ctx.pending_start_listening is None, timeout=2.0)
-+
-             frame = await harness.wait_for_outbound(
--                lambda data: data.get("type") == "start_listening"
-+                lambda data: data.get("type") == "start_listening",
-+                timeout=2.0,
-             )
-             self.assertEqual(frame.get("type"), "start_listening")
--            ctx = adapter._contexts.get(sid)
--            self.assertIsNotNone(ctx)
--            if ctx is not None:
--                self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
-+            self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
+         state = runtime._sessions.get("sid-invalid")
+         self.assertIsNotNone(state)
+         if state is not None:
+             self.assertFalse(state.stream_open)
+             self.assertTrue(state.open_invalid)
  
--            ctx = adapter._contexts.get(sid)
--            if ctx is not None:
--                ctx.asr_ready = True
-+            ctx.asr_ready = True
-             await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x00\x00"})
- 
-             await harness.wait_for(lambda: bool(mic_events))
-             self.assertEqual(mic_events[-1].get("meta", {}).get("state"), "open")
- 
-             await harness.wait_for(lambda: bool(hud_events))
-             self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
-         finally:
-             bus.unsubscribe(token)
-             bus.unsubscribe(mic_token)
-             await harness.close()
- 
-     async def _test_client_ready_mic_open(self) -> None:
-         engine = RecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
-         harness = OutboundHarness(adapter, engine)
-         await harness.start()
-         mic_events: list[dict] = []
-         token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
-         try:
-             payload = {"type": "client.ready", "mic": {"state": "open", "vendor": "browser", "ts": 12345}}
-             await harness._inbound.put({"type": "websocket.receive", "text": json.dumps(payload)})
-             await harness.wait_for(lambda: bool(mic_events))
-             self.assertEqual(mic_events[-1]["meta"].get("state"), "open")
-             self.assertEqual(mic_events[-1]["meta"].get("vendor"), "browser")
-@@ -688,50 +696,51 @@ class TestAdapterOutboundBridge(unittest.TestCase):
-         with mock.patch("app.ws.adapter._MIC_OPEN_TIMEOUT_SECONDS", 0.05):
-             engine = RecordingEngine()
-             adapter = ChatV2Adapter(engine=engine)
-             runtime = _StubAsrRuntime()
-             adapter.asr_runtime = runtime
-             harness = OutboundHarness(adapter, engine)
-             await harness.start()
- 
-             sid = harness.sid
-             mic_events: list[dict] = []
-             token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
-             try:
-                 policy_payload = {
-                     "type": "policy.interaction",
-                     "interaction_id": "turn-1",
-                     "actions": ["assistant.say", "assistant.await_user"],
-                 }
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
-                 await asyncio.sleep(0.01)
- 
-                 tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
-                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
- 
-                 await harness.wait_for(lambda: bool(runtime.prearm_calls))
-                 bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
-+                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
- 
-                 frame = await harness.wait_for_outbound(
-                     lambda data: data.get("type") == "start_listening"
-                 )
-                 self.assertEqual(frame.get("type"), "start_listening")
-                 ctx = adapter._contexts.get(sid)
-                 self.assertIsNotNone(ctx)
-                 if ctx is not None:
-                     self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
- 
-                 nudge_frame = await harness.wait_for_outbound(
-                     lambda data: data.get("type") == "hud.nudge"
-                 )
-                 self.assertEqual(nudge_frame.get("code"), "mic_permissions")
-                 self.assertEqual(nudge_frame.get("reason"), "mic_open_timeout")
-                 self.assertFalse(mic_events)
- 
-                 ctx = adapter._contexts.get(sid)
-                 if ctx is not None:
-                     ctx.asr_ready = True
-                 await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x03\x03"})
- 
-                 await harness.wait_for(lambda: bool(mic_events))
-                 nudge_frames = [
-                     frame for frame in harness.outbound_frames if frame.get("type") == "hud.nudge"
-diff --git a/tests/test_asr_adapter_basic.py b/tests/test_asr_adapter_basic.py
-index d04f5694f5cc2e307ea203970fe3779cfb262303..5f2c02e1d54f245fa444925f097449e6f5c196ac 100644
---- a/tests/test_asr_adapter_basic.py
-+++ b/tests/test_asr_adapter_basic.py
-@@ -13,86 +13,88 @@ class TestASRAdapterBasic(unittest.TestCase):
-     def tearDown(self) -> None:
-         bus.reset()
- 
-     def test_ready_bundle_uses_pcm_policy(self) -> None:
-         adapter = ChatV2Adapter()
-         ctx = AdapterContext(sid="sid-ready-bundle", headers={})
-         ctx.asr_vendor = "speechmatics"
-         ctx.audio_pipeline_mode = "pcm16"
-         ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
- 
-         sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
- 
-         self.assertFalse(ctx.asr_ready)
-         self.assertTrue(ctx.awaiting_asr_ready)
-         self.assertTrue(ctx.client_capture_armed)
-         self.assertIsInstance(ctx.mic_armed_ms, int)
- 
-         frames = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text")
+         error_events = [
+             evt
+             for evt in bus.events
+             if evt.get("type") == "EVT_WS_JSON_SEND"
+             and evt.get("sid") == "sid-invalid"
+             and isinstance(evt.get("payload"), dict)
+             and evt["payload"].get("type") == "error"
          ]
- 
-         self.assertEqual(
-             [frame.get("type") for frame in frames],
--            ["asr.ready", "input.start", "start_listening"],
-+            ["asr.ready", "input.start"],
-         )
- 
-         ready_frame = frames[0]
-         self.assertEqual(ready_frame.get("vendor"), "speechmatics")
-         input_desc = ready_frame.get("input")
-         self.assertIsInstance(input_desc, dict)
-         self.assertEqual(input_desc.get("mode"), "pcm16")
-         self.assertEqual(input_desc.get("container"), "raw")
-         self.assertEqual(input_desc.get("codec"), "pcm_s16le")
-         self.assertEqual(input_desc.get("rate_hz"), 16000)
-         self.assertEqual(input_desc.get("channels"), 1)
- 
-         input_start = frames[1]
-         capture = input_start.get("capture")
-         self.assertIsInstance(capture, dict)
-         self.assertEqual(capture.get("mode"), "pcm16")
-         self.assertEqual(capture.get("container"), "raw")
-         self.assertEqual(capture.get("codec"), "pcm_s16le")
-         self.assertEqual(capture.get("rate_hz"), 16000)
-         self.assertEqual(capture.get("channels"), 1)
-         self.assertEqual(capture.get("timeslice_ms"), 50)
-         self.assertIs(capture.get("manual_gate"), False)
- 
-         policy = input_start.get("policy")
-         self.assertIsInstance(policy, dict)
-         self.assertEqual(policy, ctx.session_capture_policy)
-         self.assertEqual(policy.get("media", {}).get("asr_input"), "pcm_16k")
-         self.assertEqual(policy.get("audio", {}).get("pipeline", {}).get("mode"), "pcm16")
-         self.assertEqual(policy.get("capture", {}).get("sample_rate"), 16000)
-         self.assertEqual(policy.get("capture", {}).get("channels"), 1)
- 
--        start_listening = frames[2]
--        self.assertEqual(start_listening.get("policy"), policy)
-+        pending_start = ctx.pending_start_listening
-+        self.assertIsInstance(pending_start, dict)
-+        self.assertEqual(pending_start.get("type"), "start_listening")
-+        self.assertEqual(pending_start.get("policy"), policy)
- 
--        self.assertEqual(len(sent), 3)
-+        self.assertEqual(len(sent), 2)
- 
-     def test_ready_bundle_injects_default_vendor(self) -> None:
-         adapter = ChatV2Adapter()
-         ctx = AdapterContext(sid="sid-ready-default", headers={})
-         ctx.audio_pipeline_mode = "pcm16"
-         ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
- 
-         sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
- 
-         frames = [
-             json.loads(msg["text"])
-             for msg in sent
-             if msg.get("type") == "websocket.send" and msg.get("text")
-         ]
-         self.assertGreaterEqual(len(frames), 1)
-         ready_frame = frames[0]
-         self.assertEqual(ready_frame.get("vendor"), "speechmatics")
- 
-     async def _emit_ready_bundle(
-         self, adapter: ChatV2Adapter, ctx: AdapterContext
-     ) -> list[dict]:
-         sent: list[dict] = []
- 
-         async def send(message: dict) -> None:
-             sent.append(message)
-diff --git a/tests/test_ws_keepalive_and_isolation.py b/tests/test_ws_keepalive_and_isolation.py
-index 896b67363e5d8f74b6899b94721d15cc7e72f6eb..cd411e28332316dded6832e9174b74d15c2a31d2 100644
---- a/tests/test_ws_keepalive_and_isolation.py
-+++ b/tests/test_ws_keepalive_and_isolation.py
-@@ -1,39 +1,39 @@
- import asyncio
- import json
- import os
- import unittest
- import uuid
- from unittest.mock import patch
- 
- from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
- 
- os.environ.setdefault("SECRET_KEY", "test-secret")
- 
- from app import config
- from app.telemetry import bus
--from app.voice_v2 import EVT_WS_JSON_SEND
-+from app.voice_v2 import EVT_ASR_READY, EVT_WS_JSON_SEND
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, AdapterContext, ChatV2Adapter
- from app.security.jwt_utils import mint_ws_token
+         self.assertTrue(error_events)
+         payload = error_events[-1]["payload"]
+         self.assertEqual(payload.get("code"), "asr_open_invalid")
+         self.assertIsInstance(payload.get("detail"), str)
  
  
- class LabelRecordingEngine:
-     """Engine stub that records session identifiers by label."""
- 
-     def __init__(self, on_open_hook=None) -> None:
-         self.sid_by_label: dict[str, str] = {}
-         self._on_open_hook = on_open_hook
- 
-     def on_open(self, sid: str, headers: dict[str, str]) -> None:
-         label = headers.get("x-test-label")
-         if label:
-             self.sid_by_label[label] = sid
-         if self._on_open_hook is not None:
-             self._on_open_hook(sid, headers)
- 
- 
- class AdapterHarness:
-     """Drive the adapter inside asyncio tests and record outbound frames."""
- 
-     def __init__(self, adapter: ChatV2Adapter, engine: LabelRecordingEngine, *, label: str) -> None:
-         self.adapter = adapter
-         self.engine = engine
-@@ -271,50 +271,62 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
-                 )
-                 self.assertEqual(input_desc.get("container"), "raw")
-                 self.assertEqual(input_desc.get("codec"), "pcm_s16le")
-                 self.assertEqual(input_desc.get("rate_hz"), 16000)
-                 self.assertEqual(input_desc.get("channels"), 1)
- 
-                 input_start = await harness.wait_for_outbound(
-                     lambda frame: frame.get("type") == "input.start",
-                     timeout=2.0,
-                 )
-                 capture = (
-                     input_start.get("capture", {})
-                     if isinstance(input_start, dict)
-                     else {}
-                 )
-                 self.assertEqual(capture.get("mode"), "pcm16")
-                 self.assertEqual(capture.get("codec"), "pcm_s16le")
-                 self.assertEqual(capture.get("container"), "raw")
-                 self.assertEqual(capture.get("rate_hz"), 16000)
-                 self.assertEqual(capture.get("channels"), 1)
-                 session_policy = ctx.session_capture_policy or adapter._session_capture_policy_for_mode(
-                     ctx.audio_pipeline_mode or "pcm16"
-                 )
-                 self.assertEqual(input_start.get("policy"), session_policy)
- 
-+                pending_start = ctx.pending_start_listening
-+                self.assertIsInstance(pending_start, dict)
-+                self.assertEqual(pending_start.get("policy"), session_policy)
++class SpeechmaticsPreReadyAudioTest(unittest.TestCase):
++    def setUp(self) -> None:
++        self.bus = _StubBus()
++        self.engine = _StubEngine()
++        self.client = _StubClient()
++        self.runtime = ASRRuntime(self.engine, self.client, telemetry_bus=self.bus)
 +
-+                bus.publish(
-+                    {
-+                        "type": EVT_ASR_READY,
-+                        "sid": ctx.sid,
-+                        "vendor": ctx.asr_vendor,
-+                    }
-+                )
++    def test_drops_pending_audio_logs_warning(self) -> None:
++        sid = "sid-pre-ready"
++        state = _SessionState(sid=sid)
++        state.stream_id = "stream-pre"
++        chunk_a = b"\x00" * 1600
++        chunk_b = b"\x01" * 800
++        state.pending.append(chunk_a)
++        state.pending.append(chunk_b)
++        state.buffered_bytes = len(chunk_a) + len(chunk_b)
++        self.runtime._sessions[sid] = state
 +
-                 start_listening = await harness.wait_for_outbound(
-                     lambda frame: frame.get("type") == "start_listening",
-                     timeout=2.0,
-                 )
-                 self.assertEqual(start_listening.get("policy"), session_policy)
-             finally:
-                 await harness.close()
- 
-     async def _test_asr_runtime_switches_on_vendor_change(self) -> None:
-         engine = LabelRecordingEngine()
-         adapter = ChatV2Adapter(engine=engine)
- 
-         class StubSpeechmaticsClient(SpeechmaticsClient):
-             vendor = "speechmatics"
- 
-             def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
-                 super().__init__(api_key, url, _bus, _logger)
-                 self.api_key = api_key
-                 self.url = url
- 
-         class StubLegacyClient:
-             vendor = "legacy"
- 
-         class StubASRRuntime:
-             def __init__(self, engine, client, telemetry_bus=None, metrics=None) -> None:
++        dropped = self.runtime._drain_pre_ready_audio(sid, state, state.stream_id)
++
++        self.assertEqual(dropped, len(chunk_a) + len(chunk_b))
++        self.assertFalse(state.pending)
++        self.assertEqual(state.buffered_bytes, 0)
++        self.assertEqual(state.dropped_chunks, 2)
++        self.assertTrue(state.early_audio_dropped)
++        self.assertEqual(state.early_audio_dropped_bytes, dropped)
++
++        log_events = [
++            evt
++            for evt in self.bus.events
++            if evt.get("type") == "EVT_LOG"
++            and evt.get("sid") == sid
++            and isinstance(evt.get("msg"), str)
++        ]
++        self.assertTrue(
++            any(
++                event["msg"].startswith("evt=audio_dropped_before_asr_open")
++                for event in log_events
++            )
++        )
++
++
+ if __name__ == "__main__":
+     unittest.main()

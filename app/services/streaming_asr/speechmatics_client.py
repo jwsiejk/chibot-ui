@@ -371,6 +371,7 @@ class _StreamState:
     ready_error_detail: Optional[str] = None
     vendor_notices: set[str] = field(default_factory=set)
     end_of_stream_sent: bool = False
+    recognition_started: bool = False
 
 
 class SpeechmaticsClient:
@@ -690,17 +691,21 @@ class SpeechmaticsClient:
                         )
                     continue
 
-                if isinstance(message_name, str) and message_name in {
-                    "Info",
-                    "RecognitionStarted",
-                    "AudioAdded",
-                }:
+                normalized_message = ""
+                if isinstance(message_name, str):
+                    normalized_message = message_name.strip().lower()
+
+                if normalized_message in {"info", "audioadded"}:
                     if message_name not in state.vendor_notices:
-                        self._logger.info("evt=sm_notice message=%s", message_name.lower())
+                        self._logger.info("evt=sm_notice message=%s", normalized_message)
                         state.vendor_notices.add(message_name)
-                    # Treat vendor notices as sufficient to consider the stream ready so
-                    # that the sender loop can proceed with audio transmission.
-                    self._mark_stream_ready(state, payload)
+                    continue
+
+                if normalized_message == "recognitionstarted":
+                    if message_name not in state.vendor_notices:
+                        self._logger.info("evt=sm_notice message=recognitionstarted")
+                        state.vendor_notices.add(message_name)
+                    self._handle_recognition_started(state, payload)
                     continue
 
                 self._handle_payload(state, payload)
@@ -723,7 +728,20 @@ class SpeechmaticsClient:
         finally:
             await self._finalize_receiver(state)
 
-    def _mark_stream_ready(self, state: _StreamState, payload: Mapping[str, Any]) -> None:
+    def _handle_recognition_started(
+        self, state: _StreamState, payload: Mapping[str, Any]
+    ) -> None:
+        if not state.recognition_started:
+            state.recognition_started = True
+        self._mark_stream_ready(state, payload, recognition_started=True)
+
+    def _mark_stream_ready(
+        self,
+        state: _StreamState,
+        payload: Mapping[str, Any],
+        *,
+        recognition_started: bool = False,
+    ) -> None:
         if state.ready_event.is_set():
             return
 
@@ -740,25 +758,11 @@ class SpeechmaticsClient:
             state.ready_event.set()
             return
 
-        if message_type and message_type not in {
-            "partial",
-            "partial_transcript",
-            "addpartialtranscript",
-            "final",
-            "transcript",
-            "addtranscript",
-            "endoftranscript",
-        }:
+        if recognition_started or state.recognition_started:
             state.ready_event.set()
             return
 
-        # Fallback: treat informational payloads with a message or status as ready.
-        message_value = payload.get("message") if isinstance(payload, Mapping) else None
-        status_value = payload.get("status") if isinstance(payload, Mapping) else None
-        if isinstance(message_value, str) and message_value:
-            state.ready_event.set()
-        elif isinstance(status_value, str) and status_value:
-            state.ready_event.set()
+        # Ignore other payloads until the vendor confirms recognition has started.
 
     def _emit_transcript_event(
         self, state: _StreamState, text: str, is_final: bool
