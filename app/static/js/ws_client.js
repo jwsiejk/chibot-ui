@@ -117,7 +117,7 @@ import { WakeWord } from "./wake_word.js";
   AppState.policy = {
     ...P0,
     auto_record_after_greet: P0.auto_record_after_greet ?? true,
-    require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? true,
+    require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
     tts_gate_enabled: P0.tts_gate_enabled ?? true,
     autostart_retry_on: Array.isArray(P0.autostart_retry_on)
       ? P0.autostart_retry_on.slice()
@@ -135,6 +135,7 @@ import { WakeWord } from "./wake_word.js";
       input: {
         ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
         require_hotword_to_start: false,
+        require_user_gesture_first_visit: false,
       },
     },
   };
@@ -428,6 +429,13 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function attachUserGestureListeners() {
+    if (!AppState?.policy?.require_user_gesture_first_visit) {
+      userGestureSatisfied = true;
+      if (typeof gestureListenerCleanup === "function") {
+        gestureListenerCleanup();
+      }
+      return;
+    }
     if (userGestureSatisfied || typeof window === "undefined") {
       return;
     }
@@ -1703,7 +1711,7 @@ import { WakeWord } from "./wake_word.js";
 
   const DEFAULT_POLICY_FLAGS = {
     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
-    input: { require_hotword_to_start: false },
+    input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
     asr: {
       prearm_on_tts_end: true,
       keep_stream_warm_ms: 30000,
@@ -1817,6 +1825,9 @@ import { WakeWord } from "./wake_word.js";
         require_hotword_to_start: input && typeof input.require_hotword_to_start === 'boolean'
           ? input.require_hotword_to_start
           : DEFAULT_POLICY_FLAGS.input.require_hotword_to_start,
+        require_user_gesture_first_visit: input && typeof input.require_user_gesture_first_visit === 'boolean'
+          ? input.require_user_gesture_first_visit
+          : DEFAULT_POLICY_FLAGS.input.require_user_gesture_first_visit,
       };
 
       const asr = rawNested.asr && typeof rawNested.asr === 'object' ? rawNested.asr : null;
