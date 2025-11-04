@@ -1,255 +1,333 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index df3d2b242ca1fec9ca55d58e41174e3912e43730..31a9aa6b41f849b6c4af4aa3a630b84987ae7cd7 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -979,50 +979,78 @@
-         return null;
-       }
-       const candidate = nested[section];
-       return candidate && typeof candidate === 'object' ? candidate : null;
-     }
+diff --git a/app/policy/loader.py b/app/policy/loader.py
+index e7ad266725c75a1c794fdf137ff6125cd168852d..fb2f82b776c8aa24d79c25ef88e975f18a8629a3 100644
+--- a/app/policy/loader.py
++++ b/app/policy/loader.py
+@@ -58,81 +58,100 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
+         "surface_via_suggestions": True,
+         _ASSISTANT_TURN_SEQUENCE_KEY: list(_DEFAULT_ASSISTANT_TURN_ACTIONS),
+     },
+     "telemetry": {
+         "enabled": True,
+         "level": "debug",
+         "categories": {
+             "ws": True,
+             "audio": True,
+             "policy": True,
+             "tts": True,
+             "gate": True,
+             "barge": True,
+             "asr": True,
+             "nlu": True,
+             "nlg": True,
+             "client_ui": True,
+             "provider_debug": True,
+         },
+         "redaction": {"pii": True, "secrets": True, "text": False},
+         "sampling": {"percent": 100},
+     },
+ }
  
-     function shouldPrearmOnTtsEnd() {
-       const asrPolicy = getNestedPolicySection('asr');
-       if (asrPolicy && typeof asrPolicy.prearm_on_tts_end === 'boolean') {
-         return asrPolicy.prearm_on_tts_end;
-       }
-       return true;
-     }
  
-     function getKeepWarmMs() {
-       const asrPolicy = getNestedPolicySection('asr');
-       if (asrPolicy && Number.isFinite(Number(asrPolicy.keep_stream_warm_ms))) {
-         const value = Number(asrPolicy.keep_stream_warm_ms);
-         if (value >= 0) {
-           return Math.round(value);
-         }
-       }
-       return 30000;
-     }
- 
-+    function getCapturePolicy() {
-+      const snapshot = getPolicySnapshot();
-+      if (!snapshot || typeof snapshot !== 'object') {
-+        return null;
-+      }
-+      if (snapshot.capture && typeof snapshot.capture === 'object') {
-+        return snapshot.capture;
-+      }
-+      const nested = snapshot.policy;
-+      if (nested && typeof nested === 'object' && nested.capture && typeof nested.capture === 'object') {
-+        return nested.capture;
-+      }
-+      return null;
-+    }
++def _safe_merge(
++    base: Mapping[str, Any] | None,
++    override: Mapping[str, Any],
++) -> Dict[str, Any]:
++    """Recursively merge ``override`` into ``base`` without clobbering siblings."""
 +
-+    function getCaptureTimesliceMs() {
-+      const capture = getCapturePolicy();
-+      if (!capture) {
-+        return null;
-+      }
-+      const raw = capture.timeslice_ms;
-+      const numeric = Number(raw);
-+      if (Number.isFinite(numeric) && numeric > 0) {
-+        return Math.round(numeric);
-+      }
-+      return null;
-+    }
++    merged: Dict[str, Any] = {}
++    if isinstance(base, Mapping):
++        merged = {key: deepcopy(value) for key, value in base.items()}
 +
-     const micSessionTelemetry = {
-       micOpenLogged: false,
-       firstChunkLogged: false,
-       recBadgeLogged: false,
-     };
-     let micPermissionTelemetryLogged = false;
++    for key, override_value in override.items():
++        existing_value = merged.get(key)
++        if isinstance(existing_value, Mapping) and isinstance(override_value, Mapping):
++            merged[key] = _safe_merge(existing_value, override_value)
++        else:
++            merged[key] = deepcopy(override_value)
++
++    return merged
++
++
+ def load_interaction_policy(
+     overrides: Dict[str, Any] | None = None,
+ ) -> InteractionPolicySnapshot:
+     """Return a deterministic interaction policy snapshot.
  
-     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
-     let pendingClientReady = null;
-     let clientReadyTimerId = null;
-     let clientReadyStats = null;
-     const deferredClientLogs = [];
-     let deferredClientLogFlushTimer = null;
+     The returned snapshot matches the defaults defined by the system of record
+-    for the `chat.v2` contract. When ``overrides`` are provided, they are merged
+-    shallowly on top of the defaults—each top-level key in ``overrides``
+-    replaces the corresponding value entirely.
++    for the `chat.v2` contract. When overrides are provided—either via
++    configuration or the ``overrides`` argument—they are deep-merged into the
++    defaults. Only mappings are merged recursively; all other value types replace
++    the existing entry.
  
-     function scheduleDeferredClientLogFlush(delayMs = CLIENT_LOG_RATE_LIMIT_WINDOW_MS) {
-       if (typeof window === 'undefined') {
-         return;
-       }
-       if (deferredClientLogFlushTimer) {
-         return;
-       }
-       const delay = Number.isFinite(delayMs) && delayMs > 0
-         ? delayMs
-         : CLIENT_LOG_RATE_LIMIT_WINDOW_MS;
-       deferredClientLogFlushTimer = window.setTimeout(() => {
-@@ -1223,95 +1251,116 @@
-         if (!isRecorderListening() || AppState?.ttsActive) {
-           return;
+     Args:
+         overrides: Optional dictionary with top-level keys to replace in the
+             default policy snapshot. Nested merges are not performed; providing
+             a key overrides the whole value at that key.
+ 
+     Returns:
+         A new dictionary containing the policy snapshot with any specified
+         overrides applied. Mutating the returned dictionary will not affect the
+         stored defaults.
+     """
+ 
+     policy: InteractionPolicySnapshot = deepcopy(_DEFAULT_INTERACTION_POLICY)
+ 
+     base_overrides = getattr(config, "POLICY_OVERRIDES", None)
+     if isinstance(base_overrides, Mapping):
+-        for key, value in base_overrides.items():
+-            policy[key] = deepcopy(value)
++        policy = _safe_merge(policy, base_overrides)
+ 
+-    if overrides:
+-        for key, value in overrides.items():
+-            policy[key] = value
++    if isinstance(overrides, Mapping):
++        policy = _safe_merge(policy, overrides)
+ 
+     return policy
+ 
+ 
+ def assistant_turn_actions(
+     snapshot: Mapping[str, Any] | None = None,
+ ) -> list[str]:
+     """Return the configured assistant turn action sequence."""
+ 
+     actions_block: Mapping[str, Any] | None = None
+     if isinstance(snapshot, Mapping):
+         actions_candidate = snapshot.get("actions")
+         if isinstance(actions_candidate, Mapping):
+             actions_block = actions_candidate
+ 
+     if actions_block is not None:
+         candidate_sequence = actions_block.get(_ASSISTANT_TURN_SEQUENCE_KEY)
+         if isinstance(candidate_sequence, Sequence) and not isinstance(
+             candidate_sequence, (str, bytes)
+         ):
+             normalized = [
+                 action.strip()
+                 for action in candidate_sequence
+                 if isinstance(action, str) and action.strip()
+             ]
+diff --git a/tests/test_policy_loader.py b/tests/test_policy_loader.py
+index c4e129a597f9419c5eb84acf2740fbb0b71b9c30..d3d1f71420fbc7f60773d6a8a574949bf08e184a 100644
+--- a/tests/test_policy_loader.py
++++ b/tests/test_policy_loader.py
+@@ -1,132 +1,211 @@
+ """Tests for the interaction policy loader utilities."""
+ from __future__ import annotations
+ 
+ import unittest
+ from unittest.mock import patch
+ 
+ from app.policy.loader import load_interaction_policy
+ 
+ 
+ class InteractionPolicyLoaderTests(unittest.TestCase):
+     """Validate the deterministic snapshot returned by ``load_interaction_policy``."""
+ 
+     def test_defaults_shape_and_types(self) -> None:
+         snapshot = load_interaction_policy()
+ 
+         expected_keys = {
+             "mode",
+             "allow_auto_vad",
+             "barge_in_enabled",
+             "auto_commit_when_ready",
+             "telemetry",
++            "voice",
++            "greet",
++            "suggestions",
++            "actions",
++            "policy",
+             "media",
+             "capture",
++            "audio",
          }
-         let stopAttempted = false;
-         let stopped = false;
-         try {
-           if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
-             stopAttempted = true;
-             AppState.hub.stopListening({ reason: 'watchdog' });
-             stopped = true;
-           }
-         } catch (err) {
-           console.warn('Hub stopListening watchdog failed', err);
-         }
-         if (!stopped) {
-           try {
-             if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
-               stopAttempted = true;
-               window.AudioRecorder.stopListening({ reason: 'watchdog' });
-               stopped = true;
-             }
-           } catch (err) {
-             console.warn('AudioRecorder stopListening watchdog failed', err);
-           }
-         }
--        if (!stopAttempted) {
--          return;
-+        if (stopAttempted) {
-+          updateRecordingState(false, 'watchdog');
-         }
--        logClientMicEventText('evt=mic_stop reason=watchdog');
-       }, ASR_PARTIAL_WATCHDOG_MS);
-     }
+         self.assertEqual(set(snapshot.keys()), expected_keys)
  
-     function resetMicSessionTelemetry() {
-       micSessionTelemetry.micOpenLogged = false;
-       micSessionTelemetry.firstChunkLogged = false;
-       micSessionTelemetry.recBadgeLogged = false;
-     }
+         self.assertEqual(snapshot["mode"], "idle")
+         self.assertIs(snapshot["allow_auto_vad"], True)
+         self.assertIs(snapshot["barge_in_enabled"], True)
+         self.assertIs(snapshot["auto_commit_when_ready"], True)
  
-     function noteRecordingBadgeOn(source) {
-       if (micSessionTelemetry.recBadgeLogged) {
-         return;
-       }
-       micSessionTelemetry.recBadgeLogged = true;
-       const detail = { event: 'ui_rec_badge_on' };
-       if (source) {
-         detail.source = String(source).slice(0, 32);
-       }
-       logClient('evt=ui_rec_badge_on', detail);
-     }
++        voice = snapshot["voice"]
++        self.assertEqual(voice, {"voice_id": "alloy-en-US-001", "locale": "en-US"})
++
++        greet = snapshot["greet"]
++        self.assertEqual(greet, {"enabled": True, "mode": "persona", "post_hold_ms": 200})
++
++        suggestions = snapshot["suggestions"]
++        self.assertEqual(suggestions, {"on_connect": True, "count": 3})
++
+         media = snapshot["media"]
+         self.assertIsInstance(media, dict)
+         self.assertEqual(
+             media,
+             {
+                 "asr_input": "pcm_16k",
+                 "asr_rate_hz": 16000,
+                 "asr_channels": 1,
+                 "fallbacks_allowed": False,
+             },
+         )
  
-+    function normalizeStopReason(source) {
-+      if (typeof source === 'string' && source) {
-+        return source.slice(0, 48);
-+      }
-+      if (source && typeof source === 'object') {
-+        if (typeof source.reason === 'string' && source.reason) {
-+          return source.reason.slice(0, 48);
+         capture = snapshot["capture"]
+         self.assertIsInstance(capture, dict)
+         self.assertEqual(
+             capture,
+             {
+                 "start_on_asr_ready": True,
+                 "start_on_turn_ready": True,
+                 "timeslice_ms": 200,
+                 "mask_during_tts": True,
+             },
+         )
+ 
++        audio = snapshot["audio"]
++        self.assertEqual(audio, {"pipeline": {"mode": "pcm16"}})
++
++        actions = snapshot["actions"]
++        self.assertEqual(
++            actions,
++            {
++                "allowed": ["answer"],
++                "surface_via_suggestions": True,
++                "assistant_turn_sequence": [
++                    "assistant.say",
++                    "assistant.await_user",
++                ],
++            },
++        )
++
++        policy = snapshot["policy"]
++        self.assertIsInstance(policy, dict)
++        self.assertEqual(set(policy.keys()), {"recorder", "input", "asr", "routing"})
++        self.assertEqual(
++            policy["recorder"],
++            {"stop_on_tts_start": False, "mute_send_during_tts": True},
++        )
++        self.assertEqual(
++            policy["input"],
++            {"require_hotword_to_start": False},
++        )
++        self.assertEqual(
++            policy["routing"],
++            {"ws_version": "v2"},
++        )
++
++        asr = policy["asr"]
++        self.assertIsInstance(asr, dict)
++        self.assertTrue(asr["prearm_on_tts_end"])
++        self.assertEqual(asr["commit_silence_ms"], 900)
++
+         telemetry = snapshot["telemetry"]
+         self.assertIsInstance(telemetry, dict)
+         self.assertIs(telemetry["enabled"], True)
+         self.assertEqual(telemetry["level"], "debug")
+ 
+         categories = telemetry["categories"]
+         self.assertIsInstance(categories, dict)
+         expected_categories = {
+             "ws",
+             "audio",
+             "policy",
+             "tts",
+             "gate",
+             "barge",
+             "asr",
+             "nlu",
+             "nlg",
+             "client_ui",
+             "provider_debug",
+         }
+         self.assertEqual(set(categories.keys()), expected_categories)
+         for key in expected_categories:
+             self.assertIs(categories[key], True)
+ 
+         redaction = telemetry["redaction"]
+         self.assertEqual(redaction, {"pii": True, "secrets": True, "text": False})
+ 
+         sampling = telemetry["sampling"]
+         self.assertEqual(sampling, {"percent": 100})
+ 
+-    def test_overrides_shallow(self) -> None:
+-        overrides = {"telemetry": {"level": "info"}}
++    def test_overrides_safe_merge(self) -> None:
++        overrides = {
++            "telemetry": {
++                "level": "info",
++                "categories": {"audio": False},
++            },
++            "policy": {"input": {"require_hotword_to_start": True}},
 +        }
-+        if (typeof source.code === 'string' && source.code) {
-+          return source.code.slice(0, 48);
-+        }
-+      }
-+      return 'unknown';
-+    }
+         snapshot = load_interaction_policy(overrides)
+ 
+         self.assertEqual(snapshot["mode"], "idle")
+         self.assertIs(snapshot["allow_auto_vad"], True)
+         self.assertIs(snapshot["barge_in_enabled"], True)
+         self.assertIs(snapshot["auto_commit_when_ready"], True)
+         self.assertIn("media", snapshot)
+         self.assertIn("capture", snapshot)
+ 
+         telemetry = snapshot["telemetry"]
+-        self.assertEqual(telemetry, {"level": "info"})
+-        self.assertNotIn("categories", telemetry)
++        self.assertEqual(telemetry["level"], "info")
++        categories = telemetry["categories"]
++        self.assertIsInstance(categories, dict)
++        self.assertFalse(categories["audio"])
++        default_categories = load_interaction_policy()["telemetry"]["categories"]
++        for key, value in default_categories.items():
++            if key == "audio":
++                continue
++            self.assertEqual(categories[key], value)
 +
-     function updateRecordingState(active, source) {
-       const previous = runtimeState.isRecording;
-       const next = !!active;
-       runtimeState.isRecording = next;
-       if (next) {
-         if (!previous) {
-           runtimeState.finalSeenThisTurn = false;
-           if (AppState && typeof AppState.__no_rearm_until === 'number') {
-             AppState.__no_rearm_until = 0;
-           }
-           beginMicTelemetrySession();
-           resetMicSessionTelemetry();
-           noteRecordingBadgeOn(source);
-+          const timeslice = getCaptureTimesliceMs();
-+          const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
-+            ? Math.max(0, Math.round(timeslice))
-+            : 'unknown';
-+          logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
++        policy = snapshot["policy"]
++        self.assertTrue(policy["input"]["require_hotword_to_start"])
++        self.assertIn("asr", policy)
++        self.assertIn("recorder", policy)
++        self.assertIn("routing", policy)
+ 
+         # Loading defaults again should not be impacted by the overrides call.
+         fresh_defaults = load_interaction_policy()
+         self.assertIn("categories", fresh_defaults["telemetry"])
++        self.assertFalse(fresh_defaults["policy"]["input"]["require_hotword_to_start"])
+ 
+     def test_config_policy_overrides_applied(self) -> None:
+         overrides = {
+             "media": {
+                 "asr_input": "pcm_16k",
+                 "asr_rate_hz": 16000,
+                 "asr_channels": 1,
+                 "fallbacks_allowed": True,
+             },
+             "capture": {
+                 "start_on_asr_ready": False,
+                 "start_on_turn_ready": True,
+                 "timeslice_ms": 250,
+                 "mask_during_tts": False,
+             },
++            "policy": {
++                "input": {"require_hotword_to_start": True},
++            },
          }
-         if (!AppState?.ttsActive) {
-           armAsrPartialWatchdog();
-         } else {
-           cancelAsrPartialWatchdog();
-         }
-       } else if (previous) {
-+        const reasonLabel = normalizeStopReason(source);
-+        logClientMicEventText(`evt=mic_stop reason=${reasonLabel}`);
-         endMicTelemetrySession();
-         resetMicSessionTelemetry();
-         cancelAsrPartialWatchdog();
-       } else {
-         cancelAsrPartialWatchdog();
-       }
-       return next;
-     }
  
-     function noteMicOpen(source) {
-       if (micSessionTelemetry.micOpenLogged) {
-         return;
-       }
-       micSessionTelemetry.micOpenLogged = true;
-       const detail = { event: 'mic_open' };
-       if (source) {
-         detail.source = String(source).slice(0, 32);
-       }
-       logClient('evt=mic_open', detail);
-     }
+         with patch("app.policy.loader.config.POLICY_OVERRIDES", overrides):
+             snapshot = load_interaction_policy()
  
-     function setMicPermissionGranted(granted, source) {
-       const next = !!granted;
-       runtimeState.micPermissionGranted = next;
-       if (next) {
-@@ -2814,51 +2863,50 @@ window.addEventListener('asr.partial', () => {
-     return;
-   }
-   armAsrPartialWatchdog();
- });
+         self.assertEqual(snapshot["media"]["asr_input"], "pcm_16k")
+         self.assertTrue(snapshot["media"]["fallbacks_allowed"])
+         self.assertEqual(snapshot["capture"]["timeslice_ms"], 250)
+         self.assertFalse(snapshot["capture"]["start_on_asr_ready"])
+         self.assertFalse(snapshot["capture"]["mask_during_tts"])
++        self.assertTrue(snapshot["policy"]["input"]["require_hotword_to_start"])
++        self.assertIn("asr", snapshot["policy"])
++        self.assertIn("recorder", snapshot["policy"])
++        self.assertIn("routing", snapshot["policy"])
  
- window.addEventListener('asr.final', () => {
-   if (runtimeState.finalSeenThisTurn) {
-     return;
-   }
-   runtimeState.finalSeenThisTurn = true;
-   const now = Date.now();
-   if (AppState && typeof AppState === 'object') {
-     AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
-   }
-   let recorder = null;
-   try {
-     recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
-   } catch (_) {
-     recorder = null;
-   }
-   try {
-     recorder?.stopListening?.({ reason: 'final' });
-   } catch (err) {
-     console.warn('AudioRecorder stopListening on asr.final failed', err);
-   }
--  logClientMicEventText('evt=mic_stop reason=final');
-   if (runtimeState.isRecording) {
-     updateRecordingState(false, 'final');
-   }
- });
  
- window.addEventListener('assistant.await_user', (event) => {
-   runtimeState.audioPlaybackIdle = true;
-   const frame = event && event.detail;
-   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
-   maybeAutoStartCapture('await_user', reason);
-   if (shouldPrearmOnTtsEnd()) {
-     try {
-       requestAsrPrearm('await_user');
-     } catch (err) {
-       console.warn('requestAsrPrearm failed after assistant.await_user', err);
-     }
-   }
-   patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
-   if (!vadListeningLogged) {
-     logClient('client.mic', 'diag=vad_active state=Listening');
-     vadListeningLogged = true;
-   }
- });
- 
- window.addEventListener('asr.unavailable', (event) => {
+ if __name__ == "__main__":  # pragma: no cover
+     unittest.main()

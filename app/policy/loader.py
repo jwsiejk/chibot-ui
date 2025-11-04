@@ -80,15 +80,36 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
 }
 
 
+def _safe_merge(
+    base: Mapping[str, Any] | None,
+    override: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Recursively merge ``override`` into ``base`` without clobbering siblings."""
+
+    merged: Dict[str, Any] = {}
+    if isinstance(base, Mapping):
+        merged = {key: deepcopy(value) for key, value in base.items()}
+
+    for key, override_value in override.items():
+        existing_value = merged.get(key)
+        if isinstance(existing_value, Mapping) and isinstance(override_value, Mapping):
+            merged[key] = _safe_merge(existing_value, override_value)
+        else:
+            merged[key] = deepcopy(override_value)
+
+    return merged
+
+
 def load_interaction_policy(
     overrides: Dict[str, Any] | None = None,
 ) -> InteractionPolicySnapshot:
     """Return a deterministic interaction policy snapshot.
 
     The returned snapshot matches the defaults defined by the system of record
-    for the `chat.v2` contract. When ``overrides`` are provided, they are merged
-    shallowly on top of the defaults—each top-level key in ``overrides``
-    replaces the corresponding value entirely.
+    for the `chat.v2` contract. When overrides are provided—either via
+    configuration or the ``overrides`` argument—they are deep-merged into the
+    defaults. Only mappings are merged recursively; all other value types replace
+    the existing entry.
 
     Args:
         overrides: Optional dictionary with top-level keys to replace in the
@@ -105,12 +126,10 @@ def load_interaction_policy(
 
     base_overrides = getattr(config, "POLICY_OVERRIDES", None)
     if isinstance(base_overrides, Mapping):
-        for key, value in base_overrides.items():
-            policy[key] = deepcopy(value)
+        policy = _safe_merge(policy, base_overrides)
 
-    if overrides:
-        for key, value in overrides.items():
-            policy[key] = value
+    if isinstance(overrides, Mapping):
+        policy = _safe_merge(policy, overrides)
 
     return policy
 
