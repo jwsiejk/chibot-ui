@@ -14,6 +14,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 from app.telemetry import bus
 from app.voice_v2 import (
     EVT_ASR_OPEN,
+    EVT_ASR_READY,
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
     EVT_TURN_STATE,
@@ -416,18 +417,25 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
             bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
 
-            frame = await harness.wait_for_outbound(
-                lambda data: data.get("type") == "start_listening"
-            )
-            self.assertEqual(frame.get("type"), "start_listening")
             ctx = adapter._contexts.get(sid)
             self.assertIsNotNone(ctx)
-            if ctx is not None:
-                self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
+            if ctx is None:  # pragma: no cover - satisfy type checkers
+                raise AssertionError("context missing")
 
-            ctx = adapter._contexts.get(sid)
-            if ctx is not None:
-                ctx.asr_ready = True
+            await harness.wait_for(lambda: bool(ctx.pending_start_listening), timeout=2.0)
+
+            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
+
+            await harness.wait_for(lambda: ctx.pending_start_listening is None, timeout=2.0)
+
+            frame = await harness.wait_for_outbound(
+                lambda data: data.get("type") == "start_listening",
+                timeout=2.0,
+            )
+            self.assertEqual(frame.get("type"), "start_listening")
+            self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
+
+            ctx.asr_ready = True
             await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x00\x00"})
 
             await harness.wait_for(lambda: bool(mic_events))
@@ -710,6 +718,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
                 await harness.wait_for(lambda: bool(runtime.prearm_calls))
                 bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
+                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
 
                 frame = await harness.wait_for_outbound(
                     lambda data: data.get("type") == "start_listening"

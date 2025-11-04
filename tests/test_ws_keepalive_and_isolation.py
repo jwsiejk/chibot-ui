@@ -11,7 +11,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from app import config
 from app.telemetry import bus
-from app.voice_v2 import EVT_WS_JSON_SEND
+from app.voice_v2 import EVT_ASR_READY, EVT_WS_JSON_SEND
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, AdapterContext, ChatV2Adapter
 from app.security.jwt_utils import mint_ws_token
 
@@ -292,6 +292,18 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
                     ctx.audio_pipeline_mode or "pcm16"
                 )
                 self.assertEqual(input_start.get("policy"), session_policy)
+
+                pending_start = ctx.pending_start_listening
+                self.assertIsInstance(pending_start, dict)
+                self.assertEqual(pending_start.get("policy"), session_policy)
+
+                bus.publish(
+                    {
+                        "type": EVT_ASR_READY,
+                        "sid": ctx.sid,
+                        "vendor": ctx.asr_vendor,
+                    }
+                )
 
                 start_listening = await harness.wait_for_outbound(
                     lambda frame: frame.get("type") == "start_listening",

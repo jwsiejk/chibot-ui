@@ -35,7 +35,7 @@ class TestASRAdapterBasic(unittest.TestCase):
 
         self.assertEqual(
             [frame.get("type") for frame in frames],
-            ["asr.ready", "input.start", "start_listening"],
+            ["asr.ready", "input.start"],
         )
 
         ready_frame = frames[0]
@@ -67,10 +67,12 @@ class TestASRAdapterBasic(unittest.TestCase):
         self.assertEqual(policy.get("capture", {}).get("sample_rate"), 16000)
         self.assertEqual(policy.get("capture", {}).get("channels"), 1)
 
-        start_listening = frames[2]
-        self.assertEqual(start_listening.get("policy"), policy)
+        pending_start = ctx.pending_start_listening
+        self.assertIsInstance(pending_start, dict)
+        self.assertEqual(pending_start.get("type"), "start_listening")
+        self.assertEqual(pending_start.get("policy"), policy)
 
-        self.assertEqual(len(sent), 3)
+        self.assertEqual(len(sent), 2)
 
     def test_ready_bundle_injects_default_vendor(self) -> None:
         adapter = ChatV2Adapter()

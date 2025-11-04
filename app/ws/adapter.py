@@ -358,6 +358,7 @@ class AdapterContext:
     await_user_after_mask_key: Optional[str] = None
     tts_mask_phase: str = "off"
     mask_subscription_token: Optional[str] = None
+    pending_start_listening: Optional[Dict[str, Any]] = None
     tts_end_subscription_token: Optional[str] = None
     turn_state_subscription_token: Optional[str] = None
     hud_state: Optional[str] = None
@@ -478,16 +479,44 @@ class ChatV2Adapter:
                 pass
             return
         ctx.await_user_cue_emitted = True
-        ctx.await_user_vad_check_pending = True
-        _log.info(
-            "evt=turn_listen_cue sid=%s reason=tts_end policy_start=%s",
-            sid,
-            "true" if start_on_ready else "false",
-        )
-        if isinstance(req_value, str) and req_value:
-            _log.info("evt=await_user_emit sid=%s req_id=%s", sid, req_value)
+
+    def _publish_pending_start_listening(
+        self, ctx: AdapterContext, telemetry_bus: Any
+    ) -> None:
+        payload = ctx.pending_start_listening
+        if not isinstance(payload, dict):
+            return
+        frame = dict(payload)
+        ctx.pending_start_listening = None
+        outbox = ctx.outbox
+        if outbox is not None:
+            try:
+                outbox.put_nowait(frame)
+            except asyncio.QueueFull:
+                now = outbox.qsize()
+                try:
+                    asyncio.create_task(
+                        self._publish(
+                            EVT_WS_OUTBOX_DROP,
+                            ctx.sid,
+                            {"sid": ctx.sid, "dropped": 1, "now": now},
+                        )
+                    )
+                except RuntimeError:
+                    pass
         else:
-            _log.info("evt=await_user_emit sid=%s", sid)
+            telemetry_bus.publish(
+                {
+                    "type": EVT_WS_JSON_SEND,
+                    "sid": ctx.sid,
+                    "who": "server",
+                    "source": "ws_server",
+                    "meta": {"ws": {"from_adapter": True}},
+                    "frame": frame,
+                    "payload": frame,
+                }
+            )
+        ctx.await_user_vad_check_pending = True
 
     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
         if scope.get("type") != "websocket":
@@ -2212,6 +2241,7 @@ class ChatV2Adapter:
                 ctx.asr_ready = False
                 ctx.awaiting_asr_ready = False
                 ctx.client_capture_armed = False
+                ctx.pending_start_listening = None
                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
                 reason = event.get("reason")
                 if isinstance(reason, str) and reason:
@@ -2345,7 +2375,10 @@ class ChatV2Adapter:
             start_payload: Dict[str, Any] = {"type": "start_listening"}
             if session_policy:
                 start_payload["policy"] = session_policy
-            _enqueue(start_payload)
+            ctx.pending_start_listening = dict(start_payload)
+            if ctx.asr_ready:
+                _enqueue(start_payload)
+                ctx.pending_start_listening = None
 
             if key is not None:
                 ctx.listen_handoff_done.add(key)
@@ -2744,6 +2777,7 @@ class ChatV2Adapter:
                         "payload": frame,
                     }
                 )
+                self._publish_pending_start_listening(ctx, telemetry_bus)
 
             if threading.current_thread() is loop_thread:
                 _publish_ready()
@@ -3479,6 +3513,7 @@ class ChatV2Adapter:
         ctx.asr_ready = False
         ctx.awaiting_asr_ready = False
         ctx.client_capture_armed = False
+        ctx.pending_start_listening = None
         ctx.asr_recovering_until = 0.0
         ctx.asr_recovering_reason = None
         ctx.asr_recovering_audio_logged = False
@@ -4179,7 +4214,10 @@ class ChatV2Adapter:
 
         await self._send_json(send, ctx.sid, ready_frame)
         await self._send_json(send, ctx.sid, input_start)
-        await self._send_json(send, ctx.sid, start_payload)
+        ctx.pending_start_listening = dict(start_payload)
+        if ctx.asr_ready:
+            await self._send_json(send, ctx.sid, start_payload)
+            ctx.pending_start_listening = None
         _log.info(
             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
             ctx.sid,

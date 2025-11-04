@@ -1,333 +1,804 @@
-diff --git a/app/policy/loader.py b/app/policy/loader.py
-index e7ad266725c75a1c794fdf137ff6125cd168852d..fb2f82b776c8aa24d79c25ef88e975f18a8629a3 100644
---- a/app/policy/loader.py
-+++ b/app/policy/loader.py
-@@ -58,81 +58,100 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
-         "surface_via_suggestions": True,
-         _ASSISTANT_TURN_SEQUENCE_KEY: list(_DEFAULT_ASSISTANT_TURN_ACTIONS),
-     },
-     "telemetry": {
-         "enabled": True,
-         "level": "debug",
-         "categories": {
-             "ws": True,
-             "audio": True,
-             "policy": True,
-             "tts": True,
-             "gate": True,
-             "barge": True,
-             "asr": True,
-             "nlu": True,
-             "nlg": True,
-             "client_ui": True,
-             "provider_debug": True,
-         },
-         "redaction": {"pii": True, "secrets": True, "text": False},
-         "sampling": {"percent": 100},
-     },
- }
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 345d41cab5e3b08ad877a5d88186550200a30192..436cda9d75e9d1f646b3c6f0343ad80ebffcb5fe 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -336,50 +336,51 @@ class AdapterContext:
+     asr_subscription_bus: Optional[Any] = None
+     asr_open_subscription_token: Optional[str] = None
+     asr_unavailable_subscription_token: Optional[str] = None
+     asr_partial_subscription_token: Optional[str] = None
+     asr_final_subscription_token: Optional[str] = None
+     asr_recovering_until: float = 0.0
+     asr_recovering_reason: Optional[str] = None
+     asr_recovering_audio_logged: bool = False
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     policy_snapshot: Optional[Dict[str, Any]] = None
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+     tts_end_ts: Optional[float] = None
+     diag_audio_seen: bool = False
+     diag_timer: asyncio.TimerHandle | None = None
+     diag_timer_key: Optional[str] = None
+     await_user_expected: bool = False
+     await_user_pending: bool = False
+     await_user_pending_key: Optional[str] = None
+     await_user_after_mask: bool = False
+     await_user_after_mask_key: Optional[str] = None
+     tts_mask_phase: str = "off"
+     mask_subscription_token: Optional[str] = None
++    pending_start_listening: Optional[Dict[str, Any]] = None
+     tts_end_subscription_token: Optional[str] = None
+     turn_state_subscription_token: Optional[str] = None
+     hud_state: Optional[str] = None
+     client_mic_open: bool = False
+     mic_open_timer: asyncio.TimerHandle | None = None
+     mic_nudge_sent: bool = False
+     await_user_req_id: Optional[str] = None
+     last_tts_end_req_id: Optional[str] = None
+     await_user_cue_emitted: bool = False
+     await_user_vad_check_pending: bool = False
+     listen_handoff_done: set[str] = field(default_factory=set)
+     listen_handoff_task: asyncio.Task[None] | None = None
+     listen_handoff_task_key: Optional[str] = None
+     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+     client_banner_info: Optional[Dict[str, Any]] = None
+     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
+     allowed_asr_vendors: List[str] = field(default_factory=list)
+     asr_vendor: Optional[str] = None
+     audio_pipeline_mode: Optional[str] = None
+     asr_vendor_logged: bool = False
+     session_capture_policy: Optional[Dict[str, Any]] = None
  
  
-+def _safe_merge(
-+    base: Mapping[str, Any] | None,
-+    override: Mapping[str, Any],
-+) -> Dict[str, Any]:
-+    """Recursively merge ``override`` into ``base`` without clobbering siblings."""
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+@@ -456,60 +457,88 @@ class ChatV2Adapter:
+             return
+         payload: Dict[str, Any] = {
+             "type": "assistant.await_user",
+             "reason": "tts_end",
+             "ts": self._now_ms(),
+         }
+         req_value = getattr(ctx, "await_user_req_id", None)
+         if isinstance(req_value, str) and req_value:
+             payload["req_id"] = req_value
+         try:
+             outbox.put_nowait(payload)
+         except asyncio.QueueFull:
+             now = outbox.qsize()
+             try:
+                 asyncio.create_task(
+                     self._publish(
+                         EVT_WS_OUTBOX_DROP,
+                         sid,
+                         {"sid": sid, "dropped": 1, "now": now},
+                     )
+                 )
+             except RuntimeError:
+                 pass
+             return
+         ctx.await_user_cue_emitted = True
+-        ctx.await_user_vad_check_pending = True
+-        _log.info(
+-            "evt=turn_listen_cue sid=%s reason=tts_end policy_start=%s",
+-            sid,
+-            "true" if start_on_ready else "false",
+-        )
+-        if isinstance(req_value, str) and req_value:
+-            _log.info("evt=await_user_emit sid=%s req_id=%s", sid, req_value)
 +
-+    merged: Dict[str, Any] = {}
-+    if isinstance(base, Mapping):
-+        merged = {key: deepcopy(value) for key, value in base.items()}
-+
-+    for key, override_value in override.items():
-+        existing_value = merged.get(key)
-+        if isinstance(existing_value, Mapping) and isinstance(override_value, Mapping):
-+            merged[key] = _safe_merge(existing_value, override_value)
-+        else:
-+            merged[key] = deepcopy(override_value)
-+
-+    return merged
-+
-+
- def load_interaction_policy(
-     overrides: Dict[str, Any] | None = None,
- ) -> InteractionPolicySnapshot:
-     """Return a deterministic interaction policy snapshot.
++    def _publish_pending_start_listening(
++        self, ctx: AdapterContext, telemetry_bus: Any
++    ) -> None:
++        payload = ctx.pending_start_listening
++        if not isinstance(payload, dict):
++            return
++        frame = dict(payload)
++        ctx.pending_start_listening = None
++        outbox = ctx.outbox
++        if outbox is not None:
++            try:
++                outbox.put_nowait(frame)
++            except asyncio.QueueFull:
++                now = outbox.qsize()
++                try:
++                    asyncio.create_task(
++                        self._publish(
++                            EVT_WS_OUTBOX_DROP,
++                            ctx.sid,
++                            {"sid": ctx.sid, "dropped": 1, "now": now},
++                        )
++                    )
++                except RuntimeError:
++                    pass
+         else:
+-            _log.info("evt=await_user_emit sid=%s", sid)
++            telemetry_bus.publish(
++                {
++                    "type": EVT_WS_JSON_SEND,
++                    "sid": ctx.sid,
++                    "who": "server",
++                    "source": "ws_server",
++                    "meta": {"ws": {"from_adapter": True}},
++                    "frame": frame,
++                    "payload": frame,
++                }
++            )
++        ctx.await_user_vad_check_pending = True
  
-     The returned snapshot matches the defaults defined by the system of record
--    for the `chat.v2` contract. When ``overrides`` are provided, they are merged
--    shallowly on top of the defaults—each top-level key in ``overrides``
--    replaces the corresponding value entirely.
-+    for the `chat.v2` contract. When overrides are provided—either via
-+    configuration or the ``overrides`` argument—they are deep-merged into the
-+    defaults. Only mappings are merged recursively; all other value types replace
-+    the existing entry.
+     async def __call__(self, scope: dict, receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
+         if scope.get("type") != "websocket":
+             raise RuntimeError("ChatV2Adapter can only handle websocket scopes")
  
-     Args:
-         overrides: Optional dictionary with top-level keys to replace in the
-             default policy snapshot. Nested merges are not performed; providing
-             a key overrides the whole value at that key.
+         connect_event = await receive()
+         if connect_event.get("type") != "websocket.connect":
+             return
  
-     Returns:
-         A new dictionary containing the policy snapshot with any specified
-         overrides applied. Mutating the returned dictionary will not affect the
-         stored defaults.
-     """
+         raw_path = scope.get("raw_path")
+         if isinstance(raw_path, bytes):
+             try:
+                 path = raw_path.decode("utf-8")
+             except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+                 path = raw_path.decode("latin-1", errors="ignore")
+         else:
+             path = scope.get("path", "")
  
-     policy: InteractionPolicySnapshot = deepcopy(_DEFAULT_INTERACTION_POLICY)
+         query_bytes = scope.get("query_string") or b""
+         try:
+             query_string = query_bytes.decode("utf-8")
+         except UnicodeDecodeError:  # pragma: no cover - defensive fallback
+             query_string = query_bytes.decode("latin-1", errors="ignore")
+         path_qs = path
+         if query_string:
+@@ -2190,50 +2219,51 @@ class ChatV2Adapter:
+                     return
+                 _enqueue(frame)
  
-     base_overrides = getattr(config, "POLICY_OVERRIDES", None)
-     if isinstance(base_overrides, Mapping):
--        for key, value in base_overrides.items():
--            policy[key] = deepcopy(value)
-+        policy = _safe_merge(policy, base_overrides)
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
  
--    if overrides:
--        for key, value in overrides.items():
--            policy[key] = value
-+    if isinstance(overrides, Mapping):
-+        policy = _safe_merge(policy, overrides)
+         ctx.asr_partial_subscription_token = bus.subscribe(
+             EVT_ASR_PARTIAL, _handle_asr_event
+         )
+         ctx.asr_final_subscription_token = bus.subscribe(
+             EVT_ASR_FINAL, _handle_asr_event
+         )
  
-     return policy
+         def _handle_asr_unavailable_event(event: dict) -> None:
+             if event.get("type") != "asr.unavailable":
+                 return
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
  
+             def _on_loop() -> None:
+                 ctx.asr_ready = False
+                 ctx.awaiting_asr_ready = False
+                 ctx.client_capture_armed = False
++                ctx.pending_start_listening = None
+                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
+                 reason = event.get("reason")
+                 if isinstance(reason, str) and reason:
+                     payload["reason"] = reason
+                 details = event.get("details")
+                 detail_text = ""
+                 if details is not None:
+                     detail_text = details if isinstance(details, str) else str(details)
+                     payload["details"] = detail_text
+                 else:
+                     detail_text = ""
+                 lower_reason = reason.lower() if isinstance(reason, str) else ""
+                 lower_detail = detail_text.lower()
+                 concurrency_likely = False
+                 if ctx.asr_vendor == "speechmatics":
+                     if "concurrent_session" in lower_detail:
+                         concurrency_likely = True
+                     elif "concurrent_session" in lower_reason:
+                         concurrency_likely = True
+                 if concurrency_likely:
+                     ctx.asr_recovering_until = time.monotonic() + 3.0
+                     ctx.asr_recovering_reason = "concurrent_session"
+                     ctx.asr_recovering_audio_logged = False
+                     ctx.client_capture_armed = True
+                 else:
+@@ -2323,51 +2353,54 @@ class ChatV2Adapter:
+                 ready_frame["vendor"] = ctx.asr_vendor
+             capture = dict(descriptor)
+             capture["timeslice_ms"] = timeslice_ms
+             capture["manual_gate"] = False
+             session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+             input_start = {
+                 "type": "input.start",
+                 "capture": capture,
+             }
+             if session_policy:
+                 input_start["policy"] = session_policy
  
- def assistant_turn_actions(
-     snapshot: Mapping[str, Any] | None = None,
- ) -> list[str]:
-     """Return the configured assistant turn action sequence."""
+             _enqueue(ready_frame)
+             _enqueue(input_start)
+             ctx.ingress_packets = 0
+             ctx.ingress_bytes = 0
+             ctx.first_ingress_ms = None
+             mic_armed_now = int(time.time() * 1000)
+             ctx.mic_armed_ms = mic_armed_now
+             ctx.asr_ready_bundle_sent_ms = mic_armed_now
+             ctx.awaiting_asr_ready = True
+             ctx.client_capture_armed = True
+             start_payload: Dict[str, Any] = {"type": "start_listening"}
+             if session_policy:
+                 start_payload["policy"] = session_policy
+-            _enqueue(start_payload)
++            ctx.pending_start_listening = dict(start_payload)
++            if ctx.asr_ready:
++                _enqueue(start_payload)
++                ctx.pending_start_listening = None
  
-     actions_block: Mapping[str, Any] | None = None
-     if isinstance(snapshot, Mapping):
-         actions_candidate = snapshot.get("actions")
-         if isinstance(actions_candidate, Mapping):
-             actions_block = actions_candidate
+             if key is not None:
+                 ctx.listen_handoff_done.add(key)
+             self._clear_pending_for_key(ctx, key)
+             self._clear_after_mask_for_key(ctx, key)
+             current_key = self._turn_key(ctx, ctx.await_user_req_id)
+             if current_key == key:
+                 ctx.await_user_expected = False
+                 ctx.await_user_req_id = None
+             if ctx.last_tts_end_req_id == req_id:
+                 ctx.last_tts_end_req_id = None
+             ctx.client_mic_open = False
+             ctx.mic_nudge_sent = False
  
-     if actions_block is not None:
-         candidate_sequence = actions_block.get(_ASSISTANT_TURN_SEQUENCE_KEY)
-         if isinstance(candidate_sequence, Sequence) and not isinstance(
-             candidate_sequence, (str, bytes)
-         ):
-             normalized = [
-                 action.strip()
-                 for action in candidate_sequence
-                 if isinstance(action, str) and action.strip()
-             ]
-diff --git a/tests/test_policy_loader.py b/tests/test_policy_loader.py
-index c4e129a597f9419c5eb84acf2740fbb0b71b9c30..d3d1f71420fbc7f60773d6a8a574949bf08e184a 100644
---- a/tests/test_policy_loader.py
-+++ b/tests/test_policy_loader.py
-@@ -1,132 +1,211 @@
- """Tests for the interaction policy loader utilities."""
+             self._emit_hud_state(ctx, "Listening")
+             self._schedule_mic_open_guard(ctx, loop)
+             _log.info(
+                 "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
+                 ctx.sid,
+                 req_id,
+                 descriptor.get("mode", ""),
+                 descriptor.get("mime", ""),
+             )
+ 
+         def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
+@@ -2722,50 +2755,51 @@ class ChatV2Adapter:
+             ctx.asr_recovering_reason = None
+             ctx.asr_recovering_audio_logged = False
+             ctx.client_capture_armed = True
+ 
+             frame: Dict[str, Any] = {"type": "asr.ready"}
+             vendor = event.get("vendor")
+             if isinstance(vendor, str) and vendor:
+                 frame["vendor"] = vendor
+ 
+             def _publish_ready() -> None:
+                 try:
+                     asyncio.create_task(self._flush_audio_buffer(ctx))
+                 except RuntimeError:
+                     pass
+                 telemetry_bus.publish(
+                     {
+                         "type": EVT_WS_JSON_SEND,
+                         "sid": ctx.sid,
+                         "who": "server",
+                         "source": "ws_server",
+                         "meta": {"ws": {"from_adapter": True}},
+                         "frame": frame,
+                         "payload": frame,
+                     }
+                 )
++                self._publish_pending_start_listening(ctx, telemetry_bus)
+ 
+             if threading.current_thread() is loop_thread:
+                 _publish_ready()
+                 return
+ 
+             try:
+                 loop.call_soon_threadsafe(_publish_ready)
+             except RuntimeError:
+                 _publish_ready()
+ 
+         ctx.asr_subscription_token = telemetry_bus.subscribe(EVT_ASR_READY, _handle)
+ 
+     def _extract_outbound_payload(
+         self, ctx: AdapterContext, event: dict
+     ) -> Optional[Dict[str, Any]]:
+         payload = self._coerce_payload(event.get("payload"))
+         if payload is None:
+             payload = self._coerce_payload(event.get("frame"))
+ 
+         if payload is None:
+             meta = event.get("meta")
+             if isinstance(meta, dict):
+                 ws_meta = meta.get("ws")
+                 if isinstance(ws_meta, dict):
+                     payload = self._coerce_payload(ws_meta.get("frame"))
+@@ -3457,50 +3491,51 @@ class ChatV2Adapter:
+         if not callable(prearm):
+             return False
+ 
+         key = self._turn_key(ctx, req_id)
+         self._set_pending_for_key(ctx, key)
+         self._clear_after_mask_for_key(ctx, key)
+         try:
+             prearm(ctx.sid)
+         except Exception:  # pragma: no cover - defensive logging
+             self._clear_pending_for_key(ctx, key)
+             _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
+             return False
+ 
+         return True
+ 
+     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
+         token = ctx.asr_subscription_token
+         ctx.asr_subscription_token = None
+         telemetry_bus = ctx.asr_subscription_bus or bus
+         ctx.asr_subscription_bus = None
+         if token:
+             telemetry_bus.unsubscribe(token)
+         ctx.asr_ready = False
+         ctx.awaiting_asr_ready = False
+         ctx.client_capture_armed = False
++        ctx.pending_start_listening = None
+         ctx.asr_recovering_until = 0.0
+         ctx.asr_recovering_reason = None
+         ctx.asr_recovering_audio_logged = False
+         ctx.await_user_after_mask = False
+ 
+         open_token = ctx.asr_open_subscription_token
+         ctx.asr_open_subscription_token = None
+         if open_token:
+             bus.unsubscribe(open_token)
+         
+     async def set_outbound_queue_depth(self, sid: str, queued: int) -> None:
+         """Record the estimated outbound queue depth and emit diagnostics if needed."""
+ 
+         ctx = self._contexts.get(sid)
+         if ctx is None:
+             return
+ 
+         if not isinstance(queued, int):
+             try:
+                 queued = int(queued)
+             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
+                 raise TypeError("queued must be an integer") from exc
+ 
+         await self._update_backpressure(ctx, max(0, queued))
+ 
+@@ -4157,51 +4192,54 @@ class ChatV2Adapter:
+         input_start = {
+             "type": "input.start",
+             "capture": capture,
+         }
+         if session_policy:
+             input_start["policy"] = session_policy
+ 
+         start_payload: Dict[str, Any] = {"type": "start_listening"}
+         if session_policy:
+             start_payload["policy"] = session_policy
+ 
+         now_ms = int(time.time() * 1000)
+         ctx.awaiting_asr_ready = True
+         ctx.client_capture_armed = True
+         ctx.asr_recovering_until = 0.0
+         ctx.asr_recovering_reason = None
+         ctx.asr_recovering_audio_logged = False
+         ctx.ingress_packets = 0
+         ctx.ingress_bytes = 0
+         ctx.first_ingress_ms = None
+         ctx.mic_armed_ms = now_ms
+         ctx.asr_ready_bundle_sent_ms = now_ms
+ 
+         await self._send_json(send, ctx.sid, ready_frame)
+         await self._send_json(send, ctx.sid, input_start)
+-        await self._send_json(send, ctx.sid, start_payload)
++        ctx.pending_start_listening = dict(start_payload)
++        if ctx.asr_ready:
++            await self._send_json(send, ctx.sid, start_payload)
++            ctx.pending_start_listening = None
+         _log.info(
+             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
+             ctx.sid,
+             mode,
+             descriptor.get("mime", ""),
+             timeslice_ms,
+             vendor,
+         )
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+diff --git a/tests/test_adapter_outbound_bridge.py b/tests/test_adapter_outbound_bridge.py
+index f867bf5fc9b841b8cf809aa36b73d5f1682a18fd..ee4417ff9ea2cebd78bb133c0c2eb8b964992e18 100644
+--- a/tests/test_adapter_outbound_bridge.py
++++ b/tests/test_adapter_outbound_bridge.py
+@@ -1,41 +1,42 @@
+ """Tests for the outbound WebSocket bridge in the chat.v2 adapter."""
  from __future__ import annotations
  
+ import asyncio
+ import json
+ import os
  import unittest
+ from unittest import mock
+ import uuid
+ from typing import Any, Callable, Dict
+ 
+ os.environ.setdefault("SECRET_KEY", "test-secret")
+ 
+ from app.telemetry import bus
+ from app.voice_v2 import (
+     EVT_ASR_OPEN,
++    EVT_ASR_READY,
+     EVT_CLIENT_MIC_OPEN,
+     EVT_HUD_STATE,
+     EVT_TURN_STATE,
+     EVT_TTS_MASK,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_SEND,
+ )
+ from app.security.jwt_utils import mint_ws_token
+ from app.ws.adapter import (
+     CHAT_V2_SUBPROTOCOL,
+     EVT_WS_OUTBOX_DROP,
+     ChatV2Adapter,
+ )
+ 
+ 
+ class RecordingEngine:
+     """Engine stub that captures the opened session identifier."""
+ 
+     def __init__(self) -> None:
+         self.open_sid: str | None = None
+ 
+     def on_open(self, sid: str, headers: Dict[str, str]) -> None:
+         self.open_sid = sid
+ 
+ 
+@@ -394,62 +395,69 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+         adapter.asr_runtime = runtime
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         hud_events: list[dict] = []
+         mic_events: list[dict] = []
+         token = bus.subscribe(EVT_HUD_STATE, hud_events.append)
+         mic_token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
+         try:
+             sid = harness.sid
+             policy_payload = {
+                 "type": "policy.interaction",
+                 "interaction_id": "turn-1",
+                 "actions": ["assistant.say", "assistant.await_user"],
+             }
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
+             await asyncio.sleep(0.01)
+ 
+             tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
+             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
+ 
+             await harness.wait_for(lambda: bool(runtime.prearm_calls))
+             self.assertEqual(runtime.prearm_calls, [sid])
+ 
+             bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
+ 
++            ctx = adapter._contexts.get(sid)
++            self.assertIsNotNone(ctx)
++            if ctx is None:  # pragma: no cover - satisfy type checkers
++                raise AssertionError("context missing")
++
++            await harness.wait_for(lambda: bool(ctx.pending_start_listening), timeout=2.0)
++
++            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
++
++            await harness.wait_for(lambda: ctx.pending_start_listening is None, timeout=2.0)
++
+             frame = await harness.wait_for_outbound(
+-                lambda data: data.get("type") == "start_listening"
++                lambda data: data.get("type") == "start_listening",
++                timeout=2.0,
+             )
+             self.assertEqual(frame.get("type"), "start_listening")
+-            ctx = adapter._contexts.get(sid)
+-            self.assertIsNotNone(ctx)
+-            if ctx is not None:
+-                self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
++            self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
+ 
+-            ctx = adapter._contexts.get(sid)
+-            if ctx is not None:
+-                ctx.asr_ready = True
++            ctx.asr_ready = True
+             await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x00\x00"})
+ 
+             await harness.wait_for(lambda: bool(mic_events))
+             self.assertEqual(mic_events[-1].get("meta", {}).get("state"), "open")
+ 
+             await harness.wait_for(lambda: bool(hud_events))
+             self.assertEqual(hud_events[-1]["meta"].get("state"), "Listening")
+         finally:
+             bus.unsubscribe(token)
+             bus.unsubscribe(mic_token)
+             await harness.close()
+ 
+     async def _test_client_ready_mic_open(self) -> None:
+         engine = RecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
+         harness = OutboundHarness(adapter, engine)
+         await harness.start()
+         mic_events: list[dict] = []
+         token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
+         try:
+             payload = {"type": "client.ready", "mic": {"state": "open", "vendor": "browser", "ts": 12345}}
+             await harness._inbound.put({"type": "websocket.receive", "text": json.dumps(payload)})
+             await harness.wait_for(lambda: bool(mic_events))
+             self.assertEqual(mic_events[-1]["meta"].get("state"), "open")
+             self.assertEqual(mic_events[-1]["meta"].get("vendor"), "browser")
+@@ -688,50 +696,51 @@ class TestAdapterOutboundBridge(unittest.TestCase):
+         with mock.patch("app.ws.adapter._MIC_OPEN_TIMEOUT_SECONDS", 0.05):
+             engine = RecordingEngine()
+             adapter = ChatV2Adapter(engine=engine)
+             runtime = _StubAsrRuntime()
+             adapter.asr_runtime = runtime
+             harness = OutboundHarness(adapter, engine)
+             await harness.start()
+ 
+             sid = harness.sid
+             mic_events: list[dict] = []
+             token = bus.subscribe(EVT_CLIENT_MIC_OPEN, mic_events.append)
+             try:
+                 policy_payload = {
+                     "type": "policy.interaction",
+                     "interaction_id": "turn-1",
+                     "actions": ["assistant.say", "assistant.await_user"],
+                 }
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": policy_payload})
+                 await asyncio.sleep(0.01)
+ 
+                 tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
+                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
+ 
+                 await harness.wait_for(lambda: bool(runtime.prearm_calls))
+                 bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
++                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
+ 
+                 frame = await harness.wait_for_outbound(
+                     lambda data: data.get("type") == "start_listening"
+                 )
+                 self.assertEqual(frame.get("type"), "start_listening")
+                 ctx = adapter._contexts.get(sid)
+                 self.assertIsNotNone(ctx)
+                 if ctx is not None:
+                     self.assertEqual(frame.get("policy"), ctx.session_capture_policy)
+ 
+                 nudge_frame = await harness.wait_for_outbound(
+                     lambda data: data.get("type") == "hud.nudge"
+                 )
+                 self.assertEqual(nudge_frame.get("code"), "mic_permissions")
+                 self.assertEqual(nudge_frame.get("reason"), "mic_open_timeout")
+                 self.assertFalse(mic_events)
+ 
+                 ctx = adapter._contexts.get(sid)
+                 if ctx is not None:
+                     ctx.asr_ready = True
+                 await harness._inbound.put({"type": "websocket.receive", "bytes": b"\x03\x03"})
+ 
+                 await harness.wait_for(lambda: bool(mic_events))
+                 nudge_frames = [
+                     frame for frame in harness.outbound_frames if frame.get("type") == "hud.nudge"
+diff --git a/tests/test_asr_adapter_basic.py b/tests/test_asr_adapter_basic.py
+index d04f5694f5cc2e307ea203970fe3779cfb262303..5f2c02e1d54f245fa444925f097449e6f5c196ac 100644
+--- a/tests/test_asr_adapter_basic.py
++++ b/tests/test_asr_adapter_basic.py
+@@ -13,86 +13,88 @@ class TestASRAdapterBasic(unittest.TestCase):
+     def tearDown(self) -> None:
+         bus.reset()
+ 
+     def test_ready_bundle_uses_pcm_policy(self) -> None:
+         adapter = ChatV2Adapter()
+         ctx = AdapterContext(sid="sid-ready-bundle", headers={})
+         ctx.asr_vendor = "speechmatics"
+         ctx.audio_pipeline_mode = "pcm16"
+         ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
+ 
+         sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
+ 
+         self.assertFalse(ctx.asr_ready)
+         self.assertTrue(ctx.awaiting_asr_ready)
+         self.assertTrue(ctx.client_capture_armed)
+         self.assertIsInstance(ctx.mic_armed_ms, int)
+ 
+         frames = [
+             json.loads(msg["text"])
+             for msg in sent
+             if msg.get("type") == "websocket.send" and msg.get("text")
+         ]
+ 
+         self.assertEqual(
+             [frame.get("type") for frame in frames],
+-            ["asr.ready", "input.start", "start_listening"],
++            ["asr.ready", "input.start"],
+         )
+ 
+         ready_frame = frames[0]
+         self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+         input_desc = ready_frame.get("input")
+         self.assertIsInstance(input_desc, dict)
+         self.assertEqual(input_desc.get("mode"), "pcm16")
+         self.assertEqual(input_desc.get("container"), "raw")
+         self.assertEqual(input_desc.get("codec"), "pcm_s16le")
+         self.assertEqual(input_desc.get("rate_hz"), 16000)
+         self.assertEqual(input_desc.get("channels"), 1)
+ 
+         input_start = frames[1]
+         capture = input_start.get("capture")
+         self.assertIsInstance(capture, dict)
+         self.assertEqual(capture.get("mode"), "pcm16")
+         self.assertEqual(capture.get("container"), "raw")
+         self.assertEqual(capture.get("codec"), "pcm_s16le")
+         self.assertEqual(capture.get("rate_hz"), 16000)
+         self.assertEqual(capture.get("channels"), 1)
+         self.assertEqual(capture.get("timeslice_ms"), 50)
+         self.assertIs(capture.get("manual_gate"), False)
+ 
+         policy = input_start.get("policy")
+         self.assertIsInstance(policy, dict)
+         self.assertEqual(policy, ctx.session_capture_policy)
+         self.assertEqual(policy.get("media", {}).get("asr_input"), "pcm_16k")
+         self.assertEqual(policy.get("audio", {}).get("pipeline", {}).get("mode"), "pcm16")
+         self.assertEqual(policy.get("capture", {}).get("sample_rate"), 16000)
+         self.assertEqual(policy.get("capture", {}).get("channels"), 1)
+ 
+-        start_listening = frames[2]
+-        self.assertEqual(start_listening.get("policy"), policy)
++        pending_start = ctx.pending_start_listening
++        self.assertIsInstance(pending_start, dict)
++        self.assertEqual(pending_start.get("type"), "start_listening")
++        self.assertEqual(pending_start.get("policy"), policy)
+ 
+-        self.assertEqual(len(sent), 3)
++        self.assertEqual(len(sent), 2)
+ 
+     def test_ready_bundle_injects_default_vendor(self) -> None:
+         adapter = ChatV2Adapter()
+         ctx = AdapterContext(sid="sid-ready-default", headers={})
+         ctx.audio_pipeline_mode = "pcm16"
+         ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
+ 
+         sent = asyncio.run(self._emit_ready_bundle(adapter, ctx))
+ 
+         frames = [
+             json.loads(msg["text"])
+             for msg in sent
+             if msg.get("type") == "websocket.send" and msg.get("text")
+         ]
+         self.assertGreaterEqual(len(frames), 1)
+         ready_frame = frames[0]
+         self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+ 
+     async def _emit_ready_bundle(
+         self, adapter: ChatV2Adapter, ctx: AdapterContext
+     ) -> list[dict]:
+         sent: list[dict] = []
+ 
+         async def send(message: dict) -> None:
+             sent.append(message)
+diff --git a/tests/test_ws_keepalive_and_isolation.py b/tests/test_ws_keepalive_and_isolation.py
+index 896b67363e5d8f74b6899b94721d15cc7e72f6eb..cd411e28332316dded6832e9174b74d15c2a31d2 100644
+--- a/tests/test_ws_keepalive_and_isolation.py
++++ b/tests/test_ws_keepalive_and_isolation.py
+@@ -1,39 +1,39 @@
+ import asyncio
+ import json
+ import os
+ import unittest
+ import uuid
  from unittest.mock import patch
  
- from app.policy.loader import load_interaction_policy
+ from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
+ 
+ os.environ.setdefault("SECRET_KEY", "test-secret")
+ 
+ from app import config
+ from app.telemetry import bus
+-from app.voice_v2 import EVT_WS_JSON_SEND
++from app.voice_v2 import EVT_ASR_READY, EVT_WS_JSON_SEND
+ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, AdapterContext, ChatV2Adapter
+ from app.security.jwt_utils import mint_ws_token
  
  
- class InteractionPolicyLoaderTests(unittest.TestCase):
-     """Validate the deterministic snapshot returned by ``load_interaction_policy``."""
+ class LabelRecordingEngine:
+     """Engine stub that records session identifiers by label."""
  
-     def test_defaults_shape_and_types(self) -> None:
-         snapshot = load_interaction_policy()
+     def __init__(self, on_open_hook=None) -> None:
+         self.sid_by_label: dict[str, str] = {}
+         self._on_open_hook = on_open_hook
  
-         expected_keys = {
-             "mode",
-             "allow_auto_vad",
-             "barge_in_enabled",
-             "auto_commit_when_ready",
-             "telemetry",
-+            "voice",
-+            "greet",
-+            "suggestions",
-+            "actions",
-+            "policy",
-             "media",
-             "capture",
-+            "audio",
-         }
-         self.assertEqual(set(snapshot.keys()), expected_keys)
+     def on_open(self, sid: str, headers: dict[str, str]) -> None:
+         label = headers.get("x-test-label")
+         if label:
+             self.sid_by_label[label] = sid
+         if self._on_open_hook is not None:
+             self._on_open_hook(sid, headers)
  
-         self.assertEqual(snapshot["mode"], "idle")
-         self.assertIs(snapshot["allow_auto_vad"], True)
-         self.assertIs(snapshot["barge_in_enabled"], True)
-         self.assertIs(snapshot["auto_commit_when_ready"], True)
  
-+        voice = snapshot["voice"]
-+        self.assertEqual(voice, {"voice_id": "alloy-en-US-001", "locale": "en-US"})
+ class AdapterHarness:
+     """Drive the adapter inside asyncio tests and record outbound frames."""
+ 
+     def __init__(self, adapter: ChatV2Adapter, engine: LabelRecordingEngine, *, label: str) -> None:
+         self.adapter = adapter
+         self.engine = engine
+@@ -271,50 +271,62 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
+                 )
+                 self.assertEqual(input_desc.get("container"), "raw")
+                 self.assertEqual(input_desc.get("codec"), "pcm_s16le")
+                 self.assertEqual(input_desc.get("rate_hz"), 16000)
+                 self.assertEqual(input_desc.get("channels"), 1)
+ 
+                 input_start = await harness.wait_for_outbound(
+                     lambda frame: frame.get("type") == "input.start",
+                     timeout=2.0,
+                 )
+                 capture = (
+                     input_start.get("capture", {})
+                     if isinstance(input_start, dict)
+                     else {}
+                 )
+                 self.assertEqual(capture.get("mode"), "pcm16")
+                 self.assertEqual(capture.get("codec"), "pcm_s16le")
+                 self.assertEqual(capture.get("container"), "raw")
+                 self.assertEqual(capture.get("rate_hz"), 16000)
+                 self.assertEqual(capture.get("channels"), 1)
+                 session_policy = ctx.session_capture_policy or adapter._session_capture_policy_for_mode(
+                     ctx.audio_pipeline_mode or "pcm16"
+                 )
+                 self.assertEqual(input_start.get("policy"), session_policy)
+ 
++                pending_start = ctx.pending_start_listening
++                self.assertIsInstance(pending_start, dict)
++                self.assertEqual(pending_start.get("policy"), session_policy)
 +
-+        greet = snapshot["greet"]
-+        self.assertEqual(greet, {"enabled": True, "mode": "persona", "post_hold_ms": 200})
++                bus.publish(
++                    {
++                        "type": EVT_ASR_READY,
++                        "sid": ctx.sid,
++                        "vendor": ctx.asr_vendor,
++                    }
++                )
 +
-+        suggestions = snapshot["suggestions"]
-+        self.assertEqual(suggestions, {"on_connect": True, "count": 3})
-+
-         media = snapshot["media"]
-         self.assertIsInstance(media, dict)
-         self.assertEqual(
-             media,
-             {
-                 "asr_input": "pcm_16k",
-                 "asr_rate_hz": 16000,
-                 "asr_channels": 1,
-                 "fallbacks_allowed": False,
-             },
-         )
+                 start_listening = await harness.wait_for_outbound(
+                     lambda frame: frame.get("type") == "start_listening",
+                     timeout=2.0,
+                 )
+                 self.assertEqual(start_listening.get("policy"), session_policy)
+             finally:
+                 await harness.close()
  
-         capture = snapshot["capture"]
-         self.assertIsInstance(capture, dict)
-         self.assertEqual(
-             capture,
-             {
-                 "start_on_asr_ready": True,
-                 "start_on_turn_ready": True,
-                 "timeslice_ms": 200,
-                 "mask_during_tts": True,
-             },
-         )
+     async def _test_asr_runtime_switches_on_vendor_change(self) -> None:
+         engine = LabelRecordingEngine()
+         adapter = ChatV2Adapter(engine=engine)
  
-+        audio = snapshot["audio"]
-+        self.assertEqual(audio, {"pipeline": {"mode": "pcm16"}})
-+
-+        actions = snapshot["actions"]
-+        self.assertEqual(
-+            actions,
-+            {
-+                "allowed": ["answer"],
-+                "surface_via_suggestions": True,
-+                "assistant_turn_sequence": [
-+                    "assistant.say",
-+                    "assistant.await_user",
-+                ],
-+            },
-+        )
-+
-+        policy = snapshot["policy"]
-+        self.assertIsInstance(policy, dict)
-+        self.assertEqual(set(policy.keys()), {"recorder", "input", "asr", "routing"})
-+        self.assertEqual(
-+            policy["recorder"],
-+            {"stop_on_tts_start": False, "mute_send_during_tts": True},
-+        )
-+        self.assertEqual(
-+            policy["input"],
-+            {"require_hotword_to_start": False},
-+        )
-+        self.assertEqual(
-+            policy["routing"],
-+            {"ws_version": "v2"},
-+        )
-+
-+        asr = policy["asr"]
-+        self.assertIsInstance(asr, dict)
-+        self.assertTrue(asr["prearm_on_tts_end"])
-+        self.assertEqual(asr["commit_silence_ms"], 900)
-+
-         telemetry = snapshot["telemetry"]
-         self.assertIsInstance(telemetry, dict)
-         self.assertIs(telemetry["enabled"], True)
-         self.assertEqual(telemetry["level"], "debug")
+         class StubSpeechmaticsClient(SpeechmaticsClient):
+             vendor = "speechmatics"
  
-         categories = telemetry["categories"]
-         self.assertIsInstance(categories, dict)
-         expected_categories = {
-             "ws",
-             "audio",
-             "policy",
-             "tts",
-             "gate",
-             "barge",
-             "asr",
-             "nlu",
-             "nlg",
-             "client_ui",
-             "provider_debug",
-         }
-         self.assertEqual(set(categories.keys()), expected_categories)
-         for key in expected_categories:
-             self.assertIs(categories[key], True)
+             def __init__(self, api_key: str, url: str, _bus, _logger) -> None:
+                 super().__init__(api_key, url, _bus, _logger)
+                 self.api_key = api_key
+                 self.url = url
  
-         redaction = telemetry["redaction"]
-         self.assertEqual(redaction, {"pii": True, "secrets": True, "text": False})
+         class StubLegacyClient:
+             vendor = "legacy"
  
-         sampling = telemetry["sampling"]
-         self.assertEqual(sampling, {"percent": 100})
- 
--    def test_overrides_shallow(self) -> None:
--        overrides = {"telemetry": {"level": "info"}}
-+    def test_overrides_safe_merge(self) -> None:
-+        overrides = {
-+            "telemetry": {
-+                "level": "info",
-+                "categories": {"audio": False},
-+            },
-+            "policy": {"input": {"require_hotword_to_start": True}},
-+        }
-         snapshot = load_interaction_policy(overrides)
- 
-         self.assertEqual(snapshot["mode"], "idle")
-         self.assertIs(snapshot["allow_auto_vad"], True)
-         self.assertIs(snapshot["barge_in_enabled"], True)
-         self.assertIs(snapshot["auto_commit_when_ready"], True)
-         self.assertIn("media", snapshot)
-         self.assertIn("capture", snapshot)
- 
-         telemetry = snapshot["telemetry"]
--        self.assertEqual(telemetry, {"level": "info"})
--        self.assertNotIn("categories", telemetry)
-+        self.assertEqual(telemetry["level"], "info")
-+        categories = telemetry["categories"]
-+        self.assertIsInstance(categories, dict)
-+        self.assertFalse(categories["audio"])
-+        default_categories = load_interaction_policy()["telemetry"]["categories"]
-+        for key, value in default_categories.items():
-+            if key == "audio":
-+                continue
-+            self.assertEqual(categories[key], value)
-+
-+        policy = snapshot["policy"]
-+        self.assertTrue(policy["input"]["require_hotword_to_start"])
-+        self.assertIn("asr", policy)
-+        self.assertIn("recorder", policy)
-+        self.assertIn("routing", policy)
- 
-         # Loading defaults again should not be impacted by the overrides call.
-         fresh_defaults = load_interaction_policy()
-         self.assertIn("categories", fresh_defaults["telemetry"])
-+        self.assertFalse(fresh_defaults["policy"]["input"]["require_hotword_to_start"])
- 
-     def test_config_policy_overrides_applied(self) -> None:
-         overrides = {
-             "media": {
-                 "asr_input": "pcm_16k",
-                 "asr_rate_hz": 16000,
-                 "asr_channels": 1,
-                 "fallbacks_allowed": True,
-             },
-             "capture": {
-                 "start_on_asr_ready": False,
-                 "start_on_turn_ready": True,
-                 "timeslice_ms": 250,
-                 "mask_during_tts": False,
-             },
-+            "policy": {
-+                "input": {"require_hotword_to_start": True},
-+            },
-         }
- 
-         with patch("app.policy.loader.config.POLICY_OVERRIDES", overrides):
-             snapshot = load_interaction_policy()
- 
-         self.assertEqual(snapshot["media"]["asr_input"], "pcm_16k")
-         self.assertTrue(snapshot["media"]["fallbacks_allowed"])
-         self.assertEqual(snapshot["capture"]["timeslice_ms"], 250)
-         self.assertFalse(snapshot["capture"]["start_on_asr_ready"])
-         self.assertFalse(snapshot["capture"]["mask_during_tts"])
-+        self.assertTrue(snapshot["policy"]["input"]["require_hotword_to_start"])
-+        self.assertIn("asr", snapshot["policy"])
-+        self.assertIn("recorder", snapshot["policy"])
-+        self.assertIn("routing", snapshot["policy"])
- 
- 
- if __name__ == "__main__":  # pragma: no cover
-     unittest.main()
+         class StubASRRuntime:
+             def __init__(self, engine, client, telemetry_bus=None, metrics=None) -> None:
