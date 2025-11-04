@@ -470,13 +470,26 @@ import { WakeWord } from "./wake_word.js";
     sendAutostartTelemetry("gesture", { reason });
   }
 
+  function requiresHotwordToStart(snapshot) {
+    const inputPolicy = snapshot?.input ?? null;
+    if (!inputPolicy || typeof inputPolicy !== "object") {
+      return false;
+    }
+    if (typeof inputPolicy.require_hotword_to_start === "boolean") {
+      return inputPolicy.require_hotword_to_start;
+    }
+    return false;
+  }
+
   function canAutoRecord(state) {
+    if (requiresHotwordToStart(state)) return false;
     if (!state?.policy?.auto_record_after_greet) return false;
     if (state.policy.tts_gate_enabled && state.ttsActive) return false;
     return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
   }
 
   function reasonFromState(state) {
+    if (requiresHotwordToStart(state)) return "wake_word_only";
     if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
     if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
     if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
@@ -503,6 +516,7 @@ import { WakeWord } from "./wake_word.js";
   function getAutostartSnapshot() {
     const state = typeof AppState.getState === "function" ? AppState.getState() : {};
     const policy = AppState.policy || state.policy || {};
+    const inputPolicy = policy && typeof policy.input === "object" ? policy.input : null;
     const recorderState = state && state.recorder && typeof state.recorder === "object"
       ? { active: Boolean(state.recorder.active) }
       : (AppState.recorder && typeof AppState.recorder === "object"
@@ -516,6 +530,7 @@ import { WakeWord } from "./wake_word.js";
     return {
       ...state,
       policy,
+      input: inputPolicy,
       recorder: recorderState,
       ttsActive,
       turnState,
@@ -1891,6 +1906,7 @@ import { WakeWord } from "./wake_word.js";
     }
 
     policy.policy = nested;
+    policy.input = nested && typeof nested.input === 'object' ? { ...nested.input } : {};
     policy.audio = { pipeline: audioPipeline };
     return policy;
   }
