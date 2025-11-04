@@ -1682,6 +1682,17 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function handleInputStartFrame(frame) {
+    const gates = getGateSnapshot();
+    const asrReady = typeof gates?.asrReady === "boolean" ? gates.asrReady : Boolean(AppState?.asrReady);
+    if (!asrReady) {
+      setPendingAsrReadyStart({
+        frame,
+        policy: frame?.policy,
+        reason: frame?.reason || frame?.type || "input.start",
+      });
+      return;
+    }
+
     startInputCapture(frame);
   }
 
@@ -2408,7 +2419,7 @@ import { WakeWord } from "./wake_word.js";
       }
       clearPendingAsrReadyStart("stop_listening");
     } else if (frame.type === "input.start") {
-      startInputCapture(frame);
+      handleInputStartFrame(frame);
     } else if (frame.type === "input.stop") {
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
