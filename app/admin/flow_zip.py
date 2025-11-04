@@ -12,7 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import compute_sha256
-from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
+from app.voice_v2 import EVT_SESSION_STEP, EVT_TTS_END, EVT_TTS_START
 
 
 __all__ = ["build_flow_zip"]
@@ -58,6 +58,11 @@ _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SE
 _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
 
 _PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
+
+_SESSION_STEP_ALLOWLIST = {
+    "policy_defaults",
+    "turn_metrics",
+}
 
 _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
 
@@ -255,6 +260,13 @@ def _render_payloads(
 def _is_timeline_event(event: Dict[str, object]) -> bool:
     event_type = event.get("type")
     if not isinstance(event_type, str):
+        return False
+    if event_type == EVT_SESSION_STEP:
+        meta = event.get("meta")
+        if isinstance(meta, dict):
+            step_value = meta.get("step")
+            if isinstance(step_value, str) and step_value in _SESSION_STEP_ALLOWLIST:
+                return True
         return False
     if event_type in _TIMELINE_TYPES:
         return True

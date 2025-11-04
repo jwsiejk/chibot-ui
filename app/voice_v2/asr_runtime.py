@@ -1122,6 +1122,19 @@ class ASRRuntime:
             1 if extended_once else 0,
         )
 
+        self._emit_session_step(
+            sid,
+            "turn_metrics",
+            meta={
+                "finals": final_count,
+                "post_final_chunks": post_final_chunks,
+                "ue_ms": new_ue,
+                "cs_ms": new_cs,
+                "extended_once": bool(extended_once),
+            },
+            source="asr.runtime",
+        )
+
         state.listening = False
         state.prearm_requested = False
         state.pending.clear()

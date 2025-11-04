@@ -3544,6 +3544,43 @@ class ChatV2Adapter:
                     event.setdefault("frame", frame_copy)
         bus.publish(event)
 
+    def _publish_session_step_meta(
+        self,
+        sid: Optional[str],
+        meta: Mapping[str, Any] | None,
+    ) -> None:
+        if not isinstance(sid, str) or not sid:
+            return
+        if not isinstance(meta, Mapping):
+            return
+        step_value = meta.get("step")
+        if not isinstance(step_value, str) or not step_value:
+            return
+
+        payload = dict(meta)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            loop.create_task(self._publish(EVT_SESSION_STEP, sid, payload))
+            return
+
+        fallback_event = {
+            "schema_version": "1",
+            "type": EVT_SESSION_STEP,
+            "sid": sid,
+            "who": "server",
+            "source": "ws_server",
+            "meta": payload,
+        }
+        try:
+            bus.publish(fallback_event)
+        except Exception:  # pragma: no cover - defensive fallback
+            _log.exception("evt=session_step_publish_failed sid=%s step=%s", sid, step_value)
+
     def _emit_session_step(
         self,
         sid: str,
@@ -3757,6 +3794,20 @@ class ChatV2Adapter:
                 timeslice_for_log if timeslice_for_log is not None else "unknown",
                 str(allow_word_finals).lower() if allow_word_finals is not None else "unknown",
             )
+
+            sid_for_publish = current_sid.get(None)
+            policy_meta: Dict[str, Any] = {"step": "policy_defaults"}
+            if ue_ms is not None:
+                policy_meta["ue_ms"] = ue_ms
+            if cs_ms is not None:
+                policy_meta["cs_ms"] = cs_ms
+            if min_seg_ms is not None:
+                policy_meta["min_seg_ms"] = min_seg_ms
+            if timeslice_for_log is not None:
+                policy_meta["timeslice_ms"] = timeslice_for_log
+            if allow_word_finals is not None:
+                policy_meta["allow_word_finals"] = bool(allow_word_finals)
+            self._publish_session_step_meta(sid_for_publish, policy_meta)
         return stable
 
     def _allowed_asr_vendors(self) -> List[str]:
