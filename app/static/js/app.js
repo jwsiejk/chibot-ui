@@ -2869,7 +2869,7 @@ window.addEventListener('assistant.await_user', (event) => {
   } catch (err) {
     console.warn('Failed to mark auto_vad_active on policy', err);
   }
-  logClient('diag=vad_active state=Listening');
+  logClient('client.mic', 'diag=vad_active state=Listening');
 });
 
 window.addEventListener('asr.unavailable', (event) => {

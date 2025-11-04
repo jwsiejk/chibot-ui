@@ -109,10 +109,11 @@ import { WakeWord } from "./wake_word.js";
       return false;
     }
     const appState = getAppState();
+    let handled = false;
     try {
       if (appState?.hub && typeof appState.hub.log === "function") {
         appState.hub.log("client.mic", text);
-        return true;
+        handled = true;
       }
     } catch (err) {
       try {
@@ -120,23 +121,29 @@ import { WakeWord } from "./wake_word.js";
       } catch {}
     }
     if (typeof window !== "undefined") {
+      let routedToClientLogger = false;
       try {
         const logFn = window.__logClientMicString;
         if (typeof logFn === "function") {
           logFn(text);
-          return true;
+          routedToClientLogger = true;
         }
       } catch {}
+      if (!routedToClientLogger) {
+        try {
+          window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail: text } }));
+          routedToClientLogger = true;
+        } catch {}
+      }
+      handled = handled || routedToClientLogger;
+    }
+    if (!handled) {
       try {
-        window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail: text } }));
-        return true;
+        console.log(`client.mic ${text}`);
+        handled = true;
       } catch {}
     }
-    try {
-      console.log(`client.mic ${text}`);
-      return true;
-    } catch {}
-    return false;
+    return handled;
   }
 
   function getRearmCooldownRemainingMs() {
@@ -624,16 +631,7 @@ import { WakeWord } from "./wake_word.js";
       const normalizedRms = Number.isFinite(rms) ? rms : 0;
       const normalizedBytes = Number.isFinite(bytes) ? bytes : 0;
       const message = `frame seq=${seq} rms=${normalizedRms.toFixed(1)} bytes=${normalizedBytes}`;
-      try {
-        const hub = typeof window !== "undefined" ? window.AppState?.hub : null;
-        if (hub && typeof hub.log === "function") {
-          hub.log("client.mic", message);
-          return;
-        }
-      } catch {}
-      try {
-        console.log(`client.mic ${message}`);
-      } catch {}
+      logMicEventString(message);
     }
 
     _sendCommitControl(detail) {

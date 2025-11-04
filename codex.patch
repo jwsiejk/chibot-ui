@@ -1,380 +1,218 @@
-diff --git a/app/admin/flow_zip.py b/app/admin/flow_zip.py
-index 48123972278554e0b7f753772a26412f35a4ea32..39ce6035b28a9800b58282d57a36bae40df56079 100644
---- a/app/admin/flow_zip.py
-+++ b/app/admin/flow_zip.py
-@@ -1,86 +1,91 @@
- """Utilities for building deterministic flow export archives."""
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 6417155c726d7c0b4d6798b7479116fe52371af4..98958f4a9c4610124acbd3287a3ba1f88618330f 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -2847,51 +2847,51 @@ window.addEventListener('asr.final', () => {
+ });
  
- from __future__ import annotations
+ window.addEventListener('assistant.await_user', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const frame = event && event.detail;
+   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
+   maybeAutoStartCapture('await_user', reason);
+   if (shouldPrearmOnTtsEnd()) {
+     try {
+       requestAsrPrearm('await_user');
+     } catch (err) {
+       console.warn('requestAsrPrearm failed after assistant.await_user', err);
+     }
+   }
+   try {
+     if (AppState && typeof AppState === 'object') {
+       const policy = AppState.policy && typeof AppState.policy === 'object'
+         ? AppState.policy
+         : (AppState.policy = {});
+       const currentVad = policy.vad && typeof policy.vad === 'object' ? policy.vad : {};
+       policy.vad = { ...currentVad, auto_vad_active: true };
+     }
+   } catch (err) {
+     console.warn('Failed to mark auto_vad_active on policy', err);
+   }
+-  logClient('diag=vad_active state=Listening');
++  logClient('client.mic', 'diag=vad_active state=Listening');
+ });
  
- import io
- import json
- from copy import deepcopy
- from datetime import datetime, timezone
- from pathlib import Path
- from typing import Dict, Iterable, List, Tuple
- from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+ window.addEventListener('asr.unavailable', (event) => {
+   cancelAsrPartialWatchdog();
+   runtimeState.asrReady = false;
+   const detail = event && typeof event === 'object' ? event.detail : undefined;
+   let reason = null;
+   if (detail && typeof detail === 'object') {
+     if (typeof detail.reason === 'string') {
+       reason = detail.reason;
+     } else if (typeof detail.details === 'string') {
+       reason = detail.details;
+     } else if (typeof detail.detail === 'string') {
+       reason = detail.detail;
+     } else if (detail.detail && typeof detail.detail === 'object') {
+       const nested = detail.detail;
+       if (typeof nested.reason === 'string') {
+         reason = nested.reason;
+       } else if (typeof nested.details === 'string') {
+         reason = nested.details;
+       }
+     }
+   }
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
+index 51c310b85bf9babd0fdb738a8b493b561f54c70a..0909d9870c8257a20b3f2e03d5e1aa046f80e8a5 100644
+--- a/app/static/js/audio_recorder.js
++++ b/app/static/js/audio_recorder.js
+@@ -87,78 +87,85 @@ import { WakeWord } from "./wake_word.js";
+     const appState = getAppState();
+     try {
+       if (appState?.hub && typeof appState.hub.log === "function") {
+         appState.hub.log("client.mic", detail);
+         return true;
+       }
+     } catch (err) {
+       try {
+         console.warn("AudioRecorder client.mic log failed", err);
+       } catch {}
+     }
+     if (typeof window !== "undefined") {
+       try {
+         window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail } }));
+         return true;
+       } catch {}
+     }
+     return false;
+   }
  
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import compute_sha256
--from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
-+from app.voice_v2 import EVT_SESSION_STEP, EVT_TTS_END, EVT_TTS_START
+   function logMicEventString(text) {
+     if (typeof text !== "string" || !text) {
+       return false;
+     }
+     const appState = getAppState();
++    let handled = false;
+     try {
+       if (appState?.hub && typeof appState.hub.log === "function") {
+         appState.hub.log("client.mic", text);
+-        return true;
++        handled = true;
+       }
+     } catch (err) {
+       try {
+         console.warn("AudioRecorder client.mic text log failed", err);
+       } catch {}
+     }
+     if (typeof window !== "undefined") {
++      let routedToClientLogger = false;
+       try {
+         const logFn = window.__logClientMicString;
+         if (typeof logFn === "function") {
+           logFn(text);
+-          return true;
++          routedToClientLogger = true;
+         }
+       } catch {}
++      if (!routedToClientLogger) {
++        try {
++          window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail: text } }));
++          routedToClientLogger = true;
++        } catch {}
++      }
++      handled = handled || routedToClientLogger;
++    }
++    if (!handled) {
+       try {
+-        window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail: text } }));
+-        return true;
++        console.log(`client.mic ${text}`);
++        handled = true;
+       } catch {}
+     }
+-    try {
+-      console.log(`client.mic ${text}`);
+-      return true;
+-    } catch {}
+-    return false;
++    return handled;
+   }
  
+   function getRearmCooldownRemainingMs() {
+     const appState = getAppState();
+     if (!appState) {
+       return 0;
+     }
+     const untilValue = Number(appState.__no_rearm_until);
+     if (!Number.isFinite(untilValue)) {
+       return 0;
+     }
+     const now = Date.now();
+     if (now >= untilValue) {
+       return 0;
+     }
+     const remaining = Math.ceil(untilValue - now);
+     return remaining > 0 ? remaining : 0;
+   }
  
- __all__ = ["build_flow_zip"]
- 
- 
- _ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
- _README_NAME = "README.txt"
- _MANIFEST_NAME = "manifest.json"
- _EVENTS_NAME = "events.ndjson"
- _EVENTS_REDACTED_NAME = "events.redacted.ndjson"
- _TIMELINE_NAME = "flow_timeline.ndjson"
- _NLU_NAME = "nlu.ndjson"
- _NLG_NAME = "nlg.ndjson"
- _LOGS_NAME = "logs.ndjson"
- _LOGS_ASR_NAME = "logs/asr.jsonl"
- _LOGS_WS_NAME = "logs/ws.jsonl"
- _LOGS_TTS_NAME = "logs/tts.jsonl"
- 
- _TIMELINE_TYPES = {
-     "EVT_TURN_BEGIN",
-     "EVT_TURN_END",
-     EVT_TTS_START,
-     EVT_TTS_END,
-     "EVT_TTS_MASK",
-     "EVT_MIC_GATE",
-     "EVT_POLICY_APPLIED",
-     "EVT_POLICY_SNAPSHOT",
-     "EVT_BARGE_IN",
-     "EVT_BARGE_DETECTED",
-     "EVT_BARGE_CONFIRMED",
-     "EVT_BARGE_REJECTED",
-     "EVT_ACTION_SAY_END",
-     "EVT_AUTH_DISABLED",
-     "EVT_DIAG_FIRST_AUDIO_FRAME",
-     "EVT_DIAG_NO_AUDIO_FROM_CLIENT",
-     "EVT_DIAG_HUD",
-     "EVT_VAD",
-     "EVT_VAD_DECISION",
-     "EVT_CLIENT_LOG",
- }
- _WS_PREFIX = "EVT_WS_"
- _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SEND"}
- _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
- 
- _PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
- 
-+_SESSION_STEP_ALLOWLIST = {
-+    "policy_defaults",
-+    "turn_metrics",
-+}
-+
- _DEFAULT_CAP_BYTES = 25 * 1024 * 1024
- 
- 
- class _EventWrapper(dict):
-     """Container storing a redacted event and its truncation category."""
- 
-     __slots__ = ()
- 
-     @property
-     def event(self) -> Dict[str, object]:
-         return self["event"]
- 
-     @property
-     def category(self) -> str:
-         return self["category"]
- 
- 
- def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _DEFAULT_CAP_BYTES) -> Path:
-     """Package the flow artifacts for ``sid`` into a deterministic ZIP archive."""
- 
-     session_dir = Path(root) / sid
-     manifest_path = session_dir / _MANIFEST_NAME
-     events_path = session_dir / _EVENTS_NAME
-     logs_path = session_dir / _LOGS_NAME
-     logs_dir = session_dir / "logs"
-@@ -234,50 +239,57 @@ def _render_payloads(
-     payloads = {
-         _README_NAME: readme_bytes,
-         _EVENTS_REDACTED_NAME: events_bytes,
-         _TIMELINE_NAME: timeline_bytes,
-         _NLU_NAME: _dump_ndjson(nlu_events),
-         _NLG_NAME: _dump_ndjson(nlg_events),
+   function logRearmBlocked(trigger, msRemaining, reason = "cooldown") {
+     if (!(msRemaining > 0)) {
+       return;
+     }
+     const detail = {
+       event: "rearm_blocked",
+@@ -602,60 +609,51 @@ import { WakeWord } from "./wake_word.js";
+         const frac = cursor - index;
+         const sample0 = buffer[index];
+         const sample1 = buffer[index + 1] ?? sample0;
+         const interpolated = sample0 + (sample1 - sample0) * frac;
+         output.push(interpolated);
+         if (output.length >= PCM_FRAME_SAMPLES) {
+           const frame = output.splice(0, PCM_FRAME_SAMPLES);
+           this._emitPcmFrame(frame);
+         }
+         cursor += ratio;
+       }
+       const consumed = Math.max(0, Math.floor(cursor) - 1);
+       if (consumed > 0) {
+         buffer.splice(0, consumed);
+         cursor -= consumed;
+       }
+       this._pcmResampleCursor = cursor;
+       this._pcmOutputBuffer = output;
      }
  
-     if logs_payloads:
-         payloads.update(logs_payloads)
+     _logMicFrame(rms, bytes) {
+       const seq = this._pcmFrameSeq;
+       const normalizedRms = Number.isFinite(rms) ? rms : 0;
+       const normalizedBytes = Number.isFinite(bytes) ? bytes : 0;
+       const message = `frame seq=${seq} rms=${normalizedRms.toFixed(1)} bytes=${normalizedBytes}`;
+-      try {
+-        const hub = typeof window !== "undefined" ? window.AppState?.hub : null;
+-        if (hub && typeof hub.log === "function") {
+-          hub.log("client.mic", message);
+-          return;
+-        }
+-      } catch {}
+-      try {
+-        console.log(`client.mic ${message}`);
+-      } catch {}
++      logMicEventString(message);
+     }
  
-     manifest_bytes = _build_manifest_payload(
-         manifest_data,
-         payloads,
-         drop_counts,
-         cap_bytes,
-     )
- 
-     return payloads, manifest_bytes
- 
- 
- def _is_timeline_event(event: Dict[str, object]) -> bool:
-     event_type = event.get("type")
-     if not isinstance(event_type, str):
-         return False
-+    if event_type == EVT_SESSION_STEP:
-+        meta = event.get("meta")
-+        if isinstance(meta, dict):
-+            step_value = meta.get("step")
-+            if isinstance(step_value, str) and step_value in _SESSION_STEP_ALLOWLIST:
-+                return True
-+        return False
-     if event_type in _TIMELINE_TYPES:
-         return True
-     return event_type.startswith(_WS_PREFIX)
- 
- 
- def _dump_ndjson(events: Iterable[Dict[str, object]]) -> bytes:
-     lines = [json.dumps(event, separators=(",", ":"), ensure_ascii=False) for event in events]
-     if not lines:
-         return b""
-     return ("\n".join(lines) + "\n").encode("utf-8")
- 
- 
- def _build_manifest_payload(
-     manifest_data: Dict[str, object],
-     payloads: Dict[str, bytes],
-     drop_counts: Dict[str, int],
-     cap_bytes: int,
- ) -> bytes:
-     manifest_copy = dict(manifest_data)
- 
-     existing_sha = {}
-     if isinstance(manifest_copy.get("sha256"), dict):
-         existing_sha = dict(manifest_copy["sha256"])
- 
-     sha_entries = {
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index c97f636c314ca3d0377dc5bcb521f1398944821f..f14fdf8c436f0c72687d78324a984f91768d52ef 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -1100,50 +1100,63 @@ class ASRRuntime:
-             new_ue = min(2600, new_ue + 500)
-             extended_once = True
-         state.adaptive_utterance_end_ms = new_ue
-         state.adaptive_commit_silence_ms = new_cs
-         state.adaptive_extended_once = extended_once
-         ensure_session = getattr(self._engine, "_ensure_session", None)
-         engine_session = None
-         if callable(ensure_session):
-             try:
-                 engine_session = ensure_session(sid)
-             except Exception:  # pragma: no cover - defensive
-                 engine_session = None
-         if engine_session is not None:
-             engine_session.adaptive_utterance_end_ms = new_ue
-             engine_session.adaptive_commit_silence_ms = new_cs
-             engine_session.adaptive_extended_once = extended_once
-         _log.info(
-             "evt=turn_metrics finals=%d post_final_chunks=%d ue_ms=%d cs_ms=%d extended_once=%d",
-             final_count,
-             post_final_chunks,
-             new_ue,
-             new_cs,
-             1 if extended_once else 0,
-         )
- 
-+        self._emit_session_step(
-+            sid,
-+            "turn_metrics",
-+            meta={
-+                "finals": final_count,
-+                "post_final_chunks": post_final_chunks,
-+                "ue_ms": new_ue,
-+                "cs_ms": new_cs,
-+                "extended_once": bool(extended_once),
-+            },
-+            source="asr.runtime",
-+        )
-+
-         state.listening = False
-         state.prearm_requested = False
-         state.pending.clear()
-         state.buffered_bytes = 0
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.utterance_active = False
-         state.turn_final_count = 0
-         state.turn_first_final_seen = False
-         state.turn_post_final_chunks = 0
-         state.turn_no_partial_ms = 0
-         state.turn_gap_start_ms = 0
-         state.turn_speech_evidence = False
-         state.turn_first_audio_ms = 0
-         state.turn_last_partial_ms = 0
-         self._cancel_ready_watchdog(state)
-         self._cancel_idle_timer(state)
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index c5f5aa786fc0faa0d7f51db1d6e69fa71c69253a..8b66d84cb40545956238da92c60f2d5e095aea08 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -3522,50 +3522,87 @@ class ChatV2Adapter:
-             bus.publish(event)
-             return
- 
-         event = {
-             "schema_version": "1",
-             "type": event_type,
-             "sid": sid,
-             "who": "server",
-             "source": "ws_server",
-             "meta": dict(meta),
+     _sendCommitControl(detail) {
+       const payload = {
+         type: "client.telemetry",
+         event: "EVT_AUDIO_CHUNK_SENT_CLIENT",
+         meta: {
+           commit: true,
+           reason: detail.reason,
+           dur_ms: detail.dur_ms,
+           silence_ms: detail.silence_ms,
+         },
+       };
+       try {
+         const client = typeof window !== "undefined" ? window.WSClient : null;
+         if (client && typeof client.send === "function") {
+           client.send(payload);
          }
-         if payload is not None:
-             if isinstance(payload, Mapping):
-                 frame_payload = dict(payload)
-             else:
-                 frame_payload = payload
-             event["payload"] = frame_payload
-             if isinstance(frame_payload, Mapping):
-                 frame_copy = dict(frame_payload)
-                 if event_type == EVT_WS_JSON_SEND:
-                     event["frame"] = frame_copy
-                 else:
-                     event.setdefault("frame", frame_copy)
-         bus.publish(event)
+       } catch (err) {
+         console.warn("AudioRecorder commit control send failed", err);
+       }
+     }
  
-+    def _publish_session_step_meta(
-+        self,
-+        sid: Optional[str],
-+        meta: Mapping[str, Any] | None,
-+    ) -> None:
-+        if not isinstance(sid, str) or not sid:
-+            return
-+        if not isinstance(meta, Mapping):
-+            return
-+        step_value = meta.get("step")
-+        if not isinstance(step_value, str) or not step_value:
-+            return
-+
-+        payload = dict(meta)
-+
-+        try:
-+            loop = asyncio.get_running_loop()
-+        except RuntimeError:
-+            loop = None
-+
-+        if loop and loop.is_running():
-+            loop.create_task(self._publish(EVT_SESSION_STEP, sid, payload))
-+            return
-+
-+        fallback_event = {
-+            "schema_version": "1",
-+            "type": EVT_SESSION_STEP,
-+            "sid": sid,
-+            "who": "server",
-+            "source": "ws_server",
-+            "meta": payload,
-+        }
-+        try:
-+            bus.publish(fallback_event)
-+        except Exception:  # pragma: no cover - defensive fallback
-+            _log.exception("evt=session_step_publish_failed sid=%s step=%s", sid, step_value)
-+
-     def _emit_session_step(
-         self,
-         sid: str,
-         step: str,
-         *,
-         summary: Optional[str] = None,
-         meta: Optional[Mapping[str, Any]] = None,
-         source: str = "ws_server",
-         who: str = "server",
-     ) -> None:
-         payload: Dict[str, Any] = {
-             "schema_version": "1",
-             "type": EVT_SESSION_STEP,
-             "sid": sid,
-             "who": who,
-             "source": source,
-             "meta": {"step": step},
-         }
-         if meta:
-             try:
-                 payload["meta"].update(meta)
-             except Exception:
-                 payload["meta"]["detail"] = repr(meta)
-         if summary:
-             payload["summary"] = summary
-@@ -3735,50 +3772,64 @@ class ChatV2Adapter:
-                     cs_ms = int(asr_block.get("commit_silence_ms"))
-                 except (TypeError, ValueError):
-                     cs_ms = None
-                 try:
-                     min_seg_ms = int(asr_block.get("min_segment_ms"))
-                 except (TypeError, ValueError):
-                     min_seg_ms = None
-                 if allow_word_finals is None and "allow_word_finals" in asr_block:
-                     allow_word_finals = bool(asr_block.get("allow_word_finals"))
- 
-             timeslice_for_log = timeslice_value
-             if timeslice_for_log is None and isinstance(capture_block, dict):
-                 try:
-                     timeslice_for_log = int(capture_block.get("timeslice_ms"))
-                 except (TypeError, ValueError):
-                     timeslice_for_log = None
- 
-             _log.info(
-                 "evt=policy_defaults ue_ms=%s cs_ms=%s min_seg_ms=%s timeslice_ms=%s allow_word_finals=%s",
-                 ue_ms if ue_ms is not None else "unknown",
-                 cs_ms if cs_ms is not None else "unknown",
-                 min_seg_ms if min_seg_ms is not None else "unknown",
-                 timeslice_for_log if timeslice_for_log is not None else "unknown",
-                 str(allow_word_finals).lower() if allow_word_finals is not None else "unknown",
-             )
-+
-+            sid_for_publish = current_sid.get(None)
-+            policy_meta: Dict[str, Any] = {"step": "policy_defaults"}
-+            if ue_ms is not None:
-+                policy_meta["ue_ms"] = ue_ms
-+            if cs_ms is not None:
-+                policy_meta["cs_ms"] = cs_ms
-+            if min_seg_ms is not None:
-+                policy_meta["min_seg_ms"] = min_seg_ms
-+            if timeslice_for_log is not None:
-+                policy_meta["timeslice_ms"] = timeslice_for_log
-+            if allow_word_finals is not None:
-+                policy_meta["allow_word_finals"] = bool(allow_word_finals)
-+            self._publish_session_step_meta(sid_for_publish, policy_meta)
-         return stable
- 
-     def _allowed_asr_vendors(self) -> List[str]:
-         allowed: List[str] = []
-         vendor = "speechmatics"
-         speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", True)
-         api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
-         url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
- 
-         if not speechmatics_enabled:
-             _log.warning(
-                 "evt=asr_vendor_disabled sid=%s vendor=%s scope=config",
-                 current_sid.get(None),
-                 vendor,
-             )
-         if not api_key:
-             _log.warning(
-                 "evt=asr_vendor_missing sid=%s vendor=%s missing=api_key",
-                 current_sid.get(None),
-                 vendor,
-             )
-         if not url:
-             _log.warning(
-                 "evt=asr_vendor_missing sid=%s vendor=%s missing=url",
-                 current_sid.get(None),
+     _emitVadCommit(durMs, silenceMs) {
+       const detail = {
