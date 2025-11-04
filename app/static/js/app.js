@@ -946,14 +946,6 @@
       return candidate && typeof candidate === 'object' ? candidate : null;
     }
 
-    function requireHotwordToStart() {
-      const inputPolicy = getNestedPolicySection('input');
-      if (inputPolicy && typeof inputPolicy.require_hotword_to_start === 'boolean') {
-        return inputPolicy.require_hotword_to_start;
-      }
-      return false;
-    }
-
     function shouldPrearmOnTtsEnd() {
       const asrPolicy = getNestedPolicySection('asr');
       if (asrPolicy && typeof asrPolicy.prearm_on_tts_end === 'boolean') {
@@ -1438,13 +1430,7 @@
         return;
       }
 
-      if (requireHotwordToStart()) {
-        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-          blockedBy: 'wake_word_only',
-          audioIdle: runtimeState.audioPlaybackIdle,
-        });
-        return;
-      }
+      // wake-word path removed; VAD barge-in is the only gate.
 
       if (runtimeState.isRecording) {
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
@@ -2742,10 +2728,6 @@ window.addEventListener('turn.state', (event) => {
   DiagRecorder.maybeStart('turn');
   maybeAutoStartCapture('turn_ready', 'tts_end');
 
-  if (requireHotwordToStart()) {
-    console.info('diag=mic_capture_skip trigger=turn_ready mode=wake_word_only');
-    return;
-  }
 });
 
 // Assistant TTS finished → open mic after optional delay
@@ -2939,10 +2921,6 @@ window.addEventListener('asr.ready', (event) => {
     asrRetry.timer = null;
   }
   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-    if (requireHotwordToStart()) {
-      console.info('diag=mic_capture_skip trigger=asr_ready mode=wake_word_only');
-      return;
-    }
     try {
       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {

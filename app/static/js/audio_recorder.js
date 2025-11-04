@@ -1,6 +1,6 @@
 import { WakeWord } from "./wake_word.js";
 
-/** POLICY: PCM-only recorder; no PTT; no manual barge-in; wake-word only. */
+/** POLICY: PCM-only recorder; no PTT; VAD-driven barge-in. */
 (() => {
   const PCM_SAMPLE_RATE = 16000;
   const PCM_FRAME_SAMPLES = Math.round(PCM_SAMPLE_RATE * 0.05);

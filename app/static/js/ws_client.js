@@ -1,6 +1,6 @@
 import { WakeWord } from "./wake_word.js";
 
-/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; no manual barge-in; wake-word only. */
+/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; VAD-driven barge-in. */
 (() => {
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
@@ -111,6 +111,9 @@ import { WakeWord } from "./wake_word.js";
     throw new Error("AppState store is required before loading WSClient");
   }
   const P0 = AppState.policy || {};
+  const P0Policy = P0 && typeof P0.policy === "object" && P0.policy
+    ? { ...P0.policy }
+    : {};
   AppState.policy = {
     ...P0,
     auto_record_after_greet: P0.auto_record_after_greet ?? true,
@@ -127,6 +130,13 @@ import { WakeWord } from "./wake_word.js";
       ? P0.show_tap_to_speak_cta_after_ms
       : 2000,
     reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
+    policy: {
+      ...P0Policy,
+      input: {
+        ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
+        require_hotword_to_start: false,
+      },
+    },
   };
 
   const appStateEventEmitter = createEventEmitter();
@@ -324,59 +334,15 @@ import { WakeWord } from "./wake_word.js";
   // Initialize the client banner state only after related constants are defined.
   ensureClientBannerState();
 
+  let wakeWordIgnoredLogged = false;
   WakeWord.onHotword(() => {
-    let state = null;
-    try {
-      if (typeof AppState?.get === "function") {
-        state = AppState.get();
-      }
-    } catch {}
-    if (!state && typeof AppState?.getState === "function") {
-      try {
-        state = AppState.getState();
-      } catch {}
-    }
-    const turnState = typeof state?.turnState === "string"
-      ? state.turnState
-      : (typeof AppState?.turnState === "string" ? AppState.turnState : null);
-    if (turnState !== "tts") {
+    if (wakeWordIgnoredLogged) {
       return;
     }
+    wakeWordIgnoredLogged = true;
     try {
-      const activeSocket = (socket && socket.readyState === WebSocket.OPEN)
-        ? socket
-        : (window.ws && window.ws.readyState === WebSocket.OPEN ? window.ws : null);
-      if (activeSocket) {
-        try {
-          activeSocket.send(JSON.stringify({ type: "tts.pause" }));
-        } catch {}
-      }
+      console.info("wake_word_detected_ignore=1 reason=vad_barge_in_default");
     } catch {}
-    try {
-      __micAttempts += 1;
-      __micChunks = 0;
-      __micBytes = 0;
-      __micArmedAt = Date.now();
-      if (!__turnTraceId) {
-        __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-      }
-      logMic({ outcome: MIC_OUTCOME.ARMED, reason: "wake_word" });
-    } catch {}
-    try {
-      const hub = AppState?.hub;
-      const maybePromise = hub && typeof hub.startListening === "function"
-        ? hub.startListening({ reason: "wake_word" })
-        : null;
-      if (maybePromise && typeof maybePromise.then === "function") {
-        maybePromise.catch((err) => {
-          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-          logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-        });
-      }
-    } catch (err) {
-      const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-      logMic({ outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM, message: err?.message });
-    }
   });
 
   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
@@ -504,36 +470,13 @@ import { WakeWord } from "./wake_word.js";
     sendAutostartTelemetry("gesture", { reason });
   }
 
-  function requireHotwordToStart(policyCandidate) {
-    const snapshot = policyCandidate && typeof policyCandidate === 'object'
-      ? policyCandidate
-      : (AppState && typeof AppState.policy === 'object' ? AppState.policy : null);
-    if (!snapshot || typeof snapshot !== 'object') {
-      return false;
-    }
-    const nested = snapshot.policy;
-    if (!nested || typeof nested !== 'object') {
-      return false;
-    }
-    const inputPolicy = nested.input;
-    if (!inputPolicy || typeof inputPolicy !== 'object') {
-      return false;
-    }
-    if (typeof inputPolicy.require_hotword_to_start === 'boolean') {
-      return inputPolicy.require_hotword_to_start;
-    }
-    return false;
-  }
-
   function canAutoRecord(state) {
-    if (requireHotwordToStart(state?.policy)) return false;
     if (!state?.policy?.auto_record_after_greet) return false;
     if (state.policy.tts_gate_enabled && state.ttsActive) return false;
     return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
   }
 
   function reasonFromState(state) {
-    if (requireHotwordToStart(state?.policy)) return "wake_word_only";
     if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
     if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
     if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
@@ -621,11 +564,6 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function invokeStartRecording(trigger) {
-    if (requireHotwordToStart()) {
-      const label = trigger ? String(trigger).slice(0, 32) : "unknown";
-      console.info("diag=start_recording_blocked trigger=%s mode=wake_word_only", label);
-      return false;
-    }
     let handler = null;
     if (typeof window !== "undefined" && typeof window.startRecording === "function") {
       handler = window.startRecording;
