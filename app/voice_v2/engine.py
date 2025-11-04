@@ -160,6 +160,9 @@ class _TurnSession:
     suggestions_emitted: bool = False
     turn_committed: bool = False
     policy_actions_mismatch_logged: bool = False
+    adaptive_utterance_end_ms: Optional[int] = None
+    adaptive_commit_silence_ms: Optional[int] = None
+    adaptive_extended_once: bool = False
 
 
 class _NullExporter:
@@ -416,6 +419,11 @@ class EngineV2:
             return
 
         byte_count = len(chunk)
+        if byte_count % _PCM_SAMPLE_BYTES != 0:
+            _log.warning(
+                "evt=audio_invalid_chunk_size bytes=%d", byte_count, extra={"sid": sid}
+            )
+            return
         frame_ms = int((byte_count / (2 * _PCM_CHANNELS * _PCM_RATE_HZ)) * 1000)
         if frame_ms <= 0:
             frame_ms = 20
@@ -1547,17 +1555,52 @@ class EngineV2:
             else:
                 self._set_state(sid, READY, reason="tts_end")
 
+    def _snapshot_with_adaptive_overrides(
+        self, snapshot: Mapping[str, Any], session: _TurnSession
+    ) -> Dict[str, Any]:
+        result = dict(snapshot)
+        ue_override = getattr(session, "adaptive_utterance_end_ms", None)
+        cs_override = getattr(session, "adaptive_commit_silence_ms", None)
+        if not any(
+            isinstance(value, (int, float)) and value > 0
+            for value in (ue_override, cs_override)
+        ):
+            return result
+
+        policy_block = snapshot.get("policy")
+        if isinstance(policy_block, Mapping):
+            policy_copy: Dict[str, Any] = dict(policy_block)
+        else:
+            policy_copy = {}
+        asr_block = policy_copy.get("asr") if isinstance(policy_copy, Mapping) else None
+        if isinstance(asr_block, Mapping):
+            asr_copy: Dict[str, Any] = dict(asr_block)
+        else:
+            asr_copy = {}
+        if isinstance(ue_override, (int, float)) and ue_override > 0:
+            asr_copy["utterance_end_ms"] = int(ue_override)
+        if isinstance(cs_override, (int, float)) and cs_override > 0:
+            asr_copy["commit_silence_ms"] = int(cs_override)
+        policy_copy["asr"] = asr_copy
+        result["policy"] = policy_copy
+        return result
+
     def _emit_policy_frame(self, sid: str, snapshot: Dict[str, Any]) -> None:
         session = self._ensure_session(sid)
 
+        if isinstance(snapshot, Mapping):
+            snapshot_for_frame = self._snapshot_with_adaptive_overrides(snapshot, session)
+        else:
+            snapshot_for_frame = dict(snapshot)
+
         nested_sequence: list[Any] | None = None
-        actions_block = snapshot.get("actions")
+        actions_block = snapshot_for_frame.get("actions")
         if isinstance(actions_block, Mapping):
             candidate = actions_block.get("assistant_turn_sequence")
             if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
                 nested_sequence = list(candidate)
 
-        derived_actions = assistant_turn_actions(snapshot)
+        derived_actions = assistant_turn_actions(snapshot_for_frame)
         summary_actions = (
             list(nested_sequence)
             if nested_sequence is not None
@@ -1566,7 +1609,7 @@ class EngineV2:
 
         frame = {
             "type": "policy.interaction",
-            "policy": snapshot,
+            "policy": snapshot_for_frame,
             "actions": summary_actions,
         }
 

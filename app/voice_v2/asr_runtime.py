@@ -216,6 +216,19 @@ class _SessionState:
     final_accumulated: str = ""
     vendor_first_write_logged: bool = False
     vendor_totals_logged: bool = False
+    base_utterance_end_ms: int = 1200
+    base_commit_silence_ms: int = 900
+    adaptive_utterance_end_ms: int = 0
+    adaptive_commit_silence_ms: int = 0
+    adaptive_extended_once: bool = False
+    turn_final_count: int = 0
+    turn_first_final_seen: bool = False
+    turn_post_final_chunks: int = 0
+    turn_no_partial_ms: int = 0
+    turn_gap_start_ms: int = 0
+    turn_speech_evidence: bool = False
+    turn_first_audio_ms: int = 0
+    turn_last_partial_ms: int = 0
 
     def __post_init__(self) -> None:
         now_monotonic = time.monotonic()
@@ -224,6 +237,8 @@ class _SessionState:
         self.opened_at_ms = int(now_wall * 1000)
         self.last_audio_ts = now_monotonic
         self.last_audio_ts_ms = int(now_wall * 1000)
+        self.adaptive_utterance_end_ms = self.base_utterance_end_ms
+        self.adaptive_commit_silence_ms = self.base_commit_silence_ms
 
 
 class ASRRuntime:
@@ -400,6 +415,12 @@ class ASRRuntime:
         state.final_guard_ms = int(values.get("final_guard_ms", 250))
         state.min_segment_ms = int(values.get("min_segment_ms", 800))
         state.allow_word_finals = bool(values.get("allow_word_finals", False))
+        base_ue = int(values.get("utterance_end_ms", state.base_utterance_end_ms))
+        if base_ue <= 0:
+            base_ue = 1200
+        state.base_utterance_end_ms = base_ue
+        current_adapt = state.adaptive_utterance_end_ms or base_ue
+        state.adaptive_utterance_end_ms = min(2600, max(base_ue, current_adapt))
 
     def _cancel_pending_final(
         self,
@@ -625,6 +646,10 @@ class ASRRuntime:
                 speechmatics_text,
             )
         state.finals_delivered += 1
+        state.turn_final_count += 1
+        if not state.turn_first_final_seen:
+            state.turn_first_final_seen = True
+            state.turn_post_final_chunks = 0
         _log.info(
             "evt=asr_final_published sid=%s req_id=%s vendor=%s text=%s text_hash=%s",
             sid,
@@ -705,6 +730,14 @@ class ASRRuntime:
         state.last_audio_ts = now_monotonic
         now_ms = int(time.time() * 1000)
         state.last_audio_ts_ms = now_ms
+        if not state.turn_speech_evidence:
+            state.turn_speech_evidence = True
+        if state.turn_first_audio_ms <= 0:
+            state.turn_first_audio_ms = now_ms
+        if state.turn_gap_start_ms <= 0:
+            state.turn_gap_start_ms = now_ms
+        if state.turn_first_final_seen:
+            state.turn_post_final_chunks += 1
         if state.ready_watchdog is not None and state.ready_armed_at:
             self._cancel_ready_watchdog(state)
         chunk_len = len(data)
@@ -1012,6 +1045,29 @@ class ASRRuntime:
         state.prearm_requested = True
         state.utterance_active = False
         self._cancel_commit_timer(state)
+        state.turn_final_count = 0
+        state.turn_first_final_seen = False
+        state.turn_post_final_chunks = 0
+        state.turn_no_partial_ms = 0
+        state.turn_gap_start_ms = 0
+        state.turn_speech_evidence = False
+        state.turn_first_audio_ms = 0
+        state.turn_last_partial_ms = 0
+        session_supplier = getattr(self._engine, "_ensure_session", None)
+        if callable(session_supplier):
+            try:
+                engine_session = session_supplier(sid)
+            except Exception:  # pragma: no cover - defensive
+                engine_session = None
+            if engine_session is not None:
+                ue_override = getattr(engine_session, "adaptive_utterance_end_ms", None)
+                cs_override = getattr(engine_session, "adaptive_commit_silence_ms", None)
+                if isinstance(ue_override, (int, float)) and ue_override > 0:
+                    state.adaptive_utterance_end_ms = int(ue_override)
+                if isinstance(cs_override, (int, float)) and cs_override > 0:
+                    state.adaptive_commit_silence_ms = int(cs_override)
+                if getattr(engine_session, "adaptive_extended_once", False):
+                    state.adaptive_extended_once = True
         self._apply_commit_policy(state)
         self._ensure_stream(sid, state)
 
@@ -1022,6 +1078,49 @@ class ASRRuntime:
         state = self._sessions.get(sid)
         if state is None:
             return
+
+        now_ms = int(time.time() * 1000)
+        if state.turn_speech_evidence and state.turn_gap_start_ms > 0:
+            trailing_gap = max(0, now_ms - state.turn_gap_start_ms)
+            if trailing_gap > state.turn_no_partial_ms:
+                state.turn_no_partial_ms = trailing_gap
+        final_count = state.turn_final_count
+        post_final_chunks = state.turn_post_final_chunks
+        no_partial_ms = state.turn_no_partial_ms
+        current_ue = self._effective_utterance_end_ms(state)
+        current_cs = self._effective_commit_silence_ms(state)
+        new_ue = current_ue
+        new_cs = current_cs
+        extended_once = state.adaptive_extended_once
+        if final_count > 2 and new_ue < 2600:
+            new_ue = min(2600, new_ue + 200)
+        if post_final_chunks > 120 and new_cs < 1800:
+            new_cs = min(1800, new_cs + 200)
+        if state.turn_speech_evidence and no_partial_ms > 7000 and not extended_once:
+            new_ue = min(2600, new_ue + 500)
+            extended_once = True
+        state.adaptive_utterance_end_ms = new_ue
+        state.adaptive_commit_silence_ms = new_cs
+        state.adaptive_extended_once = extended_once
+        ensure_session = getattr(self._engine, "_ensure_session", None)
+        engine_session = None
+        if callable(ensure_session):
+            try:
+                engine_session = ensure_session(sid)
+            except Exception:  # pragma: no cover - defensive
+                engine_session = None
+        if engine_session is not None:
+            engine_session.adaptive_utterance_end_ms = new_ue
+            engine_session.adaptive_commit_silence_ms = new_cs
+            engine_session.adaptive_extended_once = extended_once
+        _log.info(
+            "evt=turn_metrics finals=%d post_final_chunks=%d ue_ms=%d cs_ms=%d extended_once=%d",
+            final_count,
+            post_final_chunks,
+            new_ue,
+            new_cs,
+            1 if extended_once else 0,
+        )
 
         state.listening = False
         state.prearm_requested = False
@@ -1038,6 +1137,14 @@ class ASRRuntime:
         state.first_partial_logged = False
         state.last_partial_log = 0.0
         state.utterance_active = False
+        state.turn_final_count = 0
+        state.turn_first_final_seen = False
+        state.turn_post_final_chunks = 0
+        state.turn_no_partial_ms = 0
+        state.turn_gap_start_ms = 0
+        state.turn_speech_evidence = False
+        state.turn_first_audio_ms = 0
+        state.turn_last_partial_ms = 0
         self._cancel_ready_watchdog(state)
         self._cancel_idle_timer(state)
         self._cancel_commit_timer(state)
@@ -1055,6 +1162,7 @@ class ASRRuntime:
             state.stream_id = None
             state.req_id = None
             _log.info("evt=asr_stop_listening sid=%s stream_id=%s", sid, stream_id)
+        self._apply_commit_policy(state)
     def _emit_log(self, payload: Dict[str, Any]) -> None:
         if not isinstance(payload, dict):
             return
@@ -1273,6 +1381,9 @@ class ASRRuntime:
                 else:
                     input_desc = self._input_descriptor_from_policy(policy_snapshot)
                 state.input_desc = input_desc
+                policy_snapshot = self._apply_adaptive_overrides_to_policy(
+                    state, policy_snapshot
+                )
                 model_name = None
                 if isinstance(policy_snapshot, Mapping):
                     candidate = policy_snapshot.get("model")
@@ -1980,6 +2091,13 @@ class ASRRuntime:
             "vendor": self._vendor,
         }
         self._bus.publish(event)
+        now_ms_partial = int(time.time() * 1000)
+        if state.turn_speech_evidence and state.turn_gap_start_ms > 0:
+            gap_ms = max(0, now_ms_partial - state.turn_gap_start_ms)
+            if gap_ms > state.turn_no_partial_ms:
+                state.turn_no_partial_ms = gap_ms
+        state.turn_gap_start_ms = 0
+        state.turn_last_partial_ms = now_ms_partial
 
     def _on_final(
         self, sid: str, text: str, metadata: Dict[str, object] | None = None
@@ -2332,8 +2450,13 @@ class ASRRuntime:
 
     def _apply_commit_policy(self, state: _SessionState) -> None:
         commit_on_vad, commit_silence_ms, max_utterance_ms = self._resolve_commit_policy()
+        base_commit = max(0, int(commit_silence_ms))
+        state.base_commit_silence_ms = base_commit or state.base_commit_silence_ms
+        current_adapt = state.adaptive_commit_silence_ms or state.base_commit_silence_ms
+        effective_commit = min(1800, max(state.base_commit_silence_ms, current_adapt, base_commit))
+        state.adaptive_commit_silence_ms = effective_commit
         state.commit_on_vad_silence = commit_on_vad
-        state.commit_silence_ms = commit_silence_ms
+        state.commit_silence_ms = effective_commit
         state.max_utterance_ms = max_utterance_ms
 
     def _resolve_commit_policy(self) -> tuple[bool, int, int]:
@@ -2393,6 +2516,47 @@ class ASRRuntime:
             if normalized in {"false", "0", "no", "off"}:
                 return False
         return bool(default)
+
+    def _effective_utterance_end_ms(self, state: _SessionState) -> int:
+        base = state.base_utterance_end_ms or 1200
+        if base <= 0:
+            base = 1200
+        adapt = state.adaptive_utterance_end_ms or base
+        return min(2600, max(base, adapt))
+
+    def _effective_commit_silence_ms(self, state: _SessionState) -> int:
+        base = state.base_commit_silence_ms or 900
+        if base <= 0:
+            base = 900
+        adapt = state.adaptive_commit_silence_ms or base
+        return min(1800, max(base, adapt))
+
+    def _apply_adaptive_overrides_to_policy(
+        self, state: _SessionState, snapshot: Mapping[str, Any] | Any | None
+    ) -> Mapping[str, Any] | Any | None:
+        if not isinstance(snapshot, Mapping):
+            return snapshot
+        policy_block = snapshot.get("policy")
+        if isinstance(policy_block, Mapping):
+            asr_block = policy_block.get("asr")
+        else:
+            asr_block = None
+        result: Dict[str, Any] = dict(snapshot)
+        policy_copy: Dict[str, Any]
+        if isinstance(policy_block, Mapping):
+            policy_copy = dict(policy_block)
+        else:
+            policy_copy = {}
+        asr_copy: Dict[str, Any]
+        if isinstance(asr_block, Mapping):
+            asr_copy = dict(asr_block)
+        else:
+            asr_copy = {}
+        asr_copy["utterance_end_ms"] = self._effective_utterance_end_ms(state)
+        asr_copy["commit_silence_ms"] = self._effective_commit_silence_ms(state)
+        policy_copy["asr"] = asr_copy
+        result["policy"] = policy_copy
+        return result
 
     def _resolve_final_dedupe_policy(self) -> tuple[int, bool]:
         asr_policy = getattr(self.policy, "asr", None)
