@@ -1,240 +1,284 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index ad67f8c91b84c30fc31daae1e0ce9d595c769496..55f68a6042de8c4bad6ab9dc3654c08b9b33f03a 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -95,68 +95,69 @@ import { WakeWord } from "./wake_word.js";
-         },
-       });
-       Object.defineProperty(window, "__turnTraceId", {
-         configurable: true,
-         get() { return __turnTraceId; },
-         set(value) {
-           if (typeof value === "string" || value === null) {
-             __turnTraceId = value;
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 6458f45e8be49f9a44d5f05bccd6751c74067eeb..364ef863cc1ecae59af402fc1b8249952992e46d 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -900,50 +900,86 @@
            }
          },
-       });
-     } catch {}
-   }
+       };
  
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
-   }
-   const P0 = AppState.policy || {};
-   const P0Policy = P0 && typeof P0.policy === "object" && P0.policy
-     ? { ...P0.policy }
-     : {};
-   AppState.policy = {
-     ...P0,
-     auto_record_after_greet: P0.auto_record_after_greet ?? true,
--    require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? true,
-+    require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
-     tts_gate_enabled: P0.tts_gate_enabled ?? true,
-     autostart_retry_on: Array.isArray(P0.autostart_retry_on)
-       ? P0.autostart_retry_on.slice()
-       : ["asrReady", "ttsEnded", "turnState:Ready"],
-     autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
-       ? P0.autostart_backoff_ms.slice()
-       : [0, 300, 1000],
-     autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
-     show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
-       ? P0.show_tap_to_speak_cta_after_ms
-       : 2000,
-     reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
-     policy: {
-       ...P0Policy,
-       input: {
-         ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
-         require_hotword_to_start: false,
-+        require_user_gesture_first_visit: false,
-       },
-     },
-   };
+       hub._install(hubImpl);
+     }
  
-   const appStateEventEmitter = createEventEmitter();
-   if (typeof AppState.on !== "function") {
-     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
-   }
-   if (typeof AppState.emit !== "function") {
-     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
-   }
-   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
-     AppState.__pcmBreadcrumbHandlersInstalled = true;
-     AppState.on("recordingStarted", () => {
-       __micRecordingStartAt = Date.now();
-       __micFirstChunkBreadcrumbSent = false;
-       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
-     });
-   }
+     installHubInterface();
  
-   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
-   let autostartAttempts = 0;
-   let autostartTimer = null;
+     const runtimeState = {
+       policy: null,
+       turnState: null,
+       asrReady: false,
+       isRecording: false,
+       micPermissionGranted: false,
+       audioPlaybackIdle: true,
+       policyCaptureLogged: false,
+       finalSeenThisTurn: false,
+     };
  
-   const WSClient = window.WSClient = window.WSClient || {};
-@@ -406,50 +407,57 @@ import { WakeWord } from "./wake_word.js";
+     if (AppState && typeof AppState.__no_rearm_until !== 'number') {
+       AppState.__no_rearm_until = 0;
      }
-     if (typeof snapshot.ttsActive === "undefined") {
-       patch.ttsActive = false;
-     }
-     if (typeof snapshot.turnState === "undefined") {
-       patch.turnState = null;
-     }
-     if (typeof snapshot.recorder === "undefined") {
-       patch.recorder = { active: false };
-     }
-     if (Object.keys(patch).length) {
-       updateState(patch);
-     }
-     AppState.asrReady = Boolean(snapshot.asrReady);
-     AppState.asrVendor = typeof snapshot.asrVendor === 'string' && snapshot.asrVendor
-       ? snapshot.asrVendor
-       : null;
-     AppState.ttsActive = Boolean(snapshot.ttsActive);
-     AppState.turnState = typeof snapshot.turnState === "string" ? snapshot.turnState : null;
-     AppState.recorder = snapshot.recorder && typeof snapshot.recorder === "object"
-       ? { active: Boolean(snapshot.recorder.active) }
-       : { active: false };
-   }
  
-   function attachUserGestureListeners() {
-+    if (!AppState?.policy?.require_user_gesture_first_visit) {
-+      userGestureSatisfied = true;
-+      if (typeof gestureListenerCleanup === "function") {
-+        gestureListenerCleanup();
+     let asrPrearmIssued = false;
++    let vadListeningLogged = false;
++
++    function patchPolicyVad(patch) {
++      if (!patch || typeof patch !== 'object') {
++        return;
 +      }
-+      return;
++
++      const applyPatch = (policyRoot) => {
++        if (!policyRoot || typeof policyRoot !== 'object') {
++          return;
++        }
++        const currentVad = policyRoot.vad && typeof policyRoot.vad === 'object'
++          ? policyRoot.vad
++          : {};
++        policyRoot.vad = { ...currentVad, ...patch };
++      };
++
++      try {
++        if (AppState && typeof AppState === 'object') {
++          const policy = AppState.policy && typeof AppState.policy === 'object'
++            ? AppState.policy
++            : (AppState.policy = {});
++          applyPatch(policy);
++        }
++      } catch (err) {
++        console.warn('Failed to update AppState policy VAD', err);
++      }
++
++      try {
++        if (runtimeState.policy && typeof runtimeState.policy === 'object') {
++          applyPatch(runtimeState.policy);
++        }
++      } catch (err) {
++        console.warn('Failed to update runtime policy VAD', err);
++      }
 +    }
-     if (userGestureSatisfied || typeof window === "undefined") {
-       return;
+ 
+     function getPolicySnapshot() {
+       if (runtimeState.policy && typeof runtimeState.policy === 'object') {
+         return runtimeState.policy;
+       }
+       if (AppState && typeof AppState.policy === 'object') {
+         return AppState.policy;
+       }
+       return null;
      }
-     if (gestureListenerCleanup) {
-       return;
+ 
+     function getNestedPolicySection(section) {
+       const snapshot = getPolicySnapshot();
+       if (!snapshot || typeof snapshot !== 'object') {
+         return null;
+       }
+       const nested = snapshot.policy;
+       if (!nested || typeof nested !== 'object') {
+         return null;
+       }
+       const candidate = nested[section];
+       return candidate && typeof candidate === 'object' ? candidate : null;
      }
-     const listeners = [];
-     const handler = (event) => {
-       const reason = event && typeof event.type === "string" ? event.type : "gesture";
-       markUserGestureSatisfied(reason);
-       maybeAutoStart("gesture");
-     };
-     USER_GESTURE_EVENTS.forEach((eventName) => {
-       try {
-         window.addEventListener(eventName, handler, { passive: true });
-         listeners.push({ eventName, handler });
+ 
+     function shouldPrearmOnTtsEnd() {
+@@ -2672,50 +2708,52 @@
+             ws.send(payload);
+           }
+         }
        } catch (err) {
-         console.warn("Failed to attach gesture listener", eventName, err);
+         console.warn('Failed to send asr.rearm.request', err);
        }
-     });
-     gestureListenerCleanup = () => {
-       if (typeof window === "undefined") {
-         return;
+       const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+       logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
+     }
+ 
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
+   runtimeState.audioPlaybackIdle = false;
+   cancelAsrPartialWatchdog();
+   asrPrearmIssued = false;
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
+       window.AudioRecorder.handleTtsStart();
+     } catch (err) {
+       console.warn('AudioRecorder handleTtsStart failed', err);
+     }
+   }
++  patchPolicyVad({ auto_vad_active: false });
++  vadListeningLogged = false;
+ });
+ 
+ window.addEventListener('policy.snapshot', (event) => {
+   const frame = event && event.detail;
+   try {
+     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
+     runtimeState.policy = policy && typeof policy === 'object' ? policy : null;
+     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
+       audioRecorder.setPolicy(policy);
+     }
+   } catch (err) {
+     console.warn('AudioRecorder setPolicy failed', err);
+   }
+ });
+ 
+ // Turn becomes Ready → hand control to user
+ window.addEventListener('turn.state', (event) => {
+   const frame = (event && event.detail) || {};
+   const nextState = typeof frame.state === 'string'
+     ? frame.state
+     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
+   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
+   if (runtimeState.turnState !== 'Ready') return;
+ 
+   // Optional: why we became ready (e.g., 'tts')
+@@ -2818,62 +2856,55 @@ window.addEventListener('asr.final', () => {
+           logClientMicEventText(`evt=mic_stop reason=${stopReason} seq=${seq}`);
+           handled = true;
+         }
        }
-       listeners.forEach((entry) => {
-@@ -1681,51 +1689,51 @@ import { WakeWord } from "./wake_word.js";
-   function handleAsrReadyFrame(frame) {
-     const sanitized = sanitizeAsrReadyFrame(frame);
-     AppState.asrReady = true;
-     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
-     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
-     if (typeof AppState.emit === "function") {
-       AppState.emit("asrReady", {
-         ready: true,
-         vendor: AppState.asrVendor,
-         input: sanitized.input ?? null,
+     } catch (err) {
+       console.warn('AudioRecorder stop telemetry check failed', err);
+     }
+   }
+   if (!handled) {
+     logClientMicEventText(`evt=mic_stop reason=${stopReason}`);
+   }
+ });
+ 
+ window.addEventListener('assistant.await_user', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const frame = event && event.detail;
+   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
+   maybeAutoStartCapture('await_user', reason);
+   if (shouldPrearmOnTtsEnd()) {
+     try {
+       requestAsrPrearm('await_user');
+     } catch (err) {
+       console.warn('requestAsrPrearm failed after assistant.await_user', err);
+     }
+   }
+-  try {
+-    if (AppState && typeof AppState === 'object') {
+-      const policy = AppState.policy && typeof AppState.policy === 'object'
+-        ? AppState.policy
+-        : (AppState.policy = {});
+-      const currentVad = policy.vad && typeof policy.vad === 'object' ? policy.vad : {};
+-      policy.vad = { ...currentVad, auto_vad_active: true };
+-    }
+-  } catch (err) {
+-    console.warn('Failed to mark auto_vad_active on policy', err);
++  patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
++  if (!vadListeningLogged) {
++    logClient('client.mic', 'diag=vad_active state=Listening');
++    vadListeningLogged = true;
+   }
+-  logClient('client.mic', 'diag=vad_active state=Listening');
+ });
+ 
+ window.addEventListener('asr.unavailable', (event) => {
+   cancelAsrPartialWatchdog();
+   runtimeState.asrReady = false;
+   const detail = event && typeof event === 'object' ? event.detail : undefined;
+   let reason = null;
+   if (detail && typeof detail === 'object') {
+     if (typeof detail.reason === 'string') {
+       reason = detail.reason;
+     } else if (typeof detail.details === 'string') {
+       reason = detail.details;
+     } else if (typeof detail.detail === 'string') {
+       reason = detail.detail;
+     } else if (detail.detail && typeof detail.detail === 'object') {
+       const nested = detail.detail;
+       if (typeof nested.reason === 'string') {
+         reason = nested.reason;
+       } else if (typeof nested.details === 'string') {
+         reason = nested.details;
+       }
+     }
+   }
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+@@ -2920,70 +2951,72 @@ window.addEventListener('asr.ready', (event) => {
+     clearTimeout(asrRetry.timer);
+     asrRetry.timer = null;
+   }
+   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
+     try {
+       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
+       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
+         maybe.catch((err) => {
+           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
+         });
+       }
+     } catch (err) {
+       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
+     }
+   }
+ });
+ 
+ window.addEventListener('assistant.suggestions', (event) => {
+   const detail = event && event.detail;
+   applySuggestionsFrame(detail);
+ });
+ 
+ 
+ // Start mic immediately on ws.open as a safety net; send diag banner
+ window.addEventListener('ws.open', () => {
++  vadListeningLogged = false;
+   if (audioRecorder && typeof audioRecorder.start === 'function') {
+     audioRecorder.start()
+       .then(() => {
+         setMicPermissionGranted(true, 'ws.open_start');
+       })
+       .catch(() => {
+         setMicPermissionGranted(false, 'ws.open_start_error');
+       });
+   }
+   try {
+     if (WSClient && typeof WSClient.send === 'function') {
+       WSClient.send({
+         type: 'client.banner',
+         event: { label: 'ws.open', ts_ms: Date.now() },
+         info: { build: window.__BUILD_SHA__ ?? null }
        });
      }
-     logStage('client.asr', {
-       stage: 'ready',
-       vendor: AppState.asrVendor,
-       input: sanitized.input ?? null,
-     });
-     return sanitized;
-   }
+   } catch {}
+ });
+ window.addEventListener('ws.close', () => {
++  vadListeningLogged = false;
+   resetSuggestions();
+   DiagRecorder.stop('ws');
+ });
  
-   const ASR_VENDOR_OPTIONS = ['speechmatics'];
-   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
  
-   const DEFAULT_POLICY_FLAGS = {
-     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
--    input: { require_hotword_to_start: false },
-+    input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
-     asr: {
-       prearm_on_tts_end: true,
-       keep_stream_warm_ms: 30000,
-       commit_on_vad_silence: true,
-       commit_silence_ms: 900,
-       max_utterance_ms: 8000,
-       vendor: { primary: 'speechmatics', secondary: null },
-     },
-     routing: { ws_version: 'v2' },
-     audio: { pipeline: { mode: 'pcm16' } },
-   };
- 
-   function sanitizePolicySnapshot(source) {
-     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
-     const policy = { ...base };
- 
-     if (source && typeof source === 'object') {
-       if (typeof source.mode === 'string') {
-         policy.mode = source.mode;
-       }
-       if (typeof source.allow_auto_vad === 'boolean') {
-         policy.allow_auto_vad = source.allow_auto_vad;
-       }
-       if (typeof source.barge_in_enabled === 'boolean') {
-         policy.barge_in_enabled = source.barge_in_enabled;
-@@ -1795,50 +1803,53 @@ import { WakeWord } from "./wake_word.js";
-       routing: {
-         ...DEFAULT_POLICY_FLAGS.routing,
-         ...(existingNested && typeof existingNested.routing === 'object' ? existingNested.routing : {}),
-       },
-     };
- 
-     const rawNested = source && typeof source === 'object' ? source.policy : null;
-     if (rawNested && typeof rawNested === 'object') {
-       const recorder = rawNested.recorder && typeof rawNested.recorder === 'object'
-         ? rawNested.recorder
-         : null;
-       nested.recorder = {
-         stop_on_tts_start: recorder && typeof recorder.stop_on_tts_start === 'boolean'
-           ? recorder.stop_on_tts_start
-           : DEFAULT_POLICY_FLAGS.recorder.stop_on_tts_start,
-         mute_send_during_tts: recorder && typeof recorder.mute_send_during_tts === 'boolean'
-           ? recorder.mute_send_during_tts
-           : DEFAULT_POLICY_FLAGS.recorder.mute_send_during_tts,
-       };
- 
-       const input = rawNested.input && typeof rawNested.input === 'object' ? rawNested.input : null;
-       nested.input = {
-         require_hotword_to_start: input && typeof input.require_hotword_to_start === 'boolean'
-           ? input.require_hotword_to_start
-           : DEFAULT_POLICY_FLAGS.input.require_hotword_to_start,
-+        require_user_gesture_first_visit: input && typeof input.require_user_gesture_first_visit === 'boolean'
-+          ? input.require_user_gesture_first_visit
-+          : DEFAULT_POLICY_FLAGS.input.require_user_gesture_first_visit,
-       };
- 
-       const asr = rawNested.asr && typeof rawNested.asr === 'object' ? rawNested.asr : null;
-       let keepWarm = DEFAULT_POLICY_FLAGS.asr.keep_stream_warm_ms;
-       if (asr && Number.isFinite(Number(asr.keep_stream_warm_ms))) {
-         const parsed = Number(asr.keep_stream_warm_ms);
-         if (parsed >= 0) {
-           keepWarm = Math.round(parsed);
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
          }
-       }
-       const commitOnVad = asr && typeof asr.commit_on_vad_silence === 'boolean'
-         ? asr.commit_on_vad_silence
-         : DEFAULT_POLICY_FLAGS.asr.commit_on_vad_silence;
-       let commitSilence = DEFAULT_POLICY_FLAGS.asr.commit_silence_ms;
-       if (asr && Number.isFinite(Number(asr.commit_silence_ms))) {
-         const parsed = Number(asr.commit_silence_ms);
-         if (parsed >= 0) {
-           commitSilence = Math.round(parsed);
+         send(payload) {
+           this.lastSent = payload;
          }
-       }
-       let maxUtterance = DEFAULT_POLICY_FLAGS.asr.max_utterance_ms;
-       if (asr && Number.isFinite(Number(asr.max_utterance_ms))) {
-         const parsed = Number(asr.max_utterance_ms);
-         if (parsed >= 0) {
-           maxUtterance = Math.round(parsed);
+         close(code = 1000, reason = '') {
+           this.readyState = WebSocket.CLOSED;
+           const ev = new Event('close');
+           ev.code = code;

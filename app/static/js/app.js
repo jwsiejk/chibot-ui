@@ -922,6 +922,42 @@
     }
 
     let asrPrearmIssued = false;
+    let vadListeningLogged = false;
+
+    function patchPolicyVad(patch) {
+      if (!patch || typeof patch !== 'object') {
+        return;
+      }
+
+      const applyPatch = (policyRoot) => {
+        if (!policyRoot || typeof policyRoot !== 'object') {
+          return;
+        }
+        const currentVad = policyRoot.vad && typeof policyRoot.vad === 'object'
+          ? policyRoot.vad
+          : {};
+        policyRoot.vad = { ...currentVad, ...patch };
+      };
+
+      try {
+        if (AppState && typeof AppState === 'object') {
+          const policy = AppState.policy && typeof AppState.policy === 'object'
+            ? AppState.policy
+            : (AppState.policy = {});
+          applyPatch(policy);
+        }
+      } catch (err) {
+        console.warn('Failed to update AppState policy VAD', err);
+      }
+
+      try {
+        if (runtimeState.policy && typeof runtimeState.policy === 'object') {
+          applyPatch(runtimeState.policy);
+        }
+      } catch (err) {
+        console.warn('Failed to update runtime policy VAD', err);
+      }
+    }
 
     function getPolicySnapshot() {
       if (runtimeState.policy && typeof runtimeState.policy === 'object') {
@@ -2694,6 +2730,8 @@ window.addEventListener('tts.start', (event) => {
       console.warn('AudioRecorder handleTtsStart failed', err);
     }
   }
+  patchPolicyVad({ auto_vad_active: false });
+  vadListeningLogged = false;
 });
 
 window.addEventListener('policy.snapshot', (event) => {
@@ -2840,18 +2878,11 @@ window.addEventListener('assistant.await_user', (event) => {
       console.warn('requestAsrPrearm failed after assistant.await_user', err);
     }
   }
-  try {
-    if (AppState && typeof AppState === 'object') {
-      const policy = AppState.policy && typeof AppState.policy === 'object'
-        ? AppState.policy
-        : (AppState.policy = {});
-      const currentVad = policy.vad && typeof policy.vad === 'object' ? policy.vad : {};
-      policy.vad = { ...currentVad, auto_vad_active: true };
-    }
-  } catch (err) {
-    console.warn('Failed to mark auto_vad_active on policy', err);
+  patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
+  if (!vadListeningLogged) {
+    logClient('client.mic', 'diag=vad_active state=Listening');
+    vadListeningLogged = true;
   }
-  logClient('client.mic', 'diag=vad_active state=Listening');
 });
 
 window.addEventListener('asr.unavailable', (event) => {
@@ -2942,6 +2973,7 @@ window.addEventListener('assistant.suggestions', (event) => {
 
 // Start mic immediately on ws.open as a safety net; send diag banner
 window.addEventListener('ws.open', () => {
+  vadListeningLogged = false;
   if (audioRecorder && typeof audioRecorder.start === 'function') {
     audioRecorder.start()
       .then(() => {
@@ -2962,6 +2994,7 @@ window.addEventListener('ws.open', () => {
   } catch {}
 });
 window.addEventListener('ws.close', () => {
+  vadListeningLogged = false;
   resetSuggestions();
   DiagRecorder.stop('ws');
 });
