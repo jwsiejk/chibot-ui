@@ -2683,6 +2683,18 @@ window.addEventListener('assistant.await_user', (event) => {
       console.warn('requestAsrPrearm failed after assistant.await_user', err);
     }
   }
+  try {
+    if (AppState && typeof AppState === 'object') {
+      const policy = AppState.policy && typeof AppState.policy === 'object'
+        ? AppState.policy
+        : (AppState.policy = {});
+      const currentVad = policy.vad && typeof policy.vad === 'object' ? policy.vad : {};
+      policy.vad = { ...currentVad, auto_vad_active: true };
+    }
+  } catch (err) {
+    console.warn('Failed to mark auto_vad_active on policy', err);
+  }
+  logClient('diag=vad_active state=Listening');
 });
 
 window.addEventListener('asr.unavailable', (event) => {

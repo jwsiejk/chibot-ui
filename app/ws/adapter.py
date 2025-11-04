@@ -367,6 +367,7 @@ class AdapterContext:
     await_user_req_id: Optional[str] = None
     last_tts_end_req_id: Optional[str] = None
     await_user_cue_emitted: bool = False
+    await_user_vad_check_pending: bool = False
     listen_handoff_done: set[str] = field(default_factory=set)
     listen_handoff_task: asyncio.Task[None] | None = None
     listen_handoff_task_key: Optional[str] = None
@@ -476,6 +477,7 @@ class ChatV2Adapter:
                 pass
             return
         ctx.await_user_cue_emitted = True
+        ctx.await_user_vad_check_pending = True
         _log.info(
             "evt=turn_listen_cue sid=%s reason=tts_end policy_start=%s",
             sid,
@@ -1182,6 +1184,16 @@ class ChatV2Adapter:
                 await self._send_json(send, ctx.sid, {"type": "error", "error": err})
                 return self._HandleResult(False, 4400, "policy_violation")
             ctx.audio_profile = profile
+            if getattr(ctx, "await_user_vad_check_pending", False):
+                ctx.await_user_vad_check_pending = False
+                snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+                policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+                vad_block = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
+                auto_active = None
+                if isinstance(vad_block, Mapping) and "auto_vad_active" in vad_block:
+                    auto_active = bool(vad_block.get("auto_vad_active"))
+                if auto_active is not True:
+                    _log.warning("evt=warn_vad_inactive sid=%s expected=true", ctx.sid)
             if seq_start is not None:
                 ctx.audio_seq = max(0, seq_start)
                 ctx.audio_expected_seq = ctx.audio_seq
@@ -3232,6 +3244,7 @@ class ChatV2Adapter:
         ctx.await_user_req_id = None
         ctx.last_tts_end_req_id = None
         ctx.await_user_cue_emitted = False
+        ctx.await_user_vad_check_pending = False
 
     def _handle_tts_end_diag(
         self,
