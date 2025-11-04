@@ -40,6 +40,7 @@
   const userLabel = document.getElementById('adminUserLabel');
   const debugStatus = document.getElementById('adminDebugStatus');
   const configPanelRoot = document.getElementById('adminConfigPanel');
+  const presetContainer = document.getElementById('typePresetContainer');
   const drawer = document.getElementById('jsonDrawer');
   const drawerContent = document.getElementById('jsonDrawerContent');
   const drawerClose = document.getElementById('jsonDrawerClose');
@@ -69,6 +70,32 @@
   const chipsAudio = chipWrapAudio
     .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
     .filter((input) => input instanceof HTMLInputElement);
+
+  const FILTER_PRESETS = [
+    {
+      id: 'micLifecycle',
+      label: 'Mic lifecycle',
+      tokens: [
+        'EVT_CLIENT_LOG:label=client.mic',
+        'EVT_CLIENT_LOG:label=policy_defaults',
+        'EVT_CLIENT_LOG:label=turn_metrics',
+        'EVT_CLIENT_LOG:label=rearm_blocked',
+        'EVT_CLIENT_LOG:label=vad_active',
+      ],
+      title: 'client.mic → vad_active turn lifecycle',
+    },
+  ];
+
+  const presetButtons = new Map();
+  const presetById = new Map();
+  const activePresets = new Set();
+  const activePresetTokens = new Set();
+
+  FILTER_PRESETS.forEach((preset) => {
+    if (preset && typeof preset.id === 'string' && preset.id) {
+      presetById.set(preset.id, preset);
+    }
+  });
 
   let chkHud = null;
   let chkGuard = null;
@@ -103,6 +130,8 @@
     ensureToggleBindings();
     syncChipsWithDebug({ silent: true });
   });
+
+  renderFilterPresets();
 
   function getGlobalConfigFlag(key) {
     if (typeof window === 'undefined') {
@@ -314,6 +343,102 @@
     }
   }
 
+  function normalizePresetToken(token) {
+    if (typeof token !== 'string') {
+      return '';
+    }
+    return token.trim();
+  }
+
+  function recomputeActivePresetTokens() {
+    activePresetTokens.clear();
+    activePresets.forEach((presetId) => {
+      const preset = presetById.get(presetId);
+      if (!preset || !Array.isArray(preset.tokens)) {
+        return;
+      }
+      preset.tokens.forEach((token) => {
+        const normalized = normalizePresetToken(token);
+        if (normalized) {
+          activePresetTokens.add(normalized);
+        }
+      });
+    });
+  }
+
+  function syncPresetButtons() {
+    presetButtons.forEach((button, presetId) => {
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+      const isActive = activePresets.has(presetId);
+      button.classList.toggle('is-active', isActive);
+      button.setAttribute('aria-pressed', String(isActive));
+    });
+    if (presetContainer) {
+      presetContainer.hidden = presetButtons.size === 0;
+    }
+  }
+
+  function togglePreset(presetId) {
+    if (!presetById.has(presetId)) {
+      return;
+    }
+    if (activePresets.has(presetId)) {
+      activePresets.delete(presetId);
+    } else {
+      activePresets.add(presetId);
+    }
+    recomputeActivePresetTokens();
+    syncPresetButtons();
+    notifyFiltersUpdated();
+  }
+
+  function renderFilterPresets() {
+    if (!presetContainer) {
+      return;
+    }
+    presetContainer.innerHTML = '';
+    presetButtons.clear();
+
+    FILTER_PRESETS.forEach((preset) => {
+      if (!preset || typeof preset.id !== 'string' || !preset.id) {
+        return;
+      }
+      const label = typeof preset.label === 'string' ? preset.label.trim() : '';
+      if (!label) {
+        return;
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'admin-logs__preset';
+      button.dataset.presetId = preset.id;
+      button.setAttribute('aria-pressed', 'false');
+      button.textContent = label;
+      const title = typeof preset.title === 'string' ? preset.title.trim() : '';
+      if (title) {
+        button.title = title;
+      } else if (Array.isArray(preset.tokens)) {
+        const summary = preset.tokens
+          .map((token) => normalizePresetToken(token))
+          .filter(Boolean)
+          .join(', ');
+        if (summary) {
+          button.title = summary;
+        }
+      }
+      button.addEventListener('click', () => {
+        togglePreset(preset.id);
+      });
+      presetContainer.appendChild(button);
+      presetButtons.set(preset.id, button);
+    });
+
+    presetContainer.hidden = presetButtons.size === 0;
+    recomputeActivePresetTokens();
+    syncPresetButtons();
+  }
+
   function setSessionStatus(message) {
     if (sessionStatus) {
       sessionStatus.textContent = message;
@@ -361,7 +486,7 @@
   };
 
   function selectedTypes() {
-    const tokens = new Set();
+    const tokens = new Set(activePresetTokens);
     document
       .querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
       .forEach((checkbox) => {

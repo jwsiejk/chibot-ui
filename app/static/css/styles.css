@@ -559,6 +559,43 @@ body{
   align-items:center;
   gap:12px;
 }
+.admin-logs__presets{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:0;
+  padding:0;
+  list-style:none;
+}
+.admin-logs__presets[hidden]{
+  display:none;
+}
+.admin-logs__preset{
+  border:1px solid var(--border);
+  background:rgba(255,255,255,.04);
+  border-radius:999px;
+  padding:4px 10px;
+  font-size:11px;
+  letter-spacing:.25px;
+  text-transform:uppercase;
+  color:var(--muted);
+  cursor:pointer;
+  transition:background .2s ease,border-color .2s ease,color .2s ease;
+}
+.admin-logs__preset:hover{
+  border-color:rgba(91,157,255,.25);
+  color:var(--text);
+}
+.admin-logs__preset:focus-visible{
+  outline:2px solid rgba(91,157,255,.65);
+  outline-offset:2px;
+  border-color:rgba(91,157,255,.4);
+}
+.admin-logs__preset.is-active{
+  background:rgba(91,157,255,.18);
+  border-color:rgba(91,157,255,.45);
+  color:var(--text);
+}
 .admin-logs__filter-header h2{
   margin:0;
   font-size:13px;

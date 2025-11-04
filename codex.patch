@@ -1,218 +1,498 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 6417155c726d7c0b4d6798b7479116fe52371af4..98958f4a9c4610124acbd3287a3ba1f88618330f 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -2847,51 +2847,51 @@ window.addEventListener('asr.final', () => {
- });
+diff --git a/app/static/css/styles.css b/app/static/css/styles.css
+index 78902dad2b484b8c3d3839fe29acb6852e5dc7f8..c7dba9f4789f27d63dc7d39e4e7971257c75ca75 100644
+--- a/app/static/css/styles.css
++++ b/app/static/css/styles.css
+@@ -537,50 +537,87 @@ body{
+   border:1px solid var(--border);
+   border-radius:18px;
+   padding:18px 20px;
+   box-shadow:var(--shadow);
+ }
+ .admin-logs__filters{align-items:flex-start;gap:20px;}
+ .admin-logs__field{
+   flex:1 1 240px;
+   min-width:220px;
+   display:flex;
+   flex-direction:column;
+   gap:6px;
+ }
+ .admin-logs__field label{
+   font-size:11px;
+   letter-spacing:.4px;
+   text-transform:uppercase;
+   color:var(--muted);
+ }
+ .admin-logs__actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+ .admin-logs__filter-header{
+   display:flex;
+   align-items:center;
+   gap:12px;
+ }
++.admin-logs__presets{
++  display:flex;
++  flex-wrap:wrap;
++  gap:8px;
++  margin:0;
++  padding:0;
++  list-style:none;
++}
++.admin-logs__presets[hidden]{
++  display:none;
++}
++.admin-logs__preset{
++  border:1px solid var(--border);
++  background:rgba(255,255,255,.04);
++  border-radius:999px;
++  padding:4px 10px;
++  font-size:11px;
++  letter-spacing:.25px;
++  text-transform:uppercase;
++  color:var(--muted);
++  cursor:pointer;
++  transition:background .2s ease,border-color .2s ease,color .2s ease;
++}
++.admin-logs__preset:hover{
++  border-color:rgba(91,157,255,.25);
++  color:var(--text);
++}
++.admin-logs__preset:focus-visible{
++  outline:2px solid rgba(91,157,255,.65);
++  outline-offset:2px;
++  border-color:rgba(91,157,255,.4);
++}
++.admin-logs__preset.is-active{
++  background:rgba(91,157,255,.18);
++  border-color:rgba(91,157,255,.45);
++  color:var(--text);
++}
+ .admin-logs__filter-header h2{
+   margin:0;
+   font-size:13px;
+   letter-spacing:.35px;
+   text-transform:uppercase;
+   color:var(--muted);
+ }
+ .admin-logs__types{
+   display:flex;
+   flex-wrap:wrap;
+   gap:12px;
+ }
+ .admin-logs__type{
+   display:inline-flex;
+   align-items:center;
+   gap:6px;
+   padding:6px 12px;
+   border-radius:999px;
+   border:1px solid var(--border);
+   background:rgba(255,255,255,.04);
+   font-size:12px;
+   letter-spacing:.25px;
+   color:var(--muted);
+ }
+ .admin-logs__type span{color:var(--text);font-weight:600;letter-spacing:.2px;text-transform:none;}
+diff --git a/app/static/js/admin_logs.js b/app/static/js/admin_logs.js
+index 4f9a3414c4d08d373aeaa55ac57e50b0f22f6e90..07aee3a72b216e1a54760d5cc393458d1470235b 100644
+--- a/app/static/js/admin_logs.js
++++ b/app/static/js/admin_logs.js
+@@ -18,114 +18,143 @@
  
- window.addEventListener('assistant.await_user', (event) => {
-   runtimeState.audioPlaybackIdle = true;
-   const frame = event && event.detail;
-   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
-   maybeAutoStartCapture('await_user', reason);
-   if (shouldPrearmOnTtsEnd()) {
+   const sessionSearchInput = document.getElementById('sessionSearchInput');
+   const sessionOpenOnly = document.getElementById('sessionOpenOnly');
+   const sessionRefreshBtn = document.getElementById('sessionRefreshBtn');
+   const sessionTableBody = document.getElementById('sessionTableBody');
+   const sessionStatus = document.getElementById('sessionStatus');
+   const sidInput = document.getElementById('sidInput');
+   const liveBtn = document.getElementById('liveBtn');
+   const historyBtn = document.getElementById('historyBtn');
+   const downloadBtn = document.getElementById('downloadBtn');
+   const typesAllBtn = document.getElementById('typesAllBtn');
+   const liveStatus = document.getElementById('liveStatus');
+   const liveOutput = document.getElementById('liveOutput');
+   const historyStatus = document.getElementById('historyStatus');
+   const historyTableBody = document.getElementById('historyTableBody');
+   const historyPrev = document.getElementById('historyPrev');
+   const historyNext = document.getElementById('historyNext');
+   const historyCount = document.getElementById('historyCount');
+   const liveTab = document.getElementById('liveTab');
+   const historyTab = document.getElementById('historyTab');
+   const livePanel = document.getElementById('livePanel');
+   const historyPanel = document.getElementById('historyPanel');
+   const userLabel = document.getElementById('adminUserLabel');
+   const debugStatus = document.getElementById('adminDebugStatus');
+   const configPanelRoot = document.getElementById('adminConfigPanel');
++  const presetContainer = document.getElementById('typePresetContainer');
+   const drawer = document.getElementById('jsonDrawer');
+   const drawerContent = document.getElementById('jsonDrawerContent');
+   const drawerClose = document.getElementById('jsonDrawerClose');
+   const drawerBackdrop = document.getElementById('jsonDrawerBackdrop');
+ 
+   if (userLabel) {
+     if (userEmail) {
+       userLabel.textContent = `Signed in as ${userEmail}`;
+     } else {
+       userLabel.textContent = '';
+       userLabel.setAttribute('aria-hidden', 'true');
+       userLabel.style.display = 'none';
+     }
+   }
+ 
+   const TYPE_CHECKBOX_SELECTOR = 'input[name="logType"]';
+   const typeCheckboxes = Array.from(document.querySelectorAll(TYPE_CHECKBOX_SELECTOR));
+   const chipWrapHud = Array.from(
+     document.querySelectorAll('.admin-logs__type[data-diabinds="hud"]')
+   );
+   const chipWrapAudio = Array.from(
+     document.querySelectorAll('.admin-logs__type[data-diabinds="audio"]')
+   );
+   const chipsHud = chipWrapHud
+     .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
+     .filter((input) => input instanceof HTMLInputElement);
+   const chipsAudio = chipWrapAudio
+     .map((wrapper) => wrapper.querySelector(TYPE_CHECKBOX_SELECTOR))
+     .filter((input) => input instanceof HTMLInputElement);
+ 
++  const FILTER_PRESETS = [
++    {
++      id: 'micLifecycle',
++      label: 'Mic lifecycle',
++      tokens: [
++        'EVT_CLIENT_LOG:label=client.mic',
++        'EVT_CLIENT_LOG:label=policy_defaults',
++        'EVT_CLIENT_LOG:label=turn_metrics',
++        'EVT_CLIENT_LOG:label=rearm_blocked',
++        'EVT_CLIENT_LOG:label=vad_active',
++      ],
++      title: 'client.mic → vad_active turn lifecycle',
++    },
++  ];
++
++  const presetButtons = new Map();
++  const presetById = new Map();
++  const activePresets = new Set();
++  const activePresetTokens = new Set();
++
++  FILTER_PRESETS.forEach((preset) => {
++    if (preset && typeof preset.id === 'string' && preset.id) {
++      presetById.set(preset.id, preset);
++    }
++  });
++
+   let chkHud = null;
+   let chkGuard = null;
+   let hudObserver = null;
+   let guardObserver = null;
+   let configPanelObserver = null;
+ 
+   if (configPanelRoot && window.AdminConfigPanel && typeof window.AdminConfigPanel.init === 'function') {
      try {
-       requestAsrPrearm('await_user');
+       window.AdminConfigPanel.init(configPanelRoot, { statusElement: debugStatus });
+       if (!configPanelObserver) {
+         configPanelObserver = new MutationObserver(() => {
+           ensureToggleBindings();
+         });
+         configPanelObserver.observe(configPanelRoot, { childList: true, subtree: true });
+       }
+       window.requestAnimationFrame(() => {
+         ensureToggleBindings();
+         syncChipsWithDebug({ silent: true });
+       });
      } catch (err) {
-       console.warn('requestAsrPrearm failed after assistant.await_user', err);
-     }
-   }
-   try {
-     if (AppState && typeof AppState === 'object') {
-       const policy = AppState.policy && typeof AppState.policy === 'object'
-         ? AppState.policy
-         : (AppState.policy = {});
-       const currentVad = policy.vad && typeof policy.vad === 'object' ? policy.vad : {};
-       policy.vad = { ...currentVad, auto_vad_active: true };
-     }
-   } catch (err) {
-     console.warn('Failed to mark auto_vad_active on policy', err);
-   }
--  logClient('diag=vad_active state=Listening');
-+  logClient('client.mic', 'diag=vad_active state=Listening');
- });
- 
- window.addEventListener('asr.unavailable', (event) => {
-   cancelAsrPartialWatchdog();
-   runtimeState.asrReady = false;
-   const detail = event && typeof event === 'object' ? event.detail : undefined;
-   let reason = null;
-   if (detail && typeof detail === 'object') {
-     if (typeof detail.reason === 'string') {
-       reason = detail.reason;
-     } else if (typeof detail.details === 'string') {
-       reason = detail.details;
-     } else if (typeof detail.detail === 'string') {
-       reason = detail.detail;
-     } else if (detail.detail && typeof detail.detail === 'object') {
-       const nested = detail.detail;
-       if (typeof nested.reason === 'string') {
-         reason = nested.reason;
-       } else if (typeof nested.details === 'string') {
-         reason = nested.details;
+       console.warn('Failed to initialize admin config panel', err);
+       if (debugStatus) {
+         debugStatus.textContent = 'Failed to load debug controls.';
        }
      }
-   }
-   if (diagHudEnabled()) {
-     const reasonText = reason ? String(reason).slice(0, 120) : '';
-diff --git a/app/static/js/audio_recorder.js b/app/static/js/audio_recorder.js
-index 51c310b85bf9babd0fdb738a8b493b561f54c70a..0909d9870c8257a20b3f2e03d5e1aa046f80e8a5 100644
---- a/app/static/js/audio_recorder.js
-+++ b/app/static/js/audio_recorder.js
-@@ -87,78 +87,85 @@ import { WakeWord } from "./wake_word.js";
-     const appState = getAppState();
-     try {
-       if (appState?.hub && typeof appState.hub.log === "function") {
-         appState.hub.log("client.mic", detail);
-         return true;
-       }
-     } catch (err) {
-       try {
-         console.warn("AudioRecorder client.mic log failed", err);
-       } catch {}
-     }
-     if (typeof window !== "undefined") {
-       try {
-         window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail } }));
-         return true;
-       } catch {}
-     }
-     return false;
+   } else if (debugStatus) {
+     debugStatus.textContent = '';
    }
  
-   function logMicEventString(text) {
-     if (typeof text !== "string" || !text) {
+   window.requestAnimationFrame(() => {
+     ensureToggleBindings();
+     syncChipsWithDebug({ silent: true });
+   });
+ 
++  renderFilterPresets();
++
+   function getGlobalConfigFlag(key) {
+     if (typeof window === 'undefined') {
        return false;
      }
-     const appState = getAppState();
-+    let handled = false;
-     try {
-       if (appState?.hub && typeof appState.hub.log === "function") {
-         appState.hub.log("client.mic", text);
--        return true;
-+        handled = true;
-       }
-     } catch (err) {
-       try {
-         console.warn("AudioRecorder client.mic text log failed", err);
-       } catch {}
+     const cfg = window.__CFG__;
+     if (!cfg || typeof cfg !== 'object') {
+       return false;
      }
-     if (typeof window !== "undefined") {
-+      let routedToClientLogger = false;
-       try {
-         const logFn = window.__logClientMicString;
-         if (typeof logFn === "function") {
-           logFn(text);
--          return true;
-+          routedToClientLogger = true;
+     if (!Object.prototype.hasOwnProperty.call(cfg, key)) {
+       return false;
+     }
+     return Boolean(cfg[key]);
+   }
+ 
+   function isHudDebugEnabled() {
+     if (chkHud instanceof HTMLInputElement) {
+       return Boolean(chkHud.checked);
+     }
+     return getGlobalConfigFlag('DIAG_CLIENT_HUD');
+   }
+ 
+   function isAudioDebugEnabled() {
+     if (chkGuard instanceof HTMLInputElement) {
+       return Boolean(chkGuard.checked);
+     }
+@@ -292,98 +321,194 @@
+         if (!input.dataset._everEnabled) {
+           input.dataset._everEnabled = '1';
          }
-       } catch {}
-+      if (!routedToClientLogger) {
-+        try {
-+          window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail: text } }));
-+          routedToClientLogger = true;
-+        } catch {}
-+      }
-+      handled = handled || routedToClientLogger;
+       });
+     }
+ 
+     syncTypesAllButton();
+ 
+     if (!silent && updated) {
+       notifyFiltersUpdated();
+     }
+ 
+     return updated;
+   }
+ 
+   function isLiveActive() {
+     return Boolean(liveState.source || liveState.pollTimer);
+   }
+ 
+   function notifyFiltersUpdated() {
+     if (isLiveActive()) {
+       setLiveStatus('Filters updated — restart live tail to apply.');
+     }
+   }
+ 
++  function normalizePresetToken(token) {
++    if (typeof token !== 'string') {
++      return '';
 +    }
-+    if (!handled) {
-       try {
--        window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail: text } }));
--        return true;
-+        console.log(`client.mic ${text}`);
-+        handled = true;
-       } catch {}
++    return token.trim();
++  }
++
++  function recomputeActivePresetTokens() {
++    activePresetTokens.clear();
++    activePresets.forEach((presetId) => {
++      const preset = presetById.get(presetId);
++      if (!preset || !Array.isArray(preset.tokens)) {
++        return;
++      }
++      preset.tokens.forEach((token) => {
++        const normalized = normalizePresetToken(token);
++        if (normalized) {
++          activePresetTokens.add(normalized);
++        }
++      });
++    });
++  }
++
++  function syncPresetButtons() {
++    presetButtons.forEach((button, presetId) => {
++      if (!(button instanceof HTMLButtonElement)) {
++        return;
++      }
++      const isActive = activePresets.has(presetId);
++      button.classList.toggle('is-active', isActive);
++      button.setAttribute('aria-pressed', String(isActive));
++    });
++    if (presetContainer) {
++      presetContainer.hidden = presetButtons.size === 0;
++    }
++  }
++
++  function togglePreset(presetId) {
++    if (!presetById.has(presetId)) {
++      return;
++    }
++    if (activePresets.has(presetId)) {
++      activePresets.delete(presetId);
++    } else {
++      activePresets.add(presetId);
++    }
++    recomputeActivePresetTokens();
++    syncPresetButtons();
++    notifyFiltersUpdated();
++  }
++
++  function renderFilterPresets() {
++    if (!presetContainer) {
++      return;
++    }
++    presetContainer.innerHTML = '';
++    presetButtons.clear();
++
++    FILTER_PRESETS.forEach((preset) => {
++      if (!preset || typeof preset.id !== 'string' || !preset.id) {
++        return;
++      }
++      const label = typeof preset.label === 'string' ? preset.label.trim() : '';
++      if (!label) {
++        return;
++      }
++      const button = document.createElement('button');
++      button.type = 'button';
++      button.className = 'admin-logs__preset';
++      button.dataset.presetId = preset.id;
++      button.setAttribute('aria-pressed', 'false');
++      button.textContent = label;
++      const title = typeof preset.title === 'string' ? preset.title.trim() : '';
++      if (title) {
++        button.title = title;
++      } else if (Array.isArray(preset.tokens)) {
++        const summary = preset.tokens
++          .map((token) => normalizePresetToken(token))
++          .filter(Boolean)
++          .join(', ');
++        if (summary) {
++          button.title = summary;
++        }
++      }
++      button.addEventListener('click', () => {
++        togglePreset(preset.id);
++      });
++      presetContainer.appendChild(button);
++      presetButtons.set(preset.id, button);
++    });
++
++    presetContainer.hidden = presetButtons.size === 0;
++    recomputeActivePresetTokens();
++    syncPresetButtons();
++  }
++
+   function setSessionStatus(message) {
+     if (sessionStatus) {
+       sessionStatus.textContent = message;
      }
--    try {
--      console.log(`client.mic ${text}`);
--      return true;
--    } catch {}
--    return false;
-+    return handled;
    }
  
-   function getRearmCooldownRemainingMs() {
-     const appState = getAppState();
-     if (!appState) {
-       return 0;
+   function formatTimestamp(value) {
+     if (typeof value !== 'number' || !Number.isFinite(value)) {
+       return '—';
      }
-     const untilValue = Number(appState.__no_rearm_until);
-     if (!Number.isFinite(untilValue)) {
-       return 0;
+     try {
+       return new Date(value).toISOString();
+     } catch (err) {
+       return String(value);
      }
-     const now = Date.now();
-     if (now >= untilValue) {
-       return 0;
-     }
-     const remaining = Math.ceil(untilValue - now);
-     return remaining > 0 ? remaining : 0;
    }
  
-   function logRearmBlocked(trigger, msRemaining, reason = "cooldown") {
-     if (!(msRemaining > 0)) {
+   const liveState = {
+     source: null,
+     lines: [],
+     limit: 500,
+     pollTimer: null,
+     sinceMs: null,
+     sid: null,
+   };
+ 
+   const LIVE_POLL_INTERVAL_MS = 3000;
+   const LIVE_POLL_ERROR_INTERVAL_MS = 8000;
+ 
+   const sessionState = {
+     loading: false,
+     prefix: '',
+     openOnly: false,
+     sessions: [],
+     debounceId: null,
+   };
+ 
+   const historyState = {
+     offset: 0,
+     limit: 50,
+     sid: null,
+     events: [],
+     hasMore: false,
+     loading: false,
+   };
+ 
+   function selectedTypes() {
+-    const tokens = new Set();
++    const tokens = new Set(activePresetTokens);
+     document
+       .querySelectorAll(`${TYPE_CHECKBOX_SELECTOR}:checked`)
+       .forEach((checkbox) => {
+         if (!(checkbox instanceof HTMLInputElement)) {
+           return;
+         }
+         const aliasRaw = checkbox.dataset.filterTypes;
+         if (aliasRaw) {
+           aliasRaw
+             .split(/[\s,]+/)
+             .map((token) => token.trim())
+             .filter(Boolean)
+             .forEach((token) => tokens.add(token));
+         }
+         const { value } = checkbox;
+         if (value) {
+           tokens.add(value);
+         }
+       });
+     return Array.from(tokens);
+   }
+ 
+   function syncTypesAllButton() {
+     if (!typesAllBtn) {
        return;
-     }
-     const detail = {
-       event: "rearm_blocked",
-@@ -602,60 +609,51 @@ import { WakeWord } from "./wake_word.js";
-         const frac = cursor - index;
-         const sample0 = buffer[index];
-         const sample1 = buffer[index + 1] ?? sample0;
-         const interpolated = sample0 + (sample1 - sample0) * frac;
-         output.push(interpolated);
-         if (output.length >= PCM_FRAME_SAMPLES) {
-           const frame = output.splice(0, PCM_FRAME_SAMPLES);
-           this._emitPcmFrame(frame);
-         }
-         cursor += ratio;
-       }
-       const consumed = Math.max(0, Math.floor(cursor) - 1);
-       if (consumed > 0) {
-         buffer.splice(0, consumed);
-         cursor -= consumed;
-       }
-       this._pcmResampleCursor = cursor;
-       this._pcmOutputBuffer = output;
-     }
+diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
+index ca126f5decc2afc6546b7ad5388f33f9d452c627..ba9bdfa7374e9fe413923c1acd2fb7804dc88458 100644
+--- a/app/templates/admin_logs.html
++++ b/app/templates/admin_logs.html
+@@ -76,50 +76,57 @@
+         <section class="admin-logs__controls" aria-label="Log controls">
+           <div class="admin-logs__field">
+             <label for="sidInput">Session ID</label>
+             <input
+               id="sidInput"
+               class="text-input"
+               name="sid"
+               type="text"
+               placeholder="sid-xxxxxxxx"
+               autocomplete="off"
+               spellcheck="false"
+             />
+           </div>
+           <div class="admin-logs__actions">
+             <button id="liveBtn" class="pill start" type="button">Live Tail</button>
+             <button id="historyBtn" class="pill secondary" type="button">Load History</button>
+             <button id="downloadBtn" class="pill secondary" type="button">Download Zip</button>
+           </div>
+         </section>
  
-     _logMicFrame(rms, bytes) {
-       const seq = this._pcmFrameSeq;
-       const normalizedRms = Number.isFinite(rms) ? rms : 0;
-       const normalizedBytes = Number.isFinite(bytes) ? bytes : 0;
-       const message = `frame seq=${seq} rms=${normalizedRms.toFixed(1)} bytes=${normalizedBytes}`;
--      try {
--        const hub = typeof window !== "undefined" ? window.AppState?.hub : null;
--        if (hub && typeof hub.log === "function") {
--          hub.log("client.mic", message);
--          return;
--        }
--      } catch {}
--      try {
--        console.log(`client.mic ${message}`);
--      } catch {}
-+      logMicEventString(message);
-     }
- 
-     _sendCommitControl(detail) {
-       const payload = {
-         type: "client.telemetry",
-         event: "EVT_AUDIO_CHUNK_SENT_CLIENT",
-         meta: {
-           commit: true,
-           reason: detail.reason,
-           dur_ms: detail.dur_ms,
-           silence_ms: detail.silence_ms,
-         },
-       };
-       try {
-         const client = typeof window !== "undefined" ? window.WSClient : null;
-         if (client && typeof client.send === "function") {
-           client.send(payload);
-         }
-       } catch (err) {
-         console.warn("AudioRecorder commit control send failed", err);
-       }
-     }
- 
-     _emitVadCommit(durMs, silenceMs) {
-       const detail = {
+         <section class="admin-logs__filters" aria-label="Event filters">
+           <div class="admin-logs__filter-header">
+             <h2>Event types</h2>
+             <button id="typesAllBtn" class="pill secondary" type="button" aria-pressed="true">All</button>
+           </div>
++          <div
++            id="typePresetContainer"
++            class="admin-logs__presets"
++            role="group"
++            aria-label="Filter presets"
++            hidden
++          ></div>
+           <div class="admin-logs__types" role="group" aria-label="Event types">
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_TURN_BEGIN" checked />
+               <span>Turn begin</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_TURN_END" checked />
+               <span>Turn end</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_CHAT_USER" checked />
+               <span>User chat</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_WS_JSON_SEND" checked />
+               <span>JSON send</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_SESSION_STEP" checked />
+               <span>Session steps</span>
+             </label>
+             <label class="admin-logs__type">
+               <input type="checkbox" name="logType" value="EVT_WS_JSON_RECV" />
+               <span>JSON recv</span>
+             </label>
