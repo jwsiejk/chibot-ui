@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 
+from app.services.streaming_asr.speechmatics_client import SpeechmaticsConfigError
 from app.voice_v2.asr_runtime import ASRRuntime
 
 
@@ -118,6 +120,50 @@ class SpeechmaticsFinalAggregationTest(unittest.TestCase):
         self.assertTrue(self.engine.final_calls)
         self.assertEqual(self.engine.final_calls[-1][1], "Hello world")
         self.assertEqual(state.final_accumulated, "")
+
+
+class SpeechmaticsOpenValidationTest(unittest.TestCase):
+    def test_invalid_config_emits_error_frame(self) -> None:
+        bus = _StubBus()
+        engine = _StubEngine()
+
+        class _ConfigErrorClient(_StubClient):
+            async def open_stream(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                raise SpeechmaticsConfigError(
+                    language="es",
+                    sample_rate=8000,
+                    encoding="linear16",
+                )
+
+            def send_audio(self, sid: str, chunk: bytes) -> None:  # pragma: no cover - stub
+                return
+
+        client = _ConfigErrorClient()
+        runtime = ASRRuntime(engine, client, telemetry_bus=bus)
+
+        async def _exercise() -> None:
+            await runtime.open_if_needed("sid-invalid")
+
+        asyncio.run(_exercise())
+
+        state = runtime._sessions.get("sid-invalid")
+        self.assertIsNotNone(state)
+        if state is not None:
+            self.assertFalse(state.stream_open)
+            self.assertTrue(state.open_invalid)
+
+        error_events = [
+            evt
+            for evt in bus.events
+            if evt.get("type") == "EVT_WS_JSON_SEND"
+            and evt.get("sid") == "sid-invalid"
+            and isinstance(evt.get("payload"), dict)
+            and evt["payload"].get("type") == "error"
+        ]
+        self.assertTrue(error_events)
+        payload = error_events[-1]["payload"]
+        self.assertEqual(payload.get("code"), "asr_open_invalid")
+        self.assertIsInstance(payload.get("detail"), str)
 
 
 if __name__ == "__main__":

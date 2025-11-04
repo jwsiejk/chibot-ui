@@ -21,6 +21,7 @@ from app.config import (
 )
 from app.policy.model import Policy
 from app.telemetry import bus
+from app.services.streaming_asr.speechmatics_client import SpeechmaticsConfigError
 from app.voice_v2 import (
     EVT_ASR_FINAL,
     EVT_ASR_FINAL_SUPPRESSED_DUP,
@@ -162,6 +163,7 @@ class _SessionState:
     req_id: Optional[str] = None
     stream_open_task: Optional[asyncio.Task[None]] = None
     stream_open: bool = False
+    open_invalid: bool = False
     last_audio_ts: float = 0.0
     idle_handle: asyncio.TimerHandle | None = None
     stream_id: Optional[str] = None
@@ -886,6 +888,8 @@ class ASRRuntime:
 
         deadline = time.monotonic() + max(0.0, _STREAM_OPEN_TIMEOUT_S)
         while not state.stream_open:
+            if state.open_invalid:
+                break
             task = state.stream_open_task
             now = time.monotonic()
             if task is None or task.done():
@@ -1114,12 +1118,9 @@ class ASRRuntime:
             engine_session.adaptive_commit_silence_ms = new_cs
             engine_session.adaptive_extended_once = extended_once
         _log.info(
-            "evt=turn_metrics finals=%d post_final_chunks=%d ue_ms=%d cs_ms=%d extended_once=%d",
+            "evt=turn_metrics finals=%d post_final_chunks=%d",
             final_count,
             post_final_chunks,
-            new_ue,
-            new_cs,
-            1 if extended_once else 0,
         )
 
         self._emit_session_step(
@@ -1382,6 +1383,7 @@ class ASRRuntime:
             state.last_stream_id = stream_id
             state.close_reason = None
             state.prearm_requested = False
+            state.open_invalid = False
             try:
                 policy_snapshot = None
                 try:
@@ -1436,6 +1438,8 @@ class ASRRuntime:
                         on_error=self._make_error_cb(sid),
                         stream_id=stream_id,
                         on_close=self._make_close_cb(sid, state),
+                        encoding="pcm_s16le",
+                        sample_rate=16000,
                         policy=policy_snapshot,
                     ),
                     timeout=open_timeout,
@@ -1503,6 +1507,57 @@ class ASRRuntime:
                 )
             except asyncio.CancelledError:
                 raise
+            except SpeechmaticsConfigError as exc:
+                state.stream_id = None
+                state.stream_open = False
+                state.stream_open_task = None
+                state.open_invalid = True
+                detail = getattr(exc, "detail", str(exc))
+                _log.error(
+                    "evt=asr_open_invalid sid=%s language=%s sample_rate=%s encoding=%s",
+                    sid,
+                    exc.language if getattr(exc, "language", None) is not None else "",
+                    exc.sample_rate if getattr(exc, "sample_rate", None) is not None else "",
+                    exc.encoding if getattr(exc, "encoding", None) is not None else "",
+                )
+                self._emit_log(
+                    {
+                        "type": "EVT_LOG",
+                        "logger": "app.voice_v2.asr_runtime",
+                        "level": "ERROR",
+                        "sid": sid,
+                        "msg": (
+                            "evt=asr_open_invalid sid=%s language=%s sample_rate=%s encoding=%s"
+                        )
+                        % (
+                            sid,
+                            exc.language if getattr(exc, "language", None) is not None else "",
+                            exc.sample_rate if getattr(exc, "sample_rate", None) is not None else "",
+                            exc.encoding if getattr(exc, "encoding", None) is not None else "",
+                        ),
+                    }
+                )
+                error_frame = {
+                    "type": "error",
+                    "code": "asr_open_invalid",
+                    "detail": detail,
+                }
+                self._bus.publish(
+                    {
+                        "type": EVT_WS_JSON_SEND,
+                        "sid": sid,
+                        "frame": error_frame,
+                        "payload": error_frame,
+                    }
+                )
+                self._publish_asr_unavailable(
+                    sid,
+                    "open_invalid",
+                    detail,
+                    state=state,
+                    force=True,
+                )
+                return
             except asyncio.TimeoutError as err:
                 last_url = getattr(self._client, "debug_last_url", None)
                 self._emit_log(

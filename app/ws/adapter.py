@@ -405,6 +405,7 @@ class ChatV2Adapter:
         self.tts_runtime = None
         self.asr_runtime = None
         self._asr_runtime_vendor: Optional[str] = None
+        self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
 
     @staticmethod
     def _turn_key(ctx: AdapterContext, req_id: Optional[str]) -> Optional[str]:
@@ -3245,6 +3246,7 @@ class ChatV2Adapter:
         ctx.last_tts_end_req_id = None
         ctx.await_user_cue_emitted = False
         ctx.await_user_vad_check_pending = False
+        self._policy_defaults_emitted.pop(ctx.sid, None)
 
     def _handle_tts_end_diag(
         self,
@@ -3786,28 +3788,40 @@ class ChatV2Adapter:
                 except (TypeError, ValueError):
                     timeslice_for_log = None
 
-            _log.info(
-                "evt=policy_defaults ue_ms=%s cs_ms=%s min_seg_ms=%s timeslice_ms=%s allow_word_finals=%s",
-                ue_ms if ue_ms is not None else "unknown",
-                cs_ms if cs_ms is not None else "unknown",
-                min_seg_ms if min_seg_ms is not None else "unknown",
-                timeslice_for_log if timeslice_for_log is not None else "unknown",
-                str(allow_word_finals).lower() if allow_word_finals is not None else "unknown",
-            )
-
             sid_for_publish = current_sid.get(None)
-            policy_meta: Dict[str, Any] = {"step": "policy_defaults"}
-            if ue_ms is not None:
-                policy_meta["ue_ms"] = ue_ms
-            if cs_ms is not None:
-                policy_meta["cs_ms"] = cs_ms
-            if min_seg_ms is not None:
-                policy_meta["min_seg_ms"] = min_seg_ms
-            if timeslice_for_log is not None:
-                policy_meta["timeslice_ms"] = timeslice_for_log
-            if allow_word_finals is not None:
-                policy_meta["allow_word_finals"] = bool(allow_word_finals)
-            self._publish_session_step_meta(sid_for_publish, policy_meta)
+            emission_key: Optional[str] = None
+            if isinstance(sid_for_publish, str) and sid_for_publish:
+                emission_key = sid_for_publish
+            elif sid_for_publish is None:
+                emission_key = None
+            should_emit = True
+            if emission_key in self._policy_defaults_emitted:
+                should_emit = False
+            else:
+                self._policy_defaults_emitted[emission_key] = True
+
+            if should_emit:
+                _log.info(
+                    "evt=policy_defaults ue_ms=%s cs_ms=%s min_seg_ms=%s timeslice_ms=%s allow_word_finals=%s",
+                    ue_ms if ue_ms is not None else "unknown",
+                    cs_ms if cs_ms is not None else "unknown",
+                    min_seg_ms if min_seg_ms is not None else "unknown",
+                    timeslice_for_log if timeslice_for_log is not None else "unknown",
+                    str(allow_word_finals).lower() if allow_word_finals is not None else "unknown",
+                )
+
+                policy_meta: Dict[str, Any] = {"step": "policy_defaults"}
+                if ue_ms is not None:
+                    policy_meta["ue_ms"] = ue_ms
+                if cs_ms is not None:
+                    policy_meta["cs_ms"] = cs_ms
+                if min_seg_ms is not None:
+                    policy_meta["min_seg_ms"] = min_seg_ms
+                if timeslice_for_log is not None:
+                    policy_meta["timeslice_ms"] = timeslice_for_log
+                if allow_word_finals is not None:
+                    policy_meta["allow_word_finals"] = bool(allow_word_finals)
+                self._publish_session_step_meta(sid_for_publish, policy_meta)
         return stable
 
     def _allowed_asr_vendors(self) -> List[str]:

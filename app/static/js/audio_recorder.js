@@ -176,7 +176,7 @@ import { WakeWord } from "./wake_word.js";
       detail.trigger = trigger;
     }
     logMicBreadcrumb(detail);
-    logMicEventString(`evt=rearm_blocked reason=${reason} ms_remaining=${msRemaining}`);
+    logMicEventString(`evt=rearm_blocked reason=${reason}`);
     if (typeof window !== "undefined") {
       try {
         window.__logMic?.({
@@ -973,12 +973,12 @@ import { WakeWord } from "./wake_word.js";
         const seq = Number.isFinite(this._pcmFrameSeq) ? Math.max(0, Math.round(this._pcmFrameSeq)) : 0;
         const timeslice = this._captureTimesliceMs();
         const timesliceLabel = timeslice === null ? "unknown" : timeslice;
-        logMicEventString(`evt=mic_start seq=${seq} timeslice_ms=${timesliceLabel}`);
+        logMicEventString(`evt=mic_start timeslice_ms=${timesliceLabel}`);
       } else if (!nextActive && prevActive) {
         const lastSeq = Number.isFinite(this._pcmFrameSeq)
           ? Math.max(0, Math.round(this._pcmFrameSeq) - (this._pcmFrameSeq > 0 ? 1 : 0))
           : 0;
-        logMicEventString(`evt=mic_stop reason=${normalizedReason} seq=${lastSeq}`);
+        logMicEventString(`evt=mic_stop reason=${normalizedReason}`);
         this._lastStopLog = {
           reason: normalizedReason,
           seq: lastSeq,

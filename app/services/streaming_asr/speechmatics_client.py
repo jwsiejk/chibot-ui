@@ -19,6 +19,27 @@ from app.voice_v2 import EVT_ASR_FINAL, EVT_ASR_PARTIAL
 _AUDIO_SENTINEL = object()
 
 
+class SpeechmaticsConfigError(RuntimeError):
+    """Raised when the stream configuration does not meet Speechmatics requirements."""
+
+    def __init__(
+        self,
+        *,
+        language: str | None,
+        sample_rate: int | str | None,
+        encoding: str | None,
+    ) -> None:
+        self.language = language
+        self.sample_rate = sample_rate
+        self.encoding = encoding
+        detail = (
+            "Speechmatics requires language='en', sample_rate=16000, encoding='pcm_s16le' "
+            f"(got language={language!r}, sample_rate={sample_rate!r}, encoding={encoding!r})"
+        )
+        self.detail = detail
+        super().__init__(detail)
+
+
 def _coerce_language(policy: Mapping[str, Any] | None) -> str:
     """Return the language preference from policy or default to English."""
 
@@ -406,7 +427,7 @@ class SpeechmaticsClient:
         *,
         stream_id: str,
         on_close: Optional[Callable[[int | None, str | None], None]] = None,
-        encoding: str = "linear16",
+        encoding: str = "pcm_s16le",
         sample_rate: int = 16000,
         policy: Mapping[str, Any] | None = None,
     ) -> str:
@@ -417,9 +438,25 @@ class SpeechmaticsClient:
         if sid in self._streams:
             raise RuntimeError(f"stream for sid {sid!r} already exists")
 
-        await self._await_capacity(new_sid=sid)
-
         language = _coerce_language(policy)
+        normalized_language = language.strip().lower() if isinstance(language, str) else ""
+        try:
+            normalized_sample_rate = int(sample_rate)
+        except (TypeError, ValueError):
+            normalized_sample_rate = None
+        normalized_encoding = encoding.strip().lower() if isinstance(encoding, str) else ""
+        if (
+            normalized_language != "en"
+            or normalized_sample_rate != 16000
+            or normalized_encoding != "pcm_s16le"
+        ):
+            raise SpeechmaticsConfigError(
+                language=language,
+                sample_rate=sample_rate,
+                encoding=encoding,
+            )
+
+        await self._await_capacity(new_sid=sid)
 
         headers = {"Authorization": f"Bearer {self._api_key}"}
         connect_kwargs = {
@@ -967,7 +1004,11 @@ class SpeechmaticsClient:
         return duration
 
 
-__all__ = ["SpeechmaticsClient", "OfflineSpeechmaticsClient"]
+__all__ = [
+    "SpeechmaticsClient",
+    "OfflineSpeechmaticsClient",
+    "SpeechmaticsConfigError",
+]
 
 @dataclass
 class _OfflineStreamState:
@@ -998,6 +1039,7 @@ class OfflineSpeechmaticsClient:
         *,
         stream_id: str,
         on_close: Optional[Callable[[int | None, str | None], None]] = None,
+        encoding: str = "pcm_s16le",
         **_: Any,
     ) -> str:
         if not isinstance(sid, str) or not sid:
