@@ -40,6 +40,7 @@ import { WakeWord } from "./wake_word.js";
   let __micFirstChunkBreadcrumbSent = false;
   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
   let __pendingAsrReadyStart = null;
+  let __autoVadPatchedForPendingStart = false;
 
   if (typeof window !== "undefined") {
     try {
@@ -173,9 +174,42 @@ import { WakeWord } from "./wake_word.js";
     return { ...source };
   }
 
+  function patchPolicyVad(patch) {
+    if (!patch || typeof patch !== "object") {
+      return;
+    }
+
+    const applyPatch = (policyRoot) => {
+      if (!policyRoot || typeof policyRoot !== "object") {
+        return;
+      }
+      const currentVad = policyRoot.vad && typeof policyRoot.vad === "object"
+        ? policyRoot.vad
+        : {};
+      policyRoot.vad = { ...currentVad, ...patch };
+    };
+
+    try {
+      if (AppState && typeof AppState === "object") {
+        const policyRoot = AppState.policy && typeof AppState.policy === "object"
+          ? AppState.policy
+          : (AppState.policy = {});
+        applyPatch(policyRoot);
+        if (policyRoot.policy && typeof policyRoot.policy === "object") {
+          applyPatch(policyRoot.policy);
+        }
+      }
+    } catch (err) {
+      try {
+        console.warn("Failed to update AppState policy VAD", err);
+      } catch {}
+    }
+  }
+
   function setPendingAsrReadyStart(detail) {
     if (!detail || typeof detail !== "object") {
       __pendingAsrReadyStart = null;
+      __autoVadPatchedForPendingStart = false;
       return;
     }
     const policy = clonePolicySnapshot(detail.policy);
@@ -189,6 +223,7 @@ import { WakeWord } from "./wake_word.js";
       reason,
       ts: Date.now(),
     };
+    __autoVadPatchedForPendingStart = false;
     try {
       console.info("diag=awaiting_asr_ready reason=%s", reason);
     } catch {}
@@ -203,6 +238,33 @@ import { WakeWord } from "./wake_word.js";
       console.info("diag=awaiting_asr_ready_clear reason=%s", label);
     } catch {}
     __pendingAsrReadyStart = null;
+  }
+
+  function markAutoVadActiveAfterAsrReady() {
+    if (__autoVadPatchedForPendingStart) {
+      return;
+    }
+    __autoVadPatchedForPendingStart = true;
+
+    try {
+      patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
+    } catch (err) {
+      try {
+        console.warn("Failed to patch policy VAD after asr.ready", err);
+      } catch {}
+    }
+
+    const message = "client.mic diag=vad_active state=Listening";
+    try {
+      console.log(message);
+    } catch {}
+    try {
+      hubLog("client.mic", { message });
+    } catch (err) {
+      try {
+        console.warn("Failed to log VAD activation after asr.ready", err);
+      } catch {}
+    }
   }
 
   async function startStreamingAfterAsrReady(trigger) {
@@ -2426,7 +2488,10 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
       try {
-        await startStreamingAfterAsrReady("asr.ready");
+        const started = await startStreamingAfterAsrReady("asr.ready");
+        if (started) {
+          markAutoVadActiveAfterAsrReady();
+        }
       } catch (err) {
         console.error("Deferred mic start on asr.ready failed", err);
       }

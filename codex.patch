@@ -1,77 +1,204 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 82892cebce0b104889f5d2dde6a49c2d789d940e..c76e4d4010511e0d22082b52189c79479aa9ad5c 100644
+index c76e4d4010511e0d22082b52189c79479aa9ad5c..7ea05d72288c207e8b50f571577a4c7defd0e5a4 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1660,50 +1660,61 @@ import { WakeWord } from "./wake_word.js";
-       } catch (err) {
-         console.warn("Hub startListening (legacy input) failed", err);
-       }
-     }
-     console.warn('Legacy input capture is disabled; recorder hub missing.', frame);
+@@ -18,50 +18,51 @@ import { WakeWord } from "./wake_word.js";
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+   const DEFAULT_ASR_VENDOR = 'speechmatics';
+ 
+   let __micAttempts = 0;
+   let __micChunks = 0;
+   let __micBytes = 0;
+   let __micArmedAt = 0;     // ms since epoch
+   let __micPermissionGranted = false;
+   let __micRecordingStartAt = null;
+   let __micFirstChunkBreadcrumbSent = false;
+   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
+   let __pendingAsrReadyStart = null;
++  let __autoVadPatchedForPendingStart = false;
+ 
+   if (typeof window !== "undefined") {
+     try {
+       Object.defineProperty(window, "__micAttempts", {
+         configurable: true,
+         get() { return __micAttempts; },
+         set(value) {
+           if (Number.isFinite(value)) {
+             __micAttempts = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__micChunks", {
+         configurable: true,
+         get() { return __micChunks; },
+         set(value) {
+           if (Number.isFinite(value)) {
+             __micChunks = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__micBytes", {
+         configurable: true,
+         get() { return __micBytes; },
+         set(value) {
+@@ -151,82 +152,143 @@ import { WakeWord } from "./wake_word.js";
+   };
+ 
+   const appStateEventEmitter = createEventEmitter();
+   if (typeof AppState.on !== "function") {
+     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
+   }
+   if (typeof AppState.emit !== "function") {
+     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+   }
+   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
+     AppState.__pcmBreadcrumbHandlersInstalled = true;
+     AppState.on("recordingStarted", () => {
+       __micRecordingStartAt = Date.now();
+       __micFirstChunkBreadcrumbSent = false;
+       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
+     });
    }
  
-   function stopInputCapture(options = {}) {
-     clearPendingAsrReadyStart(options && typeof options.reason === "string" ? options.reason : "stop_input_capture");
-     const hub = AppState?.hub;
-     if (hub && typeof hub.stopListening === "function") {
-       try {
-         const reason = options && typeof options === "object" && options.reason
-           ? options.reason
-           : "legacy_input";
-         hub.stopListening(reason);
-       } catch (err) {
-         console.warn("Hub stopListening (legacy input) failed", err);
-       }
-       return;
+   function clonePolicySnapshot(source) {
+     if (!source || typeof source !== "object") {
+       return {};
      }
-     void options;
+     return { ...source };
    }
  
-   function handleInputStartFrame(frame) {
-+    const gates = getGateSnapshot();
-+    const asrReady = typeof gates?.asrReady === "boolean" ? gates.asrReady : Boolean(AppState?.asrReady);
-+    if (!asrReady) {
-+      setPendingAsrReadyStart({
-+        frame,
-+        policy: frame?.policy,
-+        reason: frame?.reason || frame?.type || "input.start",
-+      });
++  function patchPolicyVad(patch) {
++    if (!patch || typeof patch !== "object") {
 +      return;
 +    }
 +
-     startInputCapture(frame);
-   }
- 
-   function handleInputStopFrame() {
-     stopInputCapture({ reason: 'input.stop' });
-   }
- 
-   function sanitizeServerBannerFrame(frame) {
-     const safe = { type: "server.banner" };
-     if (!frame || typeof frame !== "object") {
-       return safe;
++    const applyPatch = (policyRoot) => {
++      if (!policyRoot || typeof policyRoot !== "object") {
++        return;
++      }
++      const currentVad = policyRoot.vad && typeof policyRoot.vad === "object"
++        ? policyRoot.vad
++        : {};
++      policyRoot.vad = { ...currentVad, ...patch };
++    };
++
++    try {
++      if (AppState && typeof AppState === "object") {
++        const policyRoot = AppState.policy && typeof AppState.policy === "object"
++          ? AppState.policy
++          : (AppState.policy = {});
++        applyPatch(policyRoot);
++        if (policyRoot.policy && typeof policyRoot.policy === "object") {
++          applyPatch(policyRoot.policy);
++        }
++      }
++    } catch (err) {
++      try {
++        console.warn("Failed to update AppState policy VAD", err);
++      } catch {}
++    }
++  }
++
+   function setPendingAsrReadyStart(detail) {
+     if (!detail || typeof detail !== "object") {
+       __pendingAsrReadyStart = null;
++      __autoVadPatchedForPendingStart = false;
+       return;
      }
+     const policy = clonePolicySnapshot(detail.policy);
+     const frame = detail.frame && typeof detail.frame === "object" ? { ...detail.frame } : null;
+     const reason = typeof detail.reason === "string" && detail.reason
+       ? detail.reason
+       : (typeof detail.source === "string" && detail.source ? detail.source : "start_listening");
+     __pendingAsrReadyStart = {
+       policy,
+       frame,
+       reason,
+       ts: Date.now(),
+     };
++    __autoVadPatchedForPendingStart = false;
+     try {
+       console.info("diag=awaiting_asr_ready reason=%s", reason);
+     } catch {}
+   }
  
-     const stringKeys = [
-       "build_id",
-       "host",
-       "cwd",
-       "python",
-       "platform",
-       "ws_path",
-       "subprotocol_selected",
-       "adapter_file",
-       "engine_file",
-       "asr_file"
-     ];
-@@ -2386,51 +2397,51 @@ import { WakeWord } from "./wake_word.js";
-         return;
-       }
+   function clearPendingAsrReadyStart(reason) {
+     if (!__pendingAsrReadyStart) {
+       return;
+     }
+     try {
+       const label = typeof reason === "string" && reason ? reason : "unknown";
+       console.info("diag=awaiting_asr_ready_clear reason=%s", label);
+     } catch {}
+     __pendingAsrReadyStart = null;
+   }
  
-       if (hub && typeof hub.startListening === "function") {
-         // Defer actual streaming until asr.ready fires.
-         return;
-       }
++  function markAutoVadActiveAfterAsrReady() {
++    if (__autoVadPatchedForPendingStart) {
++      return;
++    }
++    __autoVadPatchedForPendingStart = true;
++
++    try {
++      patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
++    } catch (err) {
++      try {
++        console.warn("Failed to patch policy VAD after asr.ready", err);
++      } catch {}
++    }
++
++    const message = "client.mic diag=vad_active state=Listening";
++    try {
++      console.log(message);
++    } catch {}
++    try {
++      hubLog("client.mic", { message });
++    } catch (err) {
++      try {
++        console.warn("Failed to log VAD activation after asr.ready", err);
++      } catch {}
++    }
++  }
++
+   async function startStreamingAfterAsrReady(trigger) {
+     const pending = __pendingAsrReadyStart;
+     if (!pending) {
+       return false;
+     }
+     __pendingAsrReadyStart = null;
+     const reason = typeof trigger === "string" && trigger
+       ? trigger
+       : (typeof pending.reason === "string" && pending.reason ? pending.reason : "asr_ready");
+     const policy = clonePolicySnapshot(pending.policy);
+     const ar = window.AudioRecorder || null;
+     if (ar && typeof ar.startListening === "function") {
+       try {
+         const startPolicy = { ...policy };
+         if (!startPolicy.reason && typeof reason === "string" && reason) {
+           startPolicy.reason = reason;
+         }
+         const maybe = ar.startListening(startPolicy);
+         if (maybe && typeof maybe.then === "function") {
+           await maybe;
+         }
+         try {
+           console.info("diag=mic_start_streaming trigger=%s", reason);
+         } catch {}
+         return true;
+@@ -2404,51 +2466,54 @@ import { WakeWord } from "./wake_word.js";
  
        console.warn('Legacy input capture deferred until asr.ready', frame);
        return;
@@ -90,15 +217,18 @@ index 82892cebce0b104889f5d2dde6a49c2d789d940e..c76e4d4010511e0d22082b52189c7947
        }
        clearPendingAsrReadyStart("stop_listening");
      } else if (frame.type === "input.start") {
--      startInputCapture(frame);
-+      handleInputStartFrame(frame);
+       handleInputStartFrame(frame);
      } else if (frame.type === "input.stop") {
        stopInputCapture({ reason: "input.stop" });
        clearPendingAsrReadyStart("input.stop");
      } else if (frame.type === "asr.ready") {
        frame = handleAsrReadyFrame(frame) || frame;
        try {
-         await startStreamingAfterAsrReady("asr.ready");
+-        await startStreamingAfterAsrReady("asr.ready");
++        const started = await startStreamingAfterAsrReady("asr.ready");
++        if (started) {
++          markAutoVadActiveAfterAsrReady();
++        }
        } catch (err) {
          console.error("Deferred mic start on asr.ready failed", err);
        }
@@ -117,3 +247,10 @@ index 82892cebce0b104889f5d2dde6a49c2d789d940e..c76e4d4010511e0d22082b52189c7947
        updateState({ asrReady: false, asrVendor: null });
        if (typeof AppState.emit === "function") {
          AppState.emit("asrReady", { ready: false, reason, vendor: null });
+       }
+       clearPendingAsrReadyStart("asr_unavailable");
+       try {
+         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
+         hud?.setState?.("Chat");
+       } catch (err) {
+         console.warn("Failed to update HUD state after asr.unavailable", err);
