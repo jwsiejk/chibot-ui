@@ -1458,7 +1458,7 @@
       const now = Date.now();
       if (noRearmUntil && now < noRearmUntil) {
         const msRemaining = Math.max(0, Math.ceil(noRearmUntil - now));
-        logClientMicEventText(`evt=rearm_blocked reason=cooldown ms_remaining=${msRemaining}`);
+        logClientMicEventText('evt=rearm_blocked reason=cooldown');
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
           blockedBy: 'cooldown',
           msRemaining,
@@ -2825,44 +2825,20 @@ window.addEventListener('asr.final', () => {
   if (AppState && typeof AppState === 'object') {
     AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
   }
+  let recorder = null;
   try {
-    const recorder = window.AudioRecorder;
+    recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
+  } catch (_) {
+    recorder = null;
+  }
+  try {
     recorder?.stopListening?.({ reason: 'final' });
   } catch (err) {
     console.warn('AudioRecorder stopListening on asr.final failed', err);
   }
+  logClientMicEventText('evt=mic_stop reason=final');
   if (runtimeState.isRecording) {
     updateRecordingState(false, 'final');
-  }
-  const stopReason = 'final';
-  const recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
-  const supportsLifecycle = Boolean(
-    recorder && typeof recorder.supportsMicLifecycleTelemetry === 'function'
-      && recorder.supportsMicLifecycleTelemetry(),
-  );
-  let handled = false;
-  if (supportsLifecycle) {
-    try {
-      const alreadyLogged = typeof recorder.didLogMicStop === 'function'
-        ? recorder.didLogMicStop(stopReason)
-        : false;
-      if (alreadyLogged) {
-        handled = true;
-      } else {
-        const seq = typeof recorder.getLastFrameSeq === 'function'
-          ? recorder.getLastFrameSeq()
-          : null;
-        if (Number.isFinite(seq)) {
-          logClientMicEventText(`evt=mic_stop reason=${stopReason} seq=${seq}`);
-          handled = true;
-        }
-      }
-    } catch (err) {
-      console.warn('AudioRecorder stop telemetry check failed', err);
-    }
-  }
-  if (!handled) {
-    logClientMicEventText(`evt=mic_stop reason=${stopReason}`);
   }
 });
 

@@ -1,159 +1,132 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 6458f45e8be49f9a44d5f05bccd6751c74067eeb..364ef863cc1ecae59af402fc1b8249952992e46d 100644
+index 364ef863cc1ecae59af402fc1b8249952992e46d..df3d2b242ca1fec9ca55d58e41174e3912e43730 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -900,50 +900,86 @@
-           }
-         },
+@@ -1436,51 +1436,51 @@
+           micPerm: Boolean(runtimeState.micPermissionGranted),
+           recording: Boolean(runtimeState.isRecording),
+         };
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
+         return;
+       }
+ 
+       const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+       const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+       const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+         ? runtimeState.turnState.slice(0, 32)
+         : null;
+       const gates = {
+         asrReady: Boolean(runtimeState.asrReady),
+         turnState: rawTurnState,
+         micPerm: Boolean(runtimeState.micPermissionGranted),
+         recording: Boolean(runtimeState.isRecording),
        };
  
-       hub._install(hubImpl);
-     }
- 
-     installHubInterface();
- 
-     const runtimeState = {
-       policy: null,
-       turnState: null,
-       asrReady: false,
-       isRecording: false,
-       micPermissionGranted: false,
-       audioPlaybackIdle: true,
-       policyCaptureLogged: false,
-       finalSeenThisTurn: false,
-     };
- 
-     if (AppState && typeof AppState.__no_rearm_until !== 'number') {
-       AppState.__no_rearm_until = 0;
-     }
- 
-     let asrPrearmIssued = false;
-+    let vadListeningLogged = false;
-+
-+    function patchPolicyVad(patch) {
-+      if (!patch || typeof patch !== 'object') {
-+        return;
-+      }
-+
-+      const applyPatch = (policyRoot) => {
-+        if (!policyRoot || typeof policyRoot !== 'object') {
-+          return;
-+        }
-+        const currentVad = policyRoot.vad && typeof policyRoot.vad === 'object'
-+          ? policyRoot.vad
-+          : {};
-+        policyRoot.vad = { ...currentVad, ...patch };
-+      };
-+
-+      try {
-+        if (AppState && typeof AppState === 'object') {
-+          const policy = AppState.policy && typeof AppState.policy === 'object'
-+            ? AppState.policy
-+            : (AppState.policy = {});
-+          applyPatch(policy);
-+        }
-+      } catch (err) {
-+        console.warn('Failed to update AppState policy VAD', err);
-+      }
-+
-+      try {
-+        if (runtimeState.policy && typeof runtimeState.policy === 'object') {
-+          applyPatch(runtimeState.policy);
-+        }
-+      } catch (err) {
-+        console.warn('Failed to update runtime policy VAD', err);
-+      }
-+    }
- 
-     function getPolicySnapshot() {
-       if (runtimeState.policy && typeof runtimeState.policy === 'object') {
-         return runtimeState.policy;
+       const noRearmUntil = AppState && Number.isFinite(Number(AppState.__no_rearm_until))
+         ? Number(AppState.__no_rearm_until)
+         : 0;
+       const now = Date.now();
+       if (noRearmUntil && now < noRearmUntil) {
+         const msRemaining = Math.max(0, Math.ceil(noRearmUntil - now));
+-        logClientMicEventText(`evt=rearm_blocked reason=cooldown ms_remaining=${msRemaining}`);
++        logClientMicEventText('evt=rearm_blocked reason=cooldown');
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'cooldown',
+           msRemaining,
+         });
+         return;
        }
-       if (AppState && typeof AppState.policy === 'object') {
-         return AppState.policy;
-       }
-       return null;
-     }
  
-     function getNestedPolicySection(section) {
-       const snapshot = getPolicySnapshot();
-       if (!snapshot || typeof snapshot !== 'object') {
-         return null;
-       }
-       const nested = snapshot.policy;
-       if (!nested || typeof nested !== 'object') {
-         return null;
-       }
-       const candidate = nested[section];
-       return candidate && typeof candidate === 'object' ? candidate : null;
-     }
+       // wake-word path removed; VAD barge-in is the only gate.
  
-     function shouldPrearmOnTtsEnd() {
-@@ -2672,50 +2708,52 @@
-             ws.send(payload);
-           }
-         }
-       } catch (err) {
-         console.warn('Failed to send asr.rearm.request', err);
+       if (runtimeState.isRecording) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'recording',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
        }
-       const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
-       logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
-     }
- 
- window.addEventListener('tts.start', (event) => {
-   const detail = event && event.detail;
-   if (detail) {
-     updateVoiceState(extractVoiceLocale(detail));
-   }
-   runtimeState.audioPlaybackIdle = false;
-   cancelAsrPartialWatchdog();
-   asrPrearmIssued = false;
-   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
-     try {
-       window.AudioRecorder.handleTtsStart();
-     } catch (err) {
-       console.warn('AudioRecorder handleTtsStart failed', err);
-     }
-   }
-+  patchPolicyVad({ auto_vad_active: false });
-+  vadListeningLogged = false;
+       if (!runtimeState.micPermissionGranted) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'mic_permission',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
+       }
+       if (!runtimeState.asrReady) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+@@ -2803,89 +2803,65 @@ window.addEventListener('local_audio.ended', (event) => {
  });
  
- window.addEventListener('policy.snapshot', (event) => {
-   const frame = event && event.detail;
+ const FINAL_REARM_COOLDOWN_MS = 1500;
+ 
+ window.addEventListener('asr.partial', () => {
+   if (AppState?.ttsActive) {
+     cancelAsrPartialWatchdog();
+     return;
+   }
+   if (!isRecorderListening()) {
+     cancelAsrPartialWatchdog();
+     return;
+   }
+   armAsrPartialWatchdog();
+ });
+ 
+ window.addEventListener('asr.final', () => {
+   if (runtimeState.finalSeenThisTurn) {
+     return;
+   }
+   runtimeState.finalSeenThisTurn = true;
+   const now = Date.now();
+   if (AppState && typeof AppState === 'object') {
+     AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
+   }
++  let recorder = null;
++  try {
++    recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
++  } catch (_) {
++    recorder = null;
++  }
    try {
-     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
-     runtimeState.policy = policy && typeof policy === 'object' ? policy : null;
-     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
-       audioRecorder.setPolicy(policy);
-     }
+-    const recorder = window.AudioRecorder;
+     recorder?.stopListening?.({ reason: 'final' });
    } catch (err) {
-     console.warn('AudioRecorder setPolicy failed', err);
+     console.warn('AudioRecorder stopListening on asr.final failed', err);
    }
- });
- 
- // Turn becomes Ready → hand control to user
- window.addEventListener('turn.state', (event) => {
-   const frame = (event && event.detail) || {};
-   const nextState = typeof frame.state === 'string'
-     ? frame.state
-     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
-   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
-   if (runtimeState.turnState !== 'Ready') return;
- 
-   // Optional: why we became ready (e.g., 'tts')
-@@ -2818,62 +2856,55 @@ window.addEventListener('asr.final', () => {
-           logClientMicEventText(`evt=mic_stop reason=${stopReason} seq=${seq}`);
-           handled = true;
-         }
-       }
-     } catch (err) {
-       console.warn('AudioRecorder stop telemetry check failed', err);
-     }
++  logClientMicEventText('evt=mic_stop reason=final');
+   if (runtimeState.isRecording) {
+     updateRecordingState(false, 'final');
    }
-   if (!handled) {
-     logClientMicEventText(`evt=mic_stop reason=${stopReason}`);
-   }
+-  const stopReason = 'final';
+-  const recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
+-  const supportsLifecycle = Boolean(
+-    recorder && typeof recorder.supportsMicLifecycleTelemetry === 'function'
+-      && recorder.supportsMicLifecycleTelemetry(),
+-  );
+-  let handled = false;
+-  if (supportsLifecycle) {
+-    try {
+-      const alreadyLogged = typeof recorder.didLogMicStop === 'function'
+-        ? recorder.didLogMicStop(stopReason)
+-        : false;
+-      if (alreadyLogged) {
+-        handled = true;
+-      } else {
+-        const seq = typeof recorder.getLastFrameSeq === 'function'
+-          ? recorder.getLastFrameSeq()
+-          : null;
+-        if (Number.isFinite(seq)) {
+-          logClientMicEventText(`evt=mic_stop reason=${stopReason} seq=${seq}`);
+-          handled = true;
+-        }
+-      }
+-    } catch (err) {
+-      console.warn('AudioRecorder stop telemetry check failed', err);
+-    }
+-  }
+-  if (!handled) {
+-    logClientMicEventText(`evt=mic_stop reason=${stopReason}`);
+-  }
  });
  
  window.addEventListener('assistant.await_user', (event) => {
@@ -168,117 +141,14 @@ index 6458f45e8be49f9a44d5f05bccd6751c74067eeb..364ef863cc1ecae59af402fc1b824995
        console.warn('requestAsrPrearm failed after assistant.await_user', err);
      }
    }
--  try {
--    if (AppState && typeof AppState === 'object') {
--      const policy = AppState.policy && typeof AppState.policy === 'object'
--        ? AppState.policy
--        : (AppState.policy = {});
--      const currentVad = policy.vad && typeof policy.vad === 'object' ? policy.vad : {};
--      policy.vad = { ...currentVad, auto_vad_active: true };
--    }
--  } catch (err) {
--    console.warn('Failed to mark auto_vad_active on policy', err);
-+  patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
-+  if (!vadListeningLogged) {
-+    logClient('client.mic', 'diag=vad_active state=Listening');
-+    vadListeningLogged = true;
+   patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
+   if (!vadListeningLogged) {
+     logClient('client.mic', 'diag=vad_active state=Listening');
+     vadListeningLogged = true;
    }
--  logClient('client.mic', 'diag=vad_active state=Listening');
  });
  
  window.addEventListener('asr.unavailable', (event) => {
    cancelAsrPartialWatchdog();
    runtimeState.asrReady = false;
    const detail = event && typeof event === 'object' ? event.detail : undefined;
-   let reason = null;
-   if (detail && typeof detail === 'object') {
-     if (typeof detail.reason === 'string') {
-       reason = detail.reason;
-     } else if (typeof detail.details === 'string') {
-       reason = detail.details;
-     } else if (typeof detail.detail === 'string') {
-       reason = detail.detail;
-     } else if (detail.detail && typeof detail.detail === 'object') {
-       const nested = detail.detail;
-       if (typeof nested.reason === 'string') {
-         reason = nested.reason;
-       } else if (typeof nested.details === 'string') {
-         reason = nested.details;
-       }
-     }
-   }
-   if (diagHudEnabled()) {
-     const reasonText = reason ? String(reason).slice(0, 120) : '';
-@@ -2920,70 +2951,72 @@ window.addEventListener('asr.ready', (event) => {
-     clearTimeout(asrRetry.timer);
-     asrRetry.timer = null;
-   }
-   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-     try {
-       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
-       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
-         maybe.catch((err) => {
-           console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
-         });
-       }
-     } catch (err) {
-       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
-     }
-   }
- });
- 
- window.addEventListener('assistant.suggestions', (event) => {
-   const detail = event && event.detail;
-   applySuggestionsFrame(detail);
- });
- 
- 
- // Start mic immediately on ws.open as a safety net; send diag banner
- window.addEventListener('ws.open', () => {
-+  vadListeningLogged = false;
-   if (audioRecorder && typeof audioRecorder.start === 'function') {
-     audioRecorder.start()
-       .then(() => {
-         setMicPermissionGranted(true, 'ws.open_start');
-       })
-       .catch(() => {
-         setMicPermissionGranted(false, 'ws.open_start_error');
-       });
-   }
-   try {
-     if (WSClient && typeof WSClient.send === 'function') {
-       WSClient.send({
-         type: 'client.banner',
-         event: { label: 'ws.open', ts_ms: Date.now() },
-         info: { build: window.__BUILD_SHA__ ?? null }
-       });
-     }
-   } catch {}
- });
- window.addEventListener('ws.close', () => {
-+  vadListeningLogged = false;
-   resetSuggestions();
-   DiagRecorder.stop('ws');
- });
- 
-     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
-     if (urlParams.get('wsSmoke') === '1') {
-       const transitions = [];
-       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
- 
-       class MockSocket extends EventTarget {
-         constructor() {
-           super();
-           this.readyState = WebSocket.CONNECTING;
-           setTimeout(() => {
-             this.readyState = WebSocket.OPEN;
-             this.dispatchEvent(new Event('open'));
-           }, 0);
-         }
-         send(payload) {
-           this.lastSent = payload;
-         }
-         close(code = 1000, reason = '') {
-           this.readyState = WebSocket.CLOSED;
-           const ev = new Event('close');
-           ev.code = code;
