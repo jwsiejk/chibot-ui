@@ -3623,6 +3623,127 @@ class ChatV2Adapter:
         nested_policy = snapshot.get("policy")
         if isinstance(nested_policy, dict):
             stable["policy"] = json.loads(json.dumps(nested_policy))
+
+        policy_block = stable.get("policy")
+        asr_block: Optional[Dict[str, Any]] = None
+        if isinstance(policy_block, Mapping):
+            candidate = policy_block.get("asr")
+            if isinstance(candidate, Mapping):
+                asr_block = dict(candidate)
+                policy_block = dict(policy_block)
+                policy_block["asr"] = asr_block
+                stable["policy"] = policy_block
+
+        vendor_primary: Optional[str] = None
+        if asr_block:
+            vendor_block = asr_block.get("vendor")
+            if isinstance(vendor_block, Mapping):
+                vendor_primary = str(vendor_block.get("primary") or "").strip().lower()
+
+        audio_block = stable.get("audio")
+        pipeline_block: Optional[Dict[str, Any]] = None
+        if isinstance(audio_block, Mapping):
+            pipeline_candidate = audio_block.get("pipeline")
+            if isinstance(pipeline_candidate, Mapping):
+                pipeline_block = dict(pipeline_candidate)
+                audio_block = dict(audio_block)
+                audio_block["pipeline"] = pipeline_block
+                stable["audio"] = audio_block
+
+        capture_candidate = stable.get("capture")
+        capture_block = dict(capture_candidate) if isinstance(capture_candidate, Mapping) else None
+        if capture_block is not None:
+            stable["capture"] = capture_block
+
+        media_candidate = stable.get("media")
+        media_block = dict(media_candidate) if isinstance(media_candidate, Mapping) else None
+        if media_block is not None:
+            stable["media"] = media_block
+
+        audio_mode = (pipeline_block.get("mode") if pipeline_block else None) or ""
+        audio_mode = str(audio_mode).strip().lower()
+        should_apply_defaults = (vendor_primary == "speechmatics" or audio_mode == "pcm16")
+
+        if should_apply_defaults:
+            if isinstance(media_block, dict) and "asr_input" in media_block:
+                media_block["asr_input"] = "pcm_16k"
+
+            if pipeline_block is not None and "mode" in pipeline_block:
+                pipeline_block["mode"] = "pcm16"
+
+            timeslice_value: Optional[int] = None
+            if isinstance(capture_block, dict) and "timeslice_ms" in capture_block:
+                capture_block["timeslice_ms"] = 50
+                timeslice_value = 50
+            elif isinstance(capture_block, dict):
+                raw_timeslice = capture_block.get("timeslice_ms")
+                try:
+                    timeslice_value = int(raw_timeslice) if raw_timeslice is not None else None
+                except (TypeError, ValueError):
+                    timeslice_value = None
+            else:
+                timeslice_value = None
+
+            if isinstance(capture_block, dict) and "asr_input" in capture_block:
+                capture_block["asr_input"] = "pcm_16k"
+
+            if isinstance(stable.get("allow_auto_vad"), bool):
+                stable["allow_auto_vad"] = True
+
+            if isinstance(policy_block, dict):
+                vad_block = policy_block.get("vad")
+                if isinstance(vad_block, Mapping) and "allow_auto_vad" in vad_block:
+                    vad_mut = dict(vad_block)
+                    vad_mut["allow_auto_vad"] = True
+                    policy_block["vad"] = vad_mut
+                stable["policy"] = policy_block
+
+            ue_ms = None
+            cs_ms = None
+            min_seg_ms = None
+            allow_word_finals: Optional[bool] = None
+
+            if isinstance(asr_block, dict):
+                if "utterance_end_ms" in asr_block:
+                    asr_block["utterance_end_ms"] = 2100
+                if "commit_silence_ms" in asr_block:
+                    asr_block["commit_silence_ms"] = 1400
+                if "min_segment_ms" in asr_block:
+                    asr_block["min_segment_ms"] = 1200
+                if "allow_word_finals" in asr_block:
+                    asr_block["allow_word_finals"] = False
+                    allow_word_finals = False
+
+                try:
+                    ue_ms = int(asr_block.get("utterance_end_ms"))
+                except (TypeError, ValueError):
+                    ue_ms = None
+                try:
+                    cs_ms = int(asr_block.get("commit_silence_ms"))
+                except (TypeError, ValueError):
+                    cs_ms = None
+                try:
+                    min_seg_ms = int(asr_block.get("min_segment_ms"))
+                except (TypeError, ValueError):
+                    min_seg_ms = None
+                if allow_word_finals is None and "allow_word_finals" in asr_block:
+                    allow_word_finals = bool(asr_block.get("allow_word_finals"))
+
+            timeslice_for_log = timeslice_value
+            if timeslice_for_log is None and isinstance(capture_block, dict):
+                try:
+                    timeslice_for_log = int(capture_block.get("timeslice_ms"))
+                except (TypeError, ValueError):
+                    timeslice_for_log = None
+
+            _log.info(
+                "evt=policy_defaults ue_ms=%s cs_ms=%s min_seg_ms=%s timeslice_ms=%s allow_word_finals=%s",
+                ue_ms if ue_ms is not None else "unknown",
+                cs_ms if cs_ms is not None else "unknown",
+                min_seg_ms if min_seg_ms is not None else "unknown",
+                timeslice_for_log if timeslice_for_log is not None else "unknown",
+                str(allow_word_finals).lower() if allow_word_finals is not None else "unknown",
+            )
         return stable
 
     def _allowed_asr_vendors(self) -> List[str]:
