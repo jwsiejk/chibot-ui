@@ -914,7 +914,12 @@
       micPermissionGranted: false,
       audioPlaybackIdle: true,
       policyCaptureLogged: false,
+      finalSeenThisTurn: false,
     };
+
+    if (AppState && typeof AppState.__no_rearm_until !== 'number') {
+      AppState.__no_rearm_until = 0;
+    }
 
     let asrPrearmIssued = false;
 
@@ -1140,6 +1145,17 @@
       }
     }
 
+    function logClientMicEventText(text) {
+      if (typeof text !== 'string' || !text) {
+        return;
+      }
+      logClient('client.mic', text);
+    }
+
+    try {
+      window.__logClientMicString = logClientMicEventText;
+    } catch (_) {}
+
     function resetMicSessionTelemetry() {
       micSessionTelemetry.micOpenLogged = false;
       micSessionTelemetry.firstChunkLogged = false;
@@ -1164,6 +1180,10 @@
       runtimeState.isRecording = next;
       if (next) {
         if (!previous) {
+          runtimeState.finalSeenThisTurn = false;
+          if (AppState && typeof AppState.__no_rearm_until === 'number') {
+            AppState.__no_rearm_until = 0;
+          }
           beginMicTelemetrySession();
           resetMicSessionTelemetry();
           noteRecordingBadgeOn(source);
@@ -1327,6 +1347,20 @@
         micPerm: Boolean(runtimeState.micPermissionGranted),
         recording: Boolean(runtimeState.isRecording),
       };
+
+      const noRearmUntil = AppState && Number.isFinite(Number(AppState.__no_rearm_until))
+        ? Number(AppState.__no_rearm_until)
+        : 0;
+      const now = Date.now();
+      if (noRearmUntil && now < noRearmUntil) {
+        const msRemaining = Math.max(0, Math.ceil(noRearmUntil - now));
+        logClientMicEventText(`evt=rearm_blocked reason=cooldown ms_remaining=${msRemaining}`);
+        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+          blockedBy: 'cooldown',
+          msRemaining,
+        });
+        return;
+      }
 
       if (requireHotwordToStart()) {
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
@@ -2669,6 +2703,29 @@ window.addEventListener('local_audio.ended', (event) => {
   const detail = event && event.detail;
   const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
   maybeAutoStartCapture(trigger, 'tts_end');
+});
+
+const FINAL_REARM_COOLDOWN_MS = 1500;
+
+window.addEventListener('asr.final', () => {
+  if (runtimeState.finalSeenThisTurn) {
+    return;
+  }
+  runtimeState.finalSeenThisTurn = true;
+  const now = Date.now();
+  if (AppState && typeof AppState === 'object') {
+    AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
+  }
+  try {
+    const recorder = window.AudioRecorder;
+    recorder?.stopListening?.({ reason: 'final' });
+  } catch (err) {
+    console.warn('AudioRecorder stopListening on asr.final failed', err);
+  }
+  if (runtimeState.isRecording) {
+    updateRecordingState(false, 'final');
+  }
+  logClientMicEventText('evt=mic_stop reason=final');
 });
 
 window.addEventListener('assistant.await_user', (event) => {

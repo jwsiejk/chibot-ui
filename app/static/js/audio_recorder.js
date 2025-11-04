@@ -104,6 +104,67 @@ import { WakeWord } from "./wake_word.js";
     return false;
   }
 
+  function getRearmCooldownRemainingMs() {
+    const appState = getAppState();
+    if (!appState) {
+      return 0;
+    }
+    const untilValue = Number(appState.__no_rearm_until);
+    if (!Number.isFinite(untilValue)) {
+      return 0;
+    }
+    const now = Date.now();
+    if (now >= untilValue) {
+      return 0;
+    }
+    const remaining = Math.ceil(untilValue - now);
+    return remaining > 0 ? remaining : 0;
+  }
+
+  function logRearmBlocked(trigger, msRemaining) {
+    if (!(msRemaining > 0)) {
+      return;
+    }
+    const detail = {
+      event: "rearm_blocked",
+      reason: "cooldown",
+      ms_remaining: msRemaining,
+    };
+    if (trigger) {
+      detail.trigger = trigger;
+    }
+    logMicBreadcrumb(detail);
+    if (typeof window !== "undefined") {
+      try {
+        const logFn = window.__logClientMicString;
+        if (typeof logFn === "function" && trigger !== "startMicCaptureIfIdle") {
+          logFn(`evt=rearm_blocked reason=cooldown ms_remaining=${msRemaining}`);
+        }
+      } catch {}
+      try {
+        window.__logMic?.({
+          event: "rearm_blocked",
+          reason: "cooldown",
+          ms_remaining: msRemaining,
+          trigger: trigger || undefined,
+        });
+      } catch {}
+    }
+  }
+
+  function waitMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitForRearmCooldown(trigger) {
+    let remaining = getRearmCooldownRemainingMs();
+    while (remaining > 0) {
+      logRearmBlocked(trigger, remaining);
+      await waitMs(remaining);
+      remaining = getRearmCooldownRemainingMs();
+    }
+  }
+
   class AudioRecorder {
     constructor(ws, appState) {
       this._ws = ws || null;
@@ -859,12 +920,18 @@ import { WakeWord } from "./wake_word.js";
 
     async startMicCaptureIfIdle(policy = {}) {
       this.setPolicy(policy);
+      const remaining = getRearmCooldownRemainingMs();
+      if (remaining > 0) {
+        logRearmBlocked("startMicCaptureIfIdle", remaining);
+        return false;
+      }
       await this._ensureArmed();
       return true;
     }
 
     async startListening(policy = {}) {
       this.setPolicy(policy);
+      await waitForRearmCooldown("startListening");
       await this._ensureArmed();
       console.info("diag=recorder_mode mode=pcm16");
       // Always send header now; _sendAudioHeader chooses pcm format
