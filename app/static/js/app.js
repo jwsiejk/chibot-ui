@@ -2814,7 +2814,36 @@ window.addEventListener('asr.final', () => {
   if (runtimeState.isRecording) {
     updateRecordingState(false, 'final');
   }
-  logClientMicEventText('evt=mic_stop reason=final');
+  const stopReason = 'final';
+  const recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
+  const supportsLifecycle = Boolean(
+    recorder && typeof recorder.supportsMicLifecycleTelemetry === 'function'
+      && recorder.supportsMicLifecycleTelemetry(),
+  );
+  let handled = false;
+  if (supportsLifecycle) {
+    try {
+      const alreadyLogged = typeof recorder.didLogMicStop === 'function'
+        ? recorder.didLogMicStop(stopReason)
+        : false;
+      if (alreadyLogged) {
+        handled = true;
+      } else {
+        const seq = typeof recorder.getLastFrameSeq === 'function'
+          ? recorder.getLastFrameSeq()
+          : null;
+        if (Number.isFinite(seq)) {
+          logClientMicEventText(`evt=mic_stop reason=${stopReason} seq=${seq}`);
+          handled = true;
+        }
+      }
+    } catch (err) {
+      console.warn('AudioRecorder stop telemetry check failed', err);
+    }
+  }
+  if (!handled) {
+    logClientMicEventText(`evt=mic_stop reason=${stopReason}`);
+  }
 });
 
 window.addEventListener('assistant.await_user', (event) => {

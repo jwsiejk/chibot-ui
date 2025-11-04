@@ -104,6 +104,41 @@ import { WakeWord } from "./wake_word.js";
     return false;
   }
 
+  function logMicEventString(text) {
+    if (typeof text !== "string" || !text) {
+      return false;
+    }
+    const appState = getAppState();
+    try {
+      if (appState?.hub && typeof appState.hub.log === "function") {
+        appState.hub.log("client.mic", text);
+        return true;
+      }
+    } catch (err) {
+      try {
+        console.warn("AudioRecorder client.mic text log failed", err);
+      } catch {}
+    }
+    if (typeof window !== "undefined") {
+      try {
+        const logFn = window.__logClientMicString;
+        if (typeof logFn === "function") {
+          logFn(text);
+          return true;
+        }
+      } catch {}
+      try {
+        window.dispatchEvent(new CustomEvent("client.log", { detail: { label: "client.mic", detail: text } }));
+        return true;
+      } catch {}
+    }
+    try {
+      console.log(`client.mic ${text}`);
+      return true;
+    } catch {}
+    return false;
+  }
+
   function getRearmCooldownRemainingMs() {
     const appState = getAppState();
     if (!appState) {
@@ -121,30 +156,25 @@ import { WakeWord } from "./wake_word.js";
     return remaining > 0 ? remaining : 0;
   }
 
-  function logRearmBlocked(trigger, msRemaining) {
+  function logRearmBlocked(trigger, msRemaining, reason = "cooldown") {
     if (!(msRemaining > 0)) {
       return;
     }
     const detail = {
       event: "rearm_blocked",
-      reason: "cooldown",
+      reason,
       ms_remaining: msRemaining,
     };
     if (trigger) {
       detail.trigger = trigger;
     }
     logMicBreadcrumb(detail);
+    logMicEventString(`evt=rearm_blocked reason=${reason} ms_remaining=${msRemaining}`);
     if (typeof window !== "undefined") {
-      try {
-        const logFn = window.__logClientMicString;
-        if (typeof logFn === "function" && trigger !== "startMicCaptureIfIdle") {
-          logFn(`evt=rearm_blocked reason=cooldown ms_remaining=${msRemaining}`);
-        }
-      } catch {}
       try {
         window.__logMic?.({
           event: "rearm_blocked",
-          reason: "cooldown",
+          reason,
           ms_remaining: msRemaining,
           trigger: trigger || undefined,
         });
@@ -193,6 +223,7 @@ import { WakeWord } from "./wake_word.js";
       this._pcmCommitSent = false;
       this._pcmWorkletLoaded = false;
       this._armingPromise = null;
+      this._lastStopLog = null;
     }
 
     setSocket(ws) {
@@ -368,6 +399,34 @@ import { WakeWord } from "./wake_word.js";
       this._pcmLastVoiceAt = null;
       this._pcmSilenceStartAt = null;
       this._pcmCommitSent = false;
+    }
+
+    _captureTimesliceMs() {
+      const policy = this._policy && typeof this._policy === "object" ? this._policy : {};
+      const capture = policy && typeof policy.capture === "object" ? policy.capture : null;
+      const nestedCapture = policy && typeof policy.policy === "object" && typeof policy.policy.capture === "object"
+        ? policy.policy.capture
+        : null;
+      const raw = capture && Object.prototype.hasOwnProperty.call(capture, "timeslice_ms")
+        ? capture.timeslice_ms
+        : (nestedCapture && Object.prototype.hasOwnProperty.call(nestedCapture, "timeslice_ms")
+          ? nestedCapture.timeslice_ms
+          : null);
+      if (raw === undefined || raw === null || raw === "") {
+        return null;
+      }
+      if (Number.isFinite(raw)) {
+        return Math.round(raw);
+      }
+      const parsed = Number(raw);
+      if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
+        return Math.round(parsed);
+      }
+      if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        return trimmed ? trimmed : null;
+      }
+      return null;
     }
 
     _resetStreamingTelemetry() {
@@ -873,6 +932,7 @@ import { WakeWord } from "./wake_word.js";
     }
 
     _updateRecorderState(active, reason) {
+      const prevActive = Boolean(this._active);
       const nextActive = Boolean(active);
       this._active = nextActive;
       const payload = { active: nextActive };
@@ -909,6 +969,23 @@ import { WakeWord } from "./wake_word.js";
           ts: Date.now(),
           vendor: "pcm16"
         });
+      }
+      const normalizedReason = typeof reason === "string" && reason ? reason : "unknown";
+      if (nextActive && !prevActive) {
+        const seq = Number.isFinite(this._pcmFrameSeq) ? Math.max(0, Math.round(this._pcmFrameSeq)) : 0;
+        const timeslice = this._captureTimesliceMs();
+        const timesliceLabel = timeslice === null ? "unknown" : timeslice;
+        logMicEventString(`evt=mic_start seq=${seq} timeslice_ms=${timesliceLabel}`);
+      } else if (!nextActive && prevActive) {
+        const lastSeq = Number.isFinite(this._pcmFrameSeq)
+          ? Math.max(0, Math.round(this._pcmFrameSeq) - (this._pcmFrameSeq > 0 ? 1 : 0))
+          : 0;
+        logMicEventString(`evt=mic_stop reason=${normalizedReason} seq=${lastSeq}`);
+        this._lastStopLog = {
+          reason: normalizedReason,
+          seq: lastSeq,
+          ts: Date.now(),
+        };
       }
     }
 
@@ -1016,6 +1093,30 @@ import { WakeWord } from "./wake_word.js";
         } catch {}
         this._stream = null;
       }
+      this._lastStopLog = null;
+    }
+
+    getLastFrameSeq() {
+      if (!Number.isFinite(this._pcmFrameSeq)) {
+        return null;
+      }
+      return this._pcmFrameSeq > 0 ? Math.max(0, Math.round(this._pcmFrameSeq) - 1) : 0;
+    }
+
+    didLogMicStop(reason) {
+      if (!this._lastStopLog || typeof this._lastStopLog !== "object") {
+        return false;
+      }
+      const matchReason = typeof reason === "string" && reason ? reason : null;
+      if (matchReason && this._lastStopLog.reason !== matchReason) {
+        return false;
+      }
+      const delta = Date.now() - (this._lastStopLog.ts || 0);
+      return delta >= 0 && delta <= 1000;
+    }
+
+    supportsMicLifecycleTelemetry() {
+      return true;
     }
   }
 
