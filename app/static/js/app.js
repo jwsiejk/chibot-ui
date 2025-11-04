@@ -1001,6 +1001,34 @@
       return 30000;
     }
 
+    function getCapturePolicy() {
+      const snapshot = getPolicySnapshot();
+      if (!snapshot || typeof snapshot !== 'object') {
+        return null;
+      }
+      if (snapshot.capture && typeof snapshot.capture === 'object') {
+        return snapshot.capture;
+      }
+      const nested = snapshot.policy;
+      if (nested && typeof nested === 'object' && nested.capture && typeof nested.capture === 'object') {
+        return nested.capture;
+      }
+      return null;
+    }
+
+    function getCaptureTimesliceMs() {
+      const capture = getCapturePolicy();
+      if (!capture) {
+        return null;
+      }
+      const raw = capture.timeslice_ms;
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return Math.round(numeric);
+      }
+      return null;
+    }
+
     const micSessionTelemetry = {
       micOpenLogged: false,
       firstChunkLogged: false,
@@ -1245,10 +1273,9 @@
             console.warn('AudioRecorder stopListening watchdog failed', err);
           }
         }
-        if (!stopAttempted) {
-          return;
+        if (stopAttempted) {
+          updateRecordingState(false, 'watchdog');
         }
-        logClientMicEventText('evt=mic_stop reason=watchdog');
       }, ASR_PARTIAL_WATCHDOG_MS);
     }
 
@@ -1270,6 +1297,21 @@
       logClient('evt=ui_rec_badge_on', detail);
     }
 
+    function normalizeStopReason(source) {
+      if (typeof source === 'string' && source) {
+        return source.slice(0, 48);
+      }
+      if (source && typeof source === 'object') {
+        if (typeof source.reason === 'string' && source.reason) {
+          return source.reason.slice(0, 48);
+        }
+        if (typeof source.code === 'string' && source.code) {
+          return source.code.slice(0, 48);
+        }
+      }
+      return 'unknown';
+    }
+
     function updateRecordingState(active, source) {
       const previous = runtimeState.isRecording;
       const next = !!active;
@@ -1283,6 +1325,11 @@
           beginMicTelemetrySession();
           resetMicSessionTelemetry();
           noteRecordingBadgeOn(source);
+          const timeslice = getCaptureTimesliceMs();
+          const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
+            ? Math.max(0, Math.round(timeslice))
+            : 'unknown';
+          logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
         }
         if (!AppState?.ttsActive) {
           armAsrPartialWatchdog();
@@ -1290,6 +1337,8 @@
           cancelAsrPartialWatchdog();
         }
       } else if (previous) {
+        const reasonLabel = normalizeStopReason(source);
+        logClientMicEventText(`evt=mic_stop reason=${reasonLabel}`);
         endMicTelemetrySession();
         resetMicSessionTelemetry();
         cancelAsrPartialWatchdog();
@@ -2836,7 +2885,6 @@ window.addEventListener('asr.final', () => {
   } catch (err) {
     console.warn('AudioRecorder stopListening on asr.final failed', err);
   }
-  logClientMicEventText('evt=mic_stop reason=final');
   if (runtimeState.isRecording) {
     updateRecordingState(false, 'final');
   }
