@@ -919,6 +919,12 @@
 
     let __lastBadgeLabel = null;
     let __fsmPrev = 'Disconnected';
+    const scheduleBadgeMicrotask =
+      typeof queueMicrotask === 'function'
+        ? queueMicrotask
+        : (cb) => Promise.resolve().then(cb);
+    let __badgeUpdateScheduled = false;
+    let __badgePendingState = undefined;
 
     function getMicLiveFlag(state) {
       const snapshot = state && typeof state === 'object' ? state : {};
@@ -947,8 +953,19 @@
           ? AppState.getState().connectionState
           : null);
 
-      const wsConn = connectionState === 'connected';
-      const wsConning = connectionState === 'connecting' || connectionState === 'resuming';
+      const wsConnectedFlag = typeof snapshot.wsConnected === 'boolean'
+        ? snapshot.wsConnected
+        : (typeof AppState?.wsConnected === 'boolean' ? AppState.wsConnected : undefined);
+      const wsConnectingFlag = typeof snapshot.wsConnecting === 'boolean'
+        ? snapshot.wsConnecting
+        : (typeof AppState?.wsConnecting === 'boolean' ? AppState.wsConnecting : undefined);
+
+      const wsConn = typeof wsConnectedFlag === 'boolean'
+        ? wsConnectedFlag
+        : connectionState === 'connected';
+      const wsConning = typeof wsConnectingFlag === 'boolean'
+        ? wsConnectingFlag
+        : connectionState === 'connecting' || connectionState === 'resuming';
 
       const tts = typeof snapshot.ttsActive === 'boolean'
         ? snapshot.ttsActive
@@ -1021,6 +1038,9 @@
       if (wsConning && !wsConn) {
         return { label: 'Connecting…', sub: 'One sec—bringing Chip online.', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
       }
+      if (err) {
+        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive: micLiveValue };
+      }
       if (wsConn && !tts && !listen && !think) {
         return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
       }
@@ -1035,9 +1055,6 @@
       }
       if (listen && asrReady && micLive) {
         return { label: 'Listening', sub: 'I’m listening — talk to me.', tone: 'tone-green', dot: 'bg-emerald-200', micLive };
-      }
-      if (err) {
-        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive: micLiveValue };
       }
       return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
     }
@@ -1072,7 +1089,7 @@
       return 'Greeting';
     }
 
-    function updateStatusBadge(stateOverride) {
+    function renderStatusBadge(snapshot) {
       const el =
         document.getElementById('status-badge') ||
         document.querySelector('[data-role="status-badge"]') ||
@@ -1081,9 +1098,14 @@
         return;
       }
 
-      const snapshot = stateOverride && typeof stateOverride === 'object'
-        ? stateOverride
-        : (typeof AppState?.getState === 'function' ? AppState.getState() : (AppState || {}));
+      if (!el.id) {
+        el.id = 'status-badge';
+      }
+      if (!el.getAttribute('data-role')) {
+        el.setAttribute('data-role', 'status-badge');
+      }
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
 
       const normalized = normalizeUiStateSnapshot(snapshot);
       const st = computeStatusBadge(snapshot, normalized);
@@ -1094,10 +1116,6 @@
           console.log(`fsm.transition prev=${prev} next=${canonical}`);
         }
         __fsmPrev = canonical;
-      }
-
-      if (!el.getAttribute('data-role')) {
-        el.setAttribute('data-role', 'status-badge');
       }
 
       const dot = el.querySelector('.status-dot, span[class*="w-2"], .dot, .badge-dot');
@@ -1134,7 +1152,12 @@
         if (!dot.classList.contains('status-dot')) {
           dot.classList.add('status-dot');
         }
-        dot.className = `status-dot ${st.dot}`;
+        Array.from(dot.classList)
+          .filter((cls) => cls.startsWith('bg-') && cls !== st.dot)
+          .forEach((cls) => dot.classList.remove(cls));
+        if (!dot.classList.contains(st.dot)) {
+          dot.classList.add(st.dot);
+        }
       }
 
       if (labelEl) {
@@ -1149,25 +1172,49 @@
 
       el.setAttribute('aria-label', st.sub ? `${st.label}. ${st.sub}` : st.label);
 
+      const recorderListening = typeof window.AudioRecorder?.listening === 'boolean'
+        ? window.AudioRecorder.listening
+        : !!st.micLive;
       if (__lastBadgeLabel !== st.label) {
-        if (st.label === 'Listening' && st.micLive) {
+        if (st.label === 'Listening' && recorderListening) {
           console.log('ui.badge label="Listening"');
         }
         __lastBadgeLabel = st.label;
       }
 
       if (dot) {
-        const micLive = typeof snapshot?.recorder?.active === 'boolean'
-          ? snapshot.recorder.active
-          : st.micLive;
-        dot.classList.toggle('pulsing', st.label === 'Listening' && micLive);
+        dot.classList.toggle('pulsing', st.label === 'Listening' && recorderListening);
       }
+    }
+
+    // Acceptance tests:
+    // - After greet → asr.ready and mic arms, badge shows Listening, dot pulses, and logs ui.badge label="Listening" once.
+    // - During TTS playback, badge reads Responding… with “Hold on” guidance.
+    // - When ASR errors trigger asr.unavailable, badge switches to Audio issue state.
+
+    function updateStatusBadge(stateOverride) {
+      if (stateOverride !== undefined) {
+        __badgePendingState = stateOverride;
+      }
+      if (__badgeUpdateScheduled) {
+        return;
+      }
+      __badgeUpdateScheduled = true;
+      scheduleBadgeMicrotask(() => {
+        __badgeUpdateScheduled = false;
+        const pending = __badgePendingState;
+        __badgePendingState = undefined;
+        const snapshot = pending && typeof pending === 'object'
+          ? pending
+          : (typeof AppState?.getState === 'function' ? AppState.getState() : (AppState || {}));
+        renderStatusBadge(snapshot);
+      });
     }
 
     updateStatusBadge(typeof AppState?.getState === 'function' ? AppState.getState() : null);
     if (typeof AppState?.on === 'function') {
       AppState.on('change', () => updateStatusBadge());
-      ['wsConnected', 'wsConnecting', 'ttsActive', 'turnState', 'asrReady', 'micPerm', 'recordingStarted', 'recordingStopped']
+      ['wsConnected', 'wsConnecting', 'ttsActive', 'turnState', 'asrReady']
         .forEach((eventName) => AppState.on(eventName, () => updateStatusBadge()));
     }
 
@@ -1667,6 +1714,7 @@
       } else {
         cancelAsrPartialWatchdog();
       }
+      updateStatusBadge();
       return next;
     }
 
@@ -2073,6 +2121,7 @@
       updateRecordingState(false, 'ws.close');
       setMicPermissionGranted(false, 'ws.close');
       runtimeState.policy = null;
+      updateStatusBadge();
     });
 
     window.addEventListener('ws.open', () => {
@@ -2085,6 +2134,7 @@
           flushDeferredClientLogs();
         } catch {}
       }
+      updateStatusBadge();
     });
     
     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
@@ -3105,6 +3155,7 @@ window.addEventListener('tts.start', (event) => {
   }
   patchPolicyVad({ auto_vad_active: false });
   vadListeningLogged = false;
+  updateStatusBadge();
 });
 
 window.addEventListener('policy.snapshot', (event) => {
@@ -3127,6 +3178,7 @@ window.addEventListener('turn.state', (event) => {
     ? frame.state
     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
+  updateStatusBadge();
   if (runtimeState.turnState !== 'Ready') return;
 
   // Optional: why we became ready (e.g., 'tts')
@@ -3159,6 +3211,7 @@ window.addEventListener('tts.end', () => {
         console.warn('requestAsrPrearm failed after tts.end', err);
       }
     }
+    updateStatusBadge();
   };
 
   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
@@ -3233,6 +3286,7 @@ window.addEventListener('assistant.await_user', (event) => {
     logClient('client.mic', 'diag=vad_active state=Listening');
     vadListeningLogged = true;
   }
+  updateStatusBadge();
 });
 
 window.addEventListener('asr.unavailable', (event) => {
@@ -3276,6 +3330,7 @@ window.addEventListener('asr.unavailable', (event) => {
   } catch (err) {
     console.warn('scheduleAsrRearm failed after asr.unavailable', err);
   }
+  updateStatusBadge();
 });
 
 window.addEventListener('asr.ready', (event) => {
@@ -3315,6 +3370,7 @@ window.addEventListener('asr.ready', (event) => {
       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
     }
   }
+  updateStatusBadge();
 });
 
 window.addEventListener('assistant.suggestions', (event) => {
