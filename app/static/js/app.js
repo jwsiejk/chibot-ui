@@ -1551,6 +1551,7 @@
         }
         logClientMicEventText('evt=guard_stop reason=no_partials_for_7s');
       }, ASR_READY_GUARD_MS);
+      logClientMicEventText(`evt=guard_arm ts_ms=${Date.now()}`);
     }
 
     function armAsrPartialWatchdog() {
