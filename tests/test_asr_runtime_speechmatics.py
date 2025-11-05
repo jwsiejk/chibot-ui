@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from unittest.mock import MagicMock
 
 from app.services.streaming_asr.speechmatics_client import SpeechmaticsConfigError
 from app.voice_v2.asr_runtime import ASRRuntime, _SessionState
@@ -206,6 +207,40 @@ class SpeechmaticsPreReadyAudioTest(unittest.TestCase):
                 for event in log_events
             )
         )
+
+
+class SpeechmaticsStreamReuseTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bus = _StubBus()
+        self.engine = _StubEngine()
+        self.client = _StubClient()
+        self.client.close_stream = MagicMock()
+        self.runtime = ASRRuntime(self.engine, self.client, telemetry_bus=self.bus)
+
+    def test_start_listening_reuses_existing_stream(self) -> None:
+        sid = "sid-reuse"
+        state = _SessionState(sid=sid)
+        state.stream_open = True
+        state.stream_id = "stream-existing"
+        state.pending.append(b"\x01\x02")
+        state.buffered_bytes = 2
+        self.runtime._sessions[sid] = state
+
+        ensure_mock = MagicMock()
+        finalize_mock = MagicMock()
+        self.runtime._ensure_stream = ensure_mock  # type: ignore[assignment]
+        self.runtime._finalize_rms_probe = finalize_mock  # type: ignore[assignment]
+
+        self.runtime._on_start_listening_frame(sid)
+
+        self.client.close_stream.assert_not_called()
+        ensure_mock.assert_not_called()
+        finalize_mock.assert_not_called()
+        self.assertTrue(state.stream_open)
+        self.assertEqual(state.stream_id, "stream-existing")
+        self.assertFalse(state.pending)
+        self.assertEqual(state.buffered_bytes, 0)
+        self.assertFalse(state.prearm_requested)
 
 
 if __name__ == "__main__":

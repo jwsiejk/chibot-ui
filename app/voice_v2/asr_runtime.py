@@ -1017,7 +1017,10 @@ class ASRRuntime:
             task.cancel()
         state.stream_open_task = None
 
-        if state.stream_open:
+        reuse_stream = False
+        if self._vendor == "speechmatics" and state.stream_open:
+            reuse_stream = True
+        elif state.stream_open:
             try:
                 self._client.close_stream(sid)
             except Exception:  # pragma: no cover - defensive
@@ -1048,7 +1051,7 @@ class ASRRuntime:
         # never received audio and the conversation stalled immediately after the
         # greet.  Always request a prearm so the stream opens and emits the
         # asr.ready event before we wait on client audio.
-        state.prearm_requested = True
+        state.prearm_requested = not reuse_stream
         state.utterance_active = False
         self._cancel_commit_timer(state)
         state.turn_final_count = 0
@@ -1075,7 +1078,8 @@ class ASRRuntime:
                 if getattr(engine_session, "adaptive_extended_once", False):
                     state.adaptive_extended_once = True
         self._apply_commit_policy(state)
-        self._ensure_stream(sid, state)
+        if not reuse_stream:
+            self._ensure_stream(sid, state)
 
     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
         if not isinstance(sid, str) or not sid:

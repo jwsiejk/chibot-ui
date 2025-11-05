@@ -1,256 +1,218 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index c76e4d4010511e0d22082b52189c79479aa9ad5c..7ea05d72288c207e8b50f571577a4c7defd0e5a4 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -18,50 +18,51 @@ import { WakeWord } from "./wake_word.js";
-     PERM_GRANTED: 'perm_granted',
-     ARMED: 'armed',
-     STREAMING: 'streaming',
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
-   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-   const DEFAULT_ASR_VENDOR = 'speechmatics';
+diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
+index f01659e6a3e1a8c66335b6ca30bfcc58948e42fd..77b8018475b86f924e73197b7923f44ecd818b26 100644
+--- a/app/voice_v2/asr_runtime.py
++++ b/app/voice_v2/asr_runtime.py
+@@ -995,109 +995,113 @@ class ASRRuntime:
+             "evt=asr_commit_trigger sid=%s vendor=%s source=client reason=%s",
+             sid,
+             self._vendor,
+             reason,
+         )
+         self.commit(sid, reason=reason)
  
-   let __micAttempts = 0;
-   let __micChunks = 0;
-   let __micBytes = 0;
-   let __micArmedAt = 0;     // ms since epoch
-   let __micPermissionGranted = false;
-   let __micRecordingStartAt = null;
-   let __micFirstChunkBreadcrumbSent = false;
-   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
-   let __pendingAsrReadyStart = null;
-+  let __autoVadPatchedForPendingStart = false;
+     def _on_start_listening_frame(self, sid: str) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
  
-   if (typeof window !== "undefined") {
-     try {
-       Object.defineProperty(window, "__micAttempts", {
-         configurable: true,
-         get() { return __micAttempts; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micAttempts = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__micChunks", {
-         configurable: true,
-         get() { return __micChunks; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micChunks = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__micBytes", {
-         configurable: true,
-         get() { return __micBytes; },
-         set(value) {
-@@ -151,82 +152,143 @@ import { WakeWord } from "./wake_word.js";
-   };
+         state = self._sessions.get(sid)
+         if state is None:
+             state = _SessionState(sid=sid)
+             self._sessions[sid] = state
  
-   const appStateEventEmitter = createEventEmitter();
-   if (typeof AppState.on !== "function") {
-     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
-   }
-   if (typeof AppState.emit !== "function") {
-     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
-   }
-   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
-     AppState.__pcmBreadcrumbHandlersInstalled = true;
-     AppState.on("recordingStarted", () => {
-       __micRecordingStartAt = Date.now();
-       __micFirstChunkBreadcrumbSent = false;
-       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
-     });
-   }
+         if self._vendor == "speechmatics":
+             # Speechmatics strictly requires 16 kHz PCM input.
+             state.input_desc = _pcm_input_descriptor()
  
-   function clonePolicySnapshot(source) {
-     if (!source || typeof source !== "object") {
-       return {};
-     }
-     return { ...source };
-   }
+         task = state.stream_open_task
+         if task is not None and not task.done():
+             task.cancel()
+         state.stream_open_task = None
  
-+  function patchPolicyVad(patch) {
-+    if (!patch || typeof patch !== "object") {
-+      return;
-+    }
+-        if state.stream_open:
++        reuse_stream = False
++        if self._vendor == "speechmatics" and state.stream_open:
++            reuse_stream = True
++        elif state.stream_open:
+             try:
+                 self._client.close_stream(sid)
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=asr_stream_close_failed sid=%s", sid)
+             finally:
+                 self._finalize_rms_probe(sid, state)
+             state.stream_open = False
+             state.stream_id = None
+ 
+         state.listening = True
+         state.bytes_received = 0
+         state.first_chunk_seen = False
+         state.rollup_window_start = 0.0
+         state.rollup_chunks = 0
+         state.rollup_bytes = 0
+         state.ingress_packets = 0
+         state.ingress_bytes = 0
+         state.first_ingress_ms = 0
+         state.first_partial_logged = False
+         state.last_partial_log = 0.0
+         state.pending.clear()
+         state.buffered_bytes = 0
+         # Speechmatics gating requires the websocket adapter to receive an
+         # asr.ready signal before it will forward any client audio.  The previous
+         # behaviour intentionally skipped the proactive stream open for
+         # Speechmatics, assuming audio would trigger the open path.  In practice
+         # the adapter suppresses audio until it sees asr.ready, so the runtime
+         # never received audio and the conversation stalled immediately after the
+         # greet.  Always request a prearm so the stream opens and emits the
+         # asr.ready event before we wait on client audio.
+-        state.prearm_requested = True
++        state.prearm_requested = not reuse_stream
+         state.utterance_active = False
+         self._cancel_commit_timer(state)
+         state.turn_final_count = 0
+         state.turn_first_final_seen = False
+         state.turn_post_final_chunks = 0
+         state.turn_no_partial_ms = 0
+         state.turn_gap_start_ms = 0
+         state.turn_speech_evidence = False
+         state.turn_first_audio_ms = 0
+         state.turn_last_partial_ms = 0
+         session_supplier = getattr(self._engine, "_ensure_session", None)
+         if callable(session_supplier):
+             try:
+                 engine_session = session_supplier(sid)
+             except Exception:  # pragma: no cover - defensive
+                 engine_session = None
+             if engine_session is not None:
+                 ue_override = getattr(engine_session, "adaptive_utterance_end_ms", None)
+                 cs_override = getattr(engine_session, "adaptive_commit_silence_ms", None)
+                 if isinstance(ue_override, (int, float)) and ue_override > 0:
+                     state.adaptive_utterance_end_ms = int(ue_override)
+                 if isinstance(cs_override, (int, float)) and cs_override > 0:
+                     state.adaptive_commit_silence_ms = int(cs_override)
+                 if getattr(engine_session, "adaptive_extended_once", False):
+                     state.adaptive_extended_once = True
+         self._apply_commit_policy(state)
+-        self._ensure_stream(sid, state)
++        if not reuse_stream:
++            self._ensure_stream(sid, state)
+ 
+     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
+         if not isinstance(sid, str) or not sid:
+             return
+ 
+         state = self._sessions.get(sid)
+         if state is None:
+             return
+ 
+         now_ms = int(time.time() * 1000)
+         if state.turn_speech_evidence and state.turn_gap_start_ms > 0:
+             trailing_gap = max(0, now_ms - state.turn_gap_start_ms)
+             if trailing_gap > state.turn_no_partial_ms:
+                 state.turn_no_partial_ms = trailing_gap
+         final_count = state.turn_final_count
+         post_final_chunks = state.turn_post_final_chunks
+         no_partial_ms = state.turn_no_partial_ms
+         current_ue = self._effective_utterance_end_ms(state)
+         current_cs = self._effective_commit_silence_ms(state)
+         new_ue = current_ue
+         new_cs = current_cs
+         extended_once = state.adaptive_extended_once
+         if final_count > 2 and new_ue < 2600:
+             new_ue = min(2600, new_ue + 200)
+         if post_final_chunks > 120 and new_cs < 1800:
+diff --git a/tests/test_asr_runtime_speechmatics.py b/tests/test_asr_runtime_speechmatics.py
+index f8d382651fbc40262e7a682836b9abc4a6de5e7f..b00273aa3174cafe71e23c21683a471f36934613 100644
+--- a/tests/test_asr_runtime_speechmatics.py
++++ b/tests/test_asr_runtime_speechmatics.py
+@@ -1,29 +1,30 @@
+ from __future__ import annotations
+ 
+ import asyncio
+ import unittest
++from unittest.mock import MagicMock
+ 
+ from app.services.streaming_asr.speechmatics_client import SpeechmaticsConfigError
+ from app.voice_v2.asr_runtime import ASRRuntime, _SessionState
+ 
+ 
+ class _StubBus:
+     def __init__(self) -> None:
+         self.events: list[dict] = []
+ 
+     def publish(self, event: dict) -> None:
+         self.events.append(dict(event))
+ 
+     def subscribe(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+         return object()
+ 
+ 
+ class _StubEngine:
+     def __init__(self) -> None:
+         self.policy_snapshot = {}
+         self.partial_calls: list[tuple[str, str, float, str]] = []
+         self.final_calls: list[tuple[str, str, str | None]] = []
+ 
+     def on_asr_partial(
+         self, sid: str, req_id: str, confidence: float, text: str
+     ) -> None:
+@@ -186,27 +187,61 @@ class SpeechmaticsPreReadyAudioTest(unittest.TestCase):
+ 
+         dropped = self.runtime._drain_pre_ready_audio(sid, state, state.stream_id)
+ 
+         self.assertEqual(dropped, len(chunk_a) + len(chunk_b))
+         self.assertFalse(state.pending)
+         self.assertEqual(state.buffered_bytes, 0)
+         self.assertEqual(state.dropped_chunks, 2)
+         self.assertTrue(state.early_audio_dropped)
+         self.assertEqual(state.early_audio_dropped_bytes, dropped)
+ 
+         log_events = [
+             evt
+             for evt in self.bus.events
+             if evt.get("type") == "EVT_LOG"
+             and evt.get("sid") == sid
+             and isinstance(evt.get("msg"), str)
+         ]
+         self.assertTrue(
+             any(
+                 event["msg"].startswith("evt=audio_dropped_before_asr_open")
+                 for event in log_events
+             )
+         )
+ 
+ 
++class SpeechmaticsStreamReuseTest(unittest.TestCase):
++    def setUp(self) -> None:
++        self.bus = _StubBus()
++        self.engine = _StubEngine()
++        self.client = _StubClient()
++        self.client.close_stream = MagicMock()
++        self.runtime = ASRRuntime(self.engine, self.client, telemetry_bus=self.bus)
 +
-+    const applyPatch = (policyRoot) => {
-+      if (!policyRoot || typeof policyRoot !== "object") {
-+        return;
-+      }
-+      const currentVad = policyRoot.vad && typeof policyRoot.vad === "object"
-+        ? policyRoot.vad
-+        : {};
-+      policyRoot.vad = { ...currentVad, ...patch };
-+    };
++    def test_start_listening_reuses_existing_stream(self) -> None:
++        sid = "sid-reuse"
++        state = _SessionState(sid=sid)
++        state.stream_open = True
++        state.stream_id = "stream-existing"
++        state.pending.append(b"\x01\x02")
++        state.buffered_bytes = 2
++        self.runtime._sessions[sid] = state
 +
-+    try {
-+      if (AppState && typeof AppState === "object") {
-+        const policyRoot = AppState.policy && typeof AppState.policy === "object"
-+          ? AppState.policy
-+          : (AppState.policy = {});
-+        applyPatch(policyRoot);
-+        if (policyRoot.policy && typeof policyRoot.policy === "object") {
-+          applyPatch(policyRoot.policy);
-+        }
-+      }
-+    } catch (err) {
-+      try {
-+        console.warn("Failed to update AppState policy VAD", err);
-+      } catch {}
-+    }
-+  }
++        ensure_mock = MagicMock()
++        finalize_mock = MagicMock()
++        self.runtime._ensure_stream = ensure_mock  # type: ignore[assignment]
++        self.runtime._finalize_rms_probe = finalize_mock  # type: ignore[assignment]
 +
-   function setPendingAsrReadyStart(detail) {
-     if (!detail || typeof detail !== "object") {
-       __pendingAsrReadyStart = null;
-+      __autoVadPatchedForPendingStart = false;
-       return;
-     }
-     const policy = clonePolicySnapshot(detail.policy);
-     const frame = detail.frame && typeof detail.frame === "object" ? { ...detail.frame } : null;
-     const reason = typeof detail.reason === "string" && detail.reason
-       ? detail.reason
-       : (typeof detail.source === "string" && detail.source ? detail.source : "start_listening");
-     __pendingAsrReadyStart = {
-       policy,
-       frame,
-       reason,
-       ts: Date.now(),
-     };
-+    __autoVadPatchedForPendingStart = false;
-     try {
-       console.info("diag=awaiting_asr_ready reason=%s", reason);
-     } catch {}
-   }
- 
-   function clearPendingAsrReadyStart(reason) {
-     if (!__pendingAsrReadyStart) {
-       return;
-     }
-     try {
-       const label = typeof reason === "string" && reason ? reason : "unknown";
-       console.info("diag=awaiting_asr_ready_clear reason=%s", label);
-     } catch {}
-     __pendingAsrReadyStart = null;
-   }
- 
-+  function markAutoVadActiveAfterAsrReady() {
-+    if (__autoVadPatchedForPendingStart) {
-+      return;
-+    }
-+    __autoVadPatchedForPendingStart = true;
++        self.runtime._on_start_listening_frame(sid)
 +
-+    try {
-+      patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
-+    } catch (err) {
-+      try {
-+        console.warn("Failed to patch policy VAD after asr.ready", err);
-+      } catch {}
-+    }
++        self.client.close_stream.assert_not_called()
++        ensure_mock.assert_not_called()
++        finalize_mock.assert_not_called()
++        self.assertTrue(state.stream_open)
++        self.assertEqual(state.stream_id, "stream-existing")
++        self.assertFalse(state.pending)
++        self.assertEqual(state.buffered_bytes, 0)
++        self.assertFalse(state.prearm_requested)
 +
-+    const message = "client.mic diag=vad_active state=Listening";
-+    try {
-+      console.log(message);
-+    } catch {}
-+    try {
-+      hubLog("client.mic", { message });
-+    } catch (err) {
-+      try {
-+        console.warn("Failed to log VAD activation after asr.ready", err);
-+      } catch {}
-+    }
-+  }
 +
-   async function startStreamingAfterAsrReady(trigger) {
-     const pending = __pendingAsrReadyStart;
-     if (!pending) {
-       return false;
-     }
-     __pendingAsrReadyStart = null;
-     const reason = typeof trigger === "string" && trigger
-       ? trigger
-       : (typeof pending.reason === "string" && pending.reason ? pending.reason : "asr_ready");
-     const policy = clonePolicySnapshot(pending.policy);
-     const ar = window.AudioRecorder || null;
-     if (ar && typeof ar.startListening === "function") {
-       try {
-         const startPolicy = { ...policy };
-         if (!startPolicy.reason && typeof reason === "string" && reason) {
-           startPolicy.reason = reason;
-         }
-         const maybe = ar.startListening(startPolicy);
-         if (maybe && typeof maybe.then === "function") {
-           await maybe;
-         }
-         try {
-           console.info("diag=mic_start_streaming trigger=%s", reason);
-         } catch {}
-         return true;
-@@ -2404,51 +2466,54 @@ import { WakeWord } from "./wake_word.js";
- 
-       console.warn('Legacy input capture deferred until asr.ready', frame);
-       return;
-     } else if (frame.type === "stop_listening") {
-       try {
-         const hub = AppState?.hub;
-         if (hub && typeof hub.stopListening === "function") {
-           hub.stopListening("server_requested");
-         } else {
-           stopInputCapture({ reason: "server_requested" });
-         }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-       clearPendingAsrReadyStart("stop_listening");
-     } else if (frame.type === "input.start") {
-       handleInputStartFrame(frame);
-     } else if (frame.type === "input.stop") {
-       stopInputCapture({ reason: "input.stop" });
-       clearPendingAsrReadyStart("input.stop");
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-       try {
--        await startStreamingAfterAsrReady("asr.ready");
-+        const started = await startStreamingAfterAsrReady("asr.ready");
-+        if (started) {
-+          markAutoVadActiveAfterAsrReady();
-+        }
-       } catch (err) {
-         console.error("Deferred mic start on asr.ready failed", err);
-       }
-     } else if (frame.type === "asr.partial") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.final") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.unavailable") {
-       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-       const details = frame && typeof frame.details === "string"
-         ? frame.details
-         : (frame && typeof frame.detail === "string" ? frame.detail : "");
-       console.warn("asr.unavailable", reason, details);
-       AppState.asrReady = false;
-       AppState.asrVendor = null;
-       updateState({ asrReady: false, asrVendor: null });
-       if (typeof AppState.emit === "function") {
-         AppState.emit("asrReady", { ready: false, reason, vendor: null });
-       }
-       clearPendingAsrReadyStart("asr_unavailable");
-       try {
-         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
-         hud?.setState?.("Chat");
-       } catch (err) {
-         console.warn("Failed to update HUD state after asr.unavailable", err);
+ if __name__ == "__main__":
+     unittest.main()
