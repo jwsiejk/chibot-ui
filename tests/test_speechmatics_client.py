@@ -1,6 +1,9 @@
+import logging
 import unittest
+from types import SimpleNamespace
 
 from app.services.streaming_asr.speechmatics_client import (
+    SpeechmaticsClient,
     _coerce_max_delay_seconds,
     _coerce_transcript_text,
     _extract_text,
@@ -104,6 +107,42 @@ class TestSpeechmaticsMaxDelay(unittest.TestCase):
 
     def test_negative_returns_none(self) -> None:
         self.assertIsNone(_coerce_max_delay_seconds(-1))
+
+
+class TestSpeechmaticsCloseStream(unittest.TestCase):
+    def test_close_stream_keeps_state_until_finalized(self) -> None:
+        class StubBus:
+            def publish(self, event: object) -> None:  # pragma: no cover - not exercised
+                pass
+
+        class StubQueue:
+            def __init__(self) -> None:
+                self.items: list[object] = []
+
+            def put_nowait(self, item: object) -> None:
+                self.items.append(item)
+
+        class StubLoop:
+            def __init__(self) -> None:
+                self.tasks: list[tuple[object, str | None]] = []
+
+            def create_task(self, coro: object, name: str | None = None) -> object:
+                self.tasks.append((coro, name))
+                close = getattr(coro, "close", None)
+                if callable(close):
+                    close()
+                return object()
+
+        client = SpeechmaticsClient("key", "ws://example", StubBus(), logging.getLogger("test"))
+
+        state = SimpleNamespace(closing=False, audio_queue=StubQueue(), loop=StubLoop())
+        sid = "sid-123"
+        client._streams[sid] = state  # type: ignore[attr-defined]
+
+        client.close_stream(sid)
+
+        self.assertIn(sid, client._streams)
+        self.assertTrue(state.closing)
 
 
 if __name__ == "__main__":
