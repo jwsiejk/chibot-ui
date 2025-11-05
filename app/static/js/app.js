@@ -522,328 +522,36 @@
     }
   }
 
-  async function getMicStream() {
-    if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
-      throw new Error("mediaDevices.getUserMedia unavailable");
+  let lastHudState = null;
+
+  function handleHudStateChange(detail) {
+    if (!diagHudEnabled()) {
+      return;
     }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    if (diagHudEnabled()) {
-      const tracks = typeof stream.getAudioTracks === "function"
-        ? stream.getAudioTracks().map((track) => ({ label: track.label, enabled: track.enabled }))
-        : [];
-      console.info("DIAG_MEDIA_OK", tracks);
-      setBadge("mic:ok");
-      sendDiagHudEvent("EVT_CLIENT_MEDIA_OK", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
+    const meta = detail && typeof detail === 'object' ? detail.meta : null;
+    let stateLabel = typeof meta?.state === 'string' ? meta.state : null;
+    if (!stateLabel && detail && typeof detail === 'object' && typeof detail.state === 'string') {
+      stateLabel = detail.state;
     }
-    return stream;
+    if (!stateLabel) {
+      return;
+    }
+    if (stateLabel === lastHudState) {
+      return;
+    }
+    lastHudState = stateLabel;
+    const isListening = stateLabel.toLowerCase() === 'listening';
+    const badge = isListening ? 'mic:live' : 'mic:idle';
+    const message = isListening ? 'Recorder active' : 'Recorder idle';
+    setBadge(badge);
+    sendDiagHudEvent(
+      'EVT_CLIENT_HUD_STATE',
+      detail,
+      { level: 'info', badge, message }
+    );
   }
 
-  function attachRecorder(stream) {
-    void stream;
-    return null;
-  }
-
-  function sendAudioChunk(chunkBlobOrBuf) {
-    if (!chunkBlobOrBuf) {
-      return null;
-    }
-    const client = typeof WSClient !== 'undefined' ? WSClient : window.WSClient;
-    const bytes = chunkBlobOrBuf.byteLength || chunkBlobOrBuf.size || 0;
-    let result = null;
-    if (client && typeof client.send === 'function') {
-      try {
-        result = client.send(chunkBlobOrBuf, { binary: true });
-      } catch (err) {
-        console.error('WSClient audio chunk send error', err);
-      }
-    } else if (client && typeof client.sendBinary === 'function') {
-      try {
-        result = client.sendBinary(chunkBlobOrBuf, { lane: 'mic' });
-      } catch (err) {
-        console.error('WSClient audio chunk legacy send error', err);
-      }
-    }
-    if (typeof logClient === 'function' && consumeMicTelemetryBudget('chunk')) {
-      logClient('client.mic', `evt=mic_chunk_sent bytes=${bytes}`);
-    }
-    return result;
-  }
-
-  const DiagRecorder = (() => {
-    let stream = null;
-    let recorder = null;
-    let startPromise = null;
-    let policyDisabledNotified = false;
-
-    function resolveAsrInputCandidates() {
-      const candidates = [];
-      const policy = typeof runtimeState !== "undefined" && runtimeState && typeof runtimeState === "object"
-        ? runtimeState.policy
-        : null;
-      if (policy && typeof policy === "object") {
-        const capture = policy.capture && typeof policy.capture === "object" ? policy.capture : null;
-        if (capture && typeof capture.asr_input === "string") {
-          candidates.push(capture.asr_input);
-        }
-        const media = policy.media && typeof policy.media === "object" ? policy.media : null;
-        if (media && typeof media.asr_input === "string") {
-          candidates.push(media.asr_input);
-        }
-      }
-      if (typeof window !== "undefined") {
-        const cfg = window.__CFG__ && typeof window.__CFG__ === "object" ? window.__CFG__ : null;
-        if (cfg) {
-          const captureCfg = cfg.POLICY_CAPTURE && typeof cfg.POLICY_CAPTURE === "object" ? cfg.POLICY_CAPTURE : null;
-          if (captureCfg && typeof captureCfg.asr_input === "string") {
-            candidates.push(captureCfg.asr_input);
-          }
-          const mediaCfg = cfg.POLICY_MEDIA && typeof cfg.POLICY_MEDIA === "object" ? cfg.POLICY_MEDIA : null;
-          if (mediaCfg && typeof mediaCfg.asr_input === "string") {
-            candidates.push(mediaCfg.asr_input);
-          }
-        }
-      }
-      return candidates;
-    }
-
-    function diagRecorderPolicyAllowsMediaRecorder() {
-      const candidates = resolveAsrInputCandidates();
-      let hasNonPcm = false;
-      for (let i = 0; i < candidates.length; i += 1) {
-        const raw = candidates[i];
-        if (typeof raw !== "string") {
-          continue;
-        }
-        const normalized = raw.trim().toLowerCase();
-        if (!normalized) {
-          continue;
-        }
-        if (normalized.startsWith("pcm")) {
-          return false;
-        }
-        hasNonPcm = true;
-      }
-      return hasNonPcm;
-    }
-
-    function notifyPolicyDisabled() {
-      if (!diagHudEnabled()) {
-        return;
-      }
-      if (!policyDisabledNotified) {
-        const capRoot = typeof runtimeState !== "undefined" && runtimeState && typeof runtimeState === "object"
-          ? runtimeState.policy
-          : null;
-        const cap = capRoot && typeof capRoot.capture === "object" ? capRoot.capture : {};
-        const asrInput = typeof cap.asr_input === "string" ? cap.asr_input : undefined;
-        const detail = asrInput ? { reason: "policy_disabled", asr_input: asrInput } : { reason: "policy_disabled" };
-        console.info("DIAG_RECORDER_SKIPPED", detail);
-        sendDiagHudEvent("EVT_CLIENT_RECORDER_DISABLED", detail, {
-          level: "info",
-          badge: "rec:skip",
-          message: "Recorder disabled by policy",
-        });
-        policyDisabledNotified = true;
-      }
-      setBadge("rec:skip");
-    }
-
-    function cleanupStream() {
-      if (!stream) {
-        return;
-      }
-      try {
-        const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
-        tracks.forEach((track) => {
-          try {
-            track.stop();
-          } catch (err) {
-            if (diagHudEnabled()) {
-              console.warn("DIAG_TRACK_STOP_ERROR", err);
-              sendDiagHudEvent("EVT_CLIENT_TRACK_STOP_ERROR", { message: err && err.message }, {
-                level: "warn",
-                message: "Failed to stop track"
-              });
-            }
-          }
-        });
-      } finally {
-        stream = null;
-      }
-    }
-
-    function stop(reason) {
-      if (recorder) {
-        try {
-          if (recorder.state !== "inactive") {
-            recorder.stop();
-          }
-        } catch (err) {
-          if (diagHudEnabled()) {
-            console.warn("DIAG_RECORDER_STOP_ERROR", err);
-            sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP_ERROR", { message: err && err.message }, {
-              level: "warn",
-              message: "Recorder stop error"
-            });
-          }
-        }
-        recorder = null;
-      }
-      cleanupStream();
-      if (diagHudEnabled()) {
-        if (reason) {
-          setBadge(`stop:${reason}`);
-          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", { reason }, {
-            level: "info",
-            badge: `stop:${reason}`,
-            message: "Recorder stopped"
-          });
-        } else {
-          setBadge("stop");
-          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
-            level: "info",
-            badge: "stop",
-            message: "Recorder stopped"
-          });
-        }
-      }
-    }
-
-    async function startInternal(trigger) {
-      if (!diagHudEnabled()) {
-        return null;
-      }
-      if (recorder && recorder.state !== "inactive") {
-        return recorder;
-      }
-      const wsClient = window.WSClient;
-      const ws = getLiveSocket();
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        return null;
-      }
-      if (!diagRecorderPolicyAllowsMediaRecorder()) {
-        notifyPolicyDisabled();
-        return null;
-      }
-      try {
-        stream = await getMicStream();
-      } catch (err) {
-        if (diagHudEnabled()) {
-          console.warn("DIAG_MEDIA_ERROR", err);
-          setBadge("mic:fail");
-          sendDiagHudEvent("EVT_CLIENT_MEDIA_ERROR", { message: err && err.message }, {
-            level: "warn",
-            badge: "mic:fail",
-            message: "Failed to access microphone"
-          });
-        }
-        stream = null;
-        return null;
-      }
-      try {
-        recorder = attachRecorder(stream);
-      } catch (err) {
-        if (diagHudEnabled()) {
-          console.warn("DIAG_RECORDER_ERROR", err);
-          setBadge("rec:fail");
-          sendDiagHudEvent("EVT_CLIENT_RECORDER_ERROR", { message: err && err.message }, {
-            level: "warn",
-            badge: "rec:fail",
-            message: "Recorder initialization failed"
-          });
-        }
-        cleanupStream();
-        recorder = null;
-        return null;
-      }
-      if (!recorder) {
-        notifyPolicyDisabled();
-        cleanupStream();
-        return null;
-      }
-      recorder.addEventListener("stop", () => {
-        if (diagHudEnabled()) {
-          setBadge("rec:stop");
-          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
-            level: "info",
-            badge: "rec:stop",
-            message: "Recorder stopped"
-          });
-        }
-      });
-      const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
-      const sliceCandidate = Number(cap && cap.timeslice_ms);
-      const slice = Number.isFinite(sliceCandidate) && sliceCandidate > 0 ? sliceCandidate : 250;
-      if (typeof logClient === 'function') {
-        logClient('client.mic', `evt=recorder_start slice_ms=${slice}`);
-      }
-      try {
-        recorder.start(slice);
-      } catch (err) {
-        if (diagHudEnabled()) {
-          console.warn("DIAG_RECORDER_START_ERROR", err);
-          setBadge("rec:fail");
-          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_ERROR", { message: err && err.message }, {
-            level: "warn",
-            badge: "rec:fail",
-            message: "Recorder start error"
-          });
-        }
-        stop("start_err");
-        return null;
-      }
-      if (diagHudEnabled()) {
-        setBadge(trigger ? `rec:${trigger}` : "rec");
-        sendDiagHudEvent("EVT_CLIENT_RECORDER_ACTIVE", { trigger }, {
-          level: "info",
-          badge: trigger ? `rec:${trigger}` : "rec",
-          message: "Recorder active"
-        });
-      }
-      return recorder;
-    }
-
-    function maybeStart(trigger) {
-      if (!diagHudEnabled()) {
-        return;
-      }
-      if (recorder && recorder.state !== "inactive") {
-        return;
-      }
-      if (startPromise) {
-        return;
-      }
-      const wsClient = window.WSClient;
-      const ws = getLiveSocket();
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      const promise = startInternal(trigger);
-      if (!promise) {
-        return;
-      }
-      startPromise = promise;
-      promise.finally(() => {
-        if (startPromise === promise) {
-          startPromise = null;
-        }
-      }).catch(() => {
-        if (diagHudEnabled()) {
-          console.warn("DIAG_START_REJECTED");
-          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_REJECTED", null, {
-            level: "warn",
-            message: "Recorder start promise rejected"
-          });
-        }
-      });
-    }
-
-    return {
-      maybeStart,
-      stop,
-      hudEnabled: diagHudEnabled
-    };
-  })();
+  handleHudStateChange({ state: 'Idle', meta: { state: 'Idle', source: 'init' } });
 
   async function ensureRuntimeModules() {
     if (!window.AppState) {
@@ -1416,12 +1124,12 @@
 
     const micSessionTelemetry = {
       micOpenLogged: false,
-      firstChunkLogged: false,
       recBadgeLogged: false,
     };
     let micPermissionTelemetryLogged = false;
 
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
+    const CLIENT_HUD_STATE_EVENT = 'EVT_HUD_STATE';
     let pendingClientReady = null;
     let clientReadyTimerId = null;
     let clientReadyStats = null;
@@ -1731,7 +1439,6 @@
 
     function resetMicSessionTelemetry() {
       micSessionTelemetry.micOpenLogged = false;
-      micSessionTelemetry.firstChunkLogged = false;
       micSessionTelemetry.recBadgeLogged = false;
     }
 
@@ -1769,6 +1476,7 @@
       if (!next) {
         cancelAsrReadyGuard();
       }
+      let stopReasonLabel = null;
       if (next) {
         if (!previous) {
           runtimeState.finalSeenThisTurn = false;
@@ -1790,13 +1498,23 @@
           cancelAsrPartialWatchdog();
         }
       } else if (previous) {
-        const reasonLabel = normalizeStopReason(source);
-        logClientMicEventText(`evt=mic_stop reason=${reasonLabel}`);
+        stopReasonLabel = normalizeStopReason(source);
+        logClientMicEventText(`evt=mic_stop reason=${stopReasonLabel}`);
         endMicTelemetrySession();
         resetMicSessionTelemetry();
         cancelAsrPartialWatchdog();
       } else {
         cancelAsrPartialWatchdog();
+      }
+      if (previous !== next) {
+        const hudState = next ? 'Listening' : 'Idle';
+        const hudMeta = { state: hudState };
+        if (typeof source === 'string' && source) {
+          hudMeta.source = source;
+        } else if (!next && stopReasonLabel) {
+          hudMeta.reason = stopReasonLabel;
+        }
+        handleHudStateChange({ state: hudState, meta: hudMeta });
       }
       updateStatusBadge();
       return next;
@@ -1856,23 +1574,6 @@
       return Promise.resolve(outcome);
     }
 
-    if (audioRecorder && typeof audioRecorder._onWebmData === 'function') {
-      const originalOnWebmData = audioRecorder._onWebmData.bind(audioRecorder);
-      audioRecorder._onWebmData = function patchedOnWebmData(event) {
-        if (!micSessionTelemetry.firstChunkLogged) {
-          const size = event && event.data && typeof event.data.size === 'number'
-            ? event.data.size
-            : 0;
-          if (size > 0) {
-            micSessionTelemetry.firstChunkLogged = true;
-            if (consumeMicTelemetryBudget('firstChunk')) {
-              const detail = { event: 'mic_first_chunk', bytes: size };
-              logClient(`evt=mic_first_chunk bytes=${size}`, detail);
-            }
-          }
-        }
-        return originalOnWebmData(event);
-      };
     }
 
     function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
@@ -2170,6 +1871,10 @@
       updateRecordingState(true, 'mic_open_event');
       noteMicOpen('mic_open_event');
       enqueueClientReady(event && event.detail);
+    });
+
+    window.addEventListener(CLIENT_HUD_STATE_EVENT, (event) => {
+      handleHudStateChange(event && event.detail);
     });
 
     window.addEventListener('input.start', () => {
@@ -3272,7 +2977,6 @@ window.addEventListener('turn.state', (event) => {
   void reason; // not strictly needed, but kept for clarity
 
   runtimeState.audioPlaybackIdle = true;
-  DiagRecorder.maybeStart('turn');
   maybeAutoStartCapture('turn_ready', 'tts_end');
 
 });
@@ -3280,7 +2984,6 @@ window.addEventListener('turn.state', (event) => {
 // Assistant TTS finished → open mic after optional delay
 window.addEventListener('tts.end', () => {
   const release = () => {
-    DiagRecorder.maybeStart('ready');
     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
       try {
         window.AudioRecorder.handleTtsEnd();
@@ -3488,7 +3191,6 @@ window.addEventListener('ws.open', () => {
 window.addEventListener('ws.close', () => {
   vadListeningLogged = false;
   resetSuggestions();
-  DiagRecorder.stop('ws');
 });
 
     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---

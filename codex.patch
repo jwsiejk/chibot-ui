@@ -1,918 +1,825 @@
-diff --git a/app/asgi_gateway.py b/app/asgi_gateway.py
-index 8c9db6365dab68aa3f4048b9c80239aced269556..77c67c07e593d1e887d19757b3cd609223f9eae8 100644
---- a/app/asgi_gateway.py
-+++ b/app/asgi_gateway.py
-@@ -10,99 +10,101 @@ import os
- import time
- from dataclasses import dataclass
- from datetime import datetime, timezone
- from functools import partial
- from pathlib import Path
- from tempfile import NamedTemporaryFile
- from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
- from urllib.parse import parse_qs
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index b103385d6858c3d28daa575ee68f6bc6a37748a4..8a5fdb6bac01b80097cf3802cb4f0bc621f31993 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -500,372 +500,80 @@
+     style.font = "12px/1.4 system-ui, -apple-system, \"Segoe UI\", sans-serif";
+     style.zIndex = "5000";
+     style.pointerEvents = "none";
+     style.boxShadow = "0 6px 24px rgba(15, 23, 42, 0.25)";
+     badge.textContent = diagBadgePendingText != null ? diagBadgePendingText : "diag";
+     diagBadgePendingText = null;
+     document.body.appendChild(badge);
+     diagBadgeEl = badge;
+     return badge;
+   }
  
- from app import config
- from app.admin.api.settings import handle_admin_settings
- from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
- from app.auth.http_handlers import (
-     get_me,
-     post_login,
-     post_profile,
-     post_ws_token,
-     _session_email as _auth_session_email,
-     _is_admin as _auth_is_admin,
- )
- from app.db import neon
- from app.logging_config import configure_logging
- from app.logging_setup import install_bus_handler
- from app.telemetry import bus as telemetry_bus
- from app.telemetry.exporter import FileExporter
-+from app.middlewares import apply_cache_headers
- from app.versioning import get_build_id, inject_static_version
- from app.voice_v2.asr_runtime import ASRRuntime
- from app.voice_v2.engine import EngineV2
- from app.voice_v2.tts_runtime import TTSRuntime
- from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
- from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
- 
- 
- configure_logging()
- install_bus_handler(telemetry_bus, level=logging.INFO)
- 
- logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
- logging.getLogger("app.security.jwt").setLevel(logging.INFO)
- logging.getLogger("app.auth.http").setLevel(logging.INFO)
- 
- for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
-     _category_logger = logging.getLogger(_logger_name)
-     if _category_logger.level == logging.NOTSET:
-         _category_logger.setLevel(logging.INFO)
- 
- 
- _log = logging.getLogger(__name__)
- 
- 
- @dataclass(frozen=True)
- class Response:
-     """Immutable container describing a serialized HTTP response."""
- 
-     status: int
-     body: bytes
-     headers: tuple[tuple[bytes, bytes], ...]
- 
- 
- def json_response(*, status: int = 200, **payload: Any) -> Response:
-     """Serialize a payload to JSON using a compact representation."""
- 
-     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-     headers = (
-         (b"content-type", b"application/json; charset=utf-8"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=status, body=body, headers=headers)
- 
- 
- WS_ROUTE = "/ws/v2/chat"
- HEALTH_ROUTE = "/api/v1/health"
- LIVE_ROUTE = "/api/v1/live"
- READY_ROUTE = "/api/v1/ready"
- INFO_ROUTE = "/api/v1/info"
-+VERSION_ROUTE = "/version.json"
- HEALTHZ_ROUTE = "/healthz"
- DIAG_DB_ROUTE = "/diag/db"
- WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
- LOGIN_ROUTE = "/api/v1/auth/login"
- ME_ROUTE = "/api/v1/auth/me"
- PROFILE_ROUTE = "/api/v1/auth/profile"
- ROOT_ROUTE = "/"
- ADMIN_LOGS_ROUTE = "/admin/logs"
- ADMIN_SETTINGS_ROUTE = "/api/v1/admin/settings"
- ADMIN_CONFIG_ROUTE = "/api/v1/admin/config"
- FAVICON_ROUTE = "/favicon.ico"
- STATIC_ROUTE_PREFIX = "/static/"
- ADMIN_UI_ROUTE_PREFIX = "/admin/ui/"
- ADMIN_FLOW_ROUTE_PREFIX = "/api/v1/admin/flow"
- ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
- ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
- ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
- ADMIN_FLOW_LIVE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/live"
- EXPORT_ROOT = Path("exports")
- BASE_DIR = Path(__file__).resolve().parent
- STATIC_ROOT = BASE_DIR / "static"
- TEMPLATES_ROOT = BASE_DIR / "templates"
- INDEX_PATH = TEMPLATES_ROOT / "index.html"
- ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
- FAVICON_PATH = STATIC_ROOT / "favicon.ico"
-@@ -258,130 +260,155 @@ async def _handle_ready(scope: dict, receive: Callable[[], Awaitable[dict]]) ->
-         return json_response(
-             status=503,
-             ok=False,
-             reason="export_path_unwritable",
-             export_path=str(EXPORT_ROOT),
-         )
- 
- 
- async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Return build metadata derived from environment configuration."""
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
- 
-     version = os.getenv("APP_VERSION") or "0.0.0+dev"
-     raw_sha = os.getenv("GIT_SHA") or ""
-     git_sha = raw_sha[:7] if raw_sha else "unknown"
-     built_at = os.getenv("BUILD_TIME") or datetime.now(timezone.utc).isoformat()
- 
-     payload = {"version": version, "git_sha": git_sha, "built_at": built_at}
-     return json_response(**payload)
- 
- 
-+async def _handle_version_json(
-+    scope: dict, receive: Callable[[], Awaitable[dict]]
-+) -> Response:
-+    method = scope.get("method", "GET").upper()
-+    if method not in {"GET", "HEAD"}:
-+        await _drain_request_body(receive)
-+        return json_response(status=405, error="method_not_allowed")
-+
-+    await _drain_request_body(receive)
-+    build_id = get_build_id()
-+    payload = json.dumps({"build_id": build_id}, separators=(",", ":")).encode("utf-8")
-+    headers: list[tuple[bytes, bytes]] = [
-+        (b"content-type", b"application/json; charset=utf-8"),
-+        (b"cache-control", b"no-store, must-revalidate"),
-+        (b"content-length", str(len(payload)).encode("ascii")),
-+    ]
-+    if method == "HEAD":
-+        return Response(status=200, body=b"", headers=tuple(headers))
-+    return Response(status=200, body=payload, headers=tuple(headers))
-+
-+
- async def _handle_admin_config(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Expose the runtime client configuration snapshot."""
- 
-     method = scope.get("method", "GET").upper()
-     if method not in {"GET", "HEAD"}:
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     await _drain_request_body(receive)
-     snapshot = config.get_client_config_snapshot()
-     response = json_response(status=200, **snapshot)
-     if method == "HEAD":
-         return Response(status=response.status, body=b"", headers=response.headers)
-     return response
- 
- 
- async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Serve the primary HTML shell for the single-page application."""
- 
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     authenticated, is_admin, email = await _resolve_request_identity(scope)
-     await _drain_request_body(receive)
-     raw_html = _load_index_html()
-     try:
-         html_text = raw_html.decode("utf-8")
-     except UnicodeDecodeError:
-         html_text = raw_html.decode("utf-8", errors="replace")
-     rewritten = inject_static_version(html_text)
-     admin_link = ""
-     if is_admin:
-         admin_link = '<a class="topbar-link" href="/admin/logs">Admin ▸ Logs</a>'
-     context_payload = {
-         "isAdmin": is_admin,
-         "userEmail": email if authenticated else None,
+   function setBadge(text) {
+     if (!diagHudEnabled()) {
+       return;
      }
-     context_json = _serialize_context(context_payload)
-     client_config_json = _serialize_context(config.get_client_config_snapshot())
-     rewritten = rewritten.replace("{{ADMIN_LINK}}", admin_link)
-     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
-     rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
--    body = rewritten.encode("utf-8")
-     build_id = get_build_id()
-+    rewritten = rewritten.replace("{{BUILD_ID}}", build_id)
-+    rewritten = rewritten.replace("{{ BUILD_ID }}", build_id)
-+    body = rewritten.encode("utf-8")
-     return _html_response(body, build_id=build_id)
+     const value = text == null ? "" : String(text);
+     const badge = ensureDiagBadge();
+     if (badge) {
+       badge.textContent = value;
+       diagBadgePendingText = null;
+     } else {
+       diagBadgePendingText = value;
+     }
+   }
  
+-  async function getMicStream() {
+-    if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+-      throw new Error("mediaDevices.getUserMedia unavailable");
+-    }
+-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+-    if (diagHudEnabled()) {
+-      const tracks = typeof stream.getAudioTracks === "function"
+-        ? stream.getAudioTracks().map((track) => ({ label: track.label, enabled: track.enabled }))
+-        : [];
+-      console.info("DIAG_MEDIA_OK", tracks);
+-      setBadge("mic:ok");
+-      sendDiagHudEvent("EVT_CLIENT_MEDIA_OK", { tracks }, { level: "info", badge: "mic:ok", message: "Media stream ready" });
+-    }
+-    return stream;
+-  }
++  let lastHudState = null;
  
- async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     """Render the admin logs dashboard for authorized administrators."""
- 
-     if not _method_is_get(scope):
-         await _drain_request_body(receive)
-         return json_response(status=405, error="method_not_allowed")
- 
-     authenticated, is_admin, email = await _resolve_request_identity(scope)
- 
-     if not authenticated:
-         await _drain_request_body(receive)
-         return _redirect_response(ROOT_ROUTE)
- 
-     if not is_admin:
-         await _drain_request_body(receive)
-         return _forbidden_response()
- 
-     await _drain_request_body(receive)
-     raw_html = _load_admin_logs_html()
-     try:
-         html_text = raw_html.decode("utf-8")
-     except UnicodeDecodeError:
-         html_text = raw_html.decode("utf-8", errors="replace")
- 
-     rewritten = inject_static_version(html_text)
-     context_payload = {"isAdmin": is_admin, "userEmail": email}
-     context_json = _serialize_context(context_payload)
-     client_config_json = _serialize_context(config.get_client_config_snapshot())
-     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
-     rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
--    body = rewritten.encode("utf-8")
-     build_id = get_build_id()
-+    rewritten = rewritten.replace("{{BUILD_ID}}", build_id)
-+    rewritten = rewritten.replace("{{ BUILD_ID }}", build_id)
-+    body = rewritten.encode("utf-8")
-     return _html_response(body, build_id=build_id)
- 
- 
- async def _handle_admin_flow_sessions(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_flow_sessions(scope, receive)
- 
- 
- async def _handle_admin_flow_live_query(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     sid = _get_query_argument(scope, "sid")
-     if not sid:
-         await _drain_request_body(receive)
-         return json_response(status=400, error="missing_sid")
-     return await _handle_admin_flow_live(scope, receive, sid=sid)
- 
- 
- async def _handle_admin_flow_trace_query(
-     scope: dict, receive: Callable[[], Awaitable[dict]]
- ) -> Response:
-     sid = _get_query_argument(scope, "sid")
-     if not sid:
-@@ -572,86 +599,89 @@ async def _handle_static(
-     return response
- 
- 
- def _load_index_html() -> bytes:
-     try:
-         return INDEX_PATH.read_bytes()
-     except OSError:
-         return _DEFAULT_INDEX_HTML
- 
- 
- def _load_admin_logs_html() -> bytes:
-     try:
-         return ADMIN_LOGS_PATH.read_bytes()
-     except OSError:
-         return _DEFAULT_ADMIN_HTML
- 
- 
- def _serialize_context(payload: dict[str, Any]) -> str:
-     text = json.dumps(payload, separators=(",", ":"))
-     return text.replace("</", "<\\/")
- 
- 
- def _html_response(body: bytes, *, build_id: Optional[str] = None) -> Response:
-     headers: list[tuple[bytes, bytes]] = [
-         (b"content-type", b"text/html; charset=utf-8"),
--        (b"cache-control", b"no-store, no-cache, must-revalidate"),
--        (b"pragma", b"no-cache"),
--        (b"expires", b"0"),
-+        (b"cache-control", b"no-store, must-revalidate"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     ]
-     if build_id is not None:
-         headers.append((b"x-build-id", build_id.encode("utf-8")))
-     return Response(status=200, body=body, headers=tuple(headers))
- 
- 
- def _redirect_response(location: str) -> Response:
-     target = location.encode("utf-8", "ignore")
-     headers = (
-         (b"location", target),
-         (b"cache-control", b"no-store"),
-         (b"content-length", b"0"),
-     )
-     return Response(status=302, body=b"", headers=headers)
- 
- 
- def _forbidden_response(message: str = "forbidden") -> Response:
-     body = message.encode("utf-8", "ignore")
-     headers = (
-         (b"content-type", b"text/plain; charset=utf-8"),
-         (b"cache-control", b"no-store"),
-         (b"content-length", str(len(body)).encode("ascii")),
-     )
-     return Response(status=403, body=body, headers=headers)
- 
- 
- def _build_static_response(path: Path, *, if_none_match: Optional[str] = None) -> Optional[Response]:
-     try:
-         data = path.read_bytes()
-     except OSError:
-         return None
- 
-+    if b"{{ BUILD_ID }}" in data or b"{{BUILD_ID}}" in data:
-+        build_id_bytes = get_build_id().encode("utf-8")
-+        data = data.replace(b"{{ BUILD_ID }}", build_id_bytes)
-+        data = data.replace(b"{{BUILD_ID}}", build_id_bytes)
-+
-     digest = hashlib.sha256(data).hexdigest()
-     etag = f'"{digest}"'
- 
-     if if_none_match:
-         candidates = {value.strip() for value in if_none_match.split(",") if value.strip()}
-         if "*" in candidates or etag in candidates:
-             headers = (
-                 (b"cache-control", b"public, max-age=31536000, immutable"),
-                 (b"etag", etag.encode("ascii")),
-                 (b"content-length", b"0"),
-             )
-             return Response(status=304, body=b"", headers=headers)
- 
-     content_type, encoding = mimetypes.guess_type(path.name)
-     if content_type is None:
-         content_type = "application/octet-stream"
-     elif content_type.startswith("text/") and "charset=" not in content_type:
-         content_type = f"{content_type}; charset=utf-8"
- 
-     headers: list[tuple[bytes, bytes]] = [
-         (b"content-type", content_type.encode("latin1")),
-         (b"content-length", str(len(data)).encode("ascii")),
-         (b"cache-control", b"public, max-age=31536000, immutable"),
-         (b"etag", etag.encode("ascii")),
-     ]
-@@ -734,59 +764,59 @@ def _resolve_admin_ui_path(raw_path: str) -> Optional[Path]:
-         return None
- 
-     return resolved
- 
- 
- async def _drain_request_body(receive: Callable[[], Awaitable[dict]]) -> None:
-     """Consume and discard the HTTP request body if present."""
-     while True:
-         message = await receive()
-         if message.get("type") != "http.request":
-             break
-         if not message.get("more_body"):
-             break
- 
- 
- async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callable[[dict], Awaitable[None]]) -> None:
-     """Politely refuse WebSocket connections on unsupported routes."""
-     message = await receive()
-     if message.get("type") == "websocket.connect":
-         await send({"type": "websocket.close", "code": 1000})
- 
- 
- async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
-     """Emit a prepared HTTP response through the ASGI channel."""
- 
--    headers = list(response.headers)
-+    headers = list(apply_cache_headers(response.headers))
-     await send({"type": "http.response.start", "status": response.status, "headers": headers})
-     await send({"type": "http.response.body", "body": response.body, "more_body": False})
- 
- 
- async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
-     """Emit an HTTP response while still in the WebSocket handshake."""
- 
--    headers = list(response.headers)
-+    headers = list(apply_cache_headers(response.headers))
-     await send(
-         {
-             "type": "websocket.http.response.start",
-             "status": response.status,
-             "headers": headers,
-         }
-     )
-     await send(
-         {
-             "type": "websocket.http.response.body",
-             "body": response.body,
-             "more_body": False,
-         }
-     )
- 
- 
- def _method_is_get(scope: dict) -> bool:
-     """Return True when the incoming HTTP scope uses the GET method."""
- 
-     return scope.get("method", "GET").upper() == "GET"
- 
- 
- async def _resolve_request_identity(scope: dict) -> tuple[bool, bool, Optional[str]]:
-     email: Optional[str] = None
-     try:
-@@ -851,50 +881,51 @@ async def _handle_admin_settings_route(
- ) -> Response:
-     rejection = await _require_admin_api(scope, receive)
-     if rejection is not None:
-         return rejection
-     return await handle_admin_settings(scope, receive)
- 
- 
- def require_db_ready(handler: HttpHandler) -> HttpHandler:
-     async def _wrapped(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
-         status = neon.db_status()
-         state = status.get("state", "init")
-         if state != "ready":
-             await _drain_request_body(receive)
-             _log.info("evt=db_guard_warming state=%s", state)
-             return json_response(status=503, db="warming")
-         return await handler(scope, receive)
- 
-     return _wrapped
- 
- 
- _HTTP_ROUTES: Dict[str, HttpHandler] = {
-     ROOT_ROUTE: _handle_index,
-     ADMIN_LOGS_ROUTE: _handle_admin_logs,
-     ADMIN_SETTINGS_ROUTE: require_db_ready(_handle_admin_settings_route),
-     ADMIN_CONFIG_ROUTE: require_db_ready(_handle_admin_config),
-+    VERSION_ROUTE: _handle_version_json,
-     FAVICON_ROUTE: _handle_favicon,
-     HEALTH_ROUTE: _handle_health,
-     HEALTHZ_ROUTE: _handle_healthz,
-     DIAG_DB_ROUTE: _handle_diag_db,
-     LIVE_ROUTE: _handle_live,
-     READY_ROUTE: _handle_ready,
-     INFO_ROUTE: _handle_info,
-     WS_TOKEN_ROUTE: post_ws_token,
-     LOGIN_ROUTE: post_login,
-     ME_ROUTE: require_db_ready(get_me),
-     PROFILE_ROUTE: require_db_ready(post_profile),
-     ADMIN_FLOW_TRACE_ROUTE: _handle_admin_flow_trace_query,
-     ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
-     ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
-     ADMIN_FLOW_LIVE_ROUTE: _handle_admin_flow_live_query,
- }
- 
- 
- asgi = app
- 
- __all__ = ["app", "asgi"]
- 
- 
- def _get_request_header(scope: dict, header_name: bytes) -> Optional[str]:
-     headers = scope.get("headers") or []
-diff --git a/app/config_build.py b/app/config_build.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..5888283909bc5da284f881bd9669945bc3223802
---- /dev/null
-+++ b/app/config_build.py
-@@ -0,0 +1,34 @@
-+import datetime
-+import os
-+import subprocess
-+
-+_BUILD_ID = None
-+
-+
-+def _git_sha_short():
-+    try:
-+        return (
-+            subprocess.check_output(
-+                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
-+            )
-+            .decode()
-+            .strip()
-+        )
-+    except Exception:
-+        return None
-+
-+
-+def current_build_id():
-+    global _BUILD_ID
-+    if _BUILD_ID:
-+        return _BUILD_ID
-+    env = os.environ.get("BUILD_ID")
-+    if env and env.strip():
-+        _BUILD_ID = env.strip()
-+        return _BUILD_ID
-+    sha = _git_sha_short()
-+    if sha:
-+        _BUILD_ID = sha
-+        return _BUILD_ID
-+    _BUILD_ID = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-+    return _BUILD_ID
-diff --git a/app/middlewares.py b/app/middlewares.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..e997ceabf6851cd513f3f8416ea06da5c98662a4
---- /dev/null
-+++ b/app/middlewares.py
-@@ -0,0 +1,42 @@
-+"""HTTP response middleware helpers."""
-+from __future__ import annotations
-+
-+from typing import Iterable, Optional, Tuple
-+
-+_Header = Tuple[bytes, bytes]
-+
-+
-+def apply_cache_headers(headers: Iterable[_Header]) -> Tuple[_Header, ...]:
-+    """Ensure cache-control headers follow the immutable/static policy."""
-+
-+    normalized = list(headers)
-+    content_type: Optional[str] = None
-+    cache_index: Optional[int] = None
-+
-+    for idx, (name, value) in enumerate(normalized):
-+        lowered = name.lower()
-+        if lowered == b"content-type":
-+            try:
-+                content_type = value.decode("latin1")
-+            except UnicodeDecodeError:
-+                content_type = value.decode("latin1", errors="ignore")
-+        elif lowered == b"cache-control":
-+            cache_index = idx
-+
-+    ct_lower = (content_type or "").lower()
-+    cache_value: Optional[bytes] = None
-+    if "text/html" in ct_lower:
-+        cache_value = b"no-store, must-revalidate"
-+    elif any(token in ct_lower for token in ("javascript", "text/css", "font", "image")):
-+        cache_value = b"public, max-age=31536000, immutable"
-+
-+    if cache_value is None:
-+        return tuple(normalized)
-+
-+    if cache_index is None:
-+        normalized.append((b"cache-control", cache_value))
-+    else:
-+        name, _ = normalized[cache_index]
-+        normalized[cache_index] = (name, cache_value)
-+
-+    return tuple(normalized)
-diff --git a/app/static/js/version.js b/app/static/js/version.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..d98e79bfed2b3d43553c730a52a7b267182775d7
---- /dev/null
-+++ b/app/static/js/version.js
-@@ -0,0 +1,23 @@
-+export const BUILD_ID =
-+  (typeof window !== 'undefined' && window.BUILD_ID) ||
-+  (typeof document !== 'undefined'
-+    ? document
-+        .querySelector('script')
-+        ?.textContent?.match(/BUILD_ID.+?["'](.+?)["']/)?.[1] || null
-+    : null);
-+
-+export function withV(url) {
-+  if (!url) return url;
-+  try {
-+    const u = new URL(url, typeof window !== 'undefined' ? window.location.origin : undefined);
-+    u.searchParams.set('v', BUILD_ID || Date.now().toString());
-+    return u.toString();
-+  } catch (err) {
-+    const sep = url.includes('?') ? '&' : '?';
-+    return `${url}${sep}v=${encodeURIComponent(BUILD_ID || Date.now().toString())}`;
-+  }
-+}
-+
-+export async function importV(url) {
-+  return import(/* @vite-ignore */ withV(url));
-+}
-diff --git a/app/static/sw.js b/app/static/sw.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..e011a13a91b09b653c5c3c0078c422a90918cde7
---- /dev/null
-+++ b/app/static/sw.js
-@@ -0,0 +1,68 @@
-+const CACHE_VERSION = "{{ BUILD_ID }}";
-+const CACHE_NAME = "app-cache-" + CACHE_VERSION;
-+const CORE = [
-+  "/version.json",
-+  "/static/js/app.js?v={{ BUILD_ID }}",
-+  "/static/js/auth_ui.js?v={{ BUILD_ID }}",
-+  "/static/js/version.js?v={{ BUILD_ID }}",
-+  "/static/js/state.js?v={{ BUILD_ID }}",
-+  "/static/js/audio_player.js?v={{ BUILD_ID }}",
-+  "/static/js/audio_recorder.js?v={{ BUILD_ID }}",
-+  "/static/js/ws_client.js?v={{ BUILD_ID }}",
-+  "/static/js/policy_badges.js?v={{ BUILD_ID }}",
-+  "/static/js/transcript_view.js?v={{ BUILD_ID }}",
-+  "/static/js/errors.js?v={{ BUILD_ID }}",
-+  "/static/js/wake_word.js?v={{ BUILD_ID }}",
-+  "/static/js/admin_logs.js?v={{ BUILD_ID }}",
-+  "/admin/ui/config_panel.js?v={{ BUILD_ID }}",
-+  "/static/css/styles.css?v={{ BUILD_ID }}",
-+  "/static/chip/chip.png?v={{ BUILD_ID }}"
-+];
-+
-+self.addEventListener("install", (event) => {
-+  self.skipWaiting();
-+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE)));
-+});
-+
-+self.addEventListener("activate", (event) => {
-+  event.waitUntil(
-+    caches
-+      .keys()
-+      .then((keys) =>
-+        Promise.all(keys.map((key) => (key !== CACHE_NAME ? caches.delete(key) : null)))
-+      )
-+      .then(() => self.clients.claim())
-+  );
-+});
-+
-+self.addEventListener("fetch", (event) => {
-+  const request = event.request;
-+  const url = new URL(request.url);
-+
-+  if (request.mode === "navigate" || request.headers.get("Accept")?.includes("text/html")) {
-+    event.respondWith(fetch(request));
-+    return;
-+  }
-+
-+  if (
-+    (url.pathname.startsWith("/static/") || url.pathname.startsWith("/admin/ui/")) &&
-+    url.searchParams.get("v")
-+  ) {
-+    event.respondWith(
-+      caches.open(CACHE_NAME).then(async (cache) => {
-+        const match = await cache.match(request, { ignoreSearch: false });
-+        if (match) {
-+          return match;
-+        }
-+        const response = await fetch(request);
-+        cache.put(request, response.clone());
-+        return response;
-+      })
+-  function attachRecorder(stream) {
+-    void stream;
+-    return null;
+-  }
+-
+-  function sendAudioChunk(chunkBlobOrBuf) {
+-    if (!chunkBlobOrBuf) {
+-      return null;
+-    }
+-    const client = typeof WSClient !== 'undefined' ? WSClient : window.WSClient;
+-    const bytes = chunkBlobOrBuf.byteLength || chunkBlobOrBuf.size || 0;
+-    let result = null;
+-    if (client && typeof client.send === 'function') {
+-      try {
+-        result = client.send(chunkBlobOrBuf, { binary: true });
+-      } catch (err) {
+-        console.error('WSClient audio chunk send error', err);
+-      }
+-    } else if (client && typeof client.sendBinary === 'function') {
+-      try {
+-        result = client.sendBinary(chunkBlobOrBuf, { lane: 'mic' });
+-      } catch (err) {
+-        console.error('WSClient audio chunk legacy send error', err);
+-      }
+-    }
+-    if (typeof logClient === 'function' && consumeMicTelemetryBudget('chunk')) {
+-      logClient('client.mic', `evt=mic_chunk_sent bytes=${bytes}`);
+-    }
+-    return result;
+-  }
+-
+-  const DiagRecorder = (() => {
+-    let stream = null;
+-    let recorder = null;
+-    let startPromise = null;
+-    let policyDisabledNotified = false;
+-
+-    function resolveAsrInputCandidates() {
+-      const candidates = [];
+-      const policy = typeof runtimeState !== "undefined" && runtimeState && typeof runtimeState === "object"
+-        ? runtimeState.policy
+-        : null;
+-      if (policy && typeof policy === "object") {
+-        const capture = policy.capture && typeof policy.capture === "object" ? policy.capture : null;
+-        if (capture && typeof capture.asr_input === "string") {
+-          candidates.push(capture.asr_input);
+-        }
+-        const media = policy.media && typeof policy.media === "object" ? policy.media : null;
+-        if (media && typeof media.asr_input === "string") {
+-          candidates.push(media.asr_input);
+-        }
+-      }
+-      if (typeof window !== "undefined") {
+-        const cfg = window.__CFG__ && typeof window.__CFG__ === "object" ? window.__CFG__ : null;
+-        if (cfg) {
+-          const captureCfg = cfg.POLICY_CAPTURE && typeof cfg.POLICY_CAPTURE === "object" ? cfg.POLICY_CAPTURE : null;
+-          if (captureCfg && typeof captureCfg.asr_input === "string") {
+-            candidates.push(captureCfg.asr_input);
+-          }
+-          const mediaCfg = cfg.POLICY_MEDIA && typeof cfg.POLICY_MEDIA === "object" ? cfg.POLICY_MEDIA : null;
+-          if (mediaCfg && typeof mediaCfg.asr_input === "string") {
+-            candidates.push(mediaCfg.asr_input);
+-          }
+-        }
+-      }
+-      return candidates;
+-    }
+-
+-    function diagRecorderPolicyAllowsMediaRecorder() {
+-      const candidates = resolveAsrInputCandidates();
+-      let hasNonPcm = false;
+-      for (let i = 0; i < candidates.length; i += 1) {
+-        const raw = candidates[i];
+-        if (typeof raw !== "string") {
+-          continue;
+-        }
+-        const normalized = raw.trim().toLowerCase();
+-        if (!normalized) {
+-          continue;
+-        }
+-        if (normalized.startsWith("pcm")) {
+-          return false;
+-        }
+-        hasNonPcm = true;
+-      }
+-      return hasNonPcm;
+-    }
+-
+-    function notifyPolicyDisabled() {
+-      if (!diagHudEnabled()) {
+-        return;
+-      }
+-      if (!policyDisabledNotified) {
+-        const capRoot = typeof runtimeState !== "undefined" && runtimeState && typeof runtimeState === "object"
+-          ? runtimeState.policy
+-          : null;
+-        const cap = capRoot && typeof capRoot.capture === "object" ? capRoot.capture : {};
+-        const asrInput = typeof cap.asr_input === "string" ? cap.asr_input : undefined;
+-        const detail = asrInput ? { reason: "policy_disabled", asr_input: asrInput } : { reason: "policy_disabled" };
+-        console.info("DIAG_RECORDER_SKIPPED", detail);
+-        sendDiagHudEvent("EVT_CLIENT_RECORDER_DISABLED", detail, {
+-          level: "info",
+-          badge: "rec:skip",
+-          message: "Recorder disabled by policy",
+-        });
+-        policyDisabledNotified = true;
+-      }
+-      setBadge("rec:skip");
+-    }
+-
+-    function cleanupStream() {
+-      if (!stream) {
+-        return;
+-      }
+-      try {
+-        const tracks = typeof stream.getTracks === "function" ? stream.getTracks() : [];
+-        tracks.forEach((track) => {
+-          try {
+-            track.stop();
+-          } catch (err) {
+-            if (diagHudEnabled()) {
+-              console.warn("DIAG_TRACK_STOP_ERROR", err);
+-              sendDiagHudEvent("EVT_CLIENT_TRACK_STOP_ERROR", { message: err && err.message }, {
+-                level: "warn",
+-                message: "Failed to stop track"
+-              });
+-            }
+-          }
+-        });
+-      } finally {
+-        stream = null;
+-      }
++  function handleHudStateChange(detail) {
++    if (!diagHudEnabled()) {
++      return;
+     }
+-
+-    function stop(reason) {
+-      if (recorder) {
+-        try {
+-          if (recorder.state !== "inactive") {
+-            recorder.stop();
+-          }
+-        } catch (err) {
+-          if (diagHudEnabled()) {
+-            console.warn("DIAG_RECORDER_STOP_ERROR", err);
+-            sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP_ERROR", { message: err && err.message }, {
+-              level: "warn",
+-              message: "Recorder stop error"
+-            });
+-          }
+-        }
+-        recorder = null;
+-      }
+-      cleanupStream();
+-      if (diagHudEnabled()) {
+-        if (reason) {
+-          setBadge(`stop:${reason}`);
+-          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", { reason }, {
+-            level: "info",
+-            badge: `stop:${reason}`,
+-            message: "Recorder stopped"
+-          });
+-        } else {
+-          setBadge("stop");
+-          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
+-            level: "info",
+-            badge: "stop",
+-            message: "Recorder stopped"
+-          });
+-        }
+-      }
++    const meta = detail && typeof detail === 'object' ? detail.meta : null;
++    let stateLabel = typeof meta?.state === 'string' ? meta.state : null;
++    if (!stateLabel && detail && typeof detail === 'object' && typeof detail.state === 'string') {
++      stateLabel = detail.state;
+     }
+-
+-    async function startInternal(trigger) {
+-      if (!diagHudEnabled()) {
+-        return null;
+-      }
+-      if (recorder && recorder.state !== "inactive") {
+-        return recorder;
+-      }
+-      const wsClient = window.WSClient;
+-      const ws = getLiveSocket();
+-      if (!ws || ws.readyState !== WebSocket.OPEN) {
+-        return null;
+-      }
+-      if (!diagRecorderPolicyAllowsMediaRecorder()) {
+-        notifyPolicyDisabled();
+-        return null;
+-      }
+-      try {
+-        stream = await getMicStream();
+-      } catch (err) {
+-        if (diagHudEnabled()) {
+-          console.warn("DIAG_MEDIA_ERROR", err);
+-          setBadge("mic:fail");
+-          sendDiagHudEvent("EVT_CLIENT_MEDIA_ERROR", { message: err && err.message }, {
+-            level: "warn",
+-            badge: "mic:fail",
+-            message: "Failed to access microphone"
+-          });
+-        }
+-        stream = null;
+-        return null;
+-      }
+-      try {
+-        recorder = attachRecorder(stream);
+-      } catch (err) {
+-        if (diagHudEnabled()) {
+-          console.warn("DIAG_RECORDER_ERROR", err);
+-          setBadge("rec:fail");
+-          sendDiagHudEvent("EVT_CLIENT_RECORDER_ERROR", { message: err && err.message }, {
+-            level: "warn",
+-            badge: "rec:fail",
+-            message: "Recorder initialization failed"
+-          });
+-        }
+-        cleanupStream();
+-        recorder = null;
+-        return null;
+-      }
+-      if (!recorder) {
+-        notifyPolicyDisabled();
+-        cleanupStream();
+-        return null;
+-      }
+-      recorder.addEventListener("stop", () => {
+-        if (diagHudEnabled()) {
+-          setBadge("rec:stop");
+-          sendDiagHudEvent("EVT_CLIENT_RECORDER_STOP", null, {
+-            level: "info",
+-            badge: "rec:stop",
+-            message: "Recorder stopped"
+-          });
+-        }
+-      });
+-      const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
+-      const sliceCandidate = Number(cap && cap.timeslice_ms);
+-      const slice = Number.isFinite(sliceCandidate) && sliceCandidate > 0 ? sliceCandidate : 250;
+-      if (typeof logClient === 'function') {
+-        logClient('client.mic', `evt=recorder_start slice_ms=${slice}`);
+-      }
+-      try {
+-        recorder.start(slice);
+-      } catch (err) {
+-        if (diagHudEnabled()) {
+-          console.warn("DIAG_RECORDER_START_ERROR", err);
+-          setBadge("rec:fail");
+-          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_ERROR", { message: err && err.message }, {
+-            level: "warn",
+-            badge: "rec:fail",
+-            message: "Recorder start error"
+-          });
+-        }
+-        stop("start_err");
+-        return null;
+-      }
+-      if (diagHudEnabled()) {
+-        setBadge(trigger ? `rec:${trigger}` : "rec");
+-        sendDiagHudEvent("EVT_CLIENT_RECORDER_ACTIVE", { trigger }, {
+-          level: "info",
+-          badge: trigger ? `rec:${trigger}` : "rec",
+-          message: "Recorder active"
+-        });
+-      }
+-      return recorder;
++    if (!stateLabel) {
++      return;
+     }
+-
+-    function maybeStart(trigger) {
+-      if (!diagHudEnabled()) {
+-        return;
+-      }
+-      if (recorder && recorder.state !== "inactive") {
+-        return;
+-      }
+-      if (startPromise) {
+-        return;
+-      }
+-      const wsClient = window.WSClient;
+-      const ws = getLiveSocket();
+-      if (!ws || ws.readyState !== WebSocket.OPEN) {
+-        return;
+-      }
+-      const promise = startInternal(trigger);
+-      if (!promise) {
+-        return;
+-      }
+-      startPromise = promise;
+-      promise.finally(() => {
+-        if (startPromise === promise) {
+-          startPromise = null;
+-        }
+-      }).catch(() => {
+-        if (diagHudEnabled()) {
+-          console.warn("DIAG_START_REJECTED");
+-          sendDiagHudEvent("EVT_CLIENT_RECORDER_START_REJECTED", null, {
+-            level: "warn",
+-            message: "Recorder start promise rejected"
+-          });
+-        }
+-      });
++    if (stateLabel === lastHudState) {
++      return;
+     }
++    lastHudState = stateLabel;
++    const isListening = stateLabel.toLowerCase() === 'listening';
++    const badge = isListening ? 'mic:live' : 'mic:idle';
++    const message = isListening ? 'Recorder active' : 'Recorder idle';
++    setBadge(badge);
++    sendDiagHudEvent(
++      'EVT_CLIENT_HUD_STATE',
++      detail,
++      { level: 'info', badge, message }
 +    );
-+    return;
 +  }
-+
-+  event.respondWith(
-+    fetch(request).catch(() => caches.match(request, { ignoreSearch: false }))
-+  );
-+});
-diff --git a/app/templates/admin_logs.html b/app/templates/admin_logs.html
-index ba9bdfa7374e9fe413923c1acd2fb7804dc88458..573f87dec9eff84a8af06b29b8f595f931dcfc22 100644
---- a/app/templates/admin_logs.html
-+++ b/app/templates/admin_logs.html
-@@ -1,33 +1,38 @@
- <!doctype html>
- <html lang="en">
-   <head>
-     <meta charset="utf-8" />
-     <meta name="viewport" content="width=device-width, initial-scale=1" />
-+    <meta http-equiv="Cache-Control" content="no-store, must-revalidate" />
-     <title>AskChip · Admin Logs</title>
--    <link rel="icon" href="/static/favicon.ico" />
--    <link rel="stylesheet" href="/static/css/styles.css" />
-+    <link rel="icon" href="/static/favicon.ico?v={{ BUILD_ID }}" />
-+    <link rel="stylesheet" href="/static/css/styles.css?v={{ BUILD_ID }}" />
-+    <script>
-+      window.BUILD_ID = "{{ BUILD_ID }}";
-+      console.log("BUILD_ID", "{{ BUILD_ID }}");
-+    </script>
-     <style>
-       .admin-logs__type.disabled { opacity: 0.5; pointer-events: none; }
-       .admin-logs__type.disabled input { pointer-events: none; }
-     </style>
-   </head>
-   <body>
-     <div id="app">
-       <header class="topbar" role="banner">
-         <div class="topbar-left">
-           <span class="sid">Admin ▸ Logs</span>
-         </div>
-         <div class="topbar-right">
-           <span id="adminUserLabel" class="admin-logs__user" aria-live="polite">&nbsp;</span>
-           <a class="topbar-link" href="/">← Main UI</a>
-         </div>
-       </header>
  
-       <main class="admin-logs" role="main">
-         <section class="admin-logs__debug" aria-label="Debug settings">
-           <header class="admin-logs__debug-header">
-             <h2>Debug</h2>
-             <p id="adminDebugStatus" class="admin-logs__status" role="status" aria-live="polite"></p>
-           </header>
-           <div id="adminConfigPanel" class="admin-debug-card" data-role="config-panel"></div>
-         </section>
-@@ -293,29 +298,36 @@
-     <script id="appContext" type="application/json">{{APP_CONTEXT}}</script>
-     <script id="clientConfig" type="application/json">{{CLIENT_CONFIG}}</script>
-     <script>
-       (function () {
-         function parseConfig() {
+-    return {
+-      maybeStart,
+-      stop,
+-      hudEnabled: diagHudEnabled
+-    };
+-  })();
++  handleHudStateChange({ state: 'Idle', meta: { state: 'Idle', source: 'init' } });
+ 
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio_recorder.js");
+     }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
+ 
+@@ -1394,56 +1102,56 @@
+       if (snapshot.capture && typeof snapshot.capture === 'object') {
+         return snapshot.capture;
+       }
+       const nested = snapshot.policy;
+       if (nested && typeof nested === 'object' && nested.capture && typeof nested.capture === 'object') {
+         return nested.capture;
+       }
+       return null;
+     }
+ 
+     function getCaptureTimesliceMs() {
+       const capture = getCapturePolicy();
+       if (!capture) {
+         return null;
+       }
+       const raw = capture.timeslice_ms;
+       const numeric = Number(raw);
+       if (Number.isFinite(numeric) && numeric > 0) {
+         return Math.round(numeric);
+       }
+       return null;
+     }
+ 
+     const micSessionTelemetry = {
+       micOpenLogged: false,
+-      firstChunkLogged: false,
+       recBadgeLogged: false,
+     };
+     let micPermissionTelemetryLogged = false;
+ 
+     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
++    const CLIENT_HUD_STATE_EVENT = 'EVT_HUD_STATE';
+     let pendingClientReady = null;
+     let clientReadyTimerId = null;
+     let clientReadyStats = null;
+     const deferredClientLogs = [];
+     let deferredClientLogFlushTimer = null;
+ 
+     function scheduleDeferredClientLogFlush(delayMs = CLIENT_LOG_RATE_LIMIT_WINDOW_MS) {
+       if (typeof window === 'undefined') {
+         return;
+       }
+       if (deferredClientLogFlushTimer) {
+         return;
+       }
+       const delay = Number.isFinite(delayMs) && delayMs > 0
+         ? delayMs
+         : CLIENT_LOG_RATE_LIMIT_WINDOW_MS;
+       deferredClientLogFlushTimer = window.setTimeout(() => {
+         deferredClientLogFlushTimer = null;
+         try {
+           flushDeferredClientLogs();
+         } catch (err) {
            try {
-             var node = document.getElementById('clientConfig');
-             if (!node) return {};
-             var raw = node.textContent || node.innerText || '{}';
-             var parsed = JSON.parse(raw);
-             return parsed && typeof parsed === 'object' ? parsed : {};
+             console.warn('deferred client log flush failed', err);
+           } catch (_) {}
+         }
+@@ -1709,117 +1417,127 @@
+             AppState.hub.stopListening({ reason: 'watchdog' });
+             stopped = true;
+           }
+         } catch (err) {
+           console.warn('Hub stopListening watchdog failed', err);
+         }
+         if (!stopped) {
+           try {
+             if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
+               stopAttempted = true;
+               window.AudioRecorder.stopListening({ reason: 'watchdog' });
+               stopped = true;
+             }
            } catch (err) {
-             return {};
+             console.warn('AudioRecorder stopListening watchdog failed', err);
            }
          }
- 
-         var existing = typeof window !== 'undefined' && window.__CFG__ && typeof window.__CFG__ === 'object'
-           ? window.__CFG__
-           : {};
-         var merged = Object.assign({}, existing, parseConfig());
-         if (typeof window !== 'undefined') {
-           window.__CFG__ = merged;
+         if (stopAttempted) {
+           updateRecordingState(false, 'watchdog');
          }
-       }());
-     </script>
--    <script src="/admin/ui/config_panel.js" defer></script>
--    <script src="/static/js/admin_logs.js" defer></script>
-+    <script src="/admin/ui/config_panel.js?v={{ BUILD_ID }}" defer></script>
-+    <script src="/static/js/admin_logs.js?v={{ BUILD_ID }}" defer></script>
-+    <script>
-+      if ('serviceWorker' in navigator) {
-+        navigator.serviceWorker
-+          .register(`/static/sw.js?v={{ BUILD_ID }}`)
-+          .catch(function () {});
-+      }
-+    </script>
-   </body>
- </html>
-diff --git a/app/templates/index.html b/app/templates/index.html
-index 91cba4c2903db8d4e8261ccc7cb9f14aab0c2740..6d1977fe810828889c2ad319897848851b8a5b10 100644
---- a/app/templates/index.html
-+++ b/app/templates/index.html
-@@ -1,51 +1,56 @@
- <!doctype html>
- <html lang="en">
-   <head>
-     <meta charset="utf-8" />
-     <meta name="viewport" content="width=device-width, initial-scale=1" />
-+    <meta http-equiv="Cache-Control" content="no-store, must-revalidate" />
-     <title>AskChip UI</title>
--    <link rel="icon" href="/favicon.ico" />
--    <link rel="stylesheet" href="/static/css/styles.css" />
-+    <link rel="icon" href="/favicon.ico?v={{ BUILD_ID }}" />
-+    <link rel="stylesheet" href="/static/css/styles.css?v={{ BUILD_ID }}" />
-+    <script>
-+      window.BUILD_ID = "{{ BUILD_ID }}";
-+      console.log("BUILD_ID", "{{ BUILD_ID }}");
-+    </script>
-   </head>
-   <body>
-     <div id="app">
-       <header class="topbar" role="banner">
-         <div class="topbar-left">
-           <span class="sid" id="sid-text">SID: —</span>
-           {{ADMIN_LINK}}
-         </div>
-         <div class="topbar-right">
-           <div class="brand-menu">
-             <button
-               id="brandBtn"
-               class="brand-btn"
-               type="button"
-               aria-haspopup="true"
-               aria-expanded="false"
-             >
--              <img src="/static/chip/chip.png" alt="AskChip logo" class="brand-logo" />
-+              <img src="/static/chip/chip.png?v={{ BUILD_ID }}" alt="AskChip logo" class="brand-logo" />
-               <span class="brand-text">AskChip</span>
-               <span aria-hidden="true">▾</span>
-             </button>
-             <div id="brandMenu" class="menu" role="menu" aria-hidden="true">
-               <button id="profileItem" class="menu-item" type="button" role="menuitem">Profile</button>
-               <button id="adminItem" class="menu-item" type="button" role="menuitem">Admin UI</button>
-               <button id="logoutItem" class="menu-item" type="button" role="menuitem">Sign out</button>
-             </div>
-           </div>
-         </div>
-       </header>
+       }, ASR_PARTIAL_WATCHDOG_MS);
+     }
  
-       <main class="layout" role="main">
-         <section class="stage" aria-labelledby="connLabel">
-           <div class="chip-window">
-             <canvas
-               id="waveCanvas"
-               class="wave-canvas"
-               role="img"
-               aria-label="Live audio visualization"
-             ></canvas>
-             <div class="chip-overlay">
-               <div class="chip-status" role="status" aria-live="polite">
-                 <span class="status-dot" aria-hidden="true"></span>
-                 <span id="connLabel">Disconnected</span>
-@@ -180,29 +185,36 @@
+     function resetMicSessionTelemetry() {
+       micSessionTelemetry.micOpenLogged = false;
+-      micSessionTelemetry.firstChunkLogged = false;
+       micSessionTelemetry.recBadgeLogged = false;
+     }
  
-     <script id="clientConfig" type="application/json">{{CLIENT_CONFIG}}</script>
-     <script>
-       (function () {
-         function parseConfig() {
-           try {
-             var node = document.getElementById('clientConfig');
-             if (!node) return {};
-             var raw = node.textContent || node.innerText || '{}';
-             var parsed = JSON.parse(raw);
-             return parsed && typeof parsed === 'object' ? parsed : {};
-           } catch (err) {
-             return {};
+     function noteRecordingBadgeOn(source) {
+       if (micSessionTelemetry.recBadgeLogged) {
+         return;
+       }
+       micSessionTelemetry.recBadgeLogged = true;
+       const detail = { event: 'ui_rec_badge_on' };
+       if (source) {
+         detail.source = String(source).slice(0, 32);
+       }
+       logClient('evt=ui_rec_badge_on', detail);
+     }
+ 
+     function normalizeStopReason(source) {
+       if (typeof source === 'string' && source) {
+         return source.slice(0, 48);
+       }
+       if (source && typeof source === 'object') {
+         if (typeof source.reason === 'string' && source.reason) {
+           return source.reason.slice(0, 48);
+         }
+         if (typeof source.code === 'string' && source.code) {
+           return source.code.slice(0, 48);
+         }
+       }
+       return 'unknown';
+     }
+ 
+     function updateRecordingState(active, source) {
+       const previous = runtimeState.isRecording;
+       const next = !!active;
+       runtimeState.isRecording = next;
+       if (!next) {
+         cancelAsrReadyGuard();
+       }
++      let stopReasonLabel = null;
+       if (next) {
+         if (!previous) {
+           runtimeState.finalSeenThisTurn = false;
+           if (AppState && typeof AppState.__no_rearm_until === 'number') {
+             AppState.__no_rearm_until = 0;
            }
+           beginMicTelemetrySession();
+           resetMicSessionTelemetry();
+           noteRecordingBadgeOn(source);
+           const timeslice = getCaptureTimesliceMs();
+           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
+             ? Math.max(0, Math.round(timeslice))
+             : 'unknown';
+           logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
          }
- 
-         var existing = typeof window !== 'undefined' && window.__CFG__ && typeof window.__CFG__ === 'object'
-           ? window.__CFG__
-           : {};
-         var merged = Object.assign({}, existing, parseConfig());
-         if (typeof window !== 'undefined') {
-           window.__CFG__ = merged;
+         if (!AppState?.ttsActive) {
+           armAsrPartialWatchdog();
+         } else {
+           cancelAsrPartialWatchdog();
          }
-       }());
-     </script>
--    <script src="/static/js/auth_ui.js" defer></script>
--    <script src="/static/js/app.js" defer></script>
-+    <script src="/static/js/auth_ui.js?v={{ BUILD_ID }}" defer></script>
-+    <script src="/static/js/app.js?v={{ BUILD_ID }}" defer></script>
-+    <script>
-+      if ('serviceWorker' in navigator) {
-+        navigator.serviceWorker
-+          .register(`/static/sw.js?v={{ BUILD_ID }}`)
-+          .catch(function () {});
+       } else if (previous) {
+-        const reasonLabel = normalizeStopReason(source);
+-        logClientMicEventText(`evt=mic_stop reason=${reasonLabel}`);
++        stopReasonLabel = normalizeStopReason(source);
++        logClientMicEventText(`evt=mic_stop reason=${stopReasonLabel}`);
+         endMicTelemetrySession();
+         resetMicSessionTelemetry();
+         cancelAsrPartialWatchdog();
+       } else {
+         cancelAsrPartialWatchdog();
+       }
++      if (previous !== next) {
++        const hudState = next ? 'Listening' : 'Idle';
++        const hudMeta = { state: hudState };
++        if (typeof source === 'string' && source) {
++          hudMeta.source = source;
++        } else if (!next && stopReasonLabel) {
++          hudMeta.reason = stopReasonLabel;
++        }
++        handleHudStateChange({ state: hudState, meta: hudMeta });
 +      }
-+    </script>
-   </body>
- </html>
-diff --git a/app/versioning.py b/app/versioning.py
-index ec79ff9ef25aa6c978a80b1f9a5cdc0b72f82b64..07d30db477502954ab43490f407653312fcdb832 100644
---- a/app/versioning.py
-+++ b/app/versioning.py
-@@ -1,61 +1,49 @@
- """Helpers for static asset versioning and build metadata."""
- from __future__ import annotations
+       updateStatusBadge();
+       return next;
+     }
  
--import os
- import re
--from datetime import datetime, timezone
--from typing import Optional
+     function noteMicOpen(source) {
+       if (micSessionTelemetry.micOpenLogged) {
+         return;
+       }
+       micSessionTelemetry.micOpenLogged = true;
+       const detail = { event: 'mic_open' };
+       if (source) {
+         detail.source = String(source).slice(0, 32);
+       }
+       logClient('evt=mic_open', detail);
+     }
  
--_BUILD_ID: Optional[str] = None
-+from app.config_build import current_build_id
+     function setMicPermissionGranted(granted, source) {
+       const next = !!granted;
+       runtimeState.micPermissionGranted = next;
+       if (next) {
+         if (!micPermissionTelemetryLogged) {
+           micPermissionTelemetryLogged = true;
+           const detail = { event: 'mic_perm_granted' };
+           if (source) {
+             detail.source = String(source).slice(0, 32);
+@@ -1834,67 +1552,50 @@
+ 
+     function startMicCapture() {
+       if (!audioRecorder || typeof audioRecorder.startMicCaptureIfIdle !== 'function') {
+         return Promise.reject(new Error('startMicCapture_unavailable'));
+       }
+       let outcome;
+       try {
+         outcome = audioRecorder.startMicCaptureIfIdle();
+       } catch (err) {
+         return Promise.reject(err);
+       }
+       if (outcome && typeof outcome.then === 'function') {
+         return outcome.then((value) => {
+           if (value) {
+             setMicPermissionGranted(true, 'startMicCapture');
+           }
+           return value;
+         });
+       }
+       if (outcome) {
+         setMicPermissionGranted(true, 'startMicCapture');
+       }
+       return Promise.resolve(outcome);
+     }
+ 
+-    if (audioRecorder && typeof audioRecorder._onWebmData === 'function') {
+-      const originalOnWebmData = audioRecorder._onWebmData.bind(audioRecorder);
+-      audioRecorder._onWebmData = function patchedOnWebmData(event) {
+-        if (!micSessionTelemetry.firstChunkLogged) {
+-          const size = event && event.data && typeof event.data.size === 'number'
+-            ? event.data.size
+-            : 0;
+-          if (size > 0) {
+-            micSessionTelemetry.firstChunkLogged = true;
+-            if (consumeMicTelemetryBudget('firstChunk')) {
+-              const detail = { event: 'mic_first_chunk', bytes: size };
+-              logClient(`evt=mic_first_chunk bytes=${size}`, detail);
+-            }
+-          }
+-        }
+-        return originalOnWebmData(event);
+-      };
+     }
+ 
+     function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
+       const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
+       const gateSnapshot = {
+         asrReady: !!runtimeState.asrReady,
+         turnState: runtimeState.turnState || '',
+         micPerm: !!runtimeState.micPermissionGranted,
+         start_on_asr_ready: !!cap.start_on_asr_ready,
+         start_on_turn_ready: !!cap.start_on_turn_ready
+       };
+       if (typeof logClient === 'function') {
+         try {
+           const gatesJson = JSON.stringify(gateSnapshot);
+           logClient('client.mic', `evt=maybe_autostart_blocked gates=${gatesJson} trigger=${triggerLabel} reason=${reasonLabel}`);
+         } catch (err) {
+           logClient('client.mic', `evt=maybe_autostart_blocked gates_error trigger=${triggerLabel} reason=${reasonLabel}`);
+         }
+       }
+       const parts = [
+         `asrReady=${gates.asrReady}`,
+         `turnState=${gates.turnState === null ? 'null' : gates.turnState}`,
+         `micPerm=${gates.micPerm}`,
+         `recording=${gates.recording}`,
+       ];
+@@ -2150,50 +1851,54 @@
+             ? clientReadyStats.detail.vendor.slice(0, 64)
+             : undefined,
+         };
+         recordClientReadyEvent('detail_replaced', replacementMeta);
+         maybeLogClientReadyOutcome('replaced', replacementMeta);
+       }
+       pendingClientReady = normalized;
+       if (!clientReadyStats) {
+         startClientReadyTracking(normalized);
+       } else {
+         recordClientReadyEvent('enqueue_duplicate');
+       }
+       if (clientReadyTimerId !== null) {
+         return;
+       }
+       flushPendingClientReady();
+     }
+ 
+     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
+       setMicPermissionGranted(true, 'mic_open_event');
+       updateRecordingState(true, 'mic_open_event');
+       noteMicOpen('mic_open_event');
+       enqueueClientReady(event && event.detail);
+     });
+ 
++    window.addEventListener(CLIENT_HUD_STATE_EVENT, (event) => {
++      handleHudStateChange(event && event.detail);
++    });
 +
- _STATIC_PATH_PREFIXES = ("static/", "admin/ui/")
+     window.addEventListener('input.start', () => {
+       updateRecordingState(true, 'input.start');
+       setMicPermissionGranted(true, 'input.start');
+     });
  
+     window.addEventListener('input.stop', () => {
+       cancelAsrReadyGuard();
+       updateRecordingState(false, 'input.stop');
+     });
  
- def _build_static_pattern() -> re.Pattern[str]:
-     prefixes = "|".join(re.escape(prefix) for prefix in _STATIC_PATH_PREFIXES)
-     pattern = (
-         r"(?P<attr>\b(?:src|href))"
-         r"(?P<before_eq>\s*)=(?P<after_eq>\s*)"
-         r"(?P<quote>['\"])"
-         r"(?P<url>/(?:"
-         + prefixes
-         + r")(?:[^'\"]*))"
-         r"(?P=quote)"
-     )
-     return re.compile(pattern, re.IGNORECASE)
+     window.addEventListener('stop_listening', (event) => {
+       cancelAsrReadyGuard();
+       const reason =
+         (event && event.detail && typeof event.detail.reason === 'string' && event.detail.reason) ||
+         'stop_listening';
+       updateRecordingState(false, reason);
+     });
  
+     window.addEventListener('ws.close', () => {
+       if (clientReadyStats && pendingClientReady) {
+         recordClientReadyEvent('socket_closed', { reason: 'ws.close' });
+         maybeLogClientReadyOutcome('socket_closed', { reason: 'ws.close' });
+       }
+       pendingClientReady = null;
+       if (clientReadyTimerId !== null) {
+@@ -3250,59 +2955,57 @@ window.addEventListener('policy.snapshot', (event) => {
+     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
+       audioRecorder.setPolicy(policy);
+     }
+   } catch (err) {
+     console.warn('AudioRecorder setPolicy failed', err);
+   }
+ });
  
- _STATIC_ATTR_PATTERN = _build_static_pattern()
+ // Turn becomes Ready → hand control to user
+ window.addEventListener('turn.state', (event) => {
+   const frame = (event && event.detail) || {};
+   const nextState = typeof frame.state === 'string'
+     ? frame.state
+     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
+   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
+   updateStatusBadge();
+   if (runtimeState.turnState !== 'Ready') return;
  
+   // Optional: why we became ready (e.g., 'tts')
+   const reason = typeof frame.reason === 'string'
+     ? frame.reason
+     : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
+   void reason; // not strictly needed, but kept for clarity
  
- def get_build_id() -> str:
-     """Return a stable identifier for the current build."""
+   runtimeState.audioPlaybackIdle = true;
+-  DiagRecorder.maybeStart('turn');
+   maybeAutoStartCapture('turn_ready', 'tts_end');
  
--    global _BUILD_ID
--    if _BUILD_ID is None:
--        for env_var in ("BUILD_ID", "RENDER_GIT_COMMIT", "GIT_SHA"):
--            value = os.getenv(env_var)
--            if value:
--                _BUILD_ID = value
--                break
--        else:
--            now = datetime.now(timezone.utc)
--            _BUILD_ID = now.strftime("%Y%m%d%H%M%S")
--    return _BUILD_ID
-+    return current_build_id()
+ });
  
+ // Assistant TTS finished → open mic after optional delay
+ window.addEventListener('tts.end', () => {
+   const release = () => {
+-    DiagRecorder.maybeStart('ready');
+     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
+       try {
+         window.AudioRecorder.handleTtsEnd();
+       } catch (err) {
+         console.warn('AudioRecorder handleTtsEnd failed', err);
+       }
+     }
+     if (shouldPrearmOnTtsEnd()) {
+       try {
+         requestAsrPrearm('tts_end');
+       } catch (err) {
+         console.warn('requestAsrPrearm failed after tts.end', err);
+       }
+     }
+     updateStatusBadge();
+   };
  
- def inject_static_version(html: str) -> str:
-     """Append a cache-busting query string to static asset references."""
+   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+     setTimeout(release, POST_TTS_RELEASE_MS);
+   } else {
+     release();
+   }
+ });
  
-     build_id = get_build_id()
+ window.addEventListener('local_audio.ended', (event) => {
+@@ -3466,51 +3169,50 @@ window.addEventListener('assistant.suggestions', (event) => {
+ // Start mic immediately on ws.open as a safety net; send diag banner
+ window.addEventListener('ws.open', () => {
+   vadListeningLogged = false;
+   if (audioRecorder && typeof audioRecorder.start === 'function') {
+     audioRecorder.start()
+       .then(() => {
+         setMicPermissionGranted(true, 'ws.open_start');
+       })
+       .catch(() => {
+         setMicPermissionGranted(false, 'ws.open_start_error');
+       });
+   }
+   try {
+     if (WSClient && typeof WSClient.send === 'function') {
+       WSClient.send({
+         type: 'client.banner',
+         event: { label: 'ws.open', ts_ms: Date.now() },
+         info: { build: window.__BUILD_SHA__ ?? null }
+       });
+     }
+   } catch {}
+ });
+ window.addEventListener('ws.close', () => {
+   vadListeningLogged = false;
+   resetSuggestions();
+-  DiagRecorder.stop('ws');
+ });
  
-     def _replace(match: re.Match[str]) -> str:
-         url = match.group("url")
-         if "?" in url:
-             return match.group(0)
-         attr = match.group("attr")
-         before_eq = match.group("before_eq")
-         after_eq = match.group("after_eq")
-         quote = match.group("quote")
-         return f"{attr}{before_eq}={after_eq}{quote}{url}?v={build_id}{quote}"
+     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
+     if (urlParams.get('wsSmoke') === '1') {
+       const transitions = [];
+       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
  
-     return _STATIC_ATTR_PATTERN.sub(_replace, html)
+       class MockSocket extends EventTarget {
+         constructor() {
+           super();
+           this.readyState = WebSocket.CONNECTING;
+           setTimeout(() => {
+             this.readyState = WebSocket.OPEN;
+             this.dispatchEvent(new Event('open'));
+           }, 0);
+         }
+         send(payload) {
+           this.lastSent = payload;
+         }
+         close(code = 1000, reason = '') {
+           this.readyState = WebSocket.CLOSED;
+           const ev = new Event('close');
+           ev.code = code;
+           ev.reason = reason;
+           ev.wasClean = true;
