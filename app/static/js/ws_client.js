@@ -42,6 +42,11 @@ import { WakeWord } from "./wake_word.js";
   let __pendingAsrReadyStart = null;
   let __autoVadPatchedForPendingStart = false;
 
+  // Per-turn readiness/start tokens to prevent re-arm loops
+  let __readyToken = 0;
+  let __micStartedForToken = -1;
+  let __asrReadySeen = false;
+
   if (typeof window !== "undefined") {
     try {
       Object.defineProperty(window, "__micAttempts", {
@@ -204,6 +209,18 @@ import { WakeWord } from "./wake_word.js";
         console.warn("Failed to update AppState policy VAD", err);
       } catch {}
     }
+
+    const message = "client.mic diag=vad_active state=Listening";
+    try {
+      console.log(message);
+    } catch {}
+    try {
+      hubLog("client.mic", { message });
+    } catch (err) {
+      try {
+        console.warn("Failed to log VAD activation after asr.ready", err);
+      } catch {}
+    }
   }
 
   function setPendingAsrReadyStart(detail) {
@@ -251,18 +268,6 @@ import { WakeWord } from "./wake_word.js";
     } catch (err) {
       try {
         console.warn("Failed to patch policy VAD after asr.ready", err);
-      } catch {}
-    }
-
-    const message = "client.mic diag=vad_active state=Listening";
-    try {
-      console.log(message);
-    } catch {}
-    try {
-      hubLog("client.mic", { message });
-    } catch (err) {
-      try {
-        console.warn("Failed to log VAD activation after asr.ready", err);
       } catch {}
     }
   }
@@ -427,13 +432,13 @@ import { WakeWord } from "./wake_word.js";
   }
 
   try {
-  if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
-    Object.defineProperty(AppState, "websocket", {
-      configurable: true, enumerable: false,
-      get() { try { return AppState.getState().websocket || null; } catch { return null; } }
-    });
-  }
-} catch {}
+    if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
+      Object.defineProperty(AppState, "websocket", {
+        configurable: true, enumerable: false,
+        get() { try { return AppState.getState().websocket || null; } catch { return null; } }
+      });
+    }
+  } catch {}
 
   function logMic(detail = {}) {
     try {
@@ -952,6 +957,7 @@ import { WakeWord } from "./wake_word.js";
     AppState.on?.("turnReset", () => {
       autostartAttempts = 0;
       __turnTraceId = null;
+      __asrReadySeen = false;
     });
 
     maybeAutoStart("boot");
@@ -970,6 +976,7 @@ import { WakeWord } from "./wake_word.js";
     updateState({ turnState: normalized });
     if (normalized === "Ready") {
       autostartAttempts = 0;
+      __asrReadySeen = false;
       if (typeof AppState.emit === "function") {
         AppState.emit("turnReset", { state: normalized, reason: reasonValue || null });
       }
@@ -1014,7 +1021,7 @@ import { WakeWord } from "./wake_word.js";
     return value;
   }
 
-  function sanitizeBannerArray(array, depth) {
+  function sanitizeBannerArray(array, depth)) {
     if (!Array.isArray(array)) {
       return undefined;
     }
@@ -1241,7 +1248,7 @@ import { WakeWord } from "./wake_word.js";
     const state = AppState.getState();
     const existing = state && state.clientBanner && typeof state.clientBanner === "object" ? state.clientBanner : null;
     if (existing && existing.info) {
-      return {
+    return {
         info: existing.info,
         events: Array.isArray(existing.events) ? existing.events : [],
       };
@@ -1699,80 +1706,76 @@ import { WakeWord } from "./wake_word.js";
     }
   }
 
-function startInputCapture(frame) {
-  const policy = frame?.policy || {};
-  const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
-  const source = frame?.type || "input.start";
-  const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
+  function startInputCapture(frame) {
+    const policy = frame?.policy || {};
+    const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
+    const source = frame?.type || "input.start";
+    const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
 
-  if (unifiedRecorder) {
-    try {
-      logStage("client.input.capture", { source, hasPolicy, skipped: "unified_recorder" });
-    } catch {}
-    // In unified mode we don't start here; startStreamingAfterAsrReady() will.
-    return;
-  }
-
-  const hub = AppState?.hub;
-  if (hub && typeof hub.startListening === "function") {
-    try {
+    if (unifiedRecorder) {
       try {
-        logStage("client.input.capture", { source, hasPolicy });
+        logStage("client.input.capture", { source, hasPolicy, skipped: "unified_recorder" });
       } catch {}
-      return hub.startListening(policy);
-    } catch (err) {
-      console.warn("Hub startListening (legacy input) failed", err);
+      // In unified mode we don't start here; startStreamingAfterAsrReady() will.
+      return;
     }
-  }
-  console.warn("Legacy input capture is disabled; recorder hub missing.", frame);
-}
 
-function stopInputCapture(options = {}) {
-  clearPendingAsrReadyStart(
-    options && typeof options.reason === "string" ? options.reason : "stop_input_capture"
-  );
-  const hub = AppState?.hub;
-  if (hub && typeof hub.stopListening === "function") {
-    try {
-      const reason =
-        options && typeof options === "object" && options.reason ? options.reason : "legacy_input";
-      hub.stopListening(reason);
-    } catch (err) {
-      console.warn("Hub stopListening (legacy input) failed", err);
+    const hub = AppState?.hub;
+    if (hub && typeof hub.startListening === "function") {
+      try {
+        try {
+          logStage("client.input.capture", { source, hasPolicy });
+        } catch {}
+        return hub.startListening(policy);
+      } catch (err) {
+        console.warn("Hub startListening (legacy input) failed", err);
+      }
     }
-    return;
-  }
-  void options;
-}
-
-async function handleInputStartFrame(frame) {
-  const gates = typeof getGateSnapshot === "function" ? getGateSnapshot() : null;
-  const asrReady =
-    typeof gates?.asrReady === "boolean" ? gates.asrReady : !!AppState?.asrReady;
-
-  // Always stage a pending start so the asr.ready path can pick it up if it races.
-  setPendingAsrReadyStart({
-    frame,
-    policy: frame?.policy || {},
-    reason: frame?.reason || frame?.type || "input.start",
-  });
-
-  // If we're already ready, immediately run the same gate used by the asr.ready handler.
-  if (asrReady) {
-    try {
-      await startStreamingAfterAsrReady("input.start_asr_ready");
-    } catch (err) {
-      console.error("input.start deferred start failed", err);
-    }
+    console.warn("Legacy input capture is disabled; recorder hub missing.", frame);
   }
 
-  // Do NOT call startInputCapture() here in unified mode;
-  // startStreamingAfterAsrReady() will invoke AudioRecorder/hub correctly.
-}
+  function stopInputCapture(options = {}) {
+    clearPendingAsrReadyStart(
+      options && typeof options.reason === "string" ? options.reason : "stop_input_capture"
+    );
+    const hub = AppState?.hub;
+    if (hub && typeof hub.stopListening === "function") {
+      try {
+        const reason =
+          options && typeof options === "object" && options.reason ? options.reason : "legacy_input";
+        hub.stopListening(reason);
+      } catch (err) {
+        console.warn("Hub stopListening (legacy input) failed", err);
+      }
+      return;
+    }
+    void options;
+  }
 
-   // Do NOT call startInputCapture here in unified mode; startStreamingAfterAsrReady
-   // takes care of invoking AudioRecorder.startListening() (or hub) correctly.
- }
+  async function handleInputStartFrame(frame) {
+    const gates = typeof getGateSnapshot === "function" ? getGateSnapshot() : null;
+    const asrReady =
+      typeof gates?.asrReady === "boolean" ? gates.asrReady : !!AppState?.asrReady;
+
+    // Always stage a pending start so the asr.ready path can pick it up if it races.
+    setPendingAsrReadyStart({
+      frame,
+      policy: frame?.policy || {},
+      reason: frame?.reason || frame?.type || "input.start",
+    });
+
+    // If we're already ready, immediately run the same gate used by the asr.ready handler.
+    if (asrReady) {
+      try {
+        await startStreamingAfterAsrReady("input.start_asr_ready");
+      } catch (err) {
+        console.error("input.start deferred start failed", err);
+      }
+    }
+
+    // Do NOT call startInputCapture() here in unified mode;
+    // startStreamingAfterAsrReady() will invoke AudioRecorder/hub correctly.
+  }
 
   function handleInputStopFrame() {
     stopInputCapture({ reason: 'input.stop' });
@@ -2303,9 +2306,6 @@ async function handleInputStartFrame(frame) {
 
   async function handleMessageFrame(frame) {
     if (frame.type === "keepalive") {
-      // Some transports may emit a keepalive frame before the info frame has
-      // been sent. Treat it as a no-op and continue waiting for the info
-      // frame so we do not close the connection prematurely.
       return;
     }
 
@@ -2496,6 +2496,7 @@ async function handleInputStartFrame(frame) {
         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
       }
       clearPendingAsrReadyStart("stop_listening");
+      __asrReadySeen = false;
       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
         try {
           const reason =
@@ -2507,16 +2508,25 @@ async function handleInputStartFrame(frame) {
         }
       }
     } else if (frame.type === "input.start") {
-      handleInputStartFrame(frame);
+      await handleInputStartFrame(frame);
     } else if (frame.type === "input.stop") {
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
+      __asrReadySeen = false;
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
+      // Only increment token once per turn; ignore repeated ready frames.
+      if (!__asrReadySeen) {
+        __readyToken += 1;
+        __asrReadySeen = true;
+      }
       try {
-        const started = await startStreamingAfterAsrReady("asr.ready");
-        if (started) {
-          markAutoVadActiveAfterAsrReady();
+        if (__micStartedForToken !== __readyToken) {
+          const started = await startStreamingAfterAsrReady("asr.ready");
+          if (started) {
+            __micStartedForToken = __readyToken;
+            markAutoVadActiveAfterAsrReady();
+          }
         }
       } catch (err) {
         console.error("Deferred mic start on asr.ready failed", err);
@@ -2538,6 +2548,7 @@ async function handleInputStartFrame(frame) {
         AppState.emit("asrReady", { ready: false, reason, vendor: null });
       }
       clearPendingAsrReadyStart("asr_unavailable");
+      __asrReadySeen = false;
       try {
         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
         hud?.setState?.("Chat");
@@ -2625,16 +2636,16 @@ async function handleInputStartFrame(frame) {
     ws.__intentionalClose = false;
     const handlers = {
       open: () => {
-  // Write live socket and mark connected so UI gates on ws.open can run
-  try {
-    if (typeof AppState.setState === "function") {
-      AppState.setState({ websocket: ws, connectionState: "connected" });
-    } else {
-      updateState({ websocket: ws, connectionState: "connected" });
-    }
-  } catch {
-    updateState({ websocket: ws, connectionState: "connected" });
-  }
+        // Write live socket and mark connected so UI gates on ws.open can run
+        try {
+          if (typeof AppState.setState === "function") {
+            AppState.setState({ websocket: ws, connectionState: "connected" });
+          } else {
+            updateState({ websocket: ws, connectionState: "connected" });
+          }
+        } catch {
+          updateState({ websocket: ws, connectionState: "connected" });
+        }
         try {
           WSClient._ws = ws;
           WSClient._connected = true;
