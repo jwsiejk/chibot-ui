@@ -538,8 +538,9 @@
     return stream;
   }
 
-  function attachRecorder() {
-    throw new Error('media_recorder_disabled_by_policy');
+  function attachRecorder(stream) {
+    void stream;
+    return null;
   }
 
   function sendAudioChunk(chunkBlobOrBuf) {
@@ -572,6 +573,80 @@
     let stream = null;
     let recorder = null;
     let startPromise = null;
+    let policyDisabledNotified = false;
+
+    function resolveAsrInputCandidates() {
+      const candidates = [];
+      const policy = typeof runtimeState !== "undefined" && runtimeState && typeof runtimeState === "object"
+        ? runtimeState.policy
+        : null;
+      if (policy && typeof policy === "object") {
+        const capture = policy.capture && typeof policy.capture === "object" ? policy.capture : null;
+        if (capture && typeof capture.asr_input === "string") {
+          candidates.push(capture.asr_input);
+        }
+        const media = policy.media && typeof policy.media === "object" ? policy.media : null;
+        if (media && typeof media.asr_input === "string") {
+          candidates.push(media.asr_input);
+        }
+      }
+      if (typeof window !== "undefined") {
+        const cfg = window.__CFG__ && typeof window.__CFG__ === "object" ? window.__CFG__ : null;
+        if (cfg) {
+          const captureCfg = cfg.POLICY_CAPTURE && typeof cfg.POLICY_CAPTURE === "object" ? cfg.POLICY_CAPTURE : null;
+          if (captureCfg && typeof captureCfg.asr_input === "string") {
+            candidates.push(captureCfg.asr_input);
+          }
+          const mediaCfg = cfg.POLICY_MEDIA && typeof cfg.POLICY_MEDIA === "object" ? cfg.POLICY_MEDIA : null;
+          if (mediaCfg && typeof mediaCfg.asr_input === "string") {
+            candidates.push(mediaCfg.asr_input);
+          }
+        }
+      }
+      return candidates;
+    }
+
+    function diagRecorderPolicyAllowsMediaRecorder() {
+      const candidates = resolveAsrInputCandidates();
+      let hasNonPcm = false;
+      for (let i = 0; i < candidates.length; i += 1) {
+        const raw = candidates[i];
+        if (typeof raw !== "string") {
+          continue;
+        }
+        const normalized = raw.trim().toLowerCase();
+        if (!normalized) {
+          continue;
+        }
+        if (normalized.startsWith("pcm")) {
+          return false;
+        }
+        hasNonPcm = true;
+      }
+      return hasNonPcm;
+    }
+
+    function notifyPolicyDisabled() {
+      if (!diagHudEnabled()) {
+        return;
+      }
+      if (!policyDisabledNotified) {
+        const capRoot = typeof runtimeState !== "undefined" && runtimeState && typeof runtimeState === "object"
+          ? runtimeState.policy
+          : null;
+        const cap = capRoot && typeof capRoot.capture === "object" ? capRoot.capture : {};
+        const asrInput = typeof cap.asr_input === "string" ? cap.asr_input : undefined;
+        const detail = asrInput ? { reason: "policy_disabled", asr_input: asrInput } : { reason: "policy_disabled" };
+        console.info("DIAG_RECORDER_SKIPPED", detail);
+        sendDiagHudEvent("EVT_CLIENT_RECORDER_DISABLED", detail, {
+          level: "info",
+          badge: "rec:skip",
+          message: "Recorder disabled by policy",
+        });
+        policyDisabledNotified = true;
+      }
+      setBadge("rec:skip");
+    }
 
     function cleanupStream() {
       if (!stream) {
@@ -646,6 +721,10 @@
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         return null;
       }
+      if (!diagRecorderPolicyAllowsMediaRecorder()) {
+        notifyPolicyDisabled();
+        return null;
+      }
       try {
         stream = await getMicStream();
       } catch (err) {
@@ -675,6 +754,11 @@
         }
         cleanupStream();
         recorder = null;
+        return null;
+      }
+      if (!recorder) {
+        notifyPolicyDisabled();
+        cleanupStream();
         return null;
       }
       recorder.addEventListener("stop", () => {
