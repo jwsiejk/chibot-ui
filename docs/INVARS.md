@@ -38,4 +38,4 @@ PROHIBITED (block merge if detected)
 - Mic start from any path other than the **asr.ready** handler.
 - Emitting **asr.ready** before **RecognitionStarted**.
 - Recorder stop/restart mid-turn (except on first final or explicit teardown).
-- Sending Opus/WebM while declaring PCM16 (or vice versa).
+- Sending any non-PCM s16le audio or misdeclaring the `{codec,rate_hz,channels}` descriptor.
