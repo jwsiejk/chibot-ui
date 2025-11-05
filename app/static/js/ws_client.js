@@ -1021,7 +1021,7 @@ import { WakeWord } from "./wake_word.js";
     return value;
   }
 
-  function sanitizeBannerArray(array, depth)) {
+  function sanitizeBannerArray(array, depth) {
     if (!Array.isArray(array)) {
       return undefined;
     }
