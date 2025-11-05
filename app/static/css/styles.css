@@ -145,12 +145,46 @@ body{
   justify-content:space-between; pointer-events:none; padding:16px;
 }
 .chip-status{
-  align-self:flex-start; display:flex; align-items:center; gap:8px;
-  padding:8px 12px; border-radius:999px;
-  background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.22);
+  align-self:flex-start;
+  display:grid;
+  grid-template-columns:auto 1fr;
+  column-gap:8px;
+  row-gap:2px;
+  padding:8px 12px;
+  border-radius:999px;
+  background:var(--badge-bg, rgba(0,0,0,.55));
+  border:1px solid var(--badge-border, rgba(255,255,255,.22));
   backdrop-filter: blur(6px);
-  font-weight:600; letter-spacing:.2px;
+  font-weight:600;
+  letter-spacing:.2px;
+  color:var(--badge-fg, #f8fafc);
+  min-width:0;
 }
+.chip-status .sb-title{
+  grid-column:2 / span 1;
+  font-size:14px;
+  line-height:1.2;
+}
+.chip-status .sb-sub{
+  grid-column:2 / span 1;
+  font-size:12px;
+  line-height:1.3;
+  color:var(--badge-sub, rgba(226,232,240,.75));
+}
+.tone-gray{--badge-bg:rgba(15,23,42,.72);--badge-border:rgba(148,163,184,.4);--badge-fg:#f1f5f9;--badge-sub:rgba(226,232,240,.78);}
+.tone-blue{--badge-bg:rgba(30,64,175,.74);--badge-border:rgba(191,219,254,.5);--badge-fg:#e0f2fe;--badge-sub:rgba(224,242,254,.85);}
+.tone-purple{--badge-bg:rgba(91,33,182,.72);--badge-border:rgba(221,214,254,.55);--badge-fg:#ede9fe;--badge-sub:rgba(221,214,254,.85);}
+.tone-green{--badge-bg:rgba(22,101,52,.72);--badge-border:rgba(187,247,208,.45);--badge-fg:#dcfce7;--badge-sub:rgba(187,247,208,.85);}
+.tone-red{--badge-bg:rgba(190,24,93,.7);--badge-border:rgba(252,211,227,.55);--badge-fg:#fee2e2;--badge-sub:rgba(254,226,226,.85);}
+.bg-zinc-400{background-color:#a1a1aa !important;}
+.bg-zinc-300{background-color:#d4d4d8 !important;}
+.bg-zinc-200{background-color:#e4e4e7 !important;}
+.bg-blue-200{background-color:#bfdbfe !important;}
+.bg-violet-200{background-color:#ddd6fe !important;}
+.bg-emerald-200{background-color:#a7f3d0 !important;}
+.bg-rose-200{background-color:#fecdd3 !important;}
+@keyframes sbPulse{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.45);opacity:.6}}
+.status-dot.pulsing{animation:sbPulse 1s ease-in-out infinite;}
 .mode-suggestions{
   align-self:center;
   display:flex;
@@ -193,8 +227,16 @@ body{
   letter-spacing:.25px;
   box-shadow:0 10px 22px rgba(0,0,0,.35);
 }
-.status-dot{width:8px;height:8px;border-radius:50%;background:#999; display:inline-block}
-.status-dot.on{background:var(--success)}
+.chip-status .status-dot{
+  grid-row:1 / span 2;
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:#999;
+  display:block;
+  align-self:flex-start;
+  transition:transform .4s ease, opacity .4s ease, background-color .25s ease;
+}
 .voice-chip{
   align-self:flex-end; display:flex; gap:8px; align-items:center;
   padding:8px 14px; border-radius:999px;

@@ -1,60 +1,504 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index b3995d9332a2b9c46c554208c17ca7eece47d993..56f275ecaffe9176a88cacd24e24521d0c3d54df 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -709,50 +709,55 @@ class SpeechmaticsClient:
-                     continue
+diff --git a/app/static/css/styles.css b/app/static/css/styles.css
+index c7dba9f4789f27d63dc7d39e4e7971257c75ca75..ae7f6b1625bc380289b224f8cd04d7872ab6f330 100644
+--- a/app/static/css/styles.css
++++ b/app/static/css/styles.css
+@@ -123,100 +123,142 @@ body{
+ }
  
-                 self._handle_payload(state, payload)
-         except asyncio.CancelledError:
-             raise
-         except websockets.ConnectionClosedOK as exc:
-             await self._finalize_close(state, exc.code, exc.reason)
-         except websockets.ConnectionClosedError as exc:
-             self._handle_error(state, str(exc.code), exc.reason or "connection_closed")
-             await self._finalize_close(state, exc.code, exc.reason)
-         except Exception as exc:
-             self._logger.exception(
-                 "evt=sm_recv_failed sid=%s stream_id=%s err=%s",
-                 state.sid,
-                 state.stream_id,
-                 exc,
-             )
-             self._handle_error(state, "recv_failed", str(exc))
-             await self._finalize_close(state, None, None)
-         finally:
-             await self._finalize_receiver(state)
+ /* Stage */
+ .stage{
+   display:flex; align-items:center; justify-content:center;
+   position:relative;
+ }
+ .chip-window{
+   position:relative;
+   width:min(1200px, 100%); aspect-ratio:16/9;
+   border-radius:20px;
+   background:linear-gradient(180deg, #0E1627 0%, #0A0F1B 100%);
+   box-shadow:var(--shadow);
+   overflow:hidden;
+   border:1px solid var(--border);
+ }
+ .wave-canvas{
+   position:absolute; inset:0; width:100%; height:100%;
+   filter: contrast(1.15) saturate(1.2);
+ }
+ .chip-overlay{
+   position:absolute; inset:0; display:flex; flex-direction:column;
+   justify-content:space-between; pointer-events:none; padding:16px;
+ }
+ .chip-status{
+-  align-self:flex-start; display:flex; align-items:center; gap:8px;
+-  padding:8px 12px; border-radius:999px;
+-  background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.22);
++  align-self:flex-start;
++  display:grid;
++  grid-template-columns:auto 1fr;
++  column-gap:8px;
++  row-gap:2px;
++  padding:8px 12px;
++  border-radius:999px;
++  background:var(--badge-bg, rgba(0,0,0,.55));
++  border:1px solid var(--badge-border, rgba(255,255,255,.22));
+   backdrop-filter: blur(6px);
+-  font-weight:600; letter-spacing:.2px;
++  font-weight:600;
++  letter-spacing:.2px;
++  color:var(--badge-fg, #f8fafc);
++  min-width:0;
+ }
++.chip-status .sb-title{
++  grid-column:2 / span 1;
++  font-size:14px;
++  line-height:1.2;
++}
++.chip-status .sb-sub{
++  grid-column:2 / span 1;
++  font-size:12px;
++  line-height:1.3;
++  color:var(--badge-sub, rgba(226,232,240,.75));
++}
++.tone-gray{--badge-bg:rgba(15,23,42,.72);--badge-border:rgba(148,163,184,.4);--badge-fg:#f1f5f9;--badge-sub:rgba(226,232,240,.78);}
++.tone-blue{--badge-bg:rgba(30,64,175,.74);--badge-border:rgba(191,219,254,.5);--badge-fg:#e0f2fe;--badge-sub:rgba(224,242,254,.85);}
++.tone-purple{--badge-bg:rgba(91,33,182,.72);--badge-border:rgba(221,214,254,.55);--badge-fg:#ede9fe;--badge-sub:rgba(221,214,254,.85);}
++.tone-green{--badge-bg:rgba(22,101,52,.72);--badge-border:rgba(187,247,208,.45);--badge-fg:#dcfce7;--badge-sub:rgba(187,247,208,.85);}
++.tone-red{--badge-bg:rgba(190,24,93,.7);--badge-border:rgba(252,211,227,.55);--badge-fg:#fee2e2;--badge-sub:rgba(254,226,226,.85);}
++.bg-zinc-400{background-color:#a1a1aa !important;}
++.bg-zinc-300{background-color:#d4d4d8 !important;}
++.bg-zinc-200{background-color:#e4e4e7 !important;}
++.bg-blue-200{background-color:#bfdbfe !important;}
++.bg-violet-200{background-color:#ddd6fe !important;}
++.bg-emerald-200{background-color:#a7f3d0 !important;}
++.bg-rose-200{background-color:#fecdd3 !important;}
++@keyframes sbPulse{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.45);opacity:.6}}
++.status-dot.pulsing{animation:sbPulse 1s ease-in-out infinite;}
+ .mode-suggestions{
+   align-self:center;
+   display:flex;
+   flex-direction:column;
+   gap:10px;
+   padding:14px 18px;
+   border-radius:18px;
+   background:rgba(8,12,20,.55);
+   border:1px solid rgba(255,255,255,.18);
+   box-shadow:0 18px 36px rgba(0,0,0,.45);
+   backdrop-filter:blur(12px);
+   color:var(--text);
+   text-align:center;
+   max-width:min(80%, 520px);
+   margin:0 auto;
+ }
+ .mode-suggestions.hidden{display:none}
+ .mode-suggestions__label{
+   font-size:11px;
+   letter-spacing:.35px;
+   text-transform:uppercase;
+   color:var(--muted);
+ }
+ .mode-suggestions__chips{
+   display:flex;
+   flex-wrap:wrap;
+   gap:12px;
+   justify-content:center;
+ }
+ .mode-chip{
+   display:inline-flex;
+   align-items:center;
+   justify-content:center;
+   padding:8px 16px;
+   border-radius:999px;
+   background:linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.16));
+   border:1px solid rgba(255,255,255,.18);
+   color:var(--text);
+   font-weight:600;
+   letter-spacing:.25px;
+   box-shadow:0 10px 22px rgba(0,0,0,.35);
+ }
+-.status-dot{width:8px;height:8px;border-radius:50%;background:#999; display:inline-block}
+-.status-dot.on{background:var(--success)}
++.chip-status .status-dot{
++  grid-row:1 / span 2;
++  width:10px;
++  height:10px;
++  border-radius:50%;
++  background:#999;
++  display:block;
++  align-self:flex-start;
++  transition:transform .4s ease, opacity .4s ease, background-color .25s ease;
++}
+ .voice-chip{
+   align-self:flex-end; display:flex; gap:8px; align-items:center;
+   padding:8px 14px; border-radius:999px;
+   background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.22);
+   backdrop-filter: blur(6px);
+   color:var(--text); font-weight:600;
+ }
+ .sep{opacity:.5}
+ .chip-label{
+   font-size:12px;
+   text-transform:uppercase;
+   letter-spacing:.4px;
+   color:var(--muted);
+ }
  
-     def _handle_recognition_started(
-         self, state: _StreamState, payload: Mapping[str, Any]
-     ) -> None:
-+        self._logger.info(
-+            "evt=sm_recognition_started sid=%s stream_id=%s",
-+            state.sid,
-+            state.stream_id,
-+        )
-         if not state.recognition_started:
-             state.recognition_started = True
-         self._mark_stream_ready(state, payload, recognition_started=True)
+ /* Chat */
+ .chat{
+   display:flex; flex-direction:column; gap:0;
+   border:1px solid var(--border); border-radius:16px;
+   background:linear-gradient(180deg, #0e1422, #0b101b);
+   overflow:hidden;
+ }
+ .chat-header{
+   padding:14px 16px; border-bottom:1px solid var(--border);
+   background:rgba(255,255,255,.02);
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 31a9aa6b41f849b6c4af4aa3a630b84987ae7cd7..b359acd96f29cc04f2a812901e28dda85ae86139 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -895,50 +895,233 @@
+             } else {
+               audioRecorder.stopListening();
+             }
+           } catch (err) {
+             console.warn("AudioRecorder stopListening failed", err);
+           }
+         },
+       };
  
-     def _mark_stream_ready(
-         self,
-         state: _StreamState,
-         payload: Mapping[str, Any],
-         *,
-         recognition_started: bool = False,
-     ) -> None:
-         if state.ready_event.is_set():
-             return
+       hub._install(hubImpl);
+     }
  
-         message_type_raw = None
-         if isinstance(payload, Mapping):
-             message_type_raw = payload.get("type") or payload.get("message")
-         message_type = str(message_type_raw).lower() if message_type_raw else ""
+     installHubInterface();
  
-         if message_type in {"error", "error_message"}:
-             code = payload.get("code") or payload.get("error_code") or "error"
-             reason = payload.get("reason") or payload.get("message") or ""
-             state.ready_error = str(code)
-             state.ready_error_detail = str(reason)
-             state.ready_event.set()
+     const runtimeState = {
+       policy: null,
+       turnState: null,
+       asrReady: false,
+       isRecording: false,
+       micPermissionGranted: false,
+       audioPlaybackIdle: true,
+       policyCaptureLogged: false,
+       finalSeenThisTurn: false,
+     };
+ 
++    let __lastBadgeLabel = null;
++
++    function getMicLiveFlag(state) {
++      const snapshot = state && typeof state === 'object' ? state : {};
++      const recorderState = snapshot.recorder && typeof snapshot.recorder === 'object'
++        ? snapshot.recorder
++        : (AppState?.recorder && typeof AppState.recorder === 'object' ? AppState.recorder : null);
++      if (typeof recorderState?.active === 'boolean') {
++        return recorderState.active;
++      }
++      if (window.AudioRecorder && typeof window.AudioRecorder === 'object') {
++        if (typeof window.AudioRecorder.listening === 'boolean') {
++          return window.AudioRecorder.listening;
++        }
++        if (typeof window.AudioRecorder._active === 'boolean') {
++          return window.AudioRecorder._active;
++        }
++      }
++      return false;
++    }
++
++    function computeStatusBadge(state) {
++      const snapshot = state && typeof state === 'object' ? state : {};
++      const connectionState = typeof snapshot.connectionState === 'string'
++        ? snapshot.connectionState
++        : (typeof AppState?.getState === 'function'
++          ? AppState.getState().connectionState
++          : null);
++
++      const wsConn = connectionState === 'connected';
++      const wsConning = connectionState === 'connecting' || connectionState === 'resuming';
++
++      const tts = typeof snapshot.ttsActive === 'boolean'
++        ? snapshot.ttsActive
++        : Boolean(AppState?.ttsActive);
++
++      const turnState = typeof snapshot.turnState === 'string' && snapshot.turnState
++        ? snapshot.turnState
++        : (typeof AppState?.turnState === 'string' && AppState.turnState
++          ? AppState.turnState
++          : (typeof runtimeState.turnState === 'string' ? runtimeState.turnState : null));
++
++      const listen = turnState === 'Listening';
++      const think = turnState === 'Thinking';
++
++      const micLive = getMicLiveFlag(snapshot);
++
++      const asrReady = typeof snapshot.asrReady === 'boolean'
++        ? snapshot.asrReady
++        : (typeof AppState?.asrReady === 'boolean'
++          ? AppState.asrReady
++          : Boolean(runtimeState.asrReady));
++
++      const recorderState = snapshot.recorder && typeof snapshot.recorder === 'object'
++        ? snapshot.recorder
++        : (AppState?.recorder && typeof AppState.recorder === 'object' ? AppState.recorder : null);
++
++      const err = (() => {
++        if (snapshot.lastError) return snapshot.lastError;
++        if (recorderState && typeof recorderState.error !== 'undefined' && recorderState.error !== null) {
++          return recorderState.error;
++        }
++        if (AppState?.lastError) return AppState.lastError;
++        return null;
++      })();
++
++      if (!wsConn && !wsConning) {
++        return { label: 'Disconnected', sub: 'Press Start to begin.', tone: 'tone-gray', dot: 'bg-zinc-400', micLive };
++      }
++      if (wsConning && !wsConn) {
++        return { label: 'Connecting…', sub: 'One sec—bringing Chip online.', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
++      }
++      if (wsConn && !tts && !listen && !think) {
++        return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
++      }
++      if (tts) {
++        return { label: 'Responding…', sub: 'Speaking — say “Hold on” to interrupt.', tone: 'tone-blue', dot: 'bg-blue-200', micLive };
++      }
++      if (think) {
++        return { label: 'Thinking…', sub: 'Thinking… one sec.', tone: 'tone-purple', dot: 'bg-violet-200', micLive };
++      }
++      if (listen && !asrReady) {
++        return { label: 'Getting ready to listen…', sub: 'Arming mic…', tone: 'tone-gray', dot: 'bg-zinc-200', micLive };
++      }
++      if (listen && asrReady && micLive) {
++        return { label: 'Listening', sub: 'I’m listening — talk to me.', tone: 'tone-green', dot: 'bg-emerald-200', micLive };
++      }
++      if (err) {
++        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive };
++      }
++      return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
++    }
++
++    function updateStatusBadge(stateOverride) {
++      const el =
++        document.getElementById('status-badge') ||
++        document.querySelector('[data-role="status-badge"]') ||
++        document.querySelector('.chip-status');
++      if (!el) {
++        return;
++      }
++
++      const snapshot = stateOverride && typeof stateOverride === 'object'
++        ? stateOverride
++        : (typeof AppState?.getState === 'function' ? AppState.getState() : (AppState || {}));
++
++      const st = computeStatusBadge(snapshot);
++
++      if (!el.getAttribute('data-role')) {
++        el.setAttribute('data-role', 'status-badge');
++      }
++
++      const dot = el.querySelector('.status-dot, span[class*="w-2"], .dot, .badge-dot');
++      let labelEl = el.querySelector('#connLabel');
++      if (!labelEl) {
++        const spanCandidates = el.querySelectorAll('span');
++        for (const node of spanCandidates) {
++          if (!node.classList.contains('status-dot')) {
++            labelEl = node;
++            break;
++          }
++        }
++      }
++      if (!labelEl) {
++        labelEl = el.querySelector('.sb-title, .badge-title, .text');
++      }
++      if (!labelEl) {
++        labelEl = el.querySelector('*');
++      }
++
++      let sub = el.querySelector('.sb-sub');
++      if (!sub) {
++        sub = document.createElement('div');
++        sub.className = 'sb-sub hidden';
++        el.appendChild(sub);
++      }
++
++      Array.from(el.classList)
++        .filter((cls) => cls.startsWith('tone-'))
++        .forEach((cls) => el.classList.remove(cls));
++      el.classList.add(st.tone);
++
++      if (dot) {
++        if (!dot.classList.contains('status-dot')) {
++          dot.classList.add('status-dot');
++        }
++        dot.className = `status-dot ${st.dot}`;
++      }
++
++      if (labelEl) {
++        labelEl.textContent = st.label;
++        labelEl.classList.add('sb-title');
++      }
++
++      if (sub) {
++        sub.textContent = st.sub || '';
++        sub.classList.toggle('hidden', !st.sub);
++      }
++
++      el.setAttribute('aria-label', st.sub ? `${st.label}. ${st.sub}` : st.label);
++
++      if (__lastBadgeLabel !== st.label) {
++        if (st.label === 'Listening' && st.micLive) {
++          console.log('ui.badge label="Listening"');
++        }
++        __lastBadgeLabel = st.label;
++      }
++
++      if (dot) {
++        const micLive = typeof snapshot?.recorder?.active === 'boolean'
++          ? snapshot.recorder.active
++          : st.micLive;
++        dot.classList.toggle('pulsing', st.label === 'Listening' && micLive);
++      }
++    }
++
++    updateStatusBadge(typeof AppState?.getState === 'function' ? AppState.getState() : null);
++    if (typeof AppState?.on === 'function') {
++      AppState.on('change', () => updateStatusBadge());
++      ['wsConnected', 'wsConnecting', 'ttsActive', 'turnState', 'asrReady', 'micPerm', 'recordingStarted', 'recordingStopped']
++        .forEach((eventName) => AppState.on(eventName, () => updateStatusBadge()));
++    }
++
+     if (AppState && typeof AppState.__no_rearm_until !== 'number') {
+       AppState.__no_rearm_until = 0;
+     }
+ 
+     let asrPrearmIssued = false;
+     let vadListeningLogged = false;
+ 
+     function patchPolicyVad(patch) {
+       if (!patch || typeof patch !== 'object') {
+         return;
+       }
+ 
+       const applyPatch = (policyRoot) => {
+         if (!policyRoot || typeof policyRoot !== 'object') {
+           return;
+         }
+         const currentVad = policyRoot.vad && typeof policyRoot.vad === 'object'
+           ? policyRoot.vad
+           : {};
+         policyRoot.vad = { ...currentVad, ...patch };
+       };
+ 
+       try {
+         if (AppState && typeof AppState === 'object') {
+           const policy = AppState.policy && typeof AppState.policy === 'object'
+@@ -1834,52 +2017,50 @@
+         event.preventDefault();
+         return;
+       }
+       window.location.href = '/admin/logs';
+       closeMenu();
+     });
+     document.getElementById('profileItem').addEventListener('click', () => {
+       alert(`Profile for ${currentUserEmail} (placeholder).`); closeMenu();
+     });
+     document.getElementById('logoutItem').addEventListener('click', () => {
+       alert("Logging out… (placeholder)"); closeMenu();
+     });    
+ 
+     // --- Chat toggle ---
+     const openChatBtn = document.getElementById('openChatBtn');
+     const chatPanel = document.querySelector('.chat');
+     openChatBtn.addEventListener('click', () => {
+       const hidden = chatPanel.classList.toggle('hidden');
+       openChatBtn.setAttribute('aria-pressed', String(!hidden));
+     });
+ 
+     // --- Start/End button wiring ---
+     const startBtn = document.getElementById('startBtn');
+     const endBtn = document.getElementById('endBtn');
+     const sidText = document.getElementById('sid-text');
+-    const connLabel = document.getElementById('connLabel');
+-    const statusDot = document.querySelector('.status-dot');
+     const latencyHint = document.getElementById('latencyHint');
+     const voiceLabel = document.getElementById('voiceLabel');
+     const localeLabel = document.getElementById('localeLabel');
+     const textChatForm = document.getElementById('textChatForm');
+     const textChatInput = document.getElementById('textChatInput');
+ 
+     // Chat submit wiring
+     // Send typed chat to the server using chat.user frames
+     if (textChatForm) {
+       textChatForm.addEventListener('submit', (e) => {
+         e.preventDefault();
+         const text = (textChatInput && textChatInput.value || '').trim();
+         if (!text) return;
+         try {
+           WSClient && WSClient.send && WSClient.send({ type: 'chat.user', text });
+           textChatInput.value = '';
+         } catch (err) {
+           console.error('chat.user send failed', err);
+         }
+       });
+     }
+     
+ 
+     const voiceState = { voiceId: null, locale: null };
+ 
+@@ -2574,58 +2755,53 @@
+           audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 48000});
+           analyser = audioCtx.createAnalyser();
+           analyser.fftSize = 2048;
+           dataArray = new Uint8Array(analyser.frequencyBinCount);
+           source = audioCtx.createMediaStreamSource(stream);
+           source.connect(analyser);
+           synthMode = false;
+         }catch(err){
+           console.warn("Mic not available; using synth waveform.", err);
+           synthMode = true;
+         }
+         loop();
+       }
+       function stop(){
+         cancelAnimationFrame(raf); raf = 0;
+         drawBackground(); drawSynth();
+         if (source){ try{ source.disconnect(); }catch{} source = null; }
+         if (audioCtx){ try{ audioCtx.close(); }catch{} audioCtx = null; }
+       }
+       drawBackground(); drawSynth();
+       return { start, stop };
+     })();
+ 
+     let previousConnectionState = AppState.getState().connectionState;
+     AppState.subscribe((state) => {
++      updateStatusBadge(state);
+       sidText.textContent = state.sid || '—';
+-      let label = 'Disconnected';
+-      if (state.connectionState === 'connected') label = 'Connected';
+-      else if (state.connectionState === 'connecting') label = 'Connecting…';
+-      else if (state.connectionState === 'resuming') label = 'Resuming…';
+-      connLabel.textContent = label;
+       const active = state.connectionState !== 'disconnected';
+-      statusDot.classList.toggle('on', active);
+       startBtn.disabled = active;
+       endBtn.disabled = !active;
+       if (state.latencyMs != null) {
+         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = 'Latency: —';
+       }
+       if (state.connectionState === 'disconnected') {
+         resetVoiceState();
+         resetSuggestions();
+         updateRecordingState(false, 'appstate.disconnect');
+         runtimeState.turnState = null;
+         runtimeState.asrReady = false;
+         runtimeState.policy = null;
+         runtimeState.audioPlaybackIdle = true;
+         runtimeState.policyCaptureLogged = false;
+       } else if (state.infoFrame) {
+         updateVoiceState(extractVoiceLocale(state.infoFrame));
+         try {
+           const framePolicy = state.infoFrame && typeof state.infoFrame === 'object'
+             ? state.infoFrame.policy
+             : null;
+           if (framePolicy && typeof framePolicy === 'object') {
+             runtimeState.policy = framePolicy;
+             if (!runtimeState.policyCaptureLogged) {
