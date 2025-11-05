@@ -40,6 +40,14 @@ class SpeechmaticsConfigError(RuntimeError):
         super().__init__(detail)
 
 
+class SpeechmaticsOpenBusy(RuntimeError):
+    """Raised when a stream is being opened while an existing stream/open is active for the SID."""
+    def __init__(self, sid: str) -> None:
+        super().__init__(f"asr_open_busy for sid={sid}")
+        self.code = "asr_open_busy"
+        self.sid = sid
+
+
 def _coerce_language(policy: Mapping[str, Any] | None) -> str:
     """Return the language preference from policy or default to English."""
 
@@ -383,6 +391,8 @@ class SpeechmaticsClient:
         self._bus = bus
         self._logger = logger or logging.getLogger(__name__)
         self._streams: Dict[str, _StreamState] = {}
+        # Tracks SIDs currently being opened to avoid parallel opens for the same SID
+        self._opening: set[str] = set()
 
     async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
         if not self._streams:
@@ -436,8 +446,10 @@ class SpeechmaticsClient:
             raise ValueError("sid must be a non-empty string")
         if not isinstance(stream_id, str) or not stream_id:
             raise ValueError("stream_id must be a non-empty string")
-        if sid in self._streams:
-            raise RuntimeError(f"stream for sid {sid!r} already exists")
+        if sid in self._streams or sid in self._opening:
+            # Deduplicate open attempts per sid; let the caller handle this cleanly.
+            self._logger.warning("evt=asr_open_dedup sid=%s", sid)
+            raise SpeechmaticsOpenBusy(sid)
 
         language = _coerce_language(policy)
         normalized_language = language.strip().lower() if isinstance(language, str) else ""
@@ -466,82 +478,95 @@ class SpeechmaticsClient:
             "ping_interval": 20,
             "ping_timeout": 10,
         }
+
+        # mark opening to block parallel opens
+        self._opening.add(sid)
         try:
-            websocket = await websockets.connect(self._url, **connect_kwargs)
-        except Exception as exc:
-            self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
-            raise
+            try:
+                websocket = await websockets.connect(self._url, **connect_kwargs)
+            except Exception as exc:
+                self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
+                raise
 
-        vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
+            vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
 
-        asr_policy = _resolve_asr_policy(policy)
-        utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
-        allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
+            asr_policy = _resolve_asr_policy(policy)
+            utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
+            allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
 
-        transcription_config = {
-            "language": language,
-            "enable_partials": True,
-        }
-        max_delay_s = _coerce_max_delay_seconds(utterance_end_ms)
-        if max_delay_s is not None:
-            transcription_config["max_delay"] = max_delay_s
+            transcription_config = {
+                "language": language,
+                "enable_partials": True,
+            }
+            max_delay_s = _coerce_max_delay_seconds(utterance_end_ms)
+            if max_delay_s is not None:
+                transcription_config["max_delay"] = max_delay_s
 
-        start_payload = {
-            "message": "StartRecognition",
-            "transcription_config": transcription_config,
-            "audio_format": {
-                "type": "raw",
-                "encoding": "pcm_s16le",
-                "sample_rate": sample_rate
-            },
-        }
+            start_payload = {
+                "message": "StartRecognition",
+                "transcription_config": transcription_config,
+                "audio_format": {
+                    "type": "raw",
+                    "encoding": "pcm_s16le",
+                    "sample_rate": sample_rate
+                },
+            }
 
-        self._logger.info(
-            "evt=asr_vendor_opts vendor=speechmatics utterance_end_ms=%d allow_word_finals=%s",
-            utterance_end_ms,
-            "true" if allow_word_finals else "false",
-        )
-        await websocket.send(json.dumps(start_payload))
-
-        self._logger.info(
-            "sm_ws_open encoding=%s sr=%d ch=1 interim=true lang=%s",
-            encoding,
-            sample_rate,
-            language,
-        )
-
-        state = _StreamState(
-            sid=sid,
-            stream_id=vendor_stream_id,
-            websocket=websocket,
-            on_partial=on_partial,
-            on_final=on_final,
-            on_error=on_error,
-            on_close=on_close,
-            language=language,
-            encoding=encoding,
-            sample_rate=sample_rate,
-            loop=asyncio.get_running_loop(),
-        )
-        state.sender_task = state.loop.create_task(self._sender_loop(state), name=f"sm-send-{sid}")
-        state.receiver_task = state.loop.create_task(self._receiver_loop(state), name=f"sm-recv-{sid}")
-        self._streams[sid] = state
-        try:
-            await asyncio.wait_for(state.ready_event.wait(), timeout=5.0)
-        except asyncio.TimeoutError as exc:
-            self._logger.error(
-                "evt=sm_ready_timeout sid=%s stream_id=%s", sid, vendor_stream_id
+            self._logger.info(
+                "evt=asr_vendor_opts vendor=speechmatics utterance_end_ms=%d allow_word_finals=%s",
+                utterance_end_ms,
+                "true" if allow_word_finals else "false",
             )
-            self._handle_error(state, "ready_timeout", "no ready signal")
-            raise RuntimeError("speechmatics_ready_timeout") from exc
-        if state.ready_error:
-            detail = (state.ready_error_detail or "").strip()
-            if detail:
-                message = f"speechmatics_ready_failed: {state.ready_error} {detail}"
-            else:
-                message = f"speechmatics_ready_failed: {state.ready_error}"
-            raise RuntimeError(message)
-        return vendor_stream_id
+            await websocket.send(json.dumps(start_payload))
+
+            # Explicit resolved-open log for observability
+            self._logger.info(
+                "evt=asr_open vendor=speechmatics language=%s rate_hz=%d encoding=%s",
+                language, sample_rate, encoding
+            )
+            self._logger.info(
+                "sm_ws_open encoding=%s sr=%d ch=1 interim=true lang=%s",
+                encoding,
+                sample_rate,
+                language,
+            )
+
+            state = _StreamState(
+                sid=sid,
+                stream_id=vendor_stream_id,
+                websocket=websocket,
+                on_partial=on_partial,
+                on_final=on_final,
+                on_error=on_error,
+                on_close=on_close,
+                language=language,
+                encoding=encoding,
+                sample_rate=sample_rate,
+                loop=asyncio.get_running_loop(),
+            )
+            state.sender_task = state.loop.create_task(self._sender_loop(state), name=f"sm-send-{sid}")
+            state.receiver_task = state.loop.create_task(self._receiver_loop(state), name=f"sm-recv-{sid}")
+            self._streams[sid] = state
+            try:
+                await asyncio.wait_for(state.ready_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError as exc:
+                self._logger.error(
+                    "evt=sm_ready_timeout sid=%s stream_id=%s", sid, vendor_stream_id
+                )
+                self._handle_error(state, "ready_timeout", "no ready signal")
+                raise RuntimeError("speechmatics_ready_timeout") from exc
+            if state.ready_error:
+                detail = (state.ready_error_detail or "").strip()
+                if detail:
+                    message = f"speechmatics_ready_failed: {state.ready_error} {detail}"
+                else:
+                    message = f"speechmatics_ready_failed: {state.ready_error}"
+                raise RuntimeError(message)
+            return vendor_stream_id
+        finally:
+            # clear opening flag regardless of outcome
+            if sid in self._opening:
+                self._opening.discard(sid)
 
     def send_audio(self, sid: str, chunk: bytes) -> None:
         state = self._streams.get(sid)
@@ -674,6 +699,7 @@ class SpeechmaticsClient:
                         notice_type = raw_notice.strip().lower()
 
                 if notice_type.startswith("concurrent_session"):
+                    # log all concurrency notices; treat fatal separately
                     if _is_fatal_concurrency_notice(payload):
                         self._logger.error(
                             "evt=sm_concurrency_notice sid=%s stream_id=%s notice=%s",
@@ -689,6 +715,8 @@ class SpeechmaticsClient:
                             state.stream_id,
                             notice_type,
                         )
+                        # Hint for upstream backoff (the runtime decides retry policy)
+                        self._logger.info("evt=asr_backoff reason=concurrency sid=%s", state.sid)
                     continue
 
                 normalized_message = ""
@@ -702,6 +730,12 @@ class SpeechmaticsClient:
                     continue
 
                 if normalized_message == "recognitionstarted":
+                    if not state.recognition_started:
+                        self._logger.info(
+                            "evt=sm_recognition_started sid=%s stream_id=%s",
+                            state.sid,
+                            state.stream_id,
+                        )
                     if message_name not in state.vendor_notices:
                         self._logger.info("evt=sm_notice message=recognitionstarted")
                         state.vendor_notices.add(message_name)
@@ -731,11 +765,7 @@ class SpeechmaticsClient:
     def _handle_recognition_started(
         self, state: _StreamState, payload: Mapping[str, Any]
     ) -> None:
-        self._logger.info(
-            "evt=sm_recognition_started sid=%s stream_id=%s",
-            state.sid,
-            state.stream_id,
-        )
+        # mark once and only then signal readiness
         if not state.recognition_started:
             state.recognition_started = True
         self._mark_stream_ready(state, payload, recognition_started=True)
@@ -1017,6 +1047,7 @@ __all__ = [
     "SpeechmaticsClient",
     "OfflineSpeechmaticsClient",
     "SpeechmaticsConfigError",
+    "SpeechmaticsOpenBusy",
 ]
 
 @dataclass
