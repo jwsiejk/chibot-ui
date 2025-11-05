@@ -1467,7 +1467,9 @@
     } catch (_) {}
 
     const ASR_PARTIAL_WATCHDOG_MS = 1500;
+    const ASR_READY_GUARD_MS = 7000;
     let asrPartialWatchdogTimerId = null;
+    let asrReadyGuardTimerId = null;
 
     function isRecorderListening() {
       if (runtimeState.isRecording) {
@@ -1487,6 +1489,58 @@
         } catch (_) {}
         asrPartialWatchdogTimerId = null;
       }
+    }
+
+    function cancelAsrReadyGuard() {
+      if (asrReadyGuardTimerId !== null) {
+        try {
+          clearTimeout(asrReadyGuardTimerId);
+        } catch (_) {}
+        asrReadyGuardTimerId = null;
+      }
+    }
+
+    function armAsrReadyGuard() {
+      cancelAsrReadyGuard();
+      if (typeof window === 'undefined') {
+        return;
+      }
+      asrReadyGuardTimerId = window.setTimeout(() => {
+        asrReadyGuardTimerId = null;
+        if (!isRecorderListening() || AppState?.ttsActive) {
+          return;
+        }
+        let stopAttempted = false;
+        let stopped = false;
+        try {
+          if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
+            stopAttempted = true;
+            AppState.hub.stopListening({ reason: 'guard_stop' });
+            stopped = true;
+          }
+        } catch (err) {
+          console.warn('Hub guard_stop failed', err);
+        }
+        if (!stopped) {
+          try {
+            if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
+              stopAttempted = true;
+              window.AudioRecorder.stopListening({ reason: 'guard_stop' });
+              stopped = true;
+            }
+          } catch (err) {
+            console.warn('AudioRecorder guard_stop failed', err);
+          }
+        }
+        if (stopAttempted) {
+          if (AppState && typeof AppState === 'object') {
+            AppState.__no_rearm_until = Date.now() + FINAL_REARM_COOLDOWN_MS;
+          }
+          cancelAsrPartialWatchdog();
+          updateRecordingState(false, 'guard_stop');
+        }
+        logClientMicEventText('evt=guard_stop reason=no_partials_for_7s');
+      }, ASR_READY_GUARD_MS);
     }
 
     function armAsrPartialWatchdog() {
@@ -1570,6 +1624,9 @@
       const previous = runtimeState.isRecording;
       const next = !!active;
       runtimeState.isRecording = next;
+      if (!next) {
+        cancelAsrReadyGuard();
+      }
       if (next) {
         if (!previous) {
           runtimeState.finalSeenThisTurn = false;
@@ -3101,6 +3158,7 @@ window.addEventListener('local_audio.ended', (event) => {
 const FINAL_REARM_COOLDOWN_MS = 1500;
 
 window.addEventListener('asr.partial', () => {
+  cancelAsrReadyGuard();
   if (AppState?.ttsActive) {
     cancelAsrPartialWatchdog();
     return;
@@ -3113,6 +3171,7 @@ window.addEventListener('asr.partial', () => {
 });
 
 window.addEventListener('asr.final', () => {
+  cancelAsrReadyGuard();
   if (runtimeState.finalSeenThisTurn) {
     return;
   }
@@ -3158,6 +3217,7 @@ window.addEventListener('assistant.await_user', (event) => {
 
 window.addEventListener('asr.unavailable', (event) => {
   cancelAsrPartialWatchdog();
+  cancelAsrReadyGuard();
   runtimeState.asrReady = false;
   const detail = event && typeof event === 'object' ? event.detail : undefined;
   let reason = null;
@@ -3200,6 +3260,7 @@ window.addEventListener('asr.unavailable', (event) => {
 
 window.addEventListener('asr.ready', (event) => {
   runtimeState.asrReady = true;
+  armAsrReadyGuard();
   maybeAutoStartCapture('asr_ready', 'policy');
   if (diagHudEnabled()) {
     console.info('diag=asr_ready');

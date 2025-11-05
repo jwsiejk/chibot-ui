@@ -1,242 +1,339 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index b359acd96f29cc04f2a812901e28dda85ae86139..116d416bfdcf45fd97deddf766ffd2488cd4cbc5 100644
+index 116d416bfdcf45fd97deddf766ffd2488cd4cbc5..405fa62f4739b56ed29e67e80fbc1749f24c2365 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -896,156 +896,227 @@
-               audioRecorder.stopListening();
-             }
-           } catch (err) {
-             console.warn("AudioRecorder stopListening failed", err);
-           }
-         },
-       };
- 
-       hub._install(hubImpl);
-     }
- 
-     installHubInterface();
- 
-     const runtimeState = {
-       policy: null,
-       turnState: null,
-       asrReady: false,
-       isRecording: false,
-       micPermissionGranted: false,
-       audioPlaybackIdle: true,
-       policyCaptureLogged: false,
-       finalSeenThisTurn: false,
-     };
- 
-     let __lastBadgeLabel = null;
-+    let __fsmPrev = 'Disconnected';
- 
-     function getMicLiveFlag(state) {
-       const snapshot = state && typeof state === 'object' ? state : {};
-       const recorderState = snapshot.recorder && typeof snapshot.recorder === 'object'
-         ? snapshot.recorder
-         : (AppState?.recorder && typeof AppState.recorder === 'object' ? AppState.recorder : null);
-       if (typeof recorderState?.active === 'boolean') {
-         return recorderState.active;
-       }
-       if (window.AudioRecorder && typeof window.AudioRecorder === 'object') {
-         if (typeof window.AudioRecorder.listening === 'boolean') {
-           return window.AudioRecorder.listening;
-         }
-         if (typeof window.AudioRecorder._active === 'boolean') {
-           return window.AudioRecorder._active;
+@@ -1445,72 +1445,126 @@
+       if (text) {
+         try {
+           console.log(text);
+         } catch (_) {}
+         if (!payload.message) {
+           payload.message = text.slice(0, 256);
          }
        }
-       return false;
+       if (!sendClientLog('client.mic', payload)) {
+         enqueueDeferredClientLog('client.mic', payload);
+       }
      }
  
--    function computeStatusBadge(state) {
-+    function normalizeUiStateSnapshot(state) {
-       const snapshot = state && typeof state === 'object' ? state : {};
-       const connectionState = typeof snapshot.connectionState === 'string'
-         ? snapshot.connectionState
-         : (typeof AppState?.getState === 'function'
-           ? AppState.getState().connectionState
-           : null);
- 
-       const wsConn = connectionState === 'connected';
-       const wsConning = connectionState === 'connecting' || connectionState === 'resuming';
- 
-       const tts = typeof snapshot.ttsActive === 'boolean'
-         ? snapshot.ttsActive
-         : Boolean(AppState?.ttsActive);
- 
-       const turnState = typeof snapshot.turnState === 'string' && snapshot.turnState
-         ? snapshot.turnState
-         : (typeof AppState?.turnState === 'string' && AppState.turnState
-           ? AppState.turnState
-           : (typeof runtimeState.turnState === 'string' ? runtimeState.turnState : null));
- 
-       const listen = turnState === 'Listening';
-       const think = turnState === 'Thinking';
- 
-       const micLive = getMicLiveFlag(snapshot);
- 
-       const asrReady = typeof snapshot.asrReady === 'boolean'
-         ? snapshot.asrReady
-         : (typeof AppState?.asrReady === 'boolean'
-           ? AppState.asrReady
-           : Boolean(runtimeState.asrReady));
- 
-       const recorderState = snapshot.recorder && typeof snapshot.recorder === 'object'
-         ? snapshot.recorder
-         : (AppState?.recorder && typeof AppState.recorder === 'object' ? AppState.recorder : null);
- 
-       const err = (() => {
-         if (snapshot.lastError) return snapshot.lastError;
-         if (recorderState && typeof recorderState.error !== 'undefined' && recorderState.error !== null) {
-           return recorderState.error;
-         }
-         if (AppState?.lastError) return AppState.lastError;
-         return null;
-       })();
- 
-+      return {
-+        snapshot,
-+        connectionState,
-+        wsConn,
-+        wsConning,
-+        tts,
-+        turnState,
-+        listen,
-+        think,
-+        micLive,
-+        asrReady,
-+        recorderState,
-+        err,
-+      };
-+    }
-+
-+    function computeStatusBadge(state, normalized) {
-+      const ui = normalized || normalizeUiStateSnapshot(state);
-+      const {
-+        wsConn,
-+        wsConning,
-+        tts,
-+        listen,
-+        think,
-+        micLive,
-+        asrReady,
-+        err,
-+      } = ui || {};
-+
-+      const micLiveValue = typeof micLive === 'boolean' ? micLive : false;
-+
-       if (!wsConn && !wsConning) {
--        return { label: 'Disconnected', sub: 'Press Start to begin.', tone: 'tone-gray', dot: 'bg-zinc-400', micLive };
-+        return { label: 'Disconnected', sub: 'Press Start to begin.', tone: 'tone-gray', dot: 'bg-zinc-400', micLive: micLiveValue };
-       }
-       if (wsConning && !wsConn) {
--        return { label: 'Connecting…', sub: 'One sec—bringing Chip online.', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
-+        return { label: 'Connecting…', sub: 'One sec—bringing Chip online.', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
-       }
-       if (wsConn && !tts && !listen && !think) {
--        return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
-+        return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
-       }
-       if (tts) {
--        return { label: 'Responding…', sub: 'Speaking — say “Hold on” to interrupt.', tone: 'tone-blue', dot: 'bg-blue-200', micLive };
-+        return { label: 'Responding…', sub: 'Speaking — say “Hold on” to interrupt.', tone: 'tone-blue', dot: 'bg-blue-200', micLive: micLiveValue };
-       }
-       if (think) {
--        return { label: 'Thinking…', sub: 'Thinking… one sec.', tone: 'tone-purple', dot: 'bg-violet-200', micLive };
-+        return { label: 'Thinking…', sub: 'Thinking… one sec.', tone: 'tone-purple', dot: 'bg-violet-200', micLive: micLiveValue };
-       }
-       if (listen && !asrReady) {
--        return { label: 'Getting ready to listen…', sub: 'Arming mic…', tone: 'tone-gray', dot: 'bg-zinc-200', micLive };
-+        return { label: 'Getting ready to listen…', sub: 'Arming mic…', tone: 'tone-gray', dot: 'bg-zinc-200', micLive: micLiveValue };
-       }
-       if (listen && asrReady && micLive) {
-         return { label: 'Listening', sub: 'I’m listening — talk to me.', tone: 'tone-green', dot: 'bg-emerald-200', micLive };
-       }
-       if (err) {
--        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive };
-+        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive: micLiveValue };
-       }
--      return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
-+      return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
-+    }
-+
-+    function deriveCanonicalUiState(normalized) {
-+      const ui = normalized || {};
-+      const wsConn = !!ui.wsConn;
-+      const wsConning = !!ui.wsConning;
-+      const tts = !!ui.tts;
-+      const think = !!ui.think;
-+      const listen = !!ui.listen;
-+      const err = !!ui.err;
-+
-+      if (!wsConn && !wsConning) {
-+        return 'Disconnected';
-+      }
-+      if (wsConning && !wsConn) {
-+        return 'Connecting';
-+      }
-+      if (err) {
-+        return 'Error';
-+      }
-+      if (tts) {
-+        return 'Responding';
-+      }
-+      if (think) {
-+        return 'Thinking';
-+      }
-+      if (listen) {
-+        return 'Listening';
-+      }
-+      return 'Greeting';
-     }
- 
-     function updateStatusBadge(stateOverride) {
-       const el =
-         document.getElementById('status-badge') ||
-         document.querySelector('[data-role="status-badge"]') ||
-         document.querySelector('.chip-status');
-       if (!el) {
+     function logClientMicEventText(text) {
+       if (typeof text !== 'string' || !text) {
          return;
        }
+       logClient('client.mic', text);
+     }
  
-       const snapshot = stateOverride && typeof stateOverride === 'object'
-         ? stateOverride
-         : (typeof AppState?.getState === 'function' ? AppState.getState() : (AppState || {}));
+     try {
+       window.__logClientMicString = logClientMicEventText;
+     } catch (_) {}
  
--      const st = computeStatusBadge(snapshot);
-+      const normalized = normalizeUiStateSnapshot(snapshot);
-+      const st = computeStatusBadge(snapshot, normalized);
-+      const canonical = deriveCanonicalUiState(normalized);
-+      if (typeof canonical === 'string' && canonical) {
-+        const prev = typeof __fsmPrev === 'string' && __fsmPrev ? __fsmPrev : 'Disconnected';
-+        if (canonical !== prev) {
-+          console.log(`fsm.transition prev=${prev} next=${canonical}`);
-+        }
-+        __fsmPrev = canonical;
-+      }
+     const ASR_PARTIAL_WATCHDOG_MS = 1500;
++    const ASR_READY_GUARD_MS = 7000;
+     let asrPartialWatchdogTimerId = null;
++    let asrReadyGuardTimerId = null;
  
-       if (!el.getAttribute('data-role')) {
-         el.setAttribute('data-role', 'status-badge');
+     function isRecorderListening() {
+       if (runtimeState.isRecording) {
+         return true;
        }
+       try {
+         return Boolean(AppState?.recorder?.active);
+       } catch (_) {
+         return false;
+       }
+     }
  
-       const dot = el.querySelector('.status-dot, span[class*="w-2"], .dot, .badge-dot');
-       let labelEl = el.querySelector('#connLabel');
-       if (!labelEl) {
-         const spanCandidates = el.querySelectorAll('span');
-         for (const node of spanCandidates) {
-           if (!node.classList.contains('status-dot')) {
-             labelEl = node;
-             break;
+     function cancelAsrPartialWatchdog() {
+       if (asrPartialWatchdogTimerId !== null) {
+         try {
+           clearTimeout(asrPartialWatchdogTimerId);
+         } catch (_) {}
+         asrPartialWatchdogTimerId = null;
+       }
+     }
+ 
++    function cancelAsrReadyGuard() {
++      if (asrReadyGuardTimerId !== null) {
++        try {
++          clearTimeout(asrReadyGuardTimerId);
++        } catch (_) {}
++        asrReadyGuardTimerId = null;
++      }
++    }
++
++    function armAsrReadyGuard() {
++      cancelAsrReadyGuard();
++      if (typeof window === 'undefined') {
++        return;
++      }
++      asrReadyGuardTimerId = window.setTimeout(() => {
++        asrReadyGuardTimerId = null;
++        if (!isRecorderListening() || AppState?.ttsActive) {
++          return;
++        }
++        let stopAttempted = false;
++        let stopped = false;
++        try {
++          if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
++            stopAttempted = true;
++            AppState.hub.stopListening({ reason: 'guard_stop' });
++            stopped = true;
++          }
++        } catch (err) {
++          console.warn('Hub guard_stop failed', err);
++        }
++        if (!stopped) {
++          try {
++            if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
++              stopAttempted = true;
++              window.AudioRecorder.stopListening({ reason: 'guard_stop' });
++              stopped = true;
++            }
++          } catch (err) {
++            console.warn('AudioRecorder guard_stop failed', err);
++          }
++        }
++        if (stopAttempted) {
++          if (AppState && typeof AppState === 'object') {
++            AppState.__no_rearm_until = Date.now() + FINAL_REARM_COOLDOWN_MS;
++          }
++          cancelAsrPartialWatchdog();
++          updateRecordingState(false, 'guard_stop');
++        }
++        logClientMicEventText('evt=guard_stop reason=no_partials_for_7s');
++      }, ASR_READY_GUARD_MS);
++    }
++
+     function armAsrPartialWatchdog() {
+       if (typeof window === 'undefined') {
+         return;
+       }
+       if (!isRecorderListening() || AppState?.ttsActive) {
+         cancelAsrPartialWatchdog();
+         return;
+       }
+       if (asrPartialWatchdogTimerId !== null) {
+         clearTimeout(asrPartialWatchdogTimerId);
+       }
+       asrPartialWatchdogTimerId = window.setTimeout(() => {
+         asrPartialWatchdogTimerId = null;
+         if (!isRecorderListening() || AppState?.ttsActive) {
+           return;
+         }
+         let stopAttempted = false;
+         let stopped = false;
+         try {
+           if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
+             stopAttempted = true;
+             AppState.hub.stopListening({ reason: 'watchdog' });
+             stopped = true;
            }
+         } catch (err) {
+@@ -1548,50 +1602,53 @@
+       if (source) {
+         detail.source = String(source).slice(0, 32);
+       }
+       logClient('evt=ui_rec_badge_on', detail);
+     }
+ 
+     function normalizeStopReason(source) {
+       if (typeof source === 'string' && source) {
+         return source.slice(0, 48);
+       }
+       if (source && typeof source === 'object') {
+         if (typeof source.reason === 'string' && source.reason) {
+           return source.reason.slice(0, 48);
+         }
+         if (typeof source.code === 'string' && source.code) {
+           return source.code.slice(0, 48);
          }
        }
-       if (!labelEl) {
-         labelEl = el.querySelector('.sb-title, .badge-title, .text');
-       }
-       if (!labelEl) {
-         labelEl = el.querySelector('*');
-       }
+       return 'unknown';
+     }
  
-       let sub = el.querySelector('.sb-sub');
-       if (!sub) {
+     function updateRecordingState(active, source) {
+       const previous = runtimeState.isRecording;
+       const next = !!active;
+       runtimeState.isRecording = next;
++      if (!next) {
++        cancelAsrReadyGuard();
++      }
+       if (next) {
+         if (!previous) {
+           runtimeState.finalSeenThisTurn = false;
+           if (AppState && typeof AppState.__no_rearm_until === 'number') {
+             AppState.__no_rearm_until = 0;
+           }
+           beginMicTelemetrySession();
+           resetMicSessionTelemetry();
+           noteRecordingBadgeOn(source);
+           const timeslice = getCaptureTimesliceMs();
+           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
+             ? Math.max(0, Math.round(timeslice))
+             : 'unknown';
+           logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
+         }
+         if (!AppState?.ttsActive) {
+           armAsrPartialWatchdog();
+         } else {
+           cancelAsrPartialWatchdog();
+         }
+       } else if (previous) {
+         const reasonLabel = normalizeStopReason(source);
+         logClientMicEventText(`evt=mic_stop reason=${reasonLabel}`);
+         endMicTelemetrySession();
+         resetMicSessionTelemetry();
+@@ -3079,149 +3136,153 @@ window.addEventListener('tts.end', () => {
+       try {
+         requestAsrPrearm('tts_end');
+       } catch (err) {
+         console.warn('requestAsrPrearm failed after tts.end', err);
+       }
+     }
+   };
+ 
+   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
+     setTimeout(release, POST_TTS_RELEASE_MS);
+   } else {
+     release();
+   }
+ });
+ 
+ window.addEventListener('local_audio.ended', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const detail = event && event.detail;
+   const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
+   maybeAutoStartCapture(trigger, 'tts_end');
+ });
+ 
+ const FINAL_REARM_COOLDOWN_MS = 1500;
+ 
+ window.addEventListener('asr.partial', () => {
++  cancelAsrReadyGuard();
+   if (AppState?.ttsActive) {
+     cancelAsrPartialWatchdog();
+     return;
+   }
+   if (!isRecorderListening()) {
+     cancelAsrPartialWatchdog();
+     return;
+   }
+   armAsrPartialWatchdog();
+ });
+ 
+ window.addEventListener('asr.final', () => {
++  cancelAsrReadyGuard();
+   if (runtimeState.finalSeenThisTurn) {
+     return;
+   }
+   runtimeState.finalSeenThisTurn = true;
+   const now = Date.now();
+   if (AppState && typeof AppState === 'object') {
+     AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
+   }
+   let recorder = null;
+   try {
+     recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
+   } catch (_) {
+     recorder = null;
+   }
+   try {
+     recorder?.stopListening?.({ reason: 'final' });
+   } catch (err) {
+     console.warn('AudioRecorder stopListening on asr.final failed', err);
+   }
+   if (runtimeState.isRecording) {
+     updateRecordingState(false, 'final');
+   }
+ });
+ 
+ window.addEventListener('assistant.await_user', (event) => {
+   runtimeState.audioPlaybackIdle = true;
+   const frame = event && event.detail;
+   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
+   maybeAutoStartCapture('await_user', reason);
+   if (shouldPrearmOnTtsEnd()) {
+     try {
+       requestAsrPrearm('await_user');
+     } catch (err) {
+       console.warn('requestAsrPrearm failed after assistant.await_user', err);
+     }
+   }
+   patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
+   if (!vadListeningLogged) {
+     logClient('client.mic', 'diag=vad_active state=Listening');
+     vadListeningLogged = true;
+   }
+ });
+ 
+ window.addEventListener('asr.unavailable', (event) => {
+   cancelAsrPartialWatchdog();
++  cancelAsrReadyGuard();
+   runtimeState.asrReady = false;
+   const detail = event && typeof event === 'object' ? event.detail : undefined;
+   let reason = null;
+   if (detail && typeof detail === 'object') {
+     if (typeof detail.reason === 'string') {
+       reason = detail.reason;
+     } else if (typeof detail.details === 'string') {
+       reason = detail.details;
+     } else if (typeof detail.detail === 'string') {
+       reason = detail.detail;
+     } else if (detail.detail && typeof detail.detail === 'object') {
+       const nested = detail.detail;
+       if (typeof nested.reason === 'string') {
+         reason = nested.reason;
+       } else if (typeof nested.details === 'string') {
+         reason = nested.details;
+       }
+     }
+   }
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+     console.warn('diag=asr_unavailable', reasonText);
+     setBadge('asr:down');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_UNAVAILABLE',
+       reasonText ? { reason: reasonText } : undefined,
+       {
+         level: 'warn',
+         badge: 'asr:down',
+         message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
+       }
+     );
+   }
+   try {
+     scheduleAsrRearm();
+   } catch (err) {
+     console.warn('scheduleAsrRearm failed after asr.unavailable', err);
+   }
+ });
+ 
+ window.addEventListener('asr.ready', (event) => {
+   runtimeState.asrReady = true;
++  armAsrReadyGuard();
+   maybeAutoStartCapture('asr_ready', 'policy');
+   if (diagHudEnabled()) {
+     console.info('diag=asr_ready');
+     setBadge('asr:ready');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_READY',
+       event && typeof event === 'object' ? event.detail : undefined,
+       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+     );
+   }
+   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
+     try {
+       window.ChatView?.showSystemFromChip?.(
+         "Voice is back. You can speak again when you’re ready."
+       );
+     } catch (err) {
+       console.warn('Failed to show voice restoration message', err);
+     }
+     asrRetry.tries = 0;
+     clearTimeout(asrRetry.timer);
+     asrRetry.timer = null;
+   }
+   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
+     try {
+       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
