@@ -32,6 +32,7 @@ from app.logging_config import configure_logging
 from app.logging_setup import install_bus_handler
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
+from app.middlewares import apply_cache_headers
 from app.versioning import get_build_id, inject_static_version
 from app.voice_v2.asr_runtime import ASRRuntime
 from app.voice_v2.engine import EngineV2
@@ -81,6 +82,7 @@ HEALTH_ROUTE = "/api/v1/health"
 LIVE_ROUTE = "/api/v1/live"
 READY_ROUTE = "/api/v1/ready"
 INFO_ROUTE = "/api/v1/info"
+VERSION_ROUTE = "/version.json"
 HEALTHZ_ROUTE = "/healthz"
 DIAG_DB_ROUTE = "/diag/db"
 WS_TOKEN_ROUTE = "/api/v1/auth/ws-token"
@@ -280,6 +282,27 @@ async def _handle_info(scope: dict, receive: Callable[[], Awaitable[dict]]) -> R
     return json_response(**payload)
 
 
+async def _handle_version_json(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response:
+    method = scope.get("method", "GET").upper()
+    if method not in {"GET", "HEAD"}:
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+    build_id = get_build_id()
+    payload = json.dumps({"build_id": build_id}, separators=(",", ":")).encode("utf-8")
+    headers: list[tuple[bytes, bytes]] = [
+        (b"content-type", b"application/json; charset=utf-8"),
+        (b"cache-control", b"no-store, must-revalidate"),
+        (b"content-length", str(len(payload)).encode("ascii")),
+    ]
+    if method == "HEAD":
+        return Response(status=200, body=b"", headers=tuple(headers))
+    return Response(status=200, body=payload, headers=tuple(headers))
+
+
 async def _handle_admin_config(scope: dict, receive: Callable[[], Awaitable[dict]]) -> Response:
     """Expose the runtime client configuration snapshot."""
 
@@ -323,8 +346,10 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
     rewritten = rewritten.replace("{{ADMIN_LINK}}", admin_link)
     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
     rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
-    body = rewritten.encode("utf-8")
     build_id = get_build_id()
+    rewritten = rewritten.replace("{{BUILD_ID}}", build_id)
+    rewritten = rewritten.replace("{{ BUILD_ID }}", build_id)
+    body = rewritten.encode("utf-8")
     return _html_response(body, build_id=build_id)
 
 
@@ -358,8 +383,10 @@ async def _handle_admin_logs(scope: dict, receive: Callable[[], Awaitable[dict]]
     client_config_json = _serialize_context(config.get_client_config_snapshot())
     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
     rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
-    body = rewritten.encode("utf-8")
     build_id = get_build_id()
+    rewritten = rewritten.replace("{{BUILD_ID}}", build_id)
+    rewritten = rewritten.replace("{{ BUILD_ID }}", build_id)
+    body = rewritten.encode("utf-8")
     return _html_response(body, build_id=build_id)
 
 
@@ -594,9 +621,7 @@ def _serialize_context(payload: dict[str, Any]) -> str:
 def _html_response(body: bytes, *, build_id: Optional[str] = None) -> Response:
     headers: list[tuple[bytes, bytes]] = [
         (b"content-type", b"text/html; charset=utf-8"),
-        (b"cache-control", b"no-store, no-cache, must-revalidate"),
-        (b"pragma", b"no-cache"),
-        (b"expires", b"0"),
+        (b"cache-control", b"no-store, must-revalidate"),
         (b"content-length", str(len(body)).encode("ascii")),
     ]
     if build_id is not None:
@@ -629,6 +654,11 @@ def _build_static_response(path: Path, *, if_none_match: Optional[str] = None) -
         data = path.read_bytes()
     except OSError:
         return None
+
+    if b"{{ BUILD_ID }}" in data or b"{{BUILD_ID}}" in data:
+        build_id_bytes = get_build_id().encode("utf-8")
+        data = data.replace(b"{{ BUILD_ID }}", build_id_bytes)
+        data = data.replace(b"{{BUILD_ID}}", build_id_bytes)
 
     digest = hashlib.sha256(data).hexdigest()
     etag = f'"{digest}"'
@@ -756,7 +786,7 @@ async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callab
 async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
     """Emit a prepared HTTP response through the ASGI channel."""
 
-    headers = list(response.headers)
+    headers = list(apply_cache_headers(response.headers))
     await send({"type": "http.response.start", "status": response.status, "headers": headers})
     await send({"type": "http.response.body", "body": response.body, "more_body": False})
 
@@ -764,7 +794,7 @@ async def _send_response(send: Callable[[dict], Awaitable[None]], response: Resp
 async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
     """Emit an HTTP response while still in the WebSocket handshake."""
 
-    headers = list(response.headers)
+    headers = list(apply_cache_headers(response.headers))
     await send(
         {
             "type": "websocket.http.response.start",
@@ -873,6 +903,7 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ADMIN_LOGS_ROUTE: _handle_admin_logs,
     ADMIN_SETTINGS_ROUTE: require_db_ready(_handle_admin_settings_route),
     ADMIN_CONFIG_ROUTE: require_db_ready(_handle_admin_config),
+    VERSION_ROUTE: _handle_version_json,
     FAVICON_ROUTE: _handle_favicon,
     HEALTH_ROUTE: _handle_health,
     HEALTHZ_ROUTE: _handle_healthz,

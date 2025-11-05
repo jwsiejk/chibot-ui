@@ -1,12 +1,10 @@
 """Helpers for static asset versioning and build metadata."""
 from __future__ import annotations
 
-import os
 import re
-from datetime import datetime, timezone
-from typing import Optional
 
-_BUILD_ID: Optional[str] = None
+from app.config_build import current_build_id
+
 _STATIC_PATH_PREFIXES = ("static/", "admin/ui/")
 
 
@@ -30,17 +28,7 @@ _STATIC_ATTR_PATTERN = _build_static_pattern()
 def get_build_id() -> str:
     """Return a stable identifier for the current build."""
 
-    global _BUILD_ID
-    if _BUILD_ID is None:
-        for env_var in ("BUILD_ID", "RENDER_GIT_COMMIT", "GIT_SHA"):
-            value = os.getenv(env_var)
-            if value:
-                _BUILD_ID = value
-                break
-        else:
-            now = datetime.now(timezone.utc)
-            _BUILD_ID = now.strftime("%Y%m%d%H%M%S")
-    return _BUILD_ID
+    return current_build_id()
 
 
 def inject_static_version(html: str) -> str:

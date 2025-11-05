@@ -3,9 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store, must-revalidate" />
     <title>AskChip · Admin Logs</title>
-    <link rel="icon" href="/static/favicon.ico" />
-    <link rel="stylesheet" href="/static/css/styles.css" />
+    <link rel="icon" href="/static/favicon.ico?v={{ BUILD_ID }}" />
+    <link rel="stylesheet" href="/static/css/styles.css?v={{ BUILD_ID }}" />
+    <script>
+      window.BUILD_ID = "{{ BUILD_ID }}";
+      console.log("BUILD_ID", "{{ BUILD_ID }}");
+    </script>
     <style>
       .admin-logs__type.disabled { opacity: 0.5; pointer-events: none; }
       .admin-logs__type.disabled input { pointer-events: none; }
@@ -315,7 +320,14 @@
         }
       }());
     </script>
-    <script src="/admin/ui/config_panel.js" defer></script>
-    <script src="/static/js/admin_logs.js" defer></script>
+    <script src="/admin/ui/config_panel.js?v={{ BUILD_ID }}" defer></script>
+    <script src="/static/js/admin_logs.js?v={{ BUILD_ID }}" defer></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker
+          .register(`/static/sw.js?v={{ BUILD_ID }}`)
+          .catch(function () {});
+      }
+    </script>
   </body>
 </html>

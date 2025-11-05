@@ -3,9 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store, must-revalidate" />
     <title>AskChip UI</title>
-    <link rel="icon" href="/favicon.ico" />
-    <link rel="stylesheet" href="/static/css/styles.css" />
+    <link rel="icon" href="/favicon.ico?v={{ BUILD_ID }}" />
+    <link rel="stylesheet" href="/static/css/styles.css?v={{ BUILD_ID }}" />
+    <script>
+      window.BUILD_ID = "{{ BUILD_ID }}";
+      console.log("BUILD_ID", "{{ BUILD_ID }}");
+    </script>
   </head>
   <body>
     <div id="app">
@@ -23,7 +28,7 @@
               aria-haspopup="true"
               aria-expanded="false"
             >
-              <img src="/static/chip/chip.png" alt="AskChip logo" class="brand-logo" />
+              <img src="/static/chip/chip.png?v={{ BUILD_ID }}" alt="AskChip logo" class="brand-logo" />
               <span class="brand-text">AskChip</span>
               <span aria-hidden="true">▾</span>
             </button>
@@ -202,7 +207,14 @@
         }
       }());
     </script>
-    <script src="/static/js/auth_ui.js" defer></script>
-    <script src="/static/js/app.js" defer></script>
+    <script src="/static/js/auth_ui.js?v={{ BUILD_ID }}" defer></script>
+    <script src="/static/js/app.js?v={{ BUILD_ID }}" defer></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker
+          .register(`/static/sw.js?v={{ BUILD_ID }}`)
+          .catch(function () {});
+      }
+    </script>
   </body>
 </html>
