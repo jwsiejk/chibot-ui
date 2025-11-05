@@ -569,7 +569,7 @@ class SpeechmaticsClient:
             )
 
     def close_stream(self, sid: str) -> None:
-        state = self._streams.pop(sid, None)
+        state = self._streams.get(sid)
         if state is None:
             return
         if state.closing:
