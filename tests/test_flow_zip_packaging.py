@@ -41,7 +41,7 @@ class BuildFlowZipPackagingTest(unittest.TestCase):
                     "sid": sid,
                     "ts_ms": 444,
                     "level": "info",
-                    "meta": {"event": "EVT_CLIENT_RECORDER_STARTED", "badge": "rec:start"},
+                    "meta": {"event": "EVT_CLIENT_MIC_OPEN", "badge": "mic:open"},
                 },
                 {
                     "type": "EVT_NLU",
