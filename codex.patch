@@ -1,218 +1,245 @@
-diff --git a/app/voice_v2/asr_runtime.py b/app/voice_v2/asr_runtime.py
-index f01659e6a3e1a8c66335b6ca30bfcc58948e42fd..77b8018475b86f924e73197b7923f44ecd818b26 100644
---- a/app/voice_v2/asr_runtime.py
-+++ b/app/voice_v2/asr_runtime.py
-@@ -995,109 +995,113 @@ class ASRRuntime:
-             "evt=asr_commit_trigger sid=%s vendor=%s source=client reason=%s",
-             sid,
-             self._vendor,
-             reason,
-         )
-         self.commit(sid, reason=reason)
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 436cda9d75e9d1f646b3c6f0343ad80ebffcb5fe..863e4146b756d71483f331c7bb4f95e49fe6ee3c 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1142,81 +1142,112 @@ class ChatV2Adapter:
+                 "sid": ctx.sid,
+                 "who": "server",
+                 "source": "ws_server",
+                 "meta": event_meta,
+                 "text": text,
+             }
+             if client_msg_id is not None:
+                 event["client_msg_id"] = client_msg_id
+             bus.publish(event)
+         else:
+             if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
+                 meta["error"] = "unknown_type"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                 await self._send_error(send, ctx.sid, "unknown_type", frame_type)
+                 return self._HandleResult(True)
  
-     def _on_start_listening_frame(self, sid: str) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
+             is_valid, hint = validate_frame(frame)
+             if not is_valid:
+                 meta["error"] = "schema_invalid"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                 detail = hint or "Frame failed validation"
+                 await self._send_error(send, ctx.sid, "schema_invalid", detail)
+                 return self._HandleResult(True)
  
-         state = self._sessions.get(sid)
-         if state is None:
-             state = _SessionState(sid=sid)
-             self._sessions[sid] = state
- 
-         if self._vendor == "speechmatics":
-             # Speechmatics strictly requires 16 kHz PCM input.
-             state.input_desc = _pcm_input_descriptor()
- 
-         task = state.stream_open_task
-         if task is not None and not task.done():
-             task.cancel()
-         state.stream_open_task = None
- 
--        if state.stream_open:
-+        reuse_stream = False
-+        if self._vendor == "speechmatics" and state.stream_open:
-+            reuse_stream = True
-+        elif state.stream_open:
-             try:
-                 self._client.close_stream(sid)
-             except Exception:  # pragma: no cover - defensive
-                 _log.exception("evt=asr_stream_close_failed sid=%s", sid)
-             finally:
-                 self._finalize_rms_probe(sid, state)
-             state.stream_open = False
-             state.stream_id = None
- 
-         state.listening = True
-         state.bytes_received = 0
-         state.first_chunk_seen = False
-         state.rollup_window_start = 0.0
-         state.rollup_chunks = 0
-         state.rollup_bytes = 0
-         state.ingress_packets = 0
-         state.ingress_bytes = 0
-         state.first_ingress_ms = 0
-         state.first_partial_logged = False
-         state.last_partial_log = 0.0
-         state.pending.clear()
-         state.buffered_bytes = 0
-         # Speechmatics gating requires the websocket adapter to receive an
-         # asr.ready signal before it will forward any client audio.  The previous
-         # behaviour intentionally skipped the proactive stream open for
-         # Speechmatics, assuming audio would trigger the open path.  In practice
-         # the adapter suppresses audio until it sees asr.ready, so the runtime
-         # never received audio and the conversation stalled immediately after the
-         # greet.  Always request a prearm so the stream opens and emits the
-         # asr.ready event before we wait on client audio.
--        state.prearm_requested = True
-+        state.prearm_requested = not reuse_stream
-         state.utterance_active = False
-         self._cancel_commit_timer(state)
-         state.turn_final_count = 0
-         state.turn_first_final_seen = False
-         state.turn_post_final_chunks = 0
-         state.turn_no_partial_ms = 0
-         state.turn_gap_start_ms = 0
-         state.turn_speech_evidence = False
-         state.turn_first_audio_ms = 0
-         state.turn_last_partial_ms = 0
-         session_supplier = getattr(self._engine, "_ensure_session", None)
-         if callable(session_supplier):
-             try:
-                 engine_session = session_supplier(sid)
-             except Exception:  # pragma: no cover - defensive
-                 engine_session = None
-             if engine_session is not None:
-                 ue_override = getattr(engine_session, "adaptive_utterance_end_ms", None)
-                 cs_override = getattr(engine_session, "adaptive_commit_silence_ms", None)
-                 if isinstance(ue_override, (int, float)) and ue_override > 0:
-                     state.adaptive_utterance_end_ms = int(ue_override)
-                 if isinstance(cs_override, (int, float)) and cs_override > 0:
-                     state.adaptive_commit_silence_ms = int(cs_override)
-                 if getattr(engine_session, "adaptive_extended_once", False):
-                     state.adaptive_extended_once = True
-         self._apply_commit_policy(state)
--        self._ensure_stream(sid, state)
-+        if not reuse_stream:
-+            self._ensure_stream(sid, state)
- 
-     def _on_stop_listening_frame(self, sid: str, reason: str | None) -> None:
-         if not isinstance(sid, str) or not sid:
-             return
- 
-         state = self._sessions.get(sid)
-         if state is None:
-             return
- 
-         now_ms = int(time.time() * 1000)
-         if state.turn_speech_evidence and state.turn_gap_start_ms > 0:
-             trailing_gap = max(0, now_ms - state.turn_gap_start_ms)
-             if trailing_gap > state.turn_no_partial_ms:
-                 state.turn_no_partial_ms = trailing_gap
-         final_count = state.turn_final_count
-         post_final_chunks = state.turn_post_final_chunks
-         no_partial_ms = state.turn_no_partial_ms
-         current_ue = self._effective_utterance_end_ms(state)
-         current_cs = self._effective_commit_silence_ms(state)
-         new_ue = current_ue
-         new_cs = current_cs
-         extended_once = state.adaptive_extended_once
-         if final_count > 2 and new_ue < 2600:
-             new_ue = min(2600, new_ue + 200)
-         if post_final_chunks > 120 and new_cs < 1800:
-diff --git a/tests/test_asr_runtime_speechmatics.py b/tests/test_asr_runtime_speechmatics.py
-index f8d382651fbc40262e7a682836b9abc4a6de5e7f..b00273aa3174cafe71e23c21683a471f36934613 100644
---- a/tests/test_asr_runtime_speechmatics.py
-+++ b/tests/test_asr_runtime_speechmatics.py
-@@ -1,29 +1,30 @@
- from __future__ import annotations
- 
- import asyncio
- import unittest
-+from unittest.mock import MagicMock
- 
- from app.services.streaming_asr.speechmatics_client import SpeechmaticsConfigError
- from app.voice_v2.asr_runtime import ASRRuntime, _SessionState
- 
- 
- class _StubBus:
-     def __init__(self) -> None:
-         self.events: list[dict] = []
- 
-     def publish(self, event: dict) -> None:
-         self.events.append(dict(event))
- 
-     def subscribe(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
-         return object()
- 
- 
- class _StubEngine:
-     def __init__(self) -> None:
-         self.policy_snapshot = {}
-         self.partial_calls: list[tuple[str, str, float, str]] = []
-         self.final_calls: list[tuple[str, str, str | None]] = []
- 
-     def on_asr_partial(
-         self, sid: str, req_id: str, confidence: float, text: str
-     ) -> None:
-@@ -186,27 +187,61 @@ class SpeechmaticsPreReadyAudioTest(unittest.TestCase):
- 
-         dropped = self.runtime._drain_pre_ready_audio(sid, state, state.stream_id)
- 
-         self.assertEqual(dropped, len(chunk_a) + len(chunk_b))
-         self.assertFalse(state.pending)
-         self.assertEqual(state.buffered_bytes, 0)
-         self.assertEqual(state.dropped_chunks, 2)
-         self.assertTrue(state.early_audio_dropped)
-         self.assertEqual(state.early_audio_dropped_bytes, dropped)
- 
-         log_events = [
-             evt
-             for evt in self.bus.events
-             if evt.get("type") == "EVT_LOG"
-             and evt.get("sid") == sid
-             and isinstance(evt.get("msg"), str)
-         ]
-         self.assertTrue(
-             any(
-                 event["msg"].startswith("evt=audio_dropped_before_asr_open")
-                 for event in log_events
+         if frame_type == "audio.header":
++            sample_rate = frame.get("sample_rate")
++            if sample_rate is None:
++                rate_candidate = frame.get("rate_hz")
++                if isinstance(rate_candidate, int):
++                    sample_rate = rate_candidate
+             profile = {
+                 "format": "pcm",
+-                "codec": "pcm_s16le",
+-                "sample_rate": frame.get("sample_rate"),
++                "codec": frame.get("codec") or "pcm_s16le",
++                "sample_rate": sample_rate,
+                 "channels": frame.get("channels"),
+                 "container": "raw",
+             }
+             seq_start = frame.get("seq_start")
+             if seq_start is not None:
+                 if not isinstance(seq_start, int):
+                     meta["error"] = "schema_invalid"
+                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                     await self._send_error(
+                         send,
+                         ctx.sid,
+                         "schema_invalid",
+                         "audio.header seq_start must be an integer",
+                     )
+                     return self._HandleResult(False, 1003, "schema_invalid")
+                 if seq_start < 0:
+                     meta["error"] = "schema_invalid"
+                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                     await self._send_error(
+                         send,
+                         ctx.sid,
+                         "schema_invalid",
+                         "audio.header seq_start must be >= 0",
+                     )
+                     return self._HandleResult(False, 1003, "schema_invalid")
+                 profile["seq_start"] = seq_start
+             if ctx.audio_profile is not None:
++                existing_profile = (
++                    ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else {}
++                )
++                existing_codec = existing_profile.get("codec")
++                existing_rate = existing_profile.get("sample_rate")
++                existing_channels = existing_profile.get("channels")
++
++                incoming_codec = profile.get("codec")
++                incoming_rate = profile.get("sample_rate")
++                incoming_channels = profile.get("channels")
++
++                if (
++                    incoming_codec == existing_codec
++                    and incoming_rate == existing_rate
++                    and incoming_channels == existing_channels
++                ):
++                    _log.info(
++                        "evt=audio_header_dup_ignored sid=%s codec=%s rate_hz=%s ch=%s",
++                        ctx.sid,
++                        incoming_codec,
++                        incoming_rate,
++                        incoming_channels,
++                    )
++                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
++                    return self._HandleResult(True)
++
+                 meta["error"] = "schema_invalid"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                 await self._send_error(
+                     send,
+                     ctx.sid,
+                     "schema_invalid",
+                     "duplicate or conflicting audio.header",
+                 )
+                 return self._HandleResult(True)
+             err = validate_audio_header_against_policy(
+                 frame, ctx.policy_snapshot, ctx.asr_vendor
              )
+             if err:
+                 meta["error"] = "policy_violation"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
+                 await self._send_json(send, ctx.sid, {"type": "error", "error": err})
+                 return self._HandleResult(False, 4400, "policy_violation")
+             ctx.audio_profile = profile
+             if getattr(ctx, "await_user_vad_check_pending", False):
+                 ctx.await_user_vad_check_pending = False
+                 snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+                 policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+                 vad_block = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
+                 auto_active = None
+diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
+index 7dd0460747e59667ef1607dbd11eab5d23b2c24a..9ee026973c20d31910d684ee3da65721b8a5644d 100644
+--- a/tests/test_ws_binary_guard.py
++++ b/tests/test_ws_binary_guard.py
+@@ -147,85 +147,118 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
+                 "sample_rate": 16000,
+                 "channels": 1,
+             }
+             payload = b"\x03" * 2
+             events = [
+                 {"type": "websocket.connect"},
+                 {"type": "websocket.receive", "text": json.dumps(header)},
+                 {"type": "websocket.receive", "bytes": payload},
+                 {"type": "websocket.disconnect", "code": 1000},
+             ]
+ 
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)
+ 
+         self.assertEqual(len(engine.audio_calls), 1)
+         self.assertEqual(engine.audio_calls[0][2], 0)
+ 
+         errors = self._extract_error_frames(sent)
+         self.assertFalse(errors)
+ 
+         self.assertEqual(len(received_events), 1)
+         self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload))
+         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
+ 
+-    def test_duplicate_audio_header_reports_error(self) -> None:
++    def test_duplicate_audio_header_is_ignored(self) -> None:
++        adapter = ChatV2Adapter()
++        engine = RecordingEngine(adapter)
++        adapter.engine = engine
++
++        header = {
++            "type": "audio.header",
++            "format": "pcm",
++            "sample_rate": 16000,
++            "channels": 1,
++        }
++        payload = b"\x01" * 2
++        events = [
++            {"type": "websocket.connect"},
++            {"type": "websocket.receive", "text": json.dumps(header)},
++            {"type": "websocket.receive", "text": json.dumps(header)},
++            {"type": "websocket.receive", "bytes": payload},
++            {"type": "websocket.disconnect", "code": 1000},
++        ]
++
++        with self.assertLogs("app.ws.adapter", level="INFO") as captured:
++            sent = self._drive(adapter, events)
++
++        errors = self._extract_error_frames(sent)
++        self.assertFalse(errors)
++
++        log_lines = [line for line in captured.output if "evt=audio_header_dup_ignored" in line]
++        self.assertEqual(len(log_lines), 1)
++
++        self.assertEqual(len(engine.audio_calls), 1)
++        self.assertEqual(engine.audio_calls[0][2], 0)
++
++    def test_conflicting_audio_header_reports_error(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter)
+         adapter.engine = engine
+ 
+         header_one = {
+             "type": "audio.header",
+             "format": "pcm",
+             "sample_rate": 16000,
+             "channels": 1,
+         }
+         header_two = {
+             "type": "audio.header",
+             "format": "pcm",
+-            "sample_rate": 44100,
++            "sample_rate": 16000,
+             "channels": 1,
++            "codec": "pcm_f32le",
+         }
+         events = [
+             {"type": "websocket.connect"},
+             {"type": "websocket.receive", "text": json.dumps(header_one)},
+             {"type": "websocket.receive", "text": json.dumps(header_two)},
+             {"type": "websocket.disconnect", "code": 1000},
+         ]
+ 
+         sent = self._drive(adapter, events)
+ 
+         error_messages = self._extract_error_frames(sent)
+         self.assertEqual(len(error_messages), 1)
+         payload = error_messages[0]
+         self.assertEqual(
+             payload,
+             {
+                 "type": "error",
+                 "code": "schema_invalid",
+-                "detail": "audio.header pcm requires sample_rate=16000 and channels=1",
++                "detail": "duplicate or conflicting audio.header",
+             },
          )
  
+         close_messages = [msg for msg in sent if msg.get("type") == "websocket.close"]
+         self.assertFalse(close_messages)
  
-+class SpeechmaticsStreamReuseTest(unittest.TestCase):
-+    def setUp(self) -> None:
-+        self.bus = _StubBus()
-+        self.engine = _StubEngine()
-+        self.client = _StubClient()
-+        self.client.close_stream = MagicMock()
-+        self.runtime = ASRRuntime(self.engine, self.client, telemetry_bus=self.bus)
-+
-+    def test_start_listening_reuses_existing_stream(self) -> None:
-+        sid = "sid-reuse"
-+        state = _SessionState(sid=sid)
-+        state.stream_open = True
-+        state.stream_id = "stream-existing"
-+        state.pending.append(b"\x01\x02")
-+        state.buffered_bytes = 2
-+        self.runtime._sessions[sid] = state
-+
-+        ensure_mock = MagicMock()
-+        finalize_mock = MagicMock()
-+        self.runtime._ensure_stream = ensure_mock  # type: ignore[assignment]
-+        self.runtime._finalize_rms_probe = finalize_mock  # type: ignore[assignment]
-+
-+        self.runtime._on_start_listening_frame(sid)
-+
-+        self.client.close_stream.assert_not_called()
-+        ensure_mock.assert_not_called()
-+        finalize_mock.assert_not_called()
-+        self.assertTrue(state.stream_open)
-+        self.assertEqual(state.stream_id, "stream-existing")
-+        self.assertFalse(state.pending)
-+        self.assertEqual(state.buffered_bytes, 0)
-+        self.assertFalse(state.prearm_requested)
-+
-+
- if __name__ == "__main__":
-     unittest.main()
+     def test_not_accepting_audio_triggers_policy_close(self) -> None:
+         adapter = ChatV2Adapter()
+         engine = RecordingEngine(adapter, accept_audio=False)
+         adapter.engine = engine
+ 
+         received_events: List[dict] = []
+         token = bus.subscribe(EVT_WS_AUDIO_RECV, lambda event: received_events.append(event))
+         try:
+             chunk = b"\x05" * 4
+             events = [
+                 {"type": "websocket.connect"},
+                 {"type": "websocket.receive", "bytes": chunk},
+                 {"type": "websocket.receive", "bytes": chunk},
+                 {"type": "websocket.receive", "bytes": chunk},
+             ]
+ 
+             sent = self._drive(adapter, events)
+         finally:
+             bus.unsubscribe(token)

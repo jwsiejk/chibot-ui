@@ -1164,10 +1164,15 @@ class ChatV2Adapter:
                 return self._HandleResult(True)
 
         if frame_type == "audio.header":
+            sample_rate = frame.get("sample_rate")
+            if sample_rate is None:
+                rate_candidate = frame.get("rate_hz")
+                if isinstance(rate_candidate, int):
+                    sample_rate = rate_candidate
             profile = {
                 "format": "pcm",
-                "codec": "pcm_s16le",
-                "sample_rate": frame.get("sample_rate"),
+                "codec": frame.get("codec") or "pcm_s16le",
+                "sample_rate": sample_rate,
                 "channels": frame.get("channels"),
                 "container": "raw",
             }
@@ -1195,6 +1200,32 @@ class ChatV2Adapter:
                     return self._HandleResult(False, 1003, "schema_invalid")
                 profile["seq_start"] = seq_start
             if ctx.audio_profile is not None:
+                existing_profile = (
+                    ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else {}
+                )
+                existing_codec = existing_profile.get("codec")
+                existing_rate = existing_profile.get("sample_rate")
+                existing_channels = existing_profile.get("channels")
+
+                incoming_codec = profile.get("codec")
+                incoming_rate = profile.get("sample_rate")
+                incoming_channels = profile.get("channels")
+
+                if (
+                    incoming_codec == existing_codec
+                    and incoming_rate == existing_rate
+                    and incoming_channels == existing_channels
+                ):
+                    _log.info(
+                        "evt=audio_header_dup_ignored sid=%s codec=%s rate_hz=%s ch=%s",
+                        ctx.sid,
+                        incoming_codec,
+                        incoming_rate,
+                        incoming_channels,
+                    )
+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                    return self._HandleResult(True)
+
                 meta["error"] = "schema_invalid"
                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_error(

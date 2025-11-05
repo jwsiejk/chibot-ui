@@ -169,7 +169,39 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload))
         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
 
-    def test_duplicate_audio_header_reports_error(self) -> None:
+    def test_duplicate_audio_header_is_ignored(self) -> None:
+        adapter = ChatV2Adapter()
+        engine = RecordingEngine(adapter)
+        adapter.engine = engine
+
+        header = {
+            "type": "audio.header",
+            "format": "pcm",
+            "sample_rate": 16000,
+            "channels": 1,
+        }
+        payload = b"\x01" * 2
+        events = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "text": json.dumps(header)},
+            {"type": "websocket.receive", "text": json.dumps(header)},
+            {"type": "websocket.receive", "bytes": payload},
+            {"type": "websocket.disconnect", "code": 1000},
+        ]
+
+        with self.assertLogs("app.ws.adapter", level="INFO") as captured:
+            sent = self._drive(adapter, events)
+
+        errors = self._extract_error_frames(sent)
+        self.assertFalse(errors)
+
+        log_lines = [line for line in captured.output if "evt=audio_header_dup_ignored" in line]
+        self.assertEqual(len(log_lines), 1)
+
+        self.assertEqual(len(engine.audio_calls), 1)
+        self.assertEqual(engine.audio_calls[0][2], 0)
+
+    def test_conflicting_audio_header_reports_error(self) -> None:
         adapter = ChatV2Adapter()
         engine = RecordingEngine(adapter)
         adapter.engine = engine
@@ -183,8 +215,9 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         header_two = {
             "type": "audio.header",
             "format": "pcm",
-            "sample_rate": 44100,
+            "sample_rate": 16000,
             "channels": 1,
+            "codec": "pcm_f32le",
         }
         events = [
             {"type": "websocket.connect"},
@@ -203,7 +236,7 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
             {
                 "type": "error",
                 "code": "schema_invalid",
-                "detail": "audio.header pcm requires sample_rate=16000 and channels=1",
+                "detail": "duplicate or conflicting audio.header",
             },
         )
 
