@@ -2480,6 +2480,16 @@ import { WakeWord } from "./wake_word.js";
         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
       }
       clearPendingAsrReadyStart("stop_listening");
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        try {
+          const reason =
+            (typeof frame?.reason === "string" && frame.reason) ||
+            "server_requested";
+          window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
+        } catch (err) {
+          console.warn("stop_listening event dispatch failed", err);
+        }
+      }
     } else if (frame.type === "input.start") {
       handleInputStartFrame(frame);
     } else if (frame.type === "input.stop") {

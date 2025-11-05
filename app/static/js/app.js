@@ -2045,7 +2045,16 @@
     });
 
     window.addEventListener('input.stop', () => {
+      cancelAsrReadyGuard();
       updateRecordingState(false, 'input.stop');
+    });
+
+    window.addEventListener('stop_listening', (event) => {
+      cancelAsrReadyGuard();
+      const reason =
+        (event && event.detail && typeof event.detail.reason === 'string' && event.detail.reason) ||
+        'stop_listening';
+      updateRecordingState(false, reason);
     });
 
     window.addEventListener('ws.close', () => {

@@ -1,61 +1,132 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 27aa73603027927606dfa7dd0303821ecc0d1f6e..35012f9cabf571e0ab8f09eba552882750b4c6e1 100644
+index 35012f9cabf571e0ab8f09eba552882750b4c6e1..b16a5695f13c03bda14113dd22816e24a12a7618 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1491,51 +1491,55 @@
-         asrPartialWatchdogTimerId = null;
+@@ -2023,53 +2023,62 @@
+       pendingClientReady = normalized;
+       if (!clientReadyStats) {
+         startClientReadyTracking(normalized);
+       } else {
+         recordClientReadyEvent('enqueue_duplicate');
        }
-     }
- 
-     function cancelAsrReadyGuard() {
-       if (asrReadyGuardTimerId !== null) {
-         try {
-           clearTimeout(asrReadyGuardTimerId);
-         } catch (_) {}
-         asrReadyGuardTimerId = null;
-       }
-     }
- 
-     function armAsrReadyGuard() {
-       cancelAsrReadyGuard();
-       if (typeof window === 'undefined') {
+       if (clientReadyTimerId !== null) {
          return;
        }
-       __asrReadyToken += 1;
-       const token = __asrReadyToken;
-       asrReadyGuardTimerId = window.setTimeout(() => {
-         if (token !== __asrReadyToken) {
-           return;
-         }
-         asrReadyGuardTimerId = null;
--        if (!isRecorderListening() || AppState?.ttsActive) {
-+        if (
-+          !isRecorderListening() ||
-+          AppState?.ttsActive ||
-+          !(window?.__micChunks > 0 || window?.__micBytes > 0)
-+        ) {
-           return;
-         }
-         let stopAttempted = false;
-         let stopped = false;
+       flushPendingClientReady();
+     }
+ 
+     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
+       setMicPermissionGranted(true, 'mic_open_event');
+       updateRecordingState(true, 'mic_open_event');
+       noteMicOpen('mic_open_event');
+       enqueueClientReady(event && event.detail);
+     });
+ 
+     window.addEventListener('input.start', () => {
+       updateRecordingState(true, 'input.start');
+       setMicPermissionGranted(true, 'input.start');
+     });
+ 
+     window.addEventListener('input.stop', () => {
++      cancelAsrReadyGuard();
+       updateRecordingState(false, 'input.stop');
+     });
+ 
++    window.addEventListener('stop_listening', (event) => {
++      cancelAsrReadyGuard();
++      const reason =
++        (event && event.detail && typeof event.detail.reason === 'string' && event.detail.reason) ||
++        'stop_listening';
++      updateRecordingState(false, reason);
++    });
++
+     window.addEventListener('ws.close', () => {
+       if (clientReadyStats && pendingClientReady) {
+         recordClientReadyEvent('socket_closed', { reason: 'ws.close' });
+         maybeLogClientReadyOutcome('socket_closed', { reason: 'ws.close' });
+       }
+       pendingClientReady = null;
+       if (clientReadyTimerId !== null) {
+         clearTimeout(clientReadyTimerId);
+         clientReadyTimerId = null;
+       }
+       runtimeState.asrReady = false;
+       runtimeState.turnState = null;
+       updateRecordingState(false, 'ws.close');
+       setMicPermissionGranted(false, 'ws.close');
+       runtimeState.policy = null;
+     });
+ 
+     window.addEventListener('ws.open', () => {
+       runtimeState.asrReady = false;
+       runtimeState.turnState = null;
+       updateRecordingState(false, 'ws.open');
+       runtimeState.policy = null;
+       if (getLiveSocket()) {
          try {
-           if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
-             stopAttempted = true;
-             AppState.hub.stopListening({ reason: 'guard_stop' });
-             stopped = true;
-           }
-         } catch (err) {
-           console.warn('Hub guard_stop failed', err);
+           flushDeferredClientLogs();
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 7ea05d72288c207e8b50f571577a4c7defd0e5a4..118f7570d7acf4fae77e1062925e1dbabac29b00 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -2458,50 +2458,60 @@ import { WakeWord } from "./wake_word.js";
          }
-         if (!stopped) {
-           try {
-             if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
-               stopAttempted = true;
-               window.AudioRecorder.stopListening({ reason: 'guard_stop' });
-               stopped = true;
-             }
-           } catch (err) {
-             console.warn('AudioRecorder guard_stop failed', err);
-           }
+         return;
+       }
+ 
+       if (hub && typeof hub.startListening === "function") {
+         // Defer actual streaming until asr.ready fires.
+         return;
+       }
+ 
+       console.warn('Legacy input capture deferred until asr.ready', frame);
+       return;
+     } else if (frame.type === "stop_listening") {
+       try {
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+         } else {
+           stopInputCapture({ reason: "server_requested" });
          }
-         if (stopAttempted) {
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
+       clearPendingAsrReadyStart("stop_listening");
++      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
++        try {
++          const reason =
++            (typeof frame?.reason === "string" && frame.reason) ||
++            "server_requested";
++          window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
++        } catch (err) {
++          console.warn("stop_listening event dispatch failed", err);
++        }
++      }
+     } else if (frame.type === "input.start") {
+       handleInputStartFrame(frame);
+     } else if (frame.type === "input.stop") {
+       stopInputCapture({ reason: "input.stop" });
+       clearPendingAsrReadyStart("input.stop");
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
+       try {
+         const started = await startStreamingAfterAsrReady("asr.ready");
+         if (started) {
+           markAutoVadActiveAfterAsrReady();
+         }
+       } catch (err) {
+         console.error("Deferred mic start on asr.ready failed", err);
+       }
+     } else if (frame.type === "asr.partial") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.final") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details
+         : (frame && typeof frame.detail === "string" ? frame.detail : "");
+       console.warn("asr.unavailable", reason, details);
