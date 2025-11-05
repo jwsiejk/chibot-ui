@@ -1470,6 +1470,7 @@
     const ASR_READY_GUARD_MS = 7000;
     let asrPartialWatchdogTimerId = null;
     let asrReadyGuardTimerId = null;
+    let __asrReadyToken = 0;
 
     function isRecorderListening() {
       if (runtimeState.isRecording) {
@@ -1505,7 +1506,12 @@
       if (typeof window === 'undefined') {
         return;
       }
+      __asrReadyToken += 1;
+      const token = __asrReadyToken;
       asrReadyGuardTimerId = window.setTimeout(() => {
+        if (token !== __asrReadyToken) {
+          return;
+        }
         asrReadyGuardTimerId = null;
         if (!isRecorderListening() || AppState?.ttsActive) {
           return;
