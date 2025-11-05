@@ -918,6 +918,7 @@
     };
 
     let __lastBadgeLabel = null;
+    let __fsmPrev = 'Disconnected';
 
     function getMicLiveFlag(state) {
       const snapshot = state && typeof state === 'object' ? state : {};
@@ -938,7 +939,7 @@
       return false;
     }
 
-    function computeStatusBadge(state) {
+    function normalizeUiStateSnapshot(state) {
       const snapshot = state && typeof state === 'object' ? state : {};
       const connectionState = typeof snapshot.connectionState === 'string'
         ? snapshot.connectionState
@@ -983,31 +984,92 @@
         return null;
       })();
 
+      return {
+        snapshot,
+        connectionState,
+        wsConn,
+        wsConning,
+        tts,
+        turnState,
+        listen,
+        think,
+        micLive,
+        asrReady,
+        recorderState,
+        err,
+      };
+    }
+
+    function computeStatusBadge(state, normalized) {
+      const ui = normalized || normalizeUiStateSnapshot(state);
+      const {
+        wsConn,
+        wsConning,
+        tts,
+        listen,
+        think,
+        micLive,
+        asrReady,
+        err,
+      } = ui || {};
+
+      const micLiveValue = typeof micLive === 'boolean' ? micLive : false;
+
       if (!wsConn && !wsConning) {
-        return { label: 'Disconnected', sub: 'Press Start to begin.', tone: 'tone-gray', dot: 'bg-zinc-400', micLive };
+        return { label: 'Disconnected', sub: 'Press Start to begin.', tone: 'tone-gray', dot: 'bg-zinc-400', micLive: micLiveValue };
       }
       if (wsConning && !wsConn) {
-        return { label: 'Connecting…', sub: 'One sec—bringing Chip online.', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
+        return { label: 'Connecting…', sub: 'One sec—bringing Chip online.', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
       }
       if (wsConn && !tts && !listen && !think) {
-        return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
+        return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
       }
       if (tts) {
-        return { label: 'Responding…', sub: 'Speaking — say “Hold on” to interrupt.', tone: 'tone-blue', dot: 'bg-blue-200', micLive };
+        return { label: 'Responding…', sub: 'Speaking — say “Hold on” to interrupt.', tone: 'tone-blue', dot: 'bg-blue-200', micLive: micLiveValue };
       }
       if (think) {
-        return { label: 'Thinking…', sub: 'Thinking… one sec.', tone: 'tone-purple', dot: 'bg-violet-200', micLive };
+        return { label: 'Thinking…', sub: 'Thinking… one sec.', tone: 'tone-purple', dot: 'bg-violet-200', micLive: micLiveValue };
       }
       if (listen && !asrReady) {
-        return { label: 'Getting ready to listen…', sub: 'Arming mic…', tone: 'tone-gray', dot: 'bg-zinc-200', micLive };
+        return { label: 'Getting ready to listen…', sub: 'Arming mic…', tone: 'tone-gray', dot: 'bg-zinc-200', micLive: micLiveValue };
       }
       if (listen && asrReady && micLive) {
         return { label: 'Listening', sub: 'I’m listening — talk to me.', tone: 'tone-green', dot: 'bg-emerald-200', micLive };
       }
       if (err) {
-        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive };
+        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive: micLiveValue };
       }
-      return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive };
+      return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
+    }
+
+    function deriveCanonicalUiState(normalized) {
+      const ui = normalized || {};
+      const wsConn = !!ui.wsConn;
+      const wsConning = !!ui.wsConning;
+      const tts = !!ui.tts;
+      const think = !!ui.think;
+      const listen = !!ui.listen;
+      const err = !!ui.err;
+
+      if (!wsConn && !wsConning) {
+        return 'Disconnected';
+      }
+      if (wsConning && !wsConn) {
+        return 'Connecting';
+      }
+      if (err) {
+        return 'Error';
+      }
+      if (tts) {
+        return 'Responding';
+      }
+      if (think) {
+        return 'Thinking';
+      }
+      if (listen) {
+        return 'Listening';
+      }
+      return 'Greeting';
     }
 
     function updateStatusBadge(stateOverride) {
@@ -1023,7 +1085,16 @@
         ? stateOverride
         : (typeof AppState?.getState === 'function' ? AppState.getState() : (AppState || {}));
 
-      const st = computeStatusBadge(snapshot);
+      const normalized = normalizeUiStateSnapshot(snapshot);
+      const st = computeStatusBadge(snapshot, normalized);
+      const canonical = deriveCanonicalUiState(normalized);
+      if (typeof canonical === 'string' && canonical) {
+        const prev = typeof __fsmPrev === 'string' && __fsmPrev ? __fsmPrev : 'Disconnected';
+        if (canonical !== prev) {
+          console.log(`fsm.transition prev=${prev} next=${canonical}`);
+        }
+        __fsmPrev = canonical;
+      }
 
       if (!el.getAttribute('data-role')) {
         el.setAttribute('data-role', 'status-badge');
