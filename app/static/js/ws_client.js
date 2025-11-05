@@ -1699,64 +1699,80 @@ import { WakeWord } from "./wake_word.js";
     }
   }
 
-  function startInputCapture(frame) {
-    const policy = frame?.policy || {};
-    const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
-    const source = frame?.type || 'input.start';
-    const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
+function startInputCapture(frame) {
+  const policy = frame?.policy || {};
+  const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
+  const source = frame?.type || "input.start";
+  const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
 
-    if (unifiedRecorder) {
+  if (unifiedRecorder) {
+    try {
+      logStage("client.input.capture", { source, hasPolicy, skipped: "unified_recorder" });
+    } catch {}
+    // In unified mode we don't start here; startStreamingAfterAsrReady() will.
+    return;
+  }
+
+  const hub = AppState?.hub;
+  if (hub && typeof hub.startListening === "function") {
+    try {
       try {
-        logStage('client.input.capture', { source, hasPolicy, skipped: 'unified_recorder' });
+        logStage("client.input.capture", { source, hasPolicy });
       } catch {}
-      return;
+      return hub.startListening(policy);
+    } catch (err) {
+      console.warn("Hub startListening (legacy input) failed", err);
     }
+  }
+  console.warn("Legacy input capture is disabled; recorder hub missing.", frame);
+}
 
-    const hub = AppState?.hub;
-    if (hub && typeof hub.startListening === "function") {
-      try {
-        try {
-          logStage('client.input.capture', { source, hasPolicy });
-        } catch {}
-        return hub.startListening(policy);
-      } catch (err) {
-        console.warn("Hub startListening (legacy input) failed", err);
-      }
+function stopInputCapture(options = {}) {
+  clearPendingAsrReadyStart(
+    options && typeof options.reason === "string" ? options.reason : "stop_input_capture"
+  );
+  const hub = AppState?.hub;
+  if (hub && typeof hub.stopListening === "function") {
+    try {
+      const reason =
+        options && typeof options === "object" && options.reason ? options.reason : "legacy_input";
+      hub.stopListening(reason);
+    } catch (err) {
+      console.warn("Hub stopListening (legacy input) failed", err);
     }
-    console.warn('Legacy input capture is disabled; recorder hub missing.', frame);
+    return;
+  }
+  void options;
+}
+
+async function handleInputStartFrame(frame) {
+  const gates = typeof getGateSnapshot === "function" ? getGateSnapshot() : null;
+  const asrReady =
+    typeof gates?.asrReady === "boolean" ? gates.asrReady : !!AppState?.asrReady;
+
+  // Always stage a pending start so the asr.ready path can pick it up if it races.
+  setPendingAsrReadyStart({
+    frame,
+    policy: frame?.policy || {},
+    reason: frame?.reason || frame?.type || "input.start",
+  });
+
+  // If we're already ready, immediately run the same gate used by the asr.ready handler.
+  if (asrReady) {
+    try {
+      await startStreamingAfterAsrReady("input.start_asr_ready");
+    } catch (err) {
+      console.error("input.start deferred start failed", err);
+    }
   }
 
-  function stopInputCapture(options = {}) {
-    clearPendingAsrReadyStart(options && typeof options.reason === "string" ? options.reason : "stop_input_capture");
-    const hub = AppState?.hub;
-    if (hub && typeof hub.stopListening === "function") {
-      try {
-        const reason = options && typeof options === "object" && options.reason
-          ? options.reason
-          : "legacy_input";
-        hub.stopListening(reason);
-      } catch (err) {
-        console.warn("Hub stopListening (legacy input) failed", err);
-      }
-      return;
-    }
-    void options;
-  }
+  // Do NOT call startInputCapture() here in unified mode;
+  // startStreamingAfterAsrReady() will invoke AudioRecorder/hub correctly.
+}
 
-  function handleInputStartFrame(frame) {
-    const gates = getGateSnapshot();
-    const asrReady = typeof gates?.asrReady === "boolean" ? gates.asrReady : Boolean(AppState?.asrReady);
-    if (!asrReady) {
-      setPendingAsrReadyStart({
-        frame,
-        policy: frame?.policy,
-        reason: frame?.reason || frame?.type || "input.start",
-      });
-      return;
-    }
-
-    startInputCapture(frame);
-  }
+   // Do NOT call startInputCapture here in unified mode; startStreamingAfterAsrReady
+   // takes care of invoking AudioRecorder.startListening() (or hub) correctly.
+ }
 
   function handleInputStopFrame() {
     stopInputCapture({ reason: 'input.stop' });
