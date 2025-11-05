@@ -731,6 +731,11 @@ class SpeechmaticsClient:
     def _handle_recognition_started(
         self, state: _StreamState, payload: Mapping[str, Any]
     ) -> None:
+        self._logger.info(
+            "evt=sm_recognition_started sid=%s stream_id=%s",
+            state.sid,
+            state.stream_id,
+        )
         if not state.recognition_started:
             state.recognition_started = True
         self._mark_stream_ready(state, payload, recognition_started=True)
