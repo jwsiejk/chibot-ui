@@ -1513,7 +1513,11 @@
           return;
         }
         asrReadyGuardTimerId = null;
-        if (!isRecorderListening() || AppState?.ttsActive) {
+        if (
+          !isRecorderListening() ||
+          AppState?.ttsActive ||
+          !(window?.__micChunks > 0 || window?.__micBytes > 0)
+        ) {
           return;
         }
         let stopAttempted = false;

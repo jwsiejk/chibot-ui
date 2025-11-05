@@ -1,51 +1,8 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 405fa62f4739b56ed29e67e80fbc1749f24c2365..27aa73603027927606dfa7dd0303821ecc0d1f6e 100644
+index 27aa73603027927606dfa7dd0303821ecc0d1f6e..35012f9cabf571e0ab8f09eba552882750b4c6e1 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1448,86 +1448,92 @@
-         } catch (_) {}
-         if (!payload.message) {
-           payload.message = text.slice(0, 256);
-         }
-       }
-       if (!sendClientLog('client.mic', payload)) {
-         enqueueDeferredClientLog('client.mic', payload);
-       }
-     }
- 
-     function logClientMicEventText(text) {
-       if (typeof text !== 'string' || !text) {
-         return;
-       }
-       logClient('client.mic', text);
-     }
- 
-     try {
-       window.__logClientMicString = logClientMicEventText;
-     } catch (_) {}
- 
-     const ASR_PARTIAL_WATCHDOG_MS = 1500;
-     const ASR_READY_GUARD_MS = 7000;
-     let asrPartialWatchdogTimerId = null;
-     let asrReadyGuardTimerId = null;
-+    let __asrReadyToken = 0;
- 
-     function isRecorderListening() {
-       if (runtimeState.isRecording) {
-         return true;
-       }
-       try {
-         return Boolean(AppState?.recorder?.active);
-       } catch (_) {
-         return false;
-       }
-     }
- 
-     function cancelAsrPartialWatchdog() {
-       if (asrPartialWatchdogTimerId !== null) {
-         try {
-           clearTimeout(asrPartialWatchdogTimerId);
-         } catch (_) {}
+@@ -1491,51 +1491,55 @@
          asrPartialWatchdogTimerId = null;
        }
      }
@@ -64,14 +21,19 @@ index 405fa62f4739b56ed29e67e80fbc1749f24c2365..27aa73603027927606dfa7dd0303821e
        if (typeof window === 'undefined') {
          return;
        }
-+      __asrReadyToken += 1;
-+      const token = __asrReadyToken;
+       __asrReadyToken += 1;
+       const token = __asrReadyToken;
        asrReadyGuardTimerId = window.setTimeout(() => {
-+        if (token !== __asrReadyToken) {
-+          return;
-+        }
+         if (token !== __asrReadyToken) {
+           return;
+         }
          asrReadyGuardTimerId = null;
-         if (!isRecorderListening() || AppState?.ttsActive) {
+-        if (!isRecorderListening() || AppState?.ttsActive) {
++        if (
++          !isRecorderListening() ||
++          AppState?.ttsActive ||
++          !(window?.__micChunks > 0 || window?.__micBytes > 0)
++        ) {
            return;
          }
          let stopAttempted = false;
@@ -95,3 +57,5 @@ index 405fa62f4739b56ed29e67e80fbc1749f24c2365..27aa73603027927606dfa7dd0303821e
            } catch (err) {
              console.warn('AudioRecorder guard_stop failed', err);
            }
+         }
+         if (stopAttempted) {
