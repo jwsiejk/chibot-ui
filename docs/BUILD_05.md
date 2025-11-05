@@ -8,7 +8,7 @@
 
 ### B5-A — ASR Adapter (Stub)
 **File:** `app/voice_v2/asr.py` (new)  
-**Acceptance:** Accepts PCM/Opus boundaries; raises partial/final callbacks (stub); telemetry `EVT_ASR_PARTIAL/FINAL`.
+**Acceptance:** Accepts PCM chunk boundaries; raises partial/final callbacks (stub); telemetry `EVT_ASR_PARTIAL/FINAL`.
 
 ---
 

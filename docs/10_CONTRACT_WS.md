@@ -29,30 +29,19 @@ On successful upgrade, the server emits an initial `info` frame with connection 
     `/admin/logs` alongside server events.
 
 - **Audio (binary frames):**
-  The **server policy** selects the ASR provider and **required input audio**. Clients **MUST** follow the descriptor the server announces (see `asr.ready`). The client **MUST NOT** change codecs/containers; format is controlled by policy (Deepgram primary, Speechmatics secondary).  
-
-  - **Primary (Deepgram):** **WebM containerized Opus**, mono, **48 kHz**.  
-    The browser typically produces this via `MediaRecorder('audio/webm;codecs=opus')`.  
-  - **Secondary (Speechmatics):** **RAW PCM s16le**, mono, **16 kHz**.
+  The **server policy** selects the ASR provider and **required PCM capture descriptor**. Clients **MUST** follow the descriptor the server announces (see `asr.ready`). The client **MUST NOT** change codecs/containers; the production policy always requires raw PCM s16le.
 
   The server signals readiness and the required input descriptor via:
 
   ```json
   {
     "type": "asr.ready",
-    "vendor": "deepgram",
-    "input": { "container": "webm", "codec": "opus", "rate_hz": 48000, "channels": 1 }
+    "vendor": "speechmatics",
+    "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
   }
-or
+  ```
 
-json
-Copy code
-{
-  "type": "asr.ready",
-  "vendor": "speechmatics",
-  "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
-}
-Binary message rule: each WS binary message carries an arbitrary contiguous chunk of the current input stream (WebM segment/cluster bytes for Opus, or a raw PCM chunk). The server assigns/validates sequencing (see “Binary audio sequencing & jitter buffer”).
+  Binary message rule: each WS binary message carries an arbitrary contiguous chunk of the current PCM stream. The server assigns/validates sequencing (see “Binary audio sequencing & jitter buffer”).
 
 audio.header (optional, not for selecting codecs):
 Clients may not override format. audio.header can supply stream hints like a starting sequence index:
@@ -214,7 +203,7 @@ Copy code
 {"type":"tts.start","utt_id":"u-123","voice_id":"alloy-en-US-001","locale":"en-US","post_hold_ms":200}
 {"type":"tts.end","utt_id":"u-123"}
 
-{"type":"asr.ready","vendor":"deepgram","input":{"container":"webm","codec":"opus","rate_hz":48000,"channels":1}}
+{"type":"asr.ready","vendor":"speechmatics","input":{"container":"raw","codec":"pcm_s16le","rate_hz":16000,"channels":1}}
 {"type":"asr.partial","req_id":"r-1","text":"...","confidence":0.73}
 {"type":"asr.final","req_id":"r-1","text":"...","confidence":0.91}
 

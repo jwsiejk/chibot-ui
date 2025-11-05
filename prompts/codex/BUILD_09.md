@@ -4,7 +4,7 @@
 Everything above is wired: policies, env gates, vendor selection/logging, Speechmatics client, PCM recorder, validation, RMS probe, endpointing, and telemetry.
 
 ## Objective
-Validate the Speechmatics conversational flow when using the PCM16 audio pipeline, and confirm the legacy Deepgram + Opus path continues to function without redeploying.
+Validate the conversational flow when using the PCM16 audio pipeline across both Speechmatics and Deepgram without requiring a redeploy.
 
 ## Preconditions
 - Admin console is accessible.
@@ -34,11 +34,11 @@ Validate the Speechmatics conversational flow when using the PCM16 audio pipelin
    - Speak for longer than eight seconds.
    - Confirm the capture is capped and a final ASR event is emitted automatically.
 
-### Regression: Legacy Deepgram / Opus WebM
-1. In **Admin**, switch **ASR Vendor** to `deepgram` and **Audio Pipeline** to `opus-webm`.
+### Deepgram / PCM16 Parity
+1. In **Admin**, switch **ASR Vendor** to `deepgram` (pipeline remains `pcm16`).
 2. Initiate a new session and perform a short utterance.
-3. Verify the legacy logging path still emits the expected events (baseline from prior prompts) without requiring a redeploy.
+3. Verify the Deepgram logging path mirrors the PCM16 telemetry expectations (partials within target latency, `asr_final`, `asr_rollup` counts, etc.).
 
 ## Acceptance Criteria
 - All expected log lines appear in both Live Tail and the Zip archive for each scenario.
-- Switching between Speechmatics/PCM16 and Deepgram/Opus-WebM works seamlessly within the same deployment.
+- Switching between Speechmatics/PCM16 and Deepgram/PCM16 works seamlessly within the same deployment.
