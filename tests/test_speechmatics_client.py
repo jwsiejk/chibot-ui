@@ -1,6 +1,11 @@
+import asyncio
 import logging
 import unittest
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
+
+import pytest
+
+import app.services.streaming_asr.speechmatics_client as speechmatics_module
 
 from app.services.streaming_asr.speechmatics_client import (
     SpeechmaticsClient,
@@ -143,6 +148,105 @@ class TestSpeechmaticsCloseStream(unittest.TestCase):
 
         self.assertIn(sid, client._streams)
         self.assertTrue(state.closing)
+
+
+def test_open_stream_blocks_until_other_open_completes(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StubBus:
+        def publish(self, event: object) -> None:
+            pass
+
+    class StubWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+            self.closed = False
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+        async def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            return
+
+    async def run_test() -> None:
+        client = SpeechmaticsClient("key", "ws://example", StubBus(), logging.getLogger("test"))
+
+        async def sender_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
+            await state.ready_event.wait()
+
+        async def receiver_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
+            state.ready_event.set()
+
+        async def shutdown_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
+            state.closed = True
+            state.ready_event.set()
+            self._streams.pop(state.sid, None)
+
+        client._sender_loop = MethodType(sender_stub, client)  # type: ignore[assignment]
+        client._receiver_loop = MethodType(receiver_stub, client)  # type: ignore[assignment]
+        client._shutdown = MethodType(shutdown_stub, client)  # type: ignore[assignment]
+
+        first_sid = "sid-1"
+        second_sid = "sid-2"
+        first_stream_populated = asyncio.Event()
+
+        class TrackingStreams(dict[str, speechmatics_module._StreamState]):  # type: ignore[name-defined]
+            def __setitem__(self, key: str, value: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
+                super().__setitem__(key, value)
+                if key == first_sid:
+                    first_stream_populated.set()
+
+        client._streams = TrackingStreams()
+
+        connect_calls: list[int] = []
+        first_connect_started = asyncio.Event()
+        allow_first_to_finish = asyncio.Event()
+        second_connect_started = asyncio.Event()
+
+        async def fake_connect(url: str, **_: object) -> StubWebSocket:
+            call_index = len(connect_calls)
+            connect_calls.append(call_index)
+            if call_index == 0:
+                first_connect_started.set()
+                await allow_first_to_finish.wait()
+            else:
+                second_connect_started.set()
+            return StubWebSocket()
+
+        monkeypatch.setattr(speechmatics_module.websockets, "connect", fake_connect)
+
+        async def open_for_sid(sid: str) -> str:
+            return await client.open_stream(
+                sid=sid,
+                stream_id=f"stream-{sid}",
+                on_partial=lambda *_: None,
+                on_final=lambda *_: None,
+                on_error=lambda *_: None,
+            )
+
+        first_task = asyncio.create_task(open_for_sid(first_sid))
+        await first_connect_started.wait()
+
+        second_task = asyncio.create_task(open_for_sid(second_sid))
+        await asyncio.sleep(0.05)
+
+        assert len(connect_calls) == 1
+        assert not second_connect_started.is_set()
+
+        allow_first_to_finish.set()
+        await asyncio.wait_for(first_stream_populated.wait(), timeout=1.0)
+        await asyncio.wait_for(first_task, timeout=1.0)
+
+        client.close_stream(first_sid)
+        await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(second_connect_started.wait(), timeout=1.0)
+        await asyncio.wait_for(second_task, timeout=1.0)
+
+        assert len(connect_calls) == 2
+
+    asyncio.run(run_test())
 
 
 if __name__ == "__main__":

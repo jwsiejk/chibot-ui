@@ -395,13 +395,13 @@ class SpeechmaticsClient:
         self._opening: set[str] = set()
 
     async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
-        if not self._streams:
-            return
-
         deadline = time.monotonic() + max(0.0, timeout)
-        while self._streams:
+
+        while True:
             active_sids = [sid for sid in self._streams if sid != new_sid]
-            if not active_sids:
+            opening_sids = [sid for sid in self._opening if sid != new_sid]
+
+            if not active_sids and not opening_sids:
                 break
 
             for existing_sid in active_sids:
@@ -421,8 +421,10 @@ class SpeechmaticsClient:
                         pass
                     state.loop.create_task(self._shutdown(state))
 
-            if not self._streams:
-                break
+            if not active_sids and opening_sids:
+                # Ensure we do not spin immediately if we are only waiting on
+                # another pending open to complete.
+                await asyncio.sleep(0)
 
             if time.monotonic() >= deadline:
                 raise RuntimeError("speechmatics_concurrency_guard_timeout")

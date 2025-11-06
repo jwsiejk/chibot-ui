@@ -1,81 +1,258 @@
 diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index c38bae023327c1ef942ee31e55448061574f9bb9..e0087af6174482ba68a8c41f724dbedc19e0cc97 100644
+index e0087af6174482ba68a8c41f724dbedc19e0cc97..b04f59f710e3239c0e0729828f2e667beff50a5b 100644
 --- a/app/services/streaming_asr/speechmatics_client.py
 +++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -447,63 +447,64 @@ class SpeechmaticsClient:
+@@ -373,78 +373,80 @@ class _StreamState:
+     bytes_sent: int = 0
+     first_audio_ts: float | None = None
+     last_audio_ts: float | None = None
+     last_partial_log: float = 0.0
+     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
+     ready_error: Optional[str] = None
+     ready_error_detail: Optional[str] = None
+     vendor_notices: set[str] = field(default_factory=set)
+     end_of_stream_sent: bool = False
+     recognition_started: bool = False
+ 
+ 
+ class SpeechmaticsClient:
+     """Client wrapper responsible for Speechmatics realtime streams."""
+ 
+     def __init__(self, api_key: str, url: str, bus: Any, logger: logging.Logger) -> None:
+         self._api_key = api_key
+         self._url = url
+         self._bus = bus
+         self._logger = logger or logging.getLogger(__name__)
+         self._streams: Dict[str, _StreamState] = {}
+         # Tracks SIDs currently being opened to avoid parallel opens for the same SID
+         self._opening: set[str] = set()
+ 
+     async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
+-        if not self._streams:
+-            return
+-
+         deadline = time.monotonic() + max(0.0, timeout)
+-        while self._streams:
++
++        while True:
+             active_sids = [sid for sid in self._streams if sid != new_sid]
+-            if not active_sids:
++            opening_sids = [sid for sid in self._opening if sid != new_sid]
++
++            if not active_sids and not opening_sids:
+                 break
+ 
+             for existing_sid in active_sids:
+                 state = self._streams.get(existing_sid)
+                 if state is None:
+                     continue
+                 if not state.closing:
+                     self._logger.warning(
+                         "evt=sm_concurrency_guard closing_sid=%s new_sid=%s",
+                         existing_sid,
+                         new_sid,
+                     )
+                     state.closing = True
+                     try:
+                         state.audio_queue.put_nowait(_AUDIO_SENTINEL)
+                     except Exception:
+                         pass
+                     state.loop.create_task(self._shutdown(state))
+ 
+-            if not self._streams:
+-                break
++            if not active_sids and opening_sids:
++                # Ensure we do not spin immediately if we are only waiting on
++                # another pending open to complete.
++                await asyncio.sleep(0)
+ 
+             if time.monotonic() >= deadline:
+                 raise RuntimeError("speechmatics_concurrency_guard_timeout")
+ 
+             await asyncio.sleep(0.05)
+ 
+     async def open_stream(
+         self,
+         sid: str,
+         on_partial: Callable[[str, Dict[str, object]], None],
+         on_final: Callable[[str, Dict[str, object]], None],
+         on_error: Callable[..., None],
+         *,
+         stream_id: str,
+         on_close: Optional[Callable[[int | None, str | None], None]] = None,
+         encoding: str = "pcm_s16le",
+         sample_rate: int = 16000,
+         policy: Mapping[str, Any] | None = None,
+     ) -> str:
+         if not isinstance(sid, str) or not sid:
+             raise ValueError("sid must be a non-empty string")
          if not isinstance(stream_id, str) or not stream_id:
              raise ValueError("stream_id must be a non-empty string")
          if sid in self._streams or sid in self._opening:
              # Deduplicate open attempts per sid; let the caller handle this cleanly.
-             self._logger.warning("evt=asr_open_dedup sid=%s", sid)
-             raise SpeechmaticsOpenBusy(sid)
- 
-         language = _coerce_language(policy)
-         normalized_language = language.strip().lower() if isinstance(language, str) else ""
-         try:
-             normalized_sample_rate = int(sample_rate)
-         except (TypeError, ValueError):
-             normalized_sample_rate = None
-         normalized_encoding = encoding.strip().lower() if isinstance(encoding, str) else ""
-         if (
-             normalized_language != "en"
-             or normalized_sample_rate != 16000
-             or normalized_encoding != "pcm_s16le"
-         ):
-             raise SpeechmaticsConfigError(
-                 language=language,
-                 sample_rate=sample_rate,
-                 encoding=encoding,
-             )
- 
--        await self._await_capacity(new_sid=sid)
--
--        headers = {"Authorization": f"Bearer {self._api_key}"}
--        connect_kwargs = {
--            _CONNECT_HEADERS_ARG: headers,
--            "max_size": None,
--            "ping_interval": 20,
--            "ping_timeout": 10,
--        }
--
--        # mark opening to block parallel opens
--        self._opening.add(sid)
-         try:
-+            # mark opening to block parallel opens before any awaited work
-+            self._opening.add(sid)
+diff --git a/tests/test_speechmatics_client.py b/tests/test_speechmatics_client.py
+index 9e989e0e79433c5d55a094513fe456ae66b2351e..280be068a69e67b0ccbc1ad514ce8365458ed7cf 100644
+--- a/tests/test_speechmatics_client.py
++++ b/tests/test_speechmatics_client.py
+@@ -1,28 +1,33 @@
++import asyncio
+ import logging
+ import unittest
+-from types import SimpleNamespace
++from types import MethodType, SimpleNamespace
 +
-+            await self._await_capacity(new_sid=sid)
++import pytest
 +
-+            headers = {"Authorization": f"Bearer {self._api_key}"}
-+            connect_kwargs = {
-+                _CONNECT_HEADERS_ARG: headers,
-+                "max_size": None,
-+                "ping_interval": 20,
-+                "ping_timeout": 10,
-+            }
++import app.services.streaming_asr.speechmatics_client as speechmatics_module
+ 
+ from app.services.streaming_asr.speechmatics_client import (
+     SpeechmaticsClient,
+     _coerce_max_delay_seconds,
+     _coerce_transcript_text,
+     _extract_text,
+     _is_fatal_concurrency_notice,
+ )
+ 
+ 
+ class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
+     def test_info_notice_not_fatal(self) -> None:
+         payload = {"message": "Info", "type": "concurrent_session_usage"}
+         self.assertFalse(_is_fatal_concurrency_notice(payload))
+ 
+     def test_warning_notice_not_fatal(self) -> None:
+         payload = {"message": "Warning", "severity": "warning", "type": "concurrent_session_limit"}
+         self.assertFalse(_is_fatal_concurrency_notice(payload))
+ 
+     def test_error_notice_fatal(self) -> None:
+         payload = {"message": "Error", "type": "concurrent_session_usage"}
+         self.assertTrue(_is_fatal_concurrency_notice(payload))
+ 
+     def test_explicit_severity_error_fatal(self) -> None:
+         payload = {"severity": "critical", "type": "concurrent_session_usage"}
+@@ -123,27 +128,126 @@ class TestSpeechmaticsCloseStream(unittest.TestCase):
+                 self.items.append(item)
+ 
+         class StubLoop:
+             def __init__(self) -> None:
+                 self.tasks: list[tuple[object, str | None]] = []
+ 
+             def create_task(self, coro: object, name: str | None = None) -> object:
+                 self.tasks.append((coro, name))
+                 close = getattr(coro, "close", None)
+                 if callable(close):
+                     close()
+                 return object()
+ 
+         client = SpeechmaticsClient("key", "ws://example", StubBus(), logging.getLogger("test"))
+ 
+         state = SimpleNamespace(closing=False, audio_queue=StubQueue(), loop=StubLoop())
+         sid = "sid-123"
+         client._streams[sid] = state  # type: ignore[attr-defined]
+ 
+         client.close_stream(sid)
+ 
+         self.assertIn(sid, client._streams)
+         self.assertTrue(state.closing)
+ 
+ 
++def test_open_stream_blocks_until_other_open_completes(monkeypatch: pytest.MonkeyPatch) -> None:
++    class StubBus:
++        def publish(self, event: object) -> None:
++            pass
 +
-             try:
-                 websocket = await websockets.connect(self._url, **connect_kwargs)
-             except Exception as exc:
-                 self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
-                 raise
- 
-             vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
- 
-             asr_policy = _resolve_asr_policy(policy)
-             utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
-             allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
- 
-             transcription_config = {
-                 "language": language,
-                 "enable_partials": True,
-             }
-             max_delay_s = _coerce_max_delay_seconds(utterance_end_ms)
-             if max_delay_s is not None:
-                 transcription_config["max_delay"] = max_delay_s
- 
-             start_payload = {
-                 "message": "StartRecognition",
-                 "transcription_config": transcription_config,
-                 "audio_format": {
-                     "type": "raw",
++    class StubWebSocket:
++        def __init__(self) -> None:
++            self.sent: list[str] = []
++            self.closed = False
++
++        async def send(self, data: str) -> None:
++            self.sent.append(data)
++
++        async def close(self) -> None:
++            self.closed = True
++
++        async def wait_closed(self) -> None:
++            return
++
++    async def run_test() -> None:
++        client = SpeechmaticsClient("key", "ws://example", StubBus(), logging.getLogger("test"))
++
++        async def sender_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
++            await state.ready_event.wait()
++
++        async def receiver_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
++            state.ready_event.set()
++
++        async def shutdown_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
++            state.closed = True
++            state.ready_event.set()
++            self._streams.pop(state.sid, None)
++
++        client._sender_loop = MethodType(sender_stub, client)  # type: ignore[assignment]
++        client._receiver_loop = MethodType(receiver_stub, client)  # type: ignore[assignment]
++        client._shutdown = MethodType(shutdown_stub, client)  # type: ignore[assignment]
++
++        first_sid = "sid-1"
++        second_sid = "sid-2"
++        first_stream_populated = asyncio.Event()
++
++        class TrackingStreams(dict[str, speechmatics_module._StreamState]):  # type: ignore[name-defined]
++            def __setitem__(self, key: str, value: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
++                super().__setitem__(key, value)
++                if key == first_sid:
++                    first_stream_populated.set()
++
++        client._streams = TrackingStreams()
++
++        connect_calls: list[int] = []
++        first_connect_started = asyncio.Event()
++        allow_first_to_finish = asyncio.Event()
++        second_connect_started = asyncio.Event()
++
++        async def fake_connect(url: str, **_: object) -> StubWebSocket:
++            call_index = len(connect_calls)
++            connect_calls.append(call_index)
++            if call_index == 0:
++                first_connect_started.set()
++                await allow_first_to_finish.wait()
++            else:
++                second_connect_started.set()
++            return StubWebSocket()
++
++        monkeypatch.setattr(speechmatics_module.websockets, "connect", fake_connect)
++
++        async def open_for_sid(sid: str) -> str:
++            return await client.open_stream(
++                sid=sid,
++                stream_id=f"stream-{sid}",
++                on_partial=lambda *_: None,
++                on_final=lambda *_: None,
++                on_error=lambda *_: None,
++            )
++
++        first_task = asyncio.create_task(open_for_sid(first_sid))
++        await first_connect_started.wait()
++
++        second_task = asyncio.create_task(open_for_sid(second_sid))
++        await asyncio.sleep(0.05)
++
++        assert len(connect_calls) == 1
++        assert not second_connect_started.is_set()
++
++        allow_first_to_finish.set()
++        await asyncio.wait_for(first_stream_populated.wait(), timeout=1.0)
++        await asyncio.wait_for(first_task, timeout=1.0)
++
++        client.close_stream(first_sid)
++        await asyncio.sleep(0.05)
++
++        await asyncio.wait_for(second_connect_started.wait(), timeout=1.0)
++        await asyncio.wait_for(second_task, timeout=1.0)
++
++        assert len(connect_calls) == 2
++
++    asyncio.run(run_test())
++
++
+ if __name__ == "__main__":
+     unittest.main()
