@@ -1,769 +1,331 @@
-diff --git a/app/services/asr/__init__.py b/app/services/asr/__init__.py
-index 8d492775b6240c606343912e6dcb5edc213a8e95..1d28c1c78266202349143233ce6344d7834fb4c4 100644
---- a/app/services/asr/__init__.py
-+++ b/app/services/asr/__init__.py
-@@ -1,23 +1,24 @@
- """ASR service helpers."""
- 
--from .policies import to_sm_params
--from .sm_rt import (
-+from app.telemetry.events import (
-     ASR_KEEPALIVE_PING,
-     ASR_VENDOR_CLOSE_ACK,
-     ASR_VENDOR_CONNECT_INTENT,
-     SM_FINAL,
-     SM_NOTICE,
-     SM_PARTIAL,
--    SMRealtimeClient,
- )
- 
-+from .policies import to_sm_params
-+from .sm_rt import SMRealtimeClient
+diff --git a/app/static/js/audio/vad_client.js b/app/static/js/audio/vad_client.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc61356629e1b96762721f577f8ed3832018894e
+--- /dev/null
++++ b/app/static/js/audio/vad_client.js
+@@ -0,0 +1,325 @@
++/* eslint-disable no-console */
++const DB_FLOOR = -120;
++const SAMPLE_MAX = 32768;
++const STATE_PUBLISH_INTERVAL_MS = 500;
++const GATE_HEARTBEAT_INTERVAL_MS = 500;
++const NOISE_FALL_ALPHA = 0.2;
++const NOISE_RISE_ALPHA = 0.05;
 +
- __all__ = [
-     "ASR_KEEPALIVE_PING",
-     "ASR_VENDOR_CLOSE_ACK",
-     "ASR_VENDOR_CONNECT_INTENT",
-     "SM_FINAL",
-     "SM_NOTICE",
-     "SM_PARTIAL",
-     "SMRealtimeClient",
-     "to_sm_params",
- ]
-diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
-index c4207d5f3d56b8a4b38c821728d6b00765dbf600..08051cf16f9d9d92ff4a98311a84b398d96e3d0d 100644
---- a/app/services/asr/sm_rt.py
-+++ b/app/services/asr/sm_rt.py
-@@ -1,69 +1,69 @@
- """Speechmatics realtime websocket client (PCM-only)."""
- from __future__ import annotations
- 
- import asyncio
- import contextlib
- import json
- import logging
- import time
- from typing import Any, Callable, Dict, Iterable, Optional
- 
- import websockets
- from websockets.client import WebSocketClientProtocol
- from websockets.exceptions import ConnectionClosed
- 
- from app.telemetry import bus as telemetry_bus
-+from app.telemetry.events import (
-+    ASR_KEEPALIVE_PING,
-+    ASR_VENDOR_CLOSE_ACK,
-+    ASR_VENDOR_CONNECT_INTENT,
-+    SM_FINAL,
-+    SM_NOTICE,
-+    SM_PARTIAL,
-+)
- from app.voice_v2 import (
-     EVT_ASR_CLOSED,
-     EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
- )
- 
- __all__ = [
-     "ASR_KEEPALIVE_PING",
-     "ASR_VENDOR_CLOSE_ACK",
-     "ASR_VENDOR_CONNECT_INTENT",
-     "SM_FINAL",
-     "SM_NOTICE",
-     "SM_PARTIAL",
-     "SMRealtimeClient",
- ]
- 
- 
- _log = logging.getLogger(__name__)
- 
--ASR_VENDOR_CONNECT_INTENT = "ASR_VENDOR_CONNECT_INTENT"
--ASR_VENDOR_CLOSE_ACK = "ASR_VENDOR_CLOSE_ACK"
--ASR_KEEPALIVE_PING = "ASR_KEEPALIVE_PING"
--SM_NOTICE = "SM_NOTICE"
--SM_PARTIAL = "SM_PARTIAL"
--SM_FINAL = "SM_FINAL"
--
--
- class SMRealtimeClient:
-     """Minimal Speechmatics realtime client with telemetry hooks."""
- 
-     VENDOR = "speechmatics"
-     SOURCE = "speechmatics_client"
- 
-     _READY_MESSAGES = {"RecognitionStarted", "recognition_started"}
-     _PARTIAL_MESSAGES = {
-         "AddPartialTranscript",
-         "PartialTranscript",
-         "AddPartial",
-         "add_partial_transcript",
-     }
-     _FINAL_MESSAGES = {
-         "AddTranscript",
-         "Transcript",
-         "FinalTranscript",
-         "AddFinalTranscript",
-     }
-     _CLOSE_ACK_MESSAGES = {
-         "EndOfTranscript",
-         "RecognitionEnded",
-         "EndOfStreamAcknowledged",
-         "EndOfStream",
-         "SessionEnded",
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index b013071f02859d84cf110aca3a1e4e771b4982a2..63c27f621ffe25ccec099f3d3ecbd24f976affb5 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -28,67 +28,88 @@
-       WSClient.__wrapped_send__ = true;
-     }
- 
-     maybeWrap();
-     window.addEventListener('ws.open', maybeWrap);
-   })();
- 
-   const STATIC_JS_BASE = (() => {
-     if (typeof document === "undefined") {
-       return "/static/js/";
-     }
- 
-     const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
-     if (script && script.src) {
-       try {
-         const url = new URL(script.src, window.location.href);
-         return url.pathname.replace(/[^/]+$/, "");
-       } catch (err) {
-         console.warn("Failed to parse static script URL", err);
-       }
-     }
- 
-     return "/static/js/";
-   })();
- 
-+  const VERSION_STAMP = (() => {
-+    if (typeof window !== "undefined" && typeof window.BUILD_ID === "string" && window.BUILD_ID) {
-+      return window.BUILD_ID;
-+    }
-+    if (typeof window !== "undefined") {
-+      const existing = window.__APP_VERSION_STAMP__;
-+      if (typeof existing === "string" && existing) {
-+        return existing;
-+      }
-+      const generated = Date.now().toString();
-+      try {
-+        window.__APP_VERSION_STAMP__ = generated;
-+      } catch (err) {
-+        // ignore inability to persist stamp on window
-+      }
-+      return generated;
-+    }
-+    return Date.now().toString();
-+  })();
++const DEFAULTS = {
++  noiseDb: -72,
++  thresholdDb: 8,
++  ttsThresholdBoostDb: 6,
++  minSpeechMs: 120,
++  minSilenceMs: 240,
++  holdMs: 200,
++};
 +
-   const VERSION_QUERY = (() => {
-+    const suffix = `?v=${encodeURIComponent(VERSION_STAMP)}`;
-     if (typeof document === "undefined") {
--      return "";
-+      return suffix;
-     }
-     try {
-       const current =
-         document.currentScript ||
-         document.querySelector('script[src*="/static/js/app.js"]') ||
-         null;
-       if (!current || !current.src) {
--        return "";
-+        return suffix;
-       }
-       const url = new URL(current.src, window.location.href);
--      return url.search || "";
-+      return url.search || suffix;
-     } catch (err) {
-       console.warn("Failed to derive version query", err);
--      return "";
-+      return suffix;
-     }
-   })();
- 
-   function isSameOrigin(url) {
-     try {
-       if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
-         return true;
-       }
-       const parsed = new URL(url, window.location.href);
-       return parsed.origin === window.location.origin;
-     } catch (err) {
-       return false;
-     }
-   }
- 
-   function isSpecialScheme(url) {
-     return /^(data:|blob:)/i.test(url);
-   }
- 
-   function appendVersionQuery(url) {
-     if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
-       return url;
-     }
-     const hashIndex = url.indexOf("#");
-     if (hashIndex === -1) {
-diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
-index a1a75f7dc6f9cdff581f193da5377c3ddc511c06..95a7765fefad6cdc600ca373bec7ea18a3294327 100644
---- a/app/static/js/audio/pcm_recorder.js
-+++ b/app/static/js/audio/pcm_recorder.js
-@@ -1,37 +1,67 @@
- (() => {
-   const TARGET_SAMPLE_RATE = 16000;
-   const MIN_FRAME_SAMPLES = 320;
-   const MAX_FRAME_SAMPLES = 640;
-   const DEFAULT_CHUNK_MS = Math.round((MIN_FRAME_SAMPLES / TARGET_SAMPLE_RATE) * 1000);
- 
-   const BUILD_ID = typeof window !== 'undefined' && typeof window.BUILD_ID === 'string'
-     ? window.BUILD_ID
-     : null;
--  const WORKLET_PATH = BUILD_ID
--    ? `/static/js/audio/pcm-worklet-processor.js?v=${encodeURIComponent(BUILD_ID)}`
--    : '/static/js/audio/pcm-worklet-processor.js';
++function clamp(value, min, max) {
++  return Math.min(Math.max(value, min), max);
++}
 +
-+  const CACHE_STAMP = (() => {
-+    if (typeof BUILD_ID === 'string' && BUILD_ID) {
-+      return BUILD_ID;
++function toInt16Frame(buffer) {
++  if (!buffer) {
++    return new Int16Array(0);
++  }
++  if (buffer instanceof Int16Array) {
++    return buffer;
++  }
++  if (ArrayBuffer.isView(buffer) && buffer.BYTES_PER_ELEMENT === 2) {
++    try {
++      return new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length);
++    } catch {
++      return new Int16Array(0);
 +    }
-+    if (typeof window !== 'undefined') {
-+      const existing = window.__PCM_WORKLET_STAMP__;
-+      if (typeof existing === 'string' && existing) {
-+        return existing;
-+      }
-+      const generated = Date.now().toString();
-+      try {
-+        window.__PCM_WORKLET_STAMP__ = generated;
-+      } catch (err) {
-+        /* ignore assignment errors */
-+      }
-+      return generated;
-+    }
-+    return Date.now().toString();
-+  })();
++  }
++  if (buffer instanceof ArrayBuffer) {
++    return new Int16Array(buffer);
++  }
++  return new Int16Array(0);
++}
 +
-+  function withCacheBuster(path) {
-+    if (!path || typeof path !== 'string') {
-+      return path;
++function rmsDbFromPcm(int16Frame) {
++  const { length } = int16Frame;
++  if (!length) {
++    return DB_FLOOR;
++  }
++  let sumSquares = 0;
++  for (let i = 0; i < length; i += 1) {
++    const sample = int16Frame[i] / SAMPLE_MAX;
++    sumSquares += sample * sample;
++  }
++  const meanSquare = sumSquares / length;
++  if (meanSquare <= 0) {
++    return DB_FLOOR;
++  }
++  const rms = Math.sqrt(meanSquare);
++  return 20 * Math.log10(rms);
++}
++
++function lerp(current, target, alpha) {
++  return current + (target - current) * alpha;
++}
++
++function resolvePolicy(getPolicy) {
++  if (typeof getPolicy !== "function") {
++    return null;
++  }
++  try {
++    return getPolicy() || null;
++  } catch {
++    return null;
++  }
++}
++
++function resolveStreamGateMode(getPolicy) {
++  const policy = resolvePolicy(getPolicy);
++  if (!policy || typeof policy !== "object") {
++    return "pass";
++  }
++  const vadBlock = policy.vad && typeof policy.vad === "object" ? policy.vad : null;
++  if (!vadBlock) {
++    return "pass";
++  }
++  const clientBlock = vadBlock.client && typeof vadBlock.client === "object"
++    ? vadBlock.client
++    : null;
++  if (!clientBlock) {
++    return "pass";
++  }
++  const mode = clientBlock.stream_gate;
++  if (mode === "gate") {
++    return "gate";
++  }
++  return "pass";
++}
++
++function isTtsActive(getTtsActive) {
++  if (typeof getTtsActive !== "function") {
++    return false;
++  }
++  try {
++    return !!getTtsActive();
++  } catch {
++    return false;
++  }
++}
++
++function safePublish(publish, event, payload) {
++  if (typeof publish !== "function") {
++    return;
++  }
++  try {
++    publish(event, payload);
++  } catch (err) {
++    if (typeof console !== "undefined" && typeof console.warn === "function") {
++      console.warn("client.vad publish error", err);
 +    }
-+    const hashIndex = path.indexOf('#');
-+    const base = hashIndex === -1 ? path : path.slice(0, hashIndex);
-+    const hash = hashIndex === -1 ? '' : path.slice(hashIndex);
-+    const sep = base.includes('?') ? '&' : '?';
-+    return `${base}${sep}v=${encodeURIComponent(CACHE_STAMP)}${hash}`;
++  }
++}
++
++function safeSetAppState(setAppState, patch) {
++  if (typeof setAppState !== "function" || !patch || typeof patch !== "object") {
++    return;
++  }
++  try {
++    setAppState(patch);
++  } catch (err) {
++    if (typeof console !== "undefined" && typeof console.warn === "function") {
++      console.warn("client.vad setAppState error", err);
++    }
++  }
++}
++
++export function initVAD({
++  getPolicy,
++  getTtsActive,
++  onGateChange,
++  setAppState,
++  publish,
++} = {}) {
++  let vadSpeech = false;
++  let vadEnergyDb = DB_FLOOR;
++  let vadNoiseDb = DEFAULTS.noiseDb;
++  let speechCandidateStart = null;
++  let silenceCandidateStart = null;
++  let speechStartedAt = null;
++  let holdUntilMs = 0;
++  let lastStatePublishAt = 0;
++  let gatePaused = false;
++  let gatePausedAt = 0;
++  let lastGateHeartbeatAt = 0;
++  let initialized = false;
++
++  function computeThresholdDb() {
++    const base = DEFAULTS.thresholdDb;
++    const ttsActive = isTtsActive(getTtsActive);
++    const boost = ttsActive ? DEFAULTS.ttsThresholdBoostDb : 0;
++    const effectiveNoise = Number.isFinite(vadNoiseDb) ? vadNoiseDb : DEFAULTS.noiseDb;
++    const threshold = effectiveNoise + base + boost;
++    return Math.max(threshold, DEFAULTS.noiseDb + base);
 +  }
 +
-+  const WORKLET_PATH = withCacheBuster('/static/js/audio/pcm-worklet-processor.js');
- 
-   function emitClientLog(label, detail = {}) {
-     const payload = detail && typeof detail === 'object' ? detail : { value: detail };
-     const AppState = typeof window !== 'undefined' ? window.AppState : null;
-     if (AppState && AppState.hub && typeof AppState.hub.log === 'function') {
-       try {
-         AppState.hub.log(label, payload);
-         return;
-       } catch (err) {
-         try {
-           console.warn('client.log hub emit failed', err);
-         } catch (_) {}
-       }
-     }
-     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-       try {
-         window.dispatchEvent(new CustomEvent('client.log', { detail: { label, detail: payload } }));
-       } catch (err) {
-         try {
-           console.warn('client.log dispatch failed', err);
-         } catch (_) {}
-       }
-     }
-   }
- 
-diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
-index 129e7adebb314c243e1abd6bb4ad01967211f5e8..5e4c6c6cbd4248ef735bf3078c12ee4a5d90de0a 100644
---- a/app/telemetry/bus.py
-+++ b/app/telemetry/bus.py
-@@ -7,50 +7,58 @@ import time
- import uuid
- from typing import Any, Callable, Dict, Tuple
- from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
- 
- from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
- 
- Subscription = Tuple[str, Callable[[dict], None]]
- 
- _log = logging.getLogger(__name__)
- 
- # Internal registries keyed by subscription token.
- _subscriptions: Dict[str, Subscription] = {}
- # Index mapping event type to tokens for quick lookup.
- _event_index: Dict[str, set[str]] = {}
- 
- # Track per-session TTS metadata for sanitised audio telemetry.
- _tts_current_utt: Dict[str, str] = {}
- _tts_audio_totals: Dict[str, int] = {}
- 
- 
- def _now_ms() -> int:
-     """Return the current time in milliseconds."""
-     return int(time.time() * 1000)
- 
- 
-+def _now_monotonic_ms() -> float:
-+    """Return the current monotonic time in milliseconds."""
-+    try:
-+        return time.monotonic_ns() / 1_000_000.0
-+    except AttributeError:  # pragma: no cover - Python < 3.7 fallback
-+        return time.monotonic() * 1000.0
++  function updateGate(nowMs, reason) {
++    const mode = resolveStreamGateMode(getPolicy);
++    if (mode !== "gate") {
++      if (gatePaused && typeof onGateChange === "function") {
++        gatePaused = false;
++        gatePausedAt = 0;
++        lastGateHeartbeatAt = 0;
++        onGateChange("resume", "policy_disabled");
++        safePublish(publish, "client.vad.gate", { action: "resume", reason: "policy_disabled" });
++      }
++      return;
++    }
 +
++    if (vadSpeech) {
++      if (gatePaused && typeof onGateChange === "function") {
++        gatePaused = false;
++        gatePausedAt = 0;
++        lastGateHeartbeatAt = 0;
++        onGateChange("resume", reason || "speech_detected");
++        safePublish(publish, "client.vad.gate", { action: "resume", reason: reason || "speech_detected" });
++      }
++    } else {
++      if (!gatePaused && nowMs >= holdUntilMs && typeof onGateChange === "function") {
++        gatePaused = true;
++        gatePausedAt = nowMs;
++        lastGateHeartbeatAt = nowMs;
++        onGateChange("pause", reason || "silence");
++        safePublish(publish, "client.vad.gate", { action: "pause", reason: reason || "silence" });
++      }
++      if (gatePaused) {
++        if (!lastGateHeartbeatAt) {
++          lastGateHeartbeatAt = nowMs;
++        }
++        if (nowMs - lastGateHeartbeatAt >= GATE_HEARTBEAT_INTERVAL_MS) {
++          lastGateHeartbeatAt = nowMs;
++          safePublish(publish, "client.vad.gate_heartbeat", {
++            paused: true,
++            ms_since_pause: nowMs - gatePausedAt,
++          });
++        }
++      }
++    }
++  }
 +
- _TOKEN_KEYWORDS = {"token", "key", "sig", "secret", "auth"}
- _AUTH_KEYWORDS = {"authorization", "auth"}
- _BEARER_RE = re.compile(r"(Bearer\s+)([A-Za-z0-9._\-+/=]+)")
- _EMAIL_RE = re.compile(r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
- _OPAQUE_RE = re.compile(r"^[A-Za-z0-9+/=_-]{32,64}$")
- 
- 
- def _mask_tail(value: str, keep: int = 4) -> str:
-     """Return a masked token preserving only the last characters."""
-     if keep <= 0:
-         return "****"
-     if len(value) <= keep:
-         return "****"
-     return "****" + value[-keep:]
- 
- 
- def _shorten_opaque(value: str) -> str:
-     """Collapse long opaque secrets to a short representation."""
-     if len(value) < 6:
-         return value
-     return f"{value[:3]}…{value[-3:]}"
- 
- 
- def _shorten_generic(value: str) -> str:
-     """Collapse overly long strings while preserving edges."""
-@@ -229,71 +237,113 @@ def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
- 
-     token = f"sub_{uuid.uuid4().hex}"
-     _subscriptions[token] = (event_type, handler)
-     _event_index.setdefault(event_type, set()).add(token)
-     return token
- 
- 
- def unsubscribe(token: str) -> bool:
-     """Remove a previously registered subscription."""
-     subscription = _subscriptions.pop(token, None)
-     if not subscription:
-         return False
- 
-     event_type, _ = subscription
-     tokens = _event_index.get(event_type)
-     if tokens is not None:
-         tokens.discard(token)
-         if not tokens:
-             _event_index.pop(event_type, None)
-     return True
- 
- 
- def publish(event: dict) -> None:
-     """Normalize and dispatch an event to registered handlers."""
-     if not isinstance(event, dict):
--        raise ValueError("event must be a dict")
-+        _log.error("evt=telemetry_invalid_event payload_type=%s", type(event).__name__)
-+        return
- 
-     normalized = dict(event)
--    event_type = normalized.get("type")
--    if not isinstance(event_type, str) or not event_type:
--        raise ValueError("event['type'] must be a non-empty string")
-+    safe_event: dict[str, Any] | None = None
++  function emitState(nowMs, force = false) {
++    if (!force && nowMs - lastStatePublishAt < STATE_PUBLISH_INTERVAL_MS) {
++      return;
++    }
++    lastStatePublishAt = nowMs;
++    safePublish(publish, "client.vad.state", {
++      speech: vadSpeech,
++      conf: computeConfidence(nowMs),
++      energyDb: vadEnergyDb,
++      noiseDb: vadNoiseDb,
++    });
++  }
 +
-+    def _mark_error(reason: str) -> None:
-+        normalized["publish_error"] = True
-+        reasons = normalized.get("publish_error_reasons")
-+        if isinstance(reasons, list):
-+            if reason not in reasons:
-+                reasons.append(reason)
-+        else:
-+            normalized["publish_error_reasons"] = [reason]
-+        if isinstance(safe_event, dict):
-+            safe_event["publish_error"] = True
-+            existing = safe_event.get("publish_error_reasons")
-+            if isinstance(existing, list):
-+                if reason not in existing:
-+                    existing.append(reason)
-+            else:
-+                safe_event["publish_error_reasons"] = [reason]
++  function computeConfidence(nowMs) {
++    const thresholdDb = computeThresholdDb();
++    const diff = vadEnergyDb - thresholdDb;
++    const normalized = (diff + 12) / 24;
++    return clamp(Number.isFinite(normalized) ? normalized : 0, 0, 1);
++  }
 +
-+    original_type = normalized.get("type")
-+    if not isinstance(original_type, str) or not original_type:
-+        keys = sorted(str(key) for key in normalized.keys())
-+        _log.error("evt=telemetry_missing_type keys=%s", keys)
-+        _mark_error("invalid_type")
-+        info = normalized.get("publish_error_info")
-+        if isinstance(info, dict):
-+            info.setdefault("original_type", original_type)
-+        else:
-+            normalized["publish_error_info"] = {"original_type": original_type}
-+        normalized["type"] = "EVT_INVALID"
-+        event_type = "EVT_INVALID"
-+    else:
-+        event_type = original_type
- 
-     if "schema_version" not in normalized:
-         normalized["schema_version"] = "1"
- 
-     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
-         normalized["ts_ms"] = _now_ms()
++  function updateAppState(nowMs) {
++    safeSetAppState(setAppState, {
++      vadActive: true,
++      vadSpeech,
++      vadConfidence: computeConfidence(nowMs),
++      vadEnergyDb,
++      vadNoiseDb,
++    });
++  }
 +
-+    if "ts_ms_monotonic" in normalized:
-+        try:
-+            normalized["ts_ms_monotonic"] = float(normalized["ts_ms_monotonic"])
-+        except (TypeError, ValueError):
-+            _mark_error("invalid_ts_ms_monotonic")
-+            normalized["ts_ms_monotonic"] = _now_monotonic_ms()
-+    else:
-+        normalized["ts_ms_monotonic"] = _now_monotonic_ms()
++  function resetState(nowMs) {
++    vadSpeech = false;
++    vadEnergyDb = DB_FLOOR;
++    vadNoiseDb = DEFAULTS.noiseDb;
++    speechCandidateStart = null;
++    silenceCandidateStart = null;
++    speechStartedAt = null;
++    holdUntilMs = 0;
++    initialized = false;
++    if (gatePaused && typeof onGateChange === "function") {
++      onGateChange("resume", "reset");
++      safePublish(publish, "client.vad.gate", { action: "resume", reason: "reset" });
++    }
++    gatePaused = false;
++    gatePausedAt = 0;
++    lastGateHeartbeatAt = 0;
++    lastStatePublishAt = 0;
++    updateAppState(nowMs || Date.now());
++    emitState(nowMs || Date.now(), true);
++  }
 +
-     if "level" not in normalized or not isinstance(normalized["level"], str):
-         normalized["level"] = "debug"
- 
-     if "meta" in normalized:
-         original_meta = normalized["meta"]
-         try:
-             normalized["meta"] = _redact_meta(original_meta)
-         except Exception:  # pylint: disable=broad-except
-             _log.warning("evt=telemetry_redact_failed", exc_info=True)
-+            _mark_error("redaction_failed")
-             normalized["meta"] = original_meta
- 
-     sid = normalized.get("sid")
-     sid_str = sid if isinstance(sid, str) else None
- 
-     if event_type == EVT_TTS_START and sid_str:
-         utt_meta = normalized.get("meta") or {}
-         if isinstance(utt_meta, dict):
-             tts_meta = utt_meta.get("tts")
-             if isinstance(tts_meta, dict):
-                 utt_id = tts_meta.get("utt_id")
-                 if isinstance(utt_id, str) and utt_id:
-                     note_tts_start(sid_str, utt_id)
- 
-     safe_event = _json_safe(normalized)
-     if isinstance(safe_event, dict):
-         if event_type == "EVT_WS_AUDIO_SEND":
-             chunk_len = _extract_audio_chunk_len(normalized)
-             total_bytes = None
-             if sid_str and chunk_len is not None:
-                 total_bytes = _increment_audio_total(sid_str, chunk_len)
-                 utt_id = _tts_current_utt.get(sid_str)
-                 if utt_id:
-                     safe_event.setdefault("utt_id", utt_id)
-             safe_event.pop("chunk", None)
-@@ -305,43 +355,44 @@ def publish(event: dict) -> None:
-             total = _tts_audio_totals.get(sid_str)
-             if total is None and sid_str in _tts_current_utt:
-                 total = 0
-             if total is not None:
-                 safe_event["total_bytes"] = total
-             utt_id = _tts_current_utt.get(sid_str)
-             if utt_id:
-                 safe_event.setdefault("utt_id", utt_id)
- 
-     tokens = set()
-     tokens.update(_event_index.get(event_type, set()))
-     tokens.update(_event_index.get("*", set()))
- 
-     for token in list(tokens):
-         subscription = _subscriptions.get(token)
-         if not subscription:
-             continue
-         _, handler = subscription
-         try:
-             if getattr(handler, "_telemetry_accepts_binary", False):
-                 payload = _clone_payload(normalized)
-             else:
-                 payload = _clone_payload(safe_event)
-             handler(payload)
-         except Exception:  # pylint: disable=broad-except
-+            _mark_error("handler_failed")
-             handler_name = getattr(handler, "__qualname__", repr(handler))
-             _log.error(
-                 "evt=telemetry_sink_failed token=%s handler=%s",
-                 token,
-                 handler_name,
-                 exc_info=True,
-             )
- 
-     if event_type == EVT_TTS_END and sid_str:
-         note_tts_end(sid_str, _tts_current_utt.get(sid_str))
- 
- 
- def reset() -> None:
-     """Clear all subscriptions (primarily for testing)."""
-     _subscriptions.clear()
-     _event_index.clear()
-     _tts_current_utt.clear()
-     _tts_audio_totals.clear()
-diff --git a/app/telemetry/events.py b/app/telemetry/events.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..c1b355ec84120addf4867889b08a511c9bbcf02f
---- /dev/null
-+++ b/app/telemetry/events.py
-@@ -0,0 +1,52 @@
-+"""Shared telemetry event name constants used across the server."""
-+from __future__ import annotations
++  function onPcmFrame(buffer, timestampMs) {
++    const nowMs = Number.isFinite(timestampMs) ? timestampMs : Date.now();
++    const frame = toInt16Frame(buffer);
++    vadEnergyDb = rmsDbFromPcm(frame);
++    if (!initialized) {
++      vadNoiseDb = Number.isFinite(vadEnergyDb) ? Math.min(vadEnergyDb, DEFAULTS.noiseDb) : DEFAULTS.noiseDb;
++      initialized = true;
++    }
++    if (!Number.isFinite(vadNoiseDb)) {
++      vadNoiseDb = DEFAULTS.noiseDb;
++    }
 +
-+EVT_SESSION_TRANSPORT_CLOSED = "EVT_SESSION_TRANSPORT_CLOSED"
-+SESSION_TEARDOWN_COMPLETE = "SESSION_TEARDOWN_COMPLETE"
++    const thresholdDb = computeThresholdDb();
++    const aboveThreshold = vadEnergyDb > thresholdDb;
 +
-+ASR_VENDOR_CONNECT_INTENT = "ASR_VENDOR_CONNECT_INTENT"
-+ASR_VENDOR_CLOSE_ACK = "ASR_VENDOR_CLOSE_ACK"
-+ASR_KEEPALIVE_PING = "ASR_KEEPALIVE_PING"
-+ASR_VENDOR_BYTES_TOTAL = "ASR_VENDOR_BYTES_TOTAL"
-+ASR_ROLLUP = "ASR_ROLLUP"
-+AUDIO_WIRE_ROLLUP = "AUDIO_WIRE_ROLLUP"
-+ASR_POST_CLOSE_DROP = "ASR_POST_CLOSE_DROP"
-+ASR_SINGLE_STREAM_INVARIANT = "ASR_SINGLE_STREAM_INVARIANT"
++    if (aboveThreshold) {
++      vadNoiseDb = lerp(vadNoiseDb, vadEnergyDb - DEFAULTS.thresholdDb, NOISE_RISE_ALPHA);
++    } else {
++      vadNoiseDb = lerp(vadNoiseDb, vadEnergyDb, NOISE_FALL_ALPHA);
++    }
++    vadNoiseDb = clamp(vadNoiseDb, DB_FLOOR, vadEnergyDb);
 +
-+EVT_ASR_OPEN = "EVT_ASR_OPEN"
-+EVT_ASR_CLOSE = "EVT_ASR_CLOSE"
-+ASR_READY = "EVT_ASR_READY"
-+ASR_OPEN_QUEUED = "ASR_OPEN_QUEUED"
-+ASR_OPEN_DEDUP = "ASR_OPEN_DEDUP"
-+ASR_OPEN_AFTER_TTS = "ASR_OPEN_AFTER_TTS"
++    if (aboveThreshold) {
++      silenceCandidateStart = null;
++      if (speechCandidateStart === null) {
++        speechCandidateStart = nowMs;
++      }
++      if (!vadSpeech && nowMs - speechCandidateStart >= DEFAULTS.minSpeechMs) {
++        vadSpeech = true;
++        speechStartedAt = speechCandidateStart;
++        safePublish(publish, "client.vad.speech_start", {
++          conf: computeConfidence(nowMs),
++          energyDb: vadEnergyDb,
++          noiseDb: vadNoiseDb,
++        });
++        emitState(nowMs, true);
++      }
++    } else {
++      speechCandidateStart = null;
++      if (vadSpeech && silenceCandidateStart === null) {
++        silenceCandidateStart = nowMs;
++      }
++      if (vadSpeech && silenceCandidateStart !== null && nowMs - silenceCandidateStart >= DEFAULTS.minSilenceMs) {
++        vadSpeech = false;
++        holdUntilMs = nowMs + DEFAULTS.holdMs;
++        const durationMs = speechStartedAt ? Math.max(0, nowMs - speechStartedAt) : 0;
++        safePublish(publish, "client.vad.speech_end", { duration_ms: durationMs });
++        emitState(nowMs, true);
++        speechStartedAt = null;
++      }
++    }
 +
-+WS_AUDIO_HEADER_ACCEPT = "WS_AUDIO_HEADER_ACCEPT"
-+WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
++    updateAppState(nowMs);
++    emitState(nowMs);
++    updateGate(nowMs);
++  }
 +
-+SM_PARTIAL = "SM_PARTIAL"
-+SM_FINAL = "SM_FINAL"
-+SM_NOTICE = "SM_NOTICE"
++  const bootTs = Date.now();
++  updateAppState(bootTs);
++  emitState(bootTs, true);
 +
-+__all__ = [
-+    "EVT_SESSION_TRANSPORT_CLOSED",
-+    "SESSION_TEARDOWN_COMPLETE",
-+    "ASR_VENDOR_CONNECT_INTENT",
-+    "ASR_VENDOR_CLOSE_ACK",
-+    "ASR_KEEPALIVE_PING",
-+    "ASR_VENDOR_BYTES_TOTAL",
-+    "ASR_ROLLUP",
-+    "AUDIO_WIRE_ROLLUP",
-+    "ASR_POST_CLOSE_DROP",
-+    "ASR_SINGLE_STREAM_INVARIANT",
-+    "EVT_ASR_OPEN",
-+    "EVT_ASR_CLOSE",
-+    "ASR_READY",
-+    "ASR_OPEN_QUEUED",
-+    "ASR_OPEN_DEDUP",
-+    "ASR_OPEN_AFTER_TTS",
-+    "WS_AUDIO_HEADER_ACCEPT",
-+    "WS_AUDIO_FIRST_CHUNK",
-+    "SM_PARTIAL",
-+    "SM_FINAL",
-+    "SM_NOTICE",
-+]
-diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
-index 4adff4d868a714858024cd86163c0b9306597535..f621bb25887e9d0b037bfa179fecacc609abe57b 100644
---- a/app/telemetry/exporter.py
-+++ b/app/telemetry/exporter.py
-@@ -1,52 +1,52 @@
- """Minimal NDJSON file exporter for session telemetry."""
- from __future__ import annotations
- 
- import hashlib
- import json
- import os
- import time
- from dataclasses import dataclass, field
- from pathlib import Path
- from typing import Any, Dict, Optional
- 
- from app.telemetry import bus as telemetry_bus
-+from app.telemetry.events import WS_AUDIO_FIRST_CHUNK
- from app.voice_v2 import (
-     EVT_ASR_CLOSED,
-     EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_TTS_END,
-     EVT_TTS_START,
- )
- 
- 
- EVT_ASR_OPEN_ATTEMPT = "asr.open_attempt"
- EVT_ASR_OPEN_FAILED = "asr.open_failed"
- EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
- EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
--EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
- 
- _ASR_LOG_TYPES = {
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_FINAL,
-     EVT_ASR_CLOSED,
-     EVT_ASR_OPEN_ATTEMPT,
-     EVT_ASR_OPEN_FAILED,
- }
- 
- _WS_LOG_TYPES = {
-     EVT_WS_JSON_SEND_SUMMARY,
-     EVT_WS_JSON_RECV_SUMMARY,
-     EVT_WS_AUDIO_FIRST_CHUNK,
- }
- 
- _TTS_LOG_TYPES = {EVT_TTS_START, EVT_TTS_END}
- 
- 
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
- 
-     return int(time.time() * 1000)
- 
- 
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 133f2d7355ec43af3842e66c232134cecb459ab8..6c974ba23db053ca9e6b00fc89552fad18318fb3 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -3,56 +3,70 @@
- from __future__ import annotations
- 
- import os
- import asyncio
- import contextlib
- import logging
- import math
- import threading
- import time
- import inspect
- import platform
- import socket
- import sys
- from dataclasses import dataclass, field
- from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
- 
- import json
- from urllib.parse import parse_qs, urlparse
- 
- import jwt
- 
- from app import config
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
-+from app.telemetry.events import (
-+    AUDIO_WIRE_ROLLUP,
-+    ASR_OPEN_AFTER_TTS,
-+    ASR_OPEN_DEDUP,
-+    ASR_OPEN_QUEUED,
-+    ASR_POST_CLOSE_DROP,
-+    ASR_SINGLE_STREAM_INVARIANT,
-+    ASR_VENDOR_BYTES_TOTAL,
-+    ASR_ROLLUP,
-+    EVT_ASR_CLOSE,
-+    EVT_ASR_OPEN,
-+    EVT_SESSION_TRANSPORT_CLOSED,
-+    SESSION_TEARDOWN_COMPLETE,
-+    WS_AUDIO_FIRST_CHUNK,
-+    WS_AUDIO_HEADER_ACCEPT,
-+)
- from app.telemetry.exporter import FileExporter
- from app.voice_v2 import (
-     EVT_ASR_CLOSED,
-     EVT_ASR_FINAL,
--    EVT_ASR_CLOSE,
--    EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_READY,
-     EVT_CHAT_USER,
-     EVT_CLIENT_BANNER,
-     EVT_CLIENT_AUTOSTART,
-     EVT_CLIENT_MIC_OPEN,
-     EVT_HUD_STATE,
-     EVT_SESSION_STEP,
-     EVT_TTS_END,
-     EVT_TTS_MASK,
-     EVT_CLIENT_LOG,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.services.asr.sm_rt import SMRealtimeClient
- from app.ws.validator import validate_audio_header_against_policy, validate_frame
- from app.ws.state import SessionCtx, can_open, mark
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
-@@ -63,63 +77,51 @@ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
- ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
- 
- AUDIO_SEQ_WINDOW = 8
- 
- QUEUE_ON_THRESHOLD = 12
- QUEUE_OFF_THRESHOLD = 6
- 
- _DEFAULT_WS_PING_INTERVAL_MS = 20_000
- _HEARTBEAT_TIMEOUT_MS = 30_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
- EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
--EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
--WS_AUDIO_HEADER_ACCEPT = "WS_AUDIO_HEADER_ACCEPT"
--ASR_OPEN_QUEUED = "ASR_OPEN_QUEUED"
--ASR_OPEN_DEDUP = "ASR_OPEN_DEDUP"
- ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
--ASR_OPEN_AFTER_TTS = "ASR_OPEN_AFTER_TTS"
--ASR_SINGLE_STREAM_INVARIANT = "ASR_SINGLE_STREAM_INVARIANT"
--ASR_POST_CLOSE_DROP = "ASR_POST_CLOSE_DROP"
--EVT_SESSION_TRANSPORT_CLOSED = "EVT_SESSION_TRANSPORT_CLOSED"
--ASR_VENDOR_BYTES_TOTAL = "ASR_VENDOR_BYTES_TOTAL"
--ASR_ROLLUP = "ASR_ROLLUP"
--AUDIO_WIRE_ROLLUP = "AUDIO_WIRE_ROLLUP"
--SESSION_TEARDOWN_COMPLETE = "SESSION_TEARDOWN_COMPLETE"
- 
- _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
- _MIC_OPEN_TIMEOUT_SECONDS = 2.5
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-     "asr.input.start",
-     "asr.input.stop",
-     "asr.partial",
-     "asr.final",
-     "asr.unavailable",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
- }
- 
- _RATE_LIMIT_EXEMPT_TYPES = {
-     "client.autostart",
-     "client.banner",
++  return {
++    onPcmFrame,
++    reset() {
++      resetState(Date.now());
++    },
++  };
++}
