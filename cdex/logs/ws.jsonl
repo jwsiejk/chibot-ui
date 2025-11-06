@@ -1,4 +1,4 @@
-{"type":"ws.json.recv_summary","sid":"79b40328d693455a92c9586ad718e981","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762310376985,"level":"debug"}
-{"type":"ws.json.recv_summary","sid":"79b40328d693455a92c9586ad718e981","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762310376988,"level":"debug"}
-{"type":"ws.audio.first_chunk","sid":"79b40328d693455a92c9586ad718e981","who":"server","source":"ws.adapter","meta":{"bytes":1600,"ms_since_ready":568},"schema_version":"1","ts_ms":1762310377187,"level":"debug"}
-{"type":"ws.json.recv_summary","sid":"79b40328d693455a92c9586ad718e981","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762310378904,"level":"debug"}
+{"type":"ws.json.recv_summary","sid":"5938f74345f54455bf3ac91e0be57418","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762400821626,"level":"debug"}
+{"type":"ws.json.recv_summary","sid":"5938f74345f54455bf3ac91e0be57418","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762400821720,"level":"debug"}
+{"type":"ws.audio.first_chunk","sid":"5938f74345f54455bf3ac91e0be57418","who":"server","source":"ws.adapter","meta":{"bytes":1600,"ms_since_ready":713},"schema_version":"1","ts_ms":1762400822045,"level":"debug"}
+{"type":"ws.json.recv_summary","sid":"5938f74345f54455bf3ac91e0be57418","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"speechmatics"},"schema_version":"1","ts_ms":1762400823754,"level":"debug"}
