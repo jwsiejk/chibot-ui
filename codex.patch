@@ -1,57 +1,81 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 8a5fdb6bac01b80097cf3802cb4f0bc621f31993..16bc5940abe8c55cdc6b89989f086209e78fe12f 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1552,52 +1552,50 @@
+diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
+index c38bae023327c1ef942ee31e55448061574f9bb9..e0087af6174482ba68a8c41f724dbedc19e0cc97 100644
+--- a/app/services/streaming_asr/speechmatics_client.py
++++ b/app/services/streaming_asr/speechmatics_client.py
+@@ -447,63 +447,64 @@ class SpeechmaticsClient:
+         if not isinstance(stream_id, str) or not stream_id:
+             raise ValueError("stream_id must be a non-empty string")
+         if sid in self._streams or sid in self._opening:
+             # Deduplicate open attempts per sid; let the caller handle this cleanly.
+             self._logger.warning("evt=asr_open_dedup sid=%s", sid)
+             raise SpeechmaticsOpenBusy(sid)
  
-     function startMicCapture() {
-       if (!audioRecorder || typeof audioRecorder.startMicCaptureIfIdle !== 'function') {
-         return Promise.reject(new Error('startMicCapture_unavailable'));
-       }
-       let outcome;
-       try {
-         outcome = audioRecorder.startMicCaptureIfIdle();
-       } catch (err) {
-         return Promise.reject(err);
-       }
-       if (outcome && typeof outcome.then === 'function') {
-         return outcome.then((value) => {
-           if (value) {
-             setMicPermissionGranted(true, 'startMicCapture');
-           }
-           return value;
-         });
-       }
-       if (outcome) {
-         setMicPermissionGranted(true, 'startMicCapture');
-       }
-       return Promise.resolve(outcome);
-     }
+         language = _coerce_language(policy)
+         normalized_language = language.strip().lower() if isinstance(language, str) else ""
+         try:
+             normalized_sample_rate = int(sample_rate)
+         except (TypeError, ValueError):
+             normalized_sample_rate = None
+         normalized_encoding = encoding.strip().lower() if isinstance(encoding, str) else ""
+         if (
+             normalized_language != "en"
+             or normalized_sample_rate != 16000
+             or normalized_encoding != "pcm_s16le"
+         ):
+             raise SpeechmaticsConfigError(
+                 language=language,
+                 sample_rate=sample_rate,
+                 encoding=encoding,
+             )
  
--    }
+-        await self._await_capacity(new_sid=sid)
 -
-     function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
-       const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
-       const gateSnapshot = {
-         asrReady: !!runtimeState.asrReady,
-         turnState: runtimeState.turnState || '',
-         micPerm: !!runtimeState.micPermissionGranted,
-         start_on_asr_ready: !!cap.start_on_asr_ready,
-         start_on_turn_ready: !!cap.start_on_turn_ready
-       };
-       if (typeof logClient === 'function') {
-         try {
-           const gatesJson = JSON.stringify(gateSnapshot);
-           logClient('client.mic', `evt=maybe_autostart_blocked gates=${gatesJson} trigger=${triggerLabel} reason=${reasonLabel}`);
-         } catch (err) {
-           logClient('client.mic', `evt=maybe_autostart_blocked gates_error trigger=${triggerLabel} reason=${reasonLabel}`);
-         }
-       }
-       const parts = [
-         `asrReady=${gates.asrReady}`,
-         `turnState=${gates.turnState === null ? 'null' : gates.turnState}`,
-         `micPerm=${gates.micPerm}`,
-         `recording=${gates.recording}`,
-       ];
-       const detail = {
-         event: 'maybe_autostart_blocked',
+-        headers = {"Authorization": f"Bearer {self._api_key}"}
+-        connect_kwargs = {
+-            _CONNECT_HEADERS_ARG: headers,
+-            "max_size": None,
+-            "ping_interval": 20,
+-            "ping_timeout": 10,
+-        }
+-
+-        # mark opening to block parallel opens
+-        self._opening.add(sid)
+         try:
++            # mark opening to block parallel opens before any awaited work
++            self._opening.add(sid)
++
++            await self._await_capacity(new_sid=sid)
++
++            headers = {"Authorization": f"Bearer {self._api_key}"}
++            connect_kwargs = {
++                _CONNECT_HEADERS_ARG: headers,
++                "max_size": None,
++                "ping_interval": 20,
++                "ping_timeout": 10,
++            }
++
+             try:
+                 websocket = await websockets.connect(self._url, **connect_kwargs)
+             except Exception as exc:
+                 self._logger.exception("evt=sm_connect_failed sid=%s err=%s", sid, exc)
+                 raise
+ 
+             vendor_stream_id = f"sm-stream-{uuid.uuid4().hex}"
+ 
+             asr_policy = _resolve_asr_policy(policy)
+             utterance_end_ms = max(0, int(asr_policy.get("utterance_end_ms", 1200) or 0))
+             allow_word_finals = bool(asr_policy.get("allow_word_finals", False))
+ 
+             transcription_config = {
+                 "language": language,
+                 "enable_partials": True,
+             }
+             max_delay_s = _coerce_max_delay_seconds(utterance_end_ms)
+             if max_delay_s is not None:
+                 transcription_config["max_delay"] = max_delay_s
+ 
+             start_payload = {
+                 "message": "StartRecognition",
+                 "transcription_config": transcription_config,
+                 "audio_format": {
+                     "type": "raw",

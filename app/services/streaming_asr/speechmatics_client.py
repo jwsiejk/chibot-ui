@@ -469,19 +469,20 @@ class SpeechmaticsClient:
                 encoding=encoding,
             )
 
-        await self._await_capacity(new_sid=sid)
-
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        connect_kwargs = {
-            _CONNECT_HEADERS_ARG: headers,
-            "max_size": None,
-            "ping_interval": 20,
-            "ping_timeout": 10,
-        }
-
-        # mark opening to block parallel opens
-        self._opening.add(sid)
         try:
+            # mark opening to block parallel opens before any awaited work
+            self._opening.add(sid)
+
+            await self._await_capacity(new_sid=sid)
+
+            headers = {"Authorization": f"Bearer {self._api_key}"}
+            connect_kwargs = {
+                _CONNECT_HEADERS_ARG: headers,
+                "max_size": None,
+                "ping_interval": 20,
+                "ping_timeout": 10,
+            }
+
             try:
                 websocket = await websockets.connect(self._url, **connect_kwargs)
             except Exception as exc:
