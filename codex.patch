@@ -1,1206 +1,709 @@
-diff --git a/app/static/js/state.js b/app/static/js/state.js
-index 179b8558698e39dec2c388344b4fb6797c501fa2..81a1e51cc351cabe25c1937e184a8df7af2b4cf8 100644
---- a/app/static/js/state.js
-+++ b/app/static/js/state.js
-@@ -1,139 +1,364 @@
- (() => {
-   const initialState = {
-     connectionState: "disconnected",
-     sid: null,
-     resume: null,
-     resumeError: null,
-     latencyMs: null,
-     lastPingAt: null,
-     heartbeatTimerId: null,
-     websocket: null,
-     infoFrame: null,
-     serverBanner: null,
-     clientBanner: {
-       info: null,
-       events: []
--    }
-+    },
-+    wsConnected: false,
-+    wsPhase: "disconnected",
-+    ttsActive: false,
-+    asrArmInFlight: false,
-+    armAfterTtsEnd: false,
-+    listening: false,
-+    recorderActive: false,
-+    lastChunkTs: null,
-+    chunkCount: 0,
-+    lastErrorCode: null,
-+    lastErrorDetail: null,
-   };
- 
-   let state = { ...initialState };
-   const listeners = new Set();
- 
-+  const TELEMETRY_KEYS = [
-+    "wsConnected",
-+    "wsPhase",
-+    "ttsActive",
-+    "asrArmInFlight",
-+    "armAfterTtsEnd",
-+    "listening",
-+    "recorderActive",
-+    "lastChunkTs",
-+    "chunkCount",
-+    "lastErrorCode",
-+    "lastErrorDetail",
-+  ];
-+  const DELTA_COALESCE_MS = 12;
-+  const HEARTBEAT_INTERVAL_MS = 5000;
+diff --git a/app/services/asr/__init__.py b/app/services/asr/__init__.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7636df1db76285fa73f053b86eed6f806254868c
+--- /dev/null
++++ b/app/services/asr/__init__.py
+@@ -0,0 +1,21 @@
++"""ASR service helpers."""
 +
-+  let telemetryPrev = null;
-+  let pendingDelta = null;
-+  let pendingDeltaTimerId = null;
-+  let telemetryHeartbeatTimerId = null;
-+  let lastHeartbeatPayload = null;
++from .sm_rt import (
++    ASR_KEEPALIVE_PING,
++    ASR_VENDOR_CLOSE_ACK,
++    ASR_VENDOR_CONNECT_INTENT,
++    SM_FINAL,
++    SM_NOTICE,
++    SM_PARTIAL,
++    SMRealtimeClient,
++)
 +
-+  function computeTelemetrySnapshot(sourceState = state) {
-+    const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
-+    const recorderActive = typeof snapshot.recorderActive === "boolean"
-+      ? snapshot.recorderActive
-+      : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
-+    return {
-+      wsConnected: Boolean(snapshot.wsConnected),
-+      wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
-+      ttsActive: Boolean(snapshot.ttsActive),
-+      asrArmInFlight: Boolean(snapshot.asrArmInFlight),
-+      armAfterTtsEnd: Boolean(snapshot.armAfterTtsEnd),
-+      listening: Boolean(snapshot.listening),
-+      recorderActive,
-+      lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
-+      chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
-+      lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
-+      lastErrorDetail: snapshot.lastErrorDetail ?? null,
-+    };
-+  }
++__all__ = [
++    "ASR_KEEPALIVE_PING",
++    "ASR_VENDOR_CLOSE_ACK",
++    "ASR_VENDOR_CONNECT_INTENT",
++    "SM_FINAL",
++    "SM_NOTICE",
++    "SM_PARTIAL",
++    "SMRealtimeClient",
++]
+diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4207d5f3d56b8a4b38c821728d6b00765dbf600
+--- /dev/null
++++ b/app/services/asr/sm_rt.py
+@@ -0,0 +1,676 @@
++"""Speechmatics realtime websocket client (PCM-only)."""
++from __future__ import annotations
 +
-+  function publishTelemetry(label, payload) {
-+    try {
-+      const hub = window.AppState && window.AppState.hub;
-+      if (hub && typeof hub.log === "function") {
-+        hub.log(label, payload);
-+      }
-+    } catch (err) {
-+      try {
-+        console.warn("AppState telemetry publish failed", label, err);
-+      } catch {}
-+    }
-+  }
++import asyncio
++import contextlib
++import json
++import logging
++import time
++from typing import Any, Callable, Dict, Iterable, Optional
 +
-+  function normalizeTelemetryValue(value) {
-+    return value === undefined ? null : value;
-+  }
++import websockets
++from websockets.client import WebSocketClientProtocol
++from websockets.exceptions import ConnectionClosed
 +
-+  function syncTrackedProperties(snapshot) {
-+    const target = window.AppState;
-+    if (!target || typeof target !== "object") {
-+      return;
-+    }
-+    for (const key of TELEMETRY_KEYS) {
-+      if (key === "recorderActive") {
-+        target.recorderActive = snapshot.recorderActive;
-+      } else {
-+        target[key] = snapshot[key];
-+      }
-+    }
-+  }
++from app.telemetry import bus as telemetry_bus
++from app.voice_v2 import (
++    EVT_ASR_CLOSED,
++    EVT_ASR_FINAL,
++    EVT_ASR_OPEN,
++    EVT_ASR_PARTIAL,
++    EVT_ASR_READY,
++)
 +
-+  function scheduleDeltaFlush() {
-+    if (pendingDeltaTimerId) {
-+      return;
-+    }
-+    pendingDeltaTimerId = setTimeout(() => {
-+      pendingDeltaTimerId = null;
-+      if (!pendingDelta) {
-+        return;
-+      }
-+      const snapshot = pendingDelta.snapshot || telemetryPrev || computeTelemetrySnapshot();
-+      const detail = {
-+        changed: pendingDelta.changed,
-+        now_ms: Date.now(),
-+        wsPhase: snapshot.wsPhase,
-+        recorderActive: snapshot.recorderActive,
-+        listening: snapshot.listening,
-+        ttsActive: snapshot.ttsActive,
-+        asrArmInFlight: snapshot.asrArmInFlight,
-+        armAfterTtsEnd: snapshot.armAfterTtsEnd,
-+        chunkCount: snapshot.chunkCount,
-+      };
-+      publishTelemetry("client.appstate.delta", detail);
-+      pendingDelta = null;
-+    }, DELTA_COALESCE_MS);
-+  }
++__all__ = [
++    "ASR_KEEPALIVE_PING",
++    "ASR_VENDOR_CLOSE_ACK",
++    "ASR_VENDOR_CONNECT_INTENT",
++    "SM_FINAL",
++    "SM_NOTICE",
++    "SM_PARTIAL",
++    "SMRealtimeClient",
++]
 +
-+  function recordTelemetryChange(prevSnapshot, nextSnapshot) {
-+    if (!prevSnapshot) {
-+      return;
-+    }
-+    const changed = {};
-+    for (const key of TELEMETRY_KEYS) {
-+      if (!Object.is(prevSnapshot[key], nextSnapshot[key])) {
-+        changed[key] = true;
-+      }
-+    }
-+    const changedKeys = Object.keys(changed);
-+    if (!changedKeys.length) {
-+      return;
-+    }
-+    if (!pendingDelta) {
-+      pendingDelta = { changed: {}, snapshot: nextSnapshot };
-+    }
-+    for (const key of changedKeys) {
-+      const existing = pendingDelta.changed[key];
-+      if (existing) {
-+        existing.new = normalizeTelemetryValue(nextSnapshot[key]);
-+        continue;
-+      }
-+      pendingDelta.changed[key] = {
-+        old: normalizeTelemetryValue(prevSnapshot[key]),
-+        new: normalizeTelemetryValue(nextSnapshot[key]),
-+      };
-+    }
-+    pendingDelta.snapshot = nextSnapshot;
-+    scheduleDeltaFlush();
-+  }
 +
-+  function stopTelemetryHeartbeat() {
-+    if (telemetryHeartbeatTimerId) {
-+      clearInterval(telemetryHeartbeatTimerId);
-+      telemetryHeartbeatTimerId = null;
-+    }
-+    lastHeartbeatPayload = null;
-+  }
++_log = logging.getLogger(__name__)
 +
-+  function heartbeatPayloadEqual(a, b) {
-+    if (!a || !b) {
-+      return false;
-+    }
-+    return (
-+      a.wsPhase === b.wsPhase &&
-+      a.wsConnected === b.wsConnected &&
-+      a.ttsActive === b.ttsActive &&
-+      a.listening === b.listening &&
-+      a.recorderActive === b.recorderActive &&
-+      a.chunkCount === b.chunkCount &&
-+      a.lastChunkAgeMs === b.lastChunkAgeMs
-+    );
-+  }
++ASR_VENDOR_CONNECT_INTENT = "ASR_VENDOR_CONNECT_INTENT"
++ASR_VENDOR_CLOSE_ACK = "ASR_VENDOR_CLOSE_ACK"
++ASR_KEEPALIVE_PING = "ASR_KEEPALIVE_PING"
++SM_NOTICE = "SM_NOTICE"
++SM_PARTIAL = "SM_PARTIAL"
++SM_FINAL = "SM_FINAL"
 +
-+  function runTelemetryHeartbeat() {
-+    const snapshot = telemetryPrev || computeTelemetrySnapshot();
-+    if (!snapshot.wsConnected) {
-+      stopTelemetryHeartbeat();
-+      return;
-+    }
-+    const lastChunkAgeMs = snapshot.chunkCount > 0 && Number.isFinite(snapshot.lastChunkTs)
-+      ? Math.max(0, Date.now() - snapshot.lastChunkTs)
-+      : null;
-+    const payload = {
-+      wsPhase: snapshot.wsPhase,
-+      wsConnected: snapshot.wsConnected,
-+      ttsActive: snapshot.ttsActive,
-+      listening: snapshot.listening,
-+      recorderActive: snapshot.recorderActive,
-+      chunkCount: snapshot.chunkCount,
-+      lastChunkAgeMs,
-+    };
-+    if (heartbeatPayloadEqual(payload, lastHeartbeatPayload)) {
-+      return;
-+    }
-+    publishTelemetry("client.appstate.heartbeat", payload);
-+    lastHeartbeatPayload = payload;
-+  }
 +
-+  function ensureTelemetryHeartbeat(snapshot) {
-+    if (snapshot.wsConnected) {
-+      if (!telemetryHeartbeatTimerId) {
-+        telemetryHeartbeatTimerId = setInterval(runTelemetryHeartbeat, HEARTBEAT_INTERVAL_MS);
-+        runTelemetryHeartbeat();
-+      }
-+      return;
-+    }
-+    stopTelemetryHeartbeat();
-+  }
++class SMRealtimeClient:
++    """Minimal Speechmatics realtime client with telemetry hooks."""
 +
-+  function processTelemetry(nextState) {
-+    const nextSnapshot = computeTelemetrySnapshot(nextState);
-+    if (!telemetryPrev) {
-+      telemetryPrev = nextSnapshot;
-+      syncTrackedProperties(nextSnapshot);
-+      ensureTelemetryHeartbeat(nextSnapshot);
-+      return;
-+    }
-+    const prevSnapshot = telemetryPrev;
-+    telemetryPrev = nextSnapshot;
-+    syncTrackedProperties(nextSnapshot);
-+    recordTelemetryChange(prevSnapshot, nextSnapshot);
-+    ensureTelemetryHeartbeat(nextSnapshot);
-+  }
++    VENDOR = "speechmatics"
++    SOURCE = "speechmatics_client"
 +
-+  telemetryPrev = computeTelemetrySnapshot(state);
-+  syncTrackedProperties(telemetryPrev);
++    _READY_MESSAGES = {"RecognitionStarted", "recognition_started"}
++    _PARTIAL_MESSAGES = {
++        "AddPartialTranscript",
++        "PartialTranscript",
++        "AddPartial",
++        "add_partial_transcript",
++    }
++    _FINAL_MESSAGES = {
++        "AddTranscript",
++        "Transcript",
++        "FinalTranscript",
++        "AddFinalTranscript",
++    }
++    _CLOSE_ACK_MESSAGES = {
++        "EndOfTranscript",
++        "RecognitionEnded",
++        "EndOfStreamAcknowledged",
++        "EndOfStream",
++        "SessionEnded",
++    }
 +
-   function snapshot() {
-     return { ...state };
-   }
- 
-   function notify() {
-     const current = snapshot();
-     listeners.forEach((listener) => {
-       try {
-         listener(current);
-       } catch (err) {
-         console.error("AppState subscriber error", err);
-       }
-     });
-   }
- 
-   function setState(patch) {
-     if (!patch || typeof patch !== "object") return;
-     const sanitized = { ...patch };
-     if ("resume" in sanitized) {
-       delete sanitized.resume;
-     }
-     if ("resumeError" in sanitized) {
-       delete sanitized.resumeError;
-     }
-     const preservedResume = state.resume;
-     const preservedResumeError = state.resumeError;
-     state = {
-       ...state,
-       ...sanitized,
-       resume: preservedResume,
-       resumeError: preservedResumeError
-     };
-+    processTelemetry(state);
-     notify();
-   }
- 
-   function setResume(token, ttlMs) {
-     const candidate = typeof token === "string" ? token.trim() : "";
-     const ttl = Number(ttlMs);
-     if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
-       clearResume();
-       return null;
-     }
-     const expiresAt = Date.now() + ttl;
-     const resumeState = {
-       token: candidate,
-       ttlMs: ttl,
-       expiresAt
-     };
-     state = {
-       ...state,
-       resume: resumeState,
-       resumeError: null
-     };
-+    processTelemetry(state);
-     notify();
-     return resumeState;
-   }
- 
-   function clearResume() {
-     if (state.resume !== null || state.resumeError !== null) {
-       state = { ...state, resume: null, resumeError: null };
-+      processTelemetry(state);
-       notify();
-     }
-   }
- 
-   function reset() {
-     state = { ...initialState };
-+    processTelemetry(state);
-     notify();
-   }
- 
-   function subscribe(listener) {
-     if (typeof listener !== "function") {
-       throw new TypeError("listener must be a function");
-     }
-     listeners.add(listener);
-     listener(snapshot());
-     return () => {
-       listeners.delete(listener);
-     };
-   }
- 
-   const AppState = window.AppState = {
-     get: snapshot,
-     getState: snapshot,
-     setState,
-     reset,
-     subscribe,
-     setResume,
-     clearResume,
-     get initialState() {
-       return { ...initialState };
-     }
-   };
- 
-+  syncTrackedProperties(telemetryPrev);
++    PCM_QUEUE_MAX = 25
++    READY_TIMEOUT_S = 5.0
++    CLOSE_ACK_TIMEOUT_S = 5.0
++    KEEPALIVE_INTERVAL_S = 30.0
 +
-   const hubLogs = [];
-   const hubStartQueue = [];
-   const hubStopQueue = [];
-   let hubPendingSocket = { hasValue: false, value: null };
-   let hubImpl = null;
- 
-   function enqueueLog(label, detail) {
-     if (hubLogs.length >= 40) {
-       hubLogs.shift();
-     }
-     hubLogs.push({ label, detail });
-   }
- 
-   function enqueueStart(policy) {
-     if (hubStartQueue.length >= 10) {
-       hubStartQueue.shift();
-     }
-     hubStartQueue.push(policy);
-   }
- 
-   function enqueueStop(reason) {
-     if (hubStopQueue.length >= 10) {
-       hubStopQueue.shift();
-     }
-     hubStopQueue.push(reason);
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 9bd8ff0b6213009bfa5bba67637e4b7eb95076f1..1d8a704a80983325842c963edddd7ba94b34f30e 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -480,79 +480,145 @@ import { WakeWord } from "./wake_word.js";
-   let micLastChunkAt = 0;
-   let postTtsArmTimerId = null;
- 
-   function getRecorder() {
-     if (recorderInstance && typeof recorderInstance.startListening === "function") {
-       return recorderInstance;
-     }
-     const candidate = typeof window !== "undefined" ? window.AudioRecorder : null;
-     if (!candidate || typeof candidate.startListening !== "function") {
-       return null;
-     }
-     recorderInstance = candidate;
-     return recorderInstance;
-   }
- 
-   function normalizeReason(reason) {
-     if (typeof reason === "string" && reason) {
-       return reason;
-     }
-     if (reason && typeof reason === "object" && typeof reason.reason === "string" && reason.reason) {
-       return reason.reason;
-     }
-     return "unspecified";
-   }
- 
--  function setAppStateFlag(key, value) {
-+  function setAppStateValue(key, value) {
-+    if (typeof key !== "string" || !key) {
-+      return;
-+    }
-     const state = typeof AppState.getState === "function" ? AppState.getState() : null;
--    const current = state && key in state ? state[key] : AppState[key];
--    if (current === value) {
-+    const hasKey = state && Object.prototype.hasOwnProperty.call(state, key);
-+    const current = hasKey ? state[key] : AppState[key];
-+    if (Object.is(current, value)) {
-       AppState[key] = value;
-       return;
-     }
-     AppState[key] = value;
-     updateState({ [key]: value });
-   }
- 
-   function setListeningState(active) {
-     const listening = Boolean(active);
--    setAppStateFlag("listening", listening);
-+    setAppStateValue("listening", listening);
-     const recorderState = { active: listening };
--    updateState({ recorder: recorderState });
-+    AppState.recorderActive = listening;
-+    updateState({ recorder: recorderState, recorderActive: listening });
-     if (AppState.recorder && typeof AppState.recorder === "object") {
-       AppState.recorder = { ...AppState.recorder, active: listening };
-     } else {
-       AppState.recorder = recorderState;
-     }
-+    if (listening) {
-+      setWsPhase("streaming");
-+    } else if (AppState.wsConnected) {
-+      setWsPhase("connected");
-+    }
-   }
- 
-   function setAsrArmInFlight(inFlight) {
--    setAppStateFlag("asrArmInFlight", Boolean(inFlight));
-+    setAppStateValue("asrArmInFlight", Boolean(inFlight));
-   }
- 
-   function setArmAfterTtsEnd(pending) {
--    setAppStateFlag("armAfterTtsEnd", Boolean(pending));
-+    setAppStateValue("armAfterTtsEnd", Boolean(pending));
-+  }
++    def __init__(
++        self,
++        sid: str,
++        *,
++        telemetry_bus=telemetry_bus,
++        on_ready: Optional[Callable[[Dict[str, Any]], None]] = None,
++        on_partial: Optional[Callable[[str, int], None]] = None,
++        on_final: Optional[Callable[[str, int], None]] = None,
++        on_notice: Optional[Callable[[Dict[str, Any]], None]] = None,
++        on_closed: Optional[Callable[[str], None]] = None,
++        ready_timeout_s: Optional[float] = None,
++        close_ack_timeout_s: Optional[float] = None,
++        keepalive_interval_s: Optional[float] = None,
++    ) -> None:
++        if not sid:
++            raise ValueError("sid must be provided")
++        self._sid = sid
++        self._bus = telemetry_bus
++        self._state = "idle"
++        self._state_lock = asyncio.Lock()
++        self._ws: WebSocketClientProtocol | None = None
++        self._region: str | None = None
++        self._url: str | None = None
++        self._connected_at = 0.0
++        self._last_activity = time.monotonic()
++        self._partial_seq = 0
++        self._ready_event = asyncio.Event()
++        self._close_ack_event = asyncio.Event()
++        self._stop_event = asyncio.Event()
++        self._pcm_queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
++        self._pcm_sentinel: object = object()
++        self._receiver_task: asyncio.Task[None] | None = None
++        self._sender_task: asyncio.Task[None] | None = None
++        self._keepalive_task: asyncio.Task[None] | None = None
++        self._closing = False
++        self._closed_event = asyncio.Event()
++        self._close_reason: str | None = None
++        self._sent_end_of_stream = False
++        self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
++        self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
++        self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
 +
-+  function setWsConnected(connected) {
-+    setAppStateValue("wsConnected", Boolean(connected));
-+  }
++        self._on_ready = on_ready or (lambda info: None)
++        self._on_partial = on_partial or (lambda text, latency: None)
++        self._on_final = on_final or (lambda text, latency: None)
++        self._on_notice = on_notice or (lambda meta: None)
++        self._on_closed = on_closed or (lambda reason: None)
 +
-+  function setWsPhase(phase) {
-+    if (typeof phase !== "string" || !phase) {
-+      return;
-+    }
-+    setAppStateValue("wsPhase", phase);
-+  }
++    # ------------------------------------------------------------------
++    # Public properties
++    # ------------------------------------------------------------------
++    @property
++    def state(self) -> str:
++        """Return the current connection state."""
 +
-+  function resetRecorderTelemetry() {
-+    setAppStateValue("chunkCount", 0);
-+    setAppStateValue("lastChunkTs", null);
-+  }
++        return self._state
 +
-+  function recordRecorderChunk(timestampMs) {
-+    const now = Number.isFinite(timestampMs) ? timestampMs : Date.now();
-+    const currentCount = typeof AppState.chunkCount === "number"
-+      ? AppState.chunkCount
-+      : (typeof AppState.getState === "function" ? (AppState.getState().chunkCount || 0) : 0);
-+    const nextCount = currentCount + 1;
-+    AppState.chunkCount = nextCount;
-+    AppState.lastChunkTs = now;
-+    updateState({ chunkCount: nextCount, lastChunkTs: now });
-+  }
++    # ------------------------------------------------------------------
++    # Lifecycle management
++    # ------------------------------------------------------------------
++    async def connect(self, jwt: str, region: str, params: Dict[str, Any]) -> None:
++        """Open the Speechmatics websocket and wait for RecognitionStarted."""
 +
-+  function normalizeErrorDetail(detail) {
-+    if (detail === null || detail === undefined) {
-+      return null;
-+    }
-+    if (typeof detail === "string") {
-+      return truncateBannerString(detail, 240);
-+    }
-+    if (typeof detail === "number" || typeof detail === "boolean") {
-+      return truncateBannerString(String(detail), 240);
-+    }
-+    try {
-+      const serialized = JSON.stringify(detail);
-+      return truncateBannerString(serialized, 240);
-+    } catch (err) {
-+      try {
-+        return truncateBannerString(String(detail), 240);
-+      } catch {
-+        return null;
-+      }
-+    }
-+  }
++        if not isinstance(params, dict):
++            raise TypeError("params must be a dict")
++        if not jwt:
++            raise ValueError("jwt must be provided")
++        if not region:
++            raise ValueError("region must be provided")
 +
-+  function recordLastError(code, detail) {
-+    const normalizedCode = Number.isFinite(code) ? code : null;
-+    const normalizedDetail = normalizeErrorDetail(detail);
-+    setAppStateValue("lastErrorCode", normalizedCode);
-+    setAppStateValue("lastErrorDetail", normalizedDetail);
-   }
- 
-   function clearPostTtsArmTimer() {
-     if (postTtsArmTimerId) {
-       clearTimeout(postTtsArmTimerId);
-       postTtsArmTimerId = null;
-     }
-   }
- 
-   function clearAudioKeepaliveTimer() {
-     if (micKeepaliveTimerId) {
-       clearTimeout(micKeepaliveTimerId);
-       micKeepaliveTimerId = null;
-     }
-   }
- 
-   function scheduleAudioKeepalive() {
-     clearAudioKeepaliveTimer();
-     micKeepaliveTimerId = setTimeout(() => {
-       micKeepaliveTimerId = null;
-       const listening = Boolean(AppState.listening);
-       const now = Date.now();
-       if (!listening) {
-         return;
-       }
-@@ -589,130 +655,136 @@ import { WakeWord } from "./wake_word.js";
-       logStage("client.audio_header_send", {
-         format: AUDIO_HEADER_FRAME.format,
-         sample_rate: AUDIO_HEADER_FRAME.sample_rate,
-         channels: AUDIO_HEADER_FRAME.channels,
-       });
-     } catch (err) {
-       console.warn("Failed to send audio header", err);
-     }
-   }
- 
-   function handleRecorderChunk(event) {
-     if (!event) {
-       return;
-     }
-     const buffer = event.buffer instanceof ArrayBuffer
-       ? event.buffer
-       : (ArrayBuffer.isView(event.buffer)
-         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-         : null);
-     if (!buffer) {
-       return;
-     }
-     const seq = Number(event.seq) || 0;
-     micLastChunkAt = Date.now();
-     scheduleAudioKeepalive();
-+    recordRecorderChunk(micLastChunkAt);
-     if (seq === 0) {
-       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-     }
-     logStage("client.audio_chunk_send", { seq, bytes: buffer.byteLength });
-     try {
-       const result = sendBinary(buffer, { lane: "mic" });
-       if (result && typeof result.catch === "function") {
-         result.catch((err) => {
-           console.warn("Binary send (mic) failed", err);
-         });
-       }
-     } catch (err) {
-       console.error("WSClient sendBinary mic failed", err);
-     }
-   }
- 
-   async function startRecorderStreaming(policy) {
-     if (AppState.listening) {
-       return;
-     }
-     const recorder = getRecorder();
-     if (!recorder) {
-       console.warn("AudioRecorder unavailable; cannot start streaming");
-       return;
-     }
-     try {
-       await recorder.start({ onChunk: handleRecorderChunk, policy });
-     } catch (err) {
-       if (err && err.name === "NotAllowedError") {
-         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
-       }
-       throw err;
-     }
-+    resetRecorderTelemetry();
-     await recorder.startListening(policy);
-     micLastChunkAt = Date.now();
-     scheduleAudioKeepalive();
-     setListeningState(true);
-   }
- 
-   function schedulePostTtsArm(reason) {
-     clearPostTtsArmTimer();
-     postTtsArmTimerId = setTimeout(() => {
-       postTtsArmTimerId = null;
-       requestAsrArm(reason);
-     }, POST_TTS_ARM_DELAY_MS);
-   }
- 
-   function requestAsrArm(reason) {
-     const label = normalizeReason(reason);
-     clearPostTtsArmTimer();
-     if (AppState.ttsActive) {
-       setArmAfterTtsEnd(true);
-       logStage("client.asr_arm_queued", { reason: label });
-       return;
-     }
-     if (AppState.asrArmInFlight) {
-       logStage("client.asr_rearm_blocked", { reason: label });
-       return;
-     }
-     try {
-       WSClient.send({ type: "asr.open" });
-       setAsrArmInFlight(true);
-+      setWsPhase("arming");
-       logStage("client.asr_rearm_request", { reason: label });
-     } catch (err) {
-       setAsrArmInFlight(false);
-+      setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
-       console.error("Failed to send asr.open", err);
-       logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_WS_SEND, message: err?.message });
-     }
-   }
- 
-   function requestAsrClose(reason = "client_stop") {
-     const label = normalizeReason(reason);
-     clearPostTtsArmTimer();
-     setArmAfterTtsEnd(false);
-     setAsrArmInFlight(false);
-     try {
-       WSClient.send({ type: "asr.close", reason: label });
-+      setWsPhase("closing");
-       logStage("client.asr_close_request", { reason: label });
-     } catch (err) {
-       console.warn("Failed to send asr.close", err);
-+      setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
-     }
-     stopRecorder(label);
-   }
- 
-   const CLIENT_BANNER_TYPE = "client.banner";
-   const CLIENT_BANNER_MAX_HISTORY = 24;
-   const CLIENT_BANNER_MAX_QUEUE = 24;
-   const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
-   const CLIENT_BANNER_STRING_MAX = 240;
- 
-   let clientBannerQueue = [];
- 
-   // Initialize the client banner state only after related constants are defined.
-   ensureClientBannerState();
- 
-   let wakeWordIgnoredLogged = false;
-   WakeWord.onHotword(() => {
-     if (wakeWordIgnoredLogged) {
-       return;
-     }
-     wakeWordIgnoredLogged = true;
-     try {
-       console.info("wake_word_detected_ignore=1 reason=vad_barge_in_default");
-     } catch {}
-   });
-@@ -766,71 +838,99 @@ import { WakeWord } from "./wake_word.js";
-       return;
-     }
-     const snapshot = AppState.getState();
-     const patch = {};
-     if (typeof snapshot.policy === "undefined") {
-       patch.policy = AppState.policy;
-     }
-     if (typeof snapshot.asrReady === "undefined") {
-       patch.asrReady = false;
-     }
-     if (typeof snapshot.asrVendor === "undefined") {
-       patch.asrVendor = null;
-     }
-     if (typeof snapshot.ttsActive === "undefined") {
-       patch.ttsActive = false;
-     }
-     if (typeof snapshot.asrArmInFlight === "undefined") {
-       patch.asrArmInFlight = false;
-     }
-     if (typeof snapshot.armAfterTtsEnd === "undefined") {
-       patch.armAfterTtsEnd = false;
-     }
-     if (typeof snapshot.listening === "undefined") {
-       patch.listening = false;
-     }
-+    if (typeof snapshot.wsConnected === "undefined") {
-+      patch.wsConnected = Boolean(AppState.wsConnected);
-+    }
-+    if (typeof snapshot.wsPhase === "undefined") {
-+      patch.wsPhase = typeof AppState.wsPhase === "string" ? AppState.wsPhase : "disconnected";
-+    }
-     if (typeof snapshot.turnState === "undefined") {
-       patch.turnState = null;
-     }
-     if (typeof snapshot.recorder === "undefined") {
-       patch.recorder = { active: false };
-     }
-+    if (typeof snapshot.recorderActive === "undefined") {
-+      patch.recorderActive = Boolean(AppState.recorderActive);
-+    }
-+    if (typeof snapshot.chunkCount === "undefined") {
-+      patch.chunkCount = Number.isFinite(AppState.chunkCount) ? AppState.chunkCount : 0;
-+    }
-+    if (typeof snapshot.lastChunkTs === "undefined") {
-+      patch.lastChunkTs = Number.isFinite(AppState.lastChunkTs) ? AppState.lastChunkTs : null;
-+    }
-+    if (typeof snapshot.lastErrorCode === "undefined") {
-+      patch.lastErrorCode = Number.isFinite(AppState.lastErrorCode) ? AppState.lastErrorCode : null;
-+    }
-+    if (typeof snapshot.lastErrorDetail === "undefined") {
-+      patch.lastErrorDetail = AppState.lastErrorDetail ?? null;
-+    }
-     if (Object.keys(patch).length) {
-       updateState(patch);
-     }
-     AppState.asrReady = Boolean(snapshot.asrReady);
-     AppState.asrVendor = typeof snapshot.asrVendor === 'string' && snapshot.asrVendor
-       ? snapshot.asrVendor
-       : null;
-     AppState.ttsActive = Boolean(snapshot.ttsActive);
-     AppState.asrArmInFlight = Boolean(snapshot.asrArmInFlight);
-     AppState.armAfterTtsEnd = Boolean(snapshot.armAfterTtsEnd);
-     AppState.listening = Boolean(snapshot.listening);
-+    AppState.wsConnected = Boolean(snapshot.wsConnected);
-+    AppState.wsPhase = typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected";
-     AppState.turnState = typeof snapshot.turnState === "string" ? snapshot.turnState : null;
-     AppState.recorder = snapshot.recorder && typeof snapshot.recorder === "object"
-       ? { active: Boolean(snapshot.recorder.active) }
-       : { active: false };
-+    AppState.recorderActive = Boolean(snapshot.recorderActive ?? snapshot?.recorder?.active);
-+    AppState.chunkCount = Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0;
-+    AppState.lastChunkTs = Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null;
-+    AppState.lastErrorCode = Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : null;
-+    AppState.lastErrorDetail = snapshot.lastErrorDetail ?? null;
-   }
- 
-   function attachUserGestureListeners() {
-     if (!AppState?.policy?.require_user_gesture_first_visit) {
-       userGestureSatisfied = true;
-       if (typeof gestureListenerCleanup === "function") {
-         gestureListenerCleanup();
-       }
-       return;
-     }
-     if (userGestureSatisfied || typeof window === "undefined") {
-       return;
-     }
-     if (gestureListenerCleanup) {
-       return;
-     }
-     const listeners = [];
-     const handler = (event) => {
-       const reason = event && typeof event.type === "string" ? event.type : "gesture";
-       markUserGestureSatisfied(reason);
-       maybeAutoStart("gesture");
-     };
-     USER_GESTURE_EVENTS.forEach((eventName) => {
-       try {
-         window.addEventListener(eventName, handler, { passive: true });
-@@ -2538,82 +2638,82 @@ import { WakeWord } from "./wake_word.js";
-         handleChatHistoryFrame(frame);
-       } else if (frame.type === "error") {
-         handleErrorFrame(frame);
-         return;
-       } else if (frame.type !== "info") {
-         console.error("Expected info frame first, received", frame.type);
-         close("bad_info_sequence");
-         return;
-       }
-       if (frame.type === "info") {
-         handleInfoFrame(frame);
-       }
-     } else if (frame.type === "info") {
-       handleInfoFrame(frame);
-     } else if (frame.type === "server.pong") {
-       handlePongFrame(frame);
-     } else if (frame.type === "pong") {
-       handlePongFrame(frame);
-     } else if (frame.type === "error") {
-       handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
-       try {
-         AppState?.hub?.stopListening?.("tts");
-       } catch {}
-       stopRecorder("tts_start");
--      setAppStateFlag("ttsActive", true);
-+      setAppStateValue("ttsActive", true);
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: true });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
-       }
-       const uttIdStart = frame?.utt_id || 'utt-00001';
-       logStage('client.tts_start', { utt_id: uttIdStart });
-       logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
-     } else if (frame.type === "tts.end") {
--      setAppStateFlag("ttsActive", false);
-+      setAppStateValue("ttsActive", false);
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: false });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-       const uttIdEnd = frame?.utt_id || 'utt-00001';
-       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       if (AppState.armAfterTtsEnd) {
-         schedulePostTtsArm("post_greet");
-         setArmAfterTtsEnd(false);
-       }
-     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
-       const uttId = frame?.utt_id || 'utt-00001';
-       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
--      setAppStateFlag("ttsActive", false);
-+      setAppStateValue("ttsActive", false);
-       logStage('client.tts', {
-         outcome: 'ended',
-         utt_id: uttId,
-         dur_ms: frame?.dur_ms,
-         reason,
-       });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
-     } else if (frame.type === "start_listening") {
-       const ar = window.AudioRecorder || null;
-       const policy = frame?.policy || {};
-       let unifiedArmed = false;
-       try {
-         if (ar?.setPolicy) ar.setPolicy(policy);
-         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
-         const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
-         const asrInput = frame?.policy?.media?.asr_input ?? null;
-         console.info(
-           "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
-           vendor,
-           pipeline,
-           asrInput,
-         );
-         if (ar?.start) {
-           await ar.start(policy);
-           unifiedArmed = true;
-@@ -2686,50 +2786,52 @@ import { WakeWord } from "./wake_word.js";
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-       clearPendingAsrReadyStart("stop_listening");
-       __asrReadySeen = false;
-       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-         try {
-           const reason =
-             (typeof frame?.reason === "string" && frame.reason) ||
-             "server_requested";
-           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
-         } catch (err) {
-           console.warn("stop_listening event dispatch failed", err);
-         }
-       }
-     } else if (frame.type === "input.start") {
-       await handleInputStartFrame(frame);
-     } else if (frame.type === "input.stop") {
-       stopInputCapture({ reason: "input.stop" });
-       clearPendingAsrReadyStart("input.stop");
-       __asrReadySeen = false;
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-       __asrReadySeen = true;
-       setAsrArmInFlight(false);
-       setArmAfterTtsEnd(false);
-+      setWsConnected(true);
-+      setWsPhase("ready");
-       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-       sendAudioHeader();
-       try {
-         await startRecorderStreaming(frame?.policy || {});
-       } catch (err) {
-         console.error("Recorder start on asr.ready failed", err);
-         logStage("client.mic", {
-           outcome: MIC_OUTCOME.ERROR_GUM,
-           message: err && err.message ? err.message : String(err || ""),
-         });
-         setListeningState(false);
-       }
-     } else if (frame.type === "asr.partial") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.final") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.unavailable") {
-       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-       const details = frame && typeof frame.details === "string"
-         ? frame.details
-         : (frame && typeof frame.detail === "string" ? frame.detail : "");
-       console.warn("asr.unavailable", reason, details);
-       AppState.asrReady = false;
-       AppState.asrVendor = null;
-       updateState({ asrReady: false, asrVendor: null });
-@@ -2807,103 +2909,116 @@ import { WakeWord } from "./wake_word.js";
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
-     }
-     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-       const chunk = data instanceof ArrayBuffer
-         ? data
-         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(chunk);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-       return;
-     }
-     console.warn("Unknown WS frame type", data);
-   }
- 
-   function attachSocket(ws) {
-     ws.__intentionalClose = false;
-     const handlers = {
-       open: () => {
-         // Write live socket and mark connected so UI gates on ws.open can run
-+        setWsConnected(true);
-+        setWsPhase("connected");
-+        recordLastError(null, null);
-         try {
-           if (typeof AppState.setState === "function") {
-             AppState.setState({ websocket: ws, connectionState: "connected" });
-           } else {
-             updateState({ websocket: ws, connectionState: "connected" });
-           }
-         } catch {
-           updateState({ websocket: ws, connectionState: "connected" });
-         }
-         try {
-           WSClient._ws = ws;
-           WSClient._connected = true;
-         } catch {}
-         try {
-           window.ws = ws;
-         } catch {}
-         try {
-           if (AppState && AppState.hub && typeof AppState.hub.bindSocket === "function") {
-             AppState.hub.bindSocket(ws);
-           }
-         } catch (err) {
-           console.warn("AppState.hub.bindSocket open failed", err);
-         }
-         try {
-           if (!Array.isArray(WSClient._queue)) {
-             WSClient._queue = [];
-           }
-           if (WSClient._queue.length) {
-             for (const { data, isBinary } of WSClient._queue) {
-               WSClient.send(data, { binary: isBinary });
-             }
-             WSClient._queue.length = 0;
-           }
-         } catch {}
-         try {
-           window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
-         } catch {}
-         try {
-           if (!WSClient._linkedProofLogged) {
-             console.info("evt=ws_linked AppState", !!AppState?.websocket, "WSClient", !!WSClient._ws);
-             WSClient._linkedProofLogged = true;
-           }
-         } catch {}
-         startHeartbeat();
-         logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
-       },
-       message: parseFrame,
-       error: (event) => {
-         console.error("WebSocket error", event);
-+        const message = event && typeof event?.message === "string" && event.message
-+          ? event.message
-+          : "socket_error";
-+        recordLastError(null, message);
-         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
-       },
-       close: (event) => {
-         const expected = ws.__intentionalClose === true;
-+        const detailReason = event && typeof event?.reason === "string" && event.reason
-+          ? event.reason
-+          : (expected ? "intentional_close" : "ws_close");
-+        recordLastError(event && typeof event?.code === "number" ? event.code : null, detailReason);
-+        setWsConnected(false);
-+        setWsPhase("disconnected");
-         logStage('client.ws', { outcome: 'close', code: event?.code, reason: event?.reason });
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: event?.reason || (expected ? 'intentional_close' : 'ws_close') });
-         try {
-           WSClient._connected = false;
-           WSClient._ws = null;
-           WSClient._linkedProofLogged = false;
-         } catch {}
-         try {
-           window.ws = null;
-         } catch {}
-         try {
-           if (AppState && AppState.hub && typeof AppState.hub.bindSocket === "function") {
-             AppState.hub.bindSocket(null);
-           }
-         } catch (err) {
-           console.warn("AppState.hub.bindSocket close failed", err);
-         }
-         if (socket === ws) {
-           socket = null;
-           expectInfoFrame = true;
-           clearInfoWatchdog();
-         }
-         clearHeartbeat();
-         updateState({ websocket: null });
-         let resumed = false;
-@@ -2914,50 +3029,52 @@ import { WakeWord } from "./wake_word.js";
-           updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-         }
-         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
-       }
-     };
-     ws.addEventListener("open", handlers.open);
-     ws.addEventListener("message", handlers.message);
-     ws.addEventListener("error", handlers.error);
-     ws.addEventListener("close", handlers.close);
-     ws.__handlers = handlers;
-   }
- 
-   function detachSocket(ws) {
-     const handlers = ws && ws.__handlers;
-     if (!handlers) return;
-     ws.removeEventListener("open", handlers.open);
-     ws.removeEventListener("message", handlers.message);
-     ws.removeEventListener("error", handlers.error);
-     ws.removeEventListener("close", handlers.close);
-     delete ws.__handlers;
-     delete ws.__intentionalClose;
-   }
- 
-   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
-     if (!ws) return;
-+    setWsPhase("closing");
-+    setWsConnected(false);
-     detachSocket(ws);
-     ws.__intentionalClose = true;
-     recordClientBannerEvent("ws.cleanup", { reason: truncateBannerString(reason || "", 80) });
-     try {
-       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-         ws.close(1000, reason);
-       }
-     } catch (err) {
-       console.warn("WSClient cleanup close error", err);
-     }
-     if (socket === ws) {
-       socket = null;
-       expectInfoFrame = true;
-       clearInfoWatchdog();
-       stopInputCapture();
-       try {
-         if (window.ws === ws) {
-           window.ws = null;
-         }
-       } catch {}
-     }
-     const client = WSClient;
-     if (client && typeof client === "object") {
-       client._ws = null;
-       client._connected = false;
-@@ -3020,116 +3137,131 @@ import { WakeWord } from "./wake_word.js";
-         url: bannerUrlMeta,
-       });
-       return;
-     }
- 
-     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
-     const bannerProtocols = Array.isArray(wsProtocols)
-       ? wsProtocols
-         .filter((proto) => typeof proto === "string" && proto)
-         .map((proto) => truncateBannerString(proto, 48))
-         .slice(0, 4)
-       : (typeof wsProtocols === "string" && wsProtocols ? truncateBannerString(wsProtocols, 48) : undefined);
-     recordClientBannerEvent("ws.open.request", {
-       resume: isResuming,
-       skip_rate_limit_cancel: Boolean(skipRateLimitCancel),
-       has_access_token: hasAccessToken,
-       url: bannerUrlMeta,
-       protocols: bannerProtocols,
-     });
-     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
-     const logPayload = Array.isArray(wsProtocols)
-       ? { url: wsUrl, protocols: wsProtocols }
-       : { url: wsUrl, subprotocol: wsProtocols };
-     console.log("WS opening", logPayload);
- 
-+    setWsConnected(false);
-+    setWsPhase(resumeTokenValue ? "resuming" : "connecting");
-+    recordLastError(null, null);
++        async with self._state_lock:
++            if self._state not in {"idle", "closed"}:
++                raise RuntimeError(f"client state {self._state} cannot connect")
++            self._state = "opening"
 +
-     const tokenInfo = trackTokenFromUrl(wsUrl);
-     const ws = transportFactory(wsUrl, wsProtocols);
-     ws.__accessTokenInfo = tokenInfo;
-     ws.__handshakeToastShown = false;
-     try {
-       ws.binaryType = "arraybuffer";
-     } catch (err) {
-       console.warn("Failed to set WebSocket binaryType", err);
-     }
- 
-     ws.onopen = () => {
-       // Lightweight breadcrumb; keep as console.log
-       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
-       logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || (typeof wsProtocols === "string" ? wsProtocols : null) });
-       recordClientBannerEvent("ws.socket.open", {
-         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
-       });
-       flushClientBannerQueue();
-     };
- 
-     ws.onerror = (e) => {
-       console.error("WebSocket error", e, { readyState: ws.readyState });
-+      const message = e && typeof e?.message === "string" && e.message
-+        ? e.message
-+        : "socket_error";
-+      recordLastError(null, message);
-       maybeShowHandshakeToast(ws, null);
-       recordClientBannerEvent("ws.socket.error", {
-         ready_state: ws.readyState,
-       });
-     };
- 
-     ws.onclose = (e) => {
-       console.error("WebSocket closed", {
-         code: e.code,
-         reason: e.reason,
-         wasClean: e.wasClean,
-         readyState: ws.readyState,
-       });
-+      const detailReason = typeof e.reason === "string" && e.reason ? e.reason : "handshake_close";
-+      recordLastError(typeof e.code === "number" ? e.code : null, detailReason);
-+      setWsConnected(false);
-+      setWsPhase("disconnected");
-       logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
-       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
-       recordClientBannerEvent("ws.socket.close", {
-         code: typeof e.code === "number" ? e.code : undefined,
-         reason: truncateBannerString(e.reason || "", 160),
-         was_clean: Boolean(e.wasClean),
-         ready_state: ws.readyState,
-       });
-     };
- 
-     socket = ws;
-     updateState({
-       connectionState: resumeTokenValue ? "resuming" : "connecting",
-       websocket: ws,
-       latencyMs: null,
-       lastPingAt: null,
-       resumeError: null,
-       infoFrame: null,
-       serverBanner: null
-     });
-     attachSocket(ws);
-     return ws;
-   }
- 
-   function close(reason = DEFAULT_CLOSE_REASON) {
-     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
-     stopRecorder(reason || "client_shutdown");
-     setAsrArmInFlight(false);
-     setArmAfterTtsEnd(false);
--    setAppStateFlag("ttsActive", false);
-+    setAppStateValue("ttsActive", false);
-+    setWsPhase("closing");
-+    setWsConnected(false);
-     if (!socket) {
-+      setWsPhase("disconnected");
-       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-       return;
-     }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-       try {
-         window.WSErrorUI.cancelRateLimitCountdown(reason);
-       } catch (err) {
-         console.warn("Failed to cancel countdown on close", err);
-       }
-     }
-     autoResumeAttemptToken = null;
-     updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
-   }
- 
-   function send(payload, { binary = false } = {}) {
-     const client = (this && typeof this === "object") ? this : WSClient;
-     if (!Array.isArray(client._queue)) {
-       client._queue = [];
-     }
-     let stateSocket = null;
++        self._stop_event = asyncio.Event()
++        self._ready_event = asyncio.Event()
++        self._close_ack_event = asyncio.Event()
++        self._closed_event = asyncio.Event()
++        self._close_reason = None
++        self._sent_end_of_stream = False
++        self._pcm_queue = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
++
++        self._region = region.strip()
++        self._publish_event(
++            ASR_VENDOR_CONNECT_INTENT,
++            {
++                "vendor": self.VENDOR,
++                "region": self._region,
++                "meta": {"reason": "connect"},
++            },
++        )
++
++        url = f"wss://{self._region}.rt.speechmatics.com/v2?jwt={jwt}"
++        self._url = url
++
++        try:
++            ws = await websockets.connect(
++                url,
++                ping_interval=None,
++                ping_timeout=None,
++                max_size=None,
++            )
++        except Exception:
++            async with self._state_lock:
++                self._state = "closed"
++            raise
++
++        self._ws = ws
++        self._connected_at = time.monotonic()
++        self._last_activity = self._connected_at
++
++        await self._send_json(params)
++
++        self._publish_event(
++            EVT_ASR_OPEN,
++            {
++                "vendor": self.VENDOR,
++                "meta": {"url": url},
++            },
++        )
++
++        extra_messages: list[dict] = []
++        try:
++            extra_messages = await self._await_ready(ws)
++        except Exception:
++            with contextlib.suppress(Exception):
++                await ws.close()
++            await self._finalize_close(reason="ready_failed", publish_close=True)
++            raise
++
++        self._ready_event.set()
++
++        self._receiver_task = asyncio.create_task(self._receive_loop())
++        self._sender_task = asyncio.create_task(self._pcm_sender_loop())
++        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
++
++        for message in extra_messages:
++            self._process_message(message)
++
++    async def send_pcm(self, chunk: bytes) -> None:
++        """Queue PCM16 audio bytes for transmission."""
++
++        if not isinstance(chunk, (bytes, bytearray, memoryview)):
++            raise TypeError("chunk must be bytes-like")
++        data = bytes(chunk)
++        if not data:
++            return
++        if len(data) % 2 != 0:
++            raise ValueError("pcm chunk must contain complete 16-bit samples")
++
++        if self._state != "open":
++            self._emit_notice({"kind": "pcm_ignored_state", "state": self._state})
++            return
++
++        queue = self._pcm_queue
++        if queue.full():
++            try:
++                dropped = queue.get_nowait()
++            except asyncio.QueueEmpty:  # pragma: no cover - defensive
++                dropped = None
++            else:
++                if dropped is not None and dropped is not self._pcm_sentinel:
++                    self._emit_notice(
++                        {"kind": "backpressure_drop", "bytes": len(dropped)}
++                    )
++                queue.task_done()
++        await queue.put(data)
++
++    async def send_end_of_stream(self) -> None:
++        """Send the vendor end-of-stream marker and await acknowledgement."""
++
++        if self._state != "open":
++            return
++        if self._sent_end_of_stream:
++            await self._wait_for_close_ack()
++            return
++
++        self._sent_end_of_stream = True
++        payload = {"message": "EndOfStream"}
++        await self._send_json(payload)
++        await self._wait_for_close_ack()
++
++    async def close(self) -> None:
++        """Gracefully close the websocket connection."""
++
++        if self._state in {"idle", "closed"}:
++            return
++        if self._closing:
++            await self._closed_event.wait()
++            return
++
++        self._closing = True
++        await self._stop_sender()
++        await self._stop_receiver()
++        await self._stop_keepalive()
++
++        ws = self._ws
++        if ws is not None:
++            try:
++                await ws.close(code=1000)
++            except Exception:  # pragma: no cover - defensive
++                pass
++
++        await self._finalize_close(reason=self._close_reason or "client_close")
++
++    # ------------------------------------------------------------------
++    # Internal helpers
++    # ------------------------------------------------------------------
++    async def _await_ready(self, ws: WebSocketClientProtocol) -> list[dict]:
++        """Wait for the RecognitionStarted message."""
++
++        deadline = self._ready_timeout_s
++        extra: list[dict] = []
++        start = time.monotonic()
++        while True:
++            remaining = deadline - (time.monotonic() - start)
++            if remaining <= 0:
++                raise TimeoutError("speechmatics ready timeout")
++            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
++            self._last_activity = time.monotonic()
++            message = self._decode_message(raw)
++            if not isinstance(message, dict):
++                continue
++            message_type = self._message_type(message)
++            if message_type in self._READY_MESSAGES:
++                self._handle_ready(message)
++                break
++            extra.append(message)
++        return extra
++
++    async def _receive_loop(self) -> None:
++        ws = self._ws
++        if ws is None:
++            return
++        try:
++            async for raw in ws:
++                self._last_activity = time.monotonic()
++                message = self._decode_message(raw)
++                self._process_message(message)
++        except asyncio.CancelledError:  # pragma: no cover - cooperative cancel
++            raise
++        except ConnectionClosed as exc:
++            self._close_reason = exc.reason or "vendor_closed"
++        except Exception:  # pragma: no cover - defensive
++            _log.exception("speechmatics receive loop error")
++            self._close_reason = "receive_error"
++        finally:
++            await self._finalize_close(reason=self._close_reason or "vendor_closed")
++
++    async def _pcm_sender_loop(self) -> None:
++        await self._ready_event.wait()
++        try:
++            while not self._stop_event.is_set():
++                try:
++                    item = await asyncio.wait_for(self._pcm_queue.get(), timeout=0.5)
++                except asyncio.TimeoutError:
++                    continue
++                if item is self._pcm_sentinel:
++                    self._pcm_queue.task_done()
++                    break
++                if not isinstance(item, (bytes, bytearray)):
++                    self._pcm_queue.task_done()
++                    continue
++                data = bytes(item)
++                ws = self._ws
++                if ws is None:
++                    self._pcm_queue.task_done()
++                    break
++                try:
++                    await ws.send(data)
++                    self._last_activity = time.monotonic()
++                except ConnectionClosed:
++                    self._pcm_queue.task_done()
++                    break
++                except Exception:  # pragma: no cover - defensive
++                    _log.exception("speechmatics pcm send failed")
++                    self._pcm_queue.task_done()
++                    break
++                else:
++                    self._pcm_queue.task_done()
++        except asyncio.CancelledError:  # pragma: no cover - cooperative cancel
++            raise
++
++    async def _keepalive_loop(self) -> None:
++        try:
++            while not self._stop_event.is_set():
++                await asyncio.sleep(self._keepalive_interval_s)
++                if self._stop_event.is_set():
++                    break
++                if self._state != "open":
++                    continue
++                now = time.monotonic()
++                if now - self._last_activity < self._keepalive_interval_s:
++                    continue
++                ws = self._ws
++                if ws is None:
++                    continue
++                try:
++                    await ws.ping()
++                    self._last_activity = time.monotonic()
++                except ConnectionClosed:
++                    break
++                except Exception:  # pragma: no cover - defensive
++                    _log.exception("speechmatics ping failed")
++                    break
++                else:
++                    self._publish_event(
++                        ASR_KEEPALIVE_PING,
++                        {
++                            "vendor": self.VENDOR,
++                            "meta": {"idle_ms": int(self._keepalive_interval_s * 1000)},
++                        },
++                    )
++        except asyncio.CancelledError:  # pragma: no cover
++            raise
++
++    def _decode_message(self, raw: Any) -> Any:
++        if isinstance(raw, bytes):
++            return raw
++        if isinstance(raw, str):
++            try:
++                return json.loads(raw)
++            except json.JSONDecodeError as exc:
++                self._emit_notice(
++                    {"kind": "json_decode_error", "error": str(exc), "raw": raw[:80]}
++                )
++                return {}
++        return raw
++
++    def _process_message(self, message: Any) -> None:
++        if isinstance(message, dict):
++            self._handle_dict_message(message)
++        elif message:
++            self._emit_notice(
++                {
++                    "kind": "unexpected_binary",
++                    "type": type(message).__name__,
++                }
++            )
++
++    def _handle_dict_message(self, message: Dict[str, Any]) -> None:
++        message_type = self._message_type(message)
++        if not message_type:
++            self._emit_notice({"kind": "unknown_message", "payload": message})
++            return
++
++        if message_type in self._READY_MESSAGES:
++            self._handle_ready(message)
++            return
++        if message_type in self._PARTIAL_MESSAGES:
++            self._handle_partial(message)
++            return
++        if message_type in self._FINAL_MESSAGES:
++            self._handle_final(message)
++            return
++        if message_type in self._CLOSE_ACK_MESSAGES:
++            self._handle_close_ack(message)
++            return
++        if message_type.lower() in {"warning", "info"}:
++            self._emit_notice({"kind": message_type.lower(), "payload": message})
++            return
++        if message_type.lower() == "error":
++            self._emit_notice({"kind": "vendor_error", "payload": message})
++            self._close_reason = "vendor_error"
++            return
++        self._emit_notice({"kind": "unhandled_message", "payload": message})
++
++    def _handle_ready(self, message: Dict[str, Any]) -> None:
++        if self._state != "open":
++            self._state = "open"
++        meta = self._extract_meta(message)
++        self._publish_event(EVT_ASR_READY, {"vendor": self.VENDOR, "meta": meta})
++        self._call_callback(self._on_ready, meta)
++
++    def _handle_partial(self, message: Dict[str, Any]) -> None:
++        text = self._extract_text(message)
++        if not text:
++            return
++        latency_ms = self._extract_latency_ms(message)
++        self._partial_seq += 1
++        payload = {
++            "text": text,
++            "latency_ms": latency_ms,
++            "partial_seq": self._partial_seq,
++            "vendor": self.VENDOR,
++            "meta": self._extract_meta(message),
++        }
++        self._publish_event(EVT_ASR_PARTIAL, payload)
++        self._publish_event(SM_PARTIAL, payload)
++        self._call_callback(self._on_partial, text, latency_ms)
++
++    def _handle_final(self, message: Dict[str, Any]) -> None:
++        text = self._extract_text(message)
++        if not text:
++            return
++        latency_ms = self._extract_latency_ms(message)
++        payload = {
++            "text": text,
++            "latency_ms": latency_ms,
++            "vendor": self.VENDOR,
++            "meta": self._extract_meta(message),
++        }
++        self._publish_event(EVT_ASR_FINAL, payload)
++        self._publish_event(SM_FINAL, payload)
++        self._call_callback(self._on_final, text, latency_ms)
++
++    def _handle_close_ack(self, message: Dict[str, Any]) -> None:
++        if self._close_ack_event.is_set():
++            return
++        meta = self._extract_meta(message)
++        self._publish_event(
++            ASR_VENDOR_CLOSE_ACK,
++            {"vendor": self.VENDOR, "meta": meta},
++        )
++        self._close_ack_event.set()
++
++    async def _wait_for_close_ack(self) -> None:
++        try:
++            await asyncio.wait_for(
++                self._close_ack_event.wait(), timeout=self._close_ack_timeout_s
++            )
++        except asyncio.TimeoutError:
++            self._emit_notice({"kind": "close_ack_timeout"})
++
++    async def _stop_sender(self) -> None:
++        self._stop_event.set()
++        if not self._pcm_queue.empty():
++            with contextlib.suppress(asyncio.QueueEmpty):
++                while True:
++                    item = self._pcm_queue.get_nowait()
++                    self._pcm_queue.task_done()
++        try:
++            self._pcm_queue.put_nowait(self._pcm_sentinel)
++        except asyncio.QueueFull:
++            with contextlib.suppress(asyncio.QueueEmpty):
++                _ = self._pcm_queue.get_nowait()
++                self._pcm_queue.task_done()
++            with contextlib.suppress(asyncio.QueueFull):
++                self._pcm_queue.put_nowait(self._pcm_sentinel)
++        sender = self._sender_task
++        if sender is not None:
++            sender.cancel()
++            with contextlib.suppress(Exception):
++                await sender
++
++    async def _stop_receiver(self) -> None:
++        receiver = self._receiver_task
++        if receiver is not None:
++            receiver.cancel()
++            with contextlib.suppress(Exception):
++                await receiver
++
++    async def _stop_keepalive(self) -> None:
++        task = self._keepalive_task
++        if task is not None:
++            task.cancel()
++            with contextlib.suppress(Exception):
++                await task
++
++    async def _finalize_close(self, *, reason: str, publish_close: bool = True) -> None:
++        self._stop_event.set()
++        self._ready_event.set()
++        self._close_ack_event.set()
++        async with self._state_lock:
++            if self._state == "closed":
++                self._closed_event.set()
++                return
++            self._state = "closed"
++        self._close_reason = reason
++        if publish_close:
++            self._publish_event(
++                EVT_ASR_CLOSED,
++                {
++                    "vendor": self.VENDOR,
++                    "meta": {"reason": reason},
++                },
++            )
++        self._call_callback(self._on_closed, reason)
++        self._closed_event.set()
++        self._ws = None
++        self._closing = False
++
++    def _publish_event(self, event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
++        event = {
++            "type": event_type,
++            "sid": self._sid,
++            "source": self.SOURCE,
++            "ts_ms": self._now_ms(),
++        }
++        if payload:
++            event.update(payload)
++        try:
++            self._bus.publish(event)
++        except Exception:  # pragma: no cover - defensive
++            _log.exception("telemetry publish failed for %s", event_type)
++
++    def _emit_notice(self, meta: Dict[str, Any]) -> None:
++        meta = dict(meta)
++        meta.setdefault("vendor", self.VENDOR)
++        self._publish_event(SM_NOTICE, {"meta": meta})
++        self._call_callback(self._on_notice, meta)
++
++    def _call_callback(self, callback: Callable[..., None], *args) -> None:
++        try:
++            callback(*args)
++        except Exception:  # pragma: no cover - defensive
++            _log.exception("speechmatics callback error: %s", getattr(callback, "__name__", callback))
++
++    def _message_type(self, message: Dict[str, Any]) -> str | None:
++        for key in ("message", "type", "event"):
++            value = message.get(key)
++            if isinstance(value, str) and value:
++                return value
++        return None
++
++    def _extract_text(self, message: Dict[str, Any]) -> str | None:
++        candidates: Iterable[Any] = []
++        metadata = message.get("metadata")
++        if isinstance(metadata, dict):
++            candidates = list(metadata.values()) + list(candidates)
++            transcript = metadata.get("transcript")
++            if isinstance(transcript, str) and transcript.strip():
++                return transcript.strip()
++        results = message.get("results")
++        if isinstance(results, list):
++            for result in results:
++                if not isinstance(result, dict):
++                    continue
++                channel = result.get("channel")
++                if isinstance(channel, dict):
++                    alt = channel.get("alternatives")
++                    if isinstance(alt, list):
++                        for candidate in alt:
++                            if isinstance(candidate, dict):
++                                text = candidate.get("transcript") or candidate.get("text")
++                                if isinstance(text, str) and text.strip():
++                                    return text.strip()
++                alternatives = result.get("alternatives")
++                if isinstance(alternatives, list):
++                    for candidate in alternatives:
++                        if isinstance(candidate, dict):
++                            text = candidate.get("transcript") or candidate.get("text")
++                            if isinstance(text, str) and text.strip():
++                                return text.strip()
++        for key in ("transcript", "text", "utterance"):
++            value = message.get(key)
++            if isinstance(value, str) and value.strip():
++                return value.strip()
++        for candidate in candidates:
++            if isinstance(candidate, str) and candidate.strip():
++                return candidate.strip()
++        return None
++
++    def _extract_latency_ms(self, message: Dict[str, Any]) -> int:
++        metadata = message.get("metadata")
++        if isinstance(metadata, dict):
++            for key in ("latency_ms", "latency", "duration_ms", "end_time_ms"):
++                value = metadata.get(key)
++                if isinstance(value, (int, float)):
++                    return int(max(0, float(value)))
++                if isinstance(value, str):
++                    try:
++                        return int(max(0, float(value)))
++                    except ValueError:
++                        continue
++            end_time = metadata.get("end_time") or metadata.get("end_time_s")
++            if isinstance(end_time, (int, float)):
++                return int(max(0, float(end_time) * 1000))
++            if isinstance(end_time, str):
++                try:
++                    return int(max(0, float(end_time) * 1000))
++                except ValueError:
++                    pass
++        return int((time.monotonic() - self._connected_at) * 1000)
++
++    def _extract_meta(self, message: Dict[str, Any]) -> Dict[str, Any]:
++        meta = {}
++        if isinstance(message.get("metadata"), dict):
++            meta.update(message["metadata"])
++        session_id = message.get("session_id") or message.get("sessionId")
++        if isinstance(session_id, str):
++            meta.setdefault("session_id", session_id)
++        seq = message.get("seq_no") or message.get("sequence") or message.get("id")
++        if isinstance(seq, (int, float)):
++            meta.setdefault("seq", int(seq))
++        message_type = self._message_type(message)
++        if message_type:
++            meta.setdefault("message_type", message_type)
++        return meta
++
++    async def _send_json(self, payload: Dict[str, Any]) -> None:
++        ws = self._ws
++        if ws is None:
++            raise RuntimeError("websocket not connected")
++        data = json.dumps(payload)
++        await ws.send(data)
++
++    def _now_ms(self) -> int:
++        return int(time.time() * 1000)
