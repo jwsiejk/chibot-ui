@@ -13,11 +13,230 @@
     clientBanner: {
       info: null,
       events: []
-    }
+    },
+    wsConnected: false,
+    wsPhase: "disconnected",
+    ttsActive: false,
+    asrArmInFlight: false,
+    armAfterTtsEnd: false,
+    listening: false,
+    recorderActive: false,
+    lastChunkTs: null,
+    chunkCount: 0,
+    lastErrorCode: null,
+    lastErrorDetail: null,
   };
 
   let state = { ...initialState };
   const listeners = new Set();
+
+  const TELEMETRY_KEYS = [
+    "wsConnected",
+    "wsPhase",
+    "ttsActive",
+    "asrArmInFlight",
+    "armAfterTtsEnd",
+    "listening",
+    "recorderActive",
+    "lastChunkTs",
+    "chunkCount",
+    "lastErrorCode",
+    "lastErrorDetail",
+  ];
+  const DELTA_COALESCE_MS = 12;
+  const HEARTBEAT_INTERVAL_MS = 5000;
+
+  let telemetryPrev = null;
+  let pendingDelta = null;
+  let pendingDeltaTimerId = null;
+  let telemetryHeartbeatTimerId = null;
+  let lastHeartbeatPayload = null;
+
+  function computeTelemetrySnapshot(sourceState = state) {
+    const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
+    const recorderActive = typeof snapshot.recorderActive === "boolean"
+      ? snapshot.recorderActive
+      : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
+    return {
+      wsConnected: Boolean(snapshot.wsConnected),
+      wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
+      ttsActive: Boolean(snapshot.ttsActive),
+      asrArmInFlight: Boolean(snapshot.asrArmInFlight),
+      armAfterTtsEnd: Boolean(snapshot.armAfterTtsEnd),
+      listening: Boolean(snapshot.listening),
+      recorderActive,
+      lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
+      chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
+      lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
+      lastErrorDetail: snapshot.lastErrorDetail ?? null,
+    };
+  }
+
+  function publishTelemetry(label, payload) {
+    try {
+      const hub = window.AppState && window.AppState.hub;
+      if (hub && typeof hub.log === "function") {
+        hub.log(label, payload);
+      }
+    } catch (err) {
+      try {
+        console.warn("AppState telemetry publish failed", label, err);
+      } catch {}
+    }
+  }
+
+  function normalizeTelemetryValue(value) {
+    return value === undefined ? null : value;
+  }
+
+  function syncTrackedProperties(snapshot) {
+    const target = window.AppState;
+    if (!target || typeof target !== "object") {
+      return;
+    }
+    for (const key of TELEMETRY_KEYS) {
+      if (key === "recorderActive") {
+        target.recorderActive = snapshot.recorderActive;
+      } else {
+        target[key] = snapshot[key];
+      }
+    }
+  }
+
+  function scheduleDeltaFlush() {
+    if (pendingDeltaTimerId) {
+      return;
+    }
+    pendingDeltaTimerId = setTimeout(() => {
+      pendingDeltaTimerId = null;
+      if (!pendingDelta) {
+        return;
+      }
+      const snapshot = pendingDelta.snapshot || telemetryPrev || computeTelemetrySnapshot();
+      const detail = {
+        changed: pendingDelta.changed,
+        now_ms: Date.now(),
+        wsPhase: snapshot.wsPhase,
+        recorderActive: snapshot.recorderActive,
+        listening: snapshot.listening,
+        ttsActive: snapshot.ttsActive,
+        asrArmInFlight: snapshot.asrArmInFlight,
+        armAfterTtsEnd: snapshot.armAfterTtsEnd,
+        chunkCount: snapshot.chunkCount,
+      };
+      publishTelemetry("client.appstate.delta", detail);
+      pendingDelta = null;
+    }, DELTA_COALESCE_MS);
+  }
+
+  function recordTelemetryChange(prevSnapshot, nextSnapshot) {
+    if (!prevSnapshot) {
+      return;
+    }
+    const changed = {};
+    for (const key of TELEMETRY_KEYS) {
+      if (!Object.is(prevSnapshot[key], nextSnapshot[key])) {
+        changed[key] = true;
+      }
+    }
+    const changedKeys = Object.keys(changed);
+    if (!changedKeys.length) {
+      return;
+    }
+    if (!pendingDelta) {
+      pendingDelta = { changed: {}, snapshot: nextSnapshot };
+    }
+    for (const key of changedKeys) {
+      const existing = pendingDelta.changed[key];
+      if (existing) {
+        existing.new = normalizeTelemetryValue(nextSnapshot[key]);
+        continue;
+      }
+      pendingDelta.changed[key] = {
+        old: normalizeTelemetryValue(prevSnapshot[key]),
+        new: normalizeTelemetryValue(nextSnapshot[key]),
+      };
+    }
+    pendingDelta.snapshot = nextSnapshot;
+    scheduleDeltaFlush();
+  }
+
+  function stopTelemetryHeartbeat() {
+    if (telemetryHeartbeatTimerId) {
+      clearInterval(telemetryHeartbeatTimerId);
+      telemetryHeartbeatTimerId = null;
+    }
+    lastHeartbeatPayload = null;
+  }
+
+  function heartbeatPayloadEqual(a, b) {
+    if (!a || !b) {
+      return false;
+    }
+    return (
+      a.wsPhase === b.wsPhase &&
+      a.wsConnected === b.wsConnected &&
+      a.ttsActive === b.ttsActive &&
+      a.listening === b.listening &&
+      a.recorderActive === b.recorderActive &&
+      a.chunkCount === b.chunkCount &&
+      a.lastChunkAgeMs === b.lastChunkAgeMs
+    );
+  }
+
+  function runTelemetryHeartbeat() {
+    const snapshot = telemetryPrev || computeTelemetrySnapshot();
+    if (!snapshot.wsConnected) {
+      stopTelemetryHeartbeat();
+      return;
+    }
+    const lastChunkAgeMs = snapshot.chunkCount > 0 && Number.isFinite(snapshot.lastChunkTs)
+      ? Math.max(0, Date.now() - snapshot.lastChunkTs)
+      : null;
+    const payload = {
+      wsPhase: snapshot.wsPhase,
+      wsConnected: snapshot.wsConnected,
+      ttsActive: snapshot.ttsActive,
+      listening: snapshot.listening,
+      recorderActive: snapshot.recorderActive,
+      chunkCount: snapshot.chunkCount,
+      lastChunkAgeMs,
+    };
+    if (heartbeatPayloadEqual(payload, lastHeartbeatPayload)) {
+      return;
+    }
+    publishTelemetry("client.appstate.heartbeat", payload);
+    lastHeartbeatPayload = payload;
+  }
+
+  function ensureTelemetryHeartbeat(snapshot) {
+    if (snapshot.wsConnected) {
+      if (!telemetryHeartbeatTimerId) {
+        telemetryHeartbeatTimerId = setInterval(runTelemetryHeartbeat, HEARTBEAT_INTERVAL_MS);
+        runTelemetryHeartbeat();
+      }
+      return;
+    }
+    stopTelemetryHeartbeat();
+  }
+
+  function processTelemetry(nextState) {
+    const nextSnapshot = computeTelemetrySnapshot(nextState);
+    if (!telemetryPrev) {
+      telemetryPrev = nextSnapshot;
+      syncTrackedProperties(nextSnapshot);
+      ensureTelemetryHeartbeat(nextSnapshot);
+      return;
+    }
+    const prevSnapshot = telemetryPrev;
+    telemetryPrev = nextSnapshot;
+    syncTrackedProperties(nextSnapshot);
+    recordTelemetryChange(prevSnapshot, nextSnapshot);
+    ensureTelemetryHeartbeat(nextSnapshot);
+  }
+
+  telemetryPrev = computeTelemetrySnapshot(state);
+  syncTrackedProperties(telemetryPrev);
 
   function snapshot() {
     return { ...state };
@@ -51,6 +270,7 @@
       resume: preservedResume,
       resumeError: preservedResumeError
     };
+    processTelemetry(state);
     notify();
   }
 
@@ -72,6 +292,7 @@
       resume: resumeState,
       resumeError: null
     };
+    processTelemetry(state);
     notify();
     return resumeState;
   }
@@ -79,12 +300,14 @@
   function clearResume() {
     if (state.resume !== null || state.resumeError !== null) {
       state = { ...state, resume: null, resumeError: null };
+      processTelemetry(state);
       notify();
     }
   }
 
   function reset() {
     state = { ...initialState };
+    processTelemetry(state);
     notify();
   }
 
@@ -111,6 +334,8 @@
       return { ...initialState };
     }
   };
+
+  syncTrackedProperties(telemetryPrev);
 
   const hubLogs = [];
   const hubStartQueue = [];

@@ -1,470 +1,646 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7eb95076f1 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -20,52 +20,50 @@ import { WakeWord } from "./wake_word.js";
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index 179b8558698e39dec2c388344b4fb6797c501fa2..81a1e51cc351cabe25c1937e184a8df7af2b4cf8 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -1,139 +1,364 @@
+ (() => {
+   const initialState = {
+     connectionState: "disconnected",
+     sid: null,
+     resume: null,
+     resumeError: null,
+     latencyMs: null,
+     lastPingAt: null,
+     heartbeatTimerId: null,
+     websocket: null,
+     infoFrame: null,
+     serverBanner: null,
+     clientBanner: {
+       info: null,
+       events: []
+-    }
++    },
++    wsConnected: false,
++    wsPhase: "disconnected",
++    ttsActive: false,
++    asrArmInFlight: false,
++    armAfterTtsEnd: false,
++    listening: false,
++    recorderActive: false,
++    lastChunkTs: null,
++    chunkCount: 0,
++    lastErrorCode: null,
++    lastErrorDetail: null,
    };
-   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-   const DEFAULT_ASR_VENDOR = 'speechmatics';
  
-   let __micAttempts = 0;
-   let __micChunks = 0;
-   let __micBytes = 0;
-   let __micArmedAt = 0;     // ms since epoch
-   let __micPermissionGranted = false;
-   let __micRecordingStartAt = null;
-   let __micFirstChunkBreadcrumbSent = false;
-   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
-   let __pendingAsrReadyStart = null;
-   let __autoVadPatchedForPendingStart = false;
+   let state = { ...initialState };
+   const listeners = new Set();
  
-   // Per-turn readiness/start tokens to prevent re-arm loops
--  let __readyToken = 0;
--  let __micStartedForToken = -1;
-   let __asrReadySeen = false;
- 
-   if (typeof window !== "undefined") {
-     try {
-       Object.defineProperty(window, "__micAttempts", {
-         configurable: true,
-         get() { return __micAttempts; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micAttempts = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__micChunks", {
-         configurable: true,
-         get() { return __micChunks; },
-         set(value) {
-           if (Number.isFinite(value)) {
-             __micChunks = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__micBytes", {
-         configurable: true,
-         get() { return __micBytes; },
-@@ -259,126 +257,67 @@ import { WakeWord } from "./wake_word.js";
-   function markAutoVadActiveAfterAsrReady() {
-     if (__autoVadPatchedForPendingStart) {
-       return;
-     }
-     __autoVadPatchedForPendingStart = true;
- 
-     try {
-       patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
-     } catch (err) {
-       try {
-         console.warn("Failed to patch policy VAD after asr.ready", err);
-       } catch {}
-     }
-   }
- 
-   async function startStreamingAfterAsrReady(trigger) {
-     const pending = __pendingAsrReadyStart;
-     if (!pending) {
-       return false;
-     }
-     __pendingAsrReadyStart = null;
-     const reason = typeof trigger === "string" && trigger
-       ? trigger
-       : (typeof pending.reason === "string" && pending.reason ? pending.reason : "asr_ready");
-     const policy = clonePolicySnapshot(pending.policy);
--    const ar = window.AudioRecorder || null;
--    if (ar && typeof ar.startListening === "function") {
--      try {
--        const startPolicy = { ...policy };
--        if (!startPolicy.reason && typeof reason === "string" && reason) {
--          startPolicy.reason = reason;
--        }
--        const maybe = ar.startListening(startPolicy);
--        if (maybe && typeof maybe.then === "function") {
--          await maybe;
--        }
--        try {
--          console.info("diag=mic_start_streaming trigger=%s", reason);
--        } catch {}
--        return true;
--      } catch (err) {
--        console.error("AudioRecorder startListening on asr.ready failed", err);
--        try {
--          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
--          logMic({
--            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
--            message: err?.message,
--          });
--        } catch {}
--        __pendingAsrReadyStart = pending;
--        return false;
--      }
--    }
--
--    const hub = AppState?.hub;
--    if (hub && typeof hub.startListening === "function") {
--      try {
--        const maybe = hub.startListening(policy);
--        if (maybe && typeof maybe.then === "function") {
--          await maybe;
--        }
--        try {
--          console.info("diag=hub_start_listening trigger=%s", reason);
--        } catch {}
--        return true;
--      } catch (err) {
--        console.warn("Hub startListening deferred start failed", err);
--        try {
--          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
--          logMic({
--            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
--            message: err?.message,
--          });
--        } catch {}
--        __pendingAsrReadyStart = pending;
--        return false;
--      }
--    }
--
--    if (pending.frame) {
--      try {
--        startInputCapture(pending.frame);
--        try {
--          console.info("diag=legacy_input_start trigger=%s", reason);
--        } catch {}
--        return true;
--      } catch (err) {
--        console.warn("Legacy input start on asr.ready failed", err);
--        try {
--          const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
--          logMic({
--            outcome: denied ? MIC_OUTCOME.ERROR_DENIED : MIC_OUTCOME.ERROR_GUM,
--            message: err?.message,
--          });
--        } catch {}
--        __pendingAsrReadyStart = pending;
--        return false;
++  const TELEMETRY_KEYS = [
++    "wsConnected",
++    "wsPhase",
++    "ttsActive",
++    "asrArmInFlight",
++    "armAfterTtsEnd",
++    "listening",
++    "recorderActive",
++    "lastChunkTs",
++    "chunkCount",
++    "lastErrorCode",
++    "lastErrorDetail",
++  ];
++  const DELTA_COALESCE_MS = 12;
++  const HEARTBEAT_INTERVAL_MS = 5000;
++
++  let telemetryPrev = null;
++  let pendingDelta = null;
++  let pendingDeltaTimerId = null;
++  let telemetryHeartbeatTimerId = null;
++  let lastHeartbeatPayload = null;
++
++  function computeTelemetrySnapshot(sourceState = state) {
++    const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
++    const recorderActive = typeof snapshot.recorderActive === "boolean"
++      ? snapshot.recorderActive
++      : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
++    return {
++      wsConnected: Boolean(snapshot.wsConnected),
++      wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
++      ttsActive: Boolean(snapshot.ttsActive),
++      asrArmInFlight: Boolean(snapshot.asrArmInFlight),
++      armAfterTtsEnd: Boolean(snapshot.armAfterTtsEnd),
++      listening: Boolean(snapshot.listening),
++      recorderActive,
++      lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
++      chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
++      lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
++      lastErrorDetail: snapshot.lastErrorDetail ?? null,
++    };
++  }
++
++  function publishTelemetry(label, payload) {
 +    try {
-+      if (!AppState.listening) {
-+        sendAudioHeader();
-       }
-+      await startRecorderStreaming(policy);
-+      logMic({ outcome: MIC_OUTCOME.STREAMING, reason });
-+      return true;
++      const hub = window.AppState && window.AppState.hub;
++      if (hub && typeof hub.log === "function") {
++        hub.log(label, payload);
++      }
 +    } catch (err) {
-+      console.error("Deferred recorder start failed", err);
-+      logMic({
-+        outcome: MIC_OUTCOME.ERROR_GUM,
-+        message: err && err.message ? err.message : String(err || ""),
-+        reason,
-+      });
-+      __pendingAsrReadyStart = pending;
-+      return false;
-     }
--
--    return false;
-   }
- 
-   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
-   let autostartAttempts = 0;
-   let autostartTimer = null;
- 
-   const WSClient = window.WSClient = window.WSClient || {};
-   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
-     window.ws = null;
-   }
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-   const getAudioPlayer = () => window.AudioPlayer;
- 
-   function hubLog(label, detail) {
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-       try {
-         hub.log(label, detail);
-         return true;
-       } catch (err) {
-         console.warn("AppState.hub.log failed", err);
-       }
-@@ -492,63 +431,292 @@ import { WakeWord } from "./wake_word.js";
-         const reason = typeof detail?.reason === "string" && detail.reason ? detail.reason : null;
-         emitMicBreadcrumb({
-           event: "stopped",
-           reason,
-           ms_total_recording: totalMs,
-         });
-         __micRecordingStartAt = null;
-         __micFirstChunkBreadcrumbSent = false;
-       }
-       hubLog('client.mic', { ...base, ...detail });
-     } catch {}
-   }
- 
-   function logStage(label, detail = {}) {
-     try {
-       hubLog(label, { trace_id: __turnTraceId || null, ...detail });
-     } catch {}
-   }
- 
-   if (typeof window !== "undefined") {
-     try { window.__logMic = logMic; } catch {}
-     try { window.__logStage = logStage; } catch {}
-     try { window.__MIC_OUTCOME = MIC_OUTCOME; } catch {}
-   }
- 
-+  const AUDIO_HEADER_FRAME = Object.freeze({
-+    type: "audio.header",
-+    format: "pcm16",
-+    sample_rate: 16000,
-+    channels: 1,
-+  });
-+  const AUDIO_KEEPALIVE_MS = 20000;
-+  const POST_TTS_ARM_DELAY_MS = 300;
-+
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
-   let autoResumeAttemptToken = null;
-   let toastRoot = null;
-   let lastTokenValue = null;
-   let lastTokenMintedAt = null;
- 
-+  let recorderInstance = null;
-+  let micKeepaliveTimerId = null;
-+  let micLastChunkAt = 0;
-+  let postTtsArmTimerId = null;
-+
-+  function getRecorder() {
-+    if (recorderInstance && typeof recorderInstance.startListening === "function") {
-+      return recorderInstance;
++      try {
++        console.warn("AppState telemetry publish failed", label, err);
++      } catch {}
 +    }
-+    const candidate = typeof window !== "undefined" ? window.AudioRecorder : null;
-+    if (!candidate || typeof candidate.startListening !== "function") {
-+      return null;
-+    }
-+    recorderInstance = candidate;
-+    return recorderInstance;
 +  }
 +
-+  function normalizeReason(reason) {
-+    if (typeof reason === "string" && reason) {
-+      return reason;
-+    }
-+    if (reason && typeof reason === "object" && typeof reason.reason === "string" && reason.reason) {
-+      return reason.reason;
-+    }
-+    return "unspecified";
++  function normalizeTelemetryValue(value) {
++    return value === undefined ? null : value;
 +  }
 +
-+  function setAppStateFlag(key, value) {
-+    const state = typeof AppState.getState === "function" ? AppState.getState() : null;
-+    const current = state && key in state ? state[key] : AppState[key];
-+    if (current === value) {
-+      AppState[key] = value;
++  function syncTrackedProperties(snapshot) {
++    const target = window.AppState;
++    if (!target || typeof target !== "object") {
 +      return;
 +    }
-+    AppState[key] = value;
-+    updateState({ [key]: value });
-+  }
-+
-+  function setListeningState(active) {
-+    const listening = Boolean(active);
-+    setAppStateFlag("listening", listening);
-+    const recorderState = { active: listening };
-+    updateState({ recorder: recorderState });
-+    if (AppState.recorder && typeof AppState.recorder === "object") {
-+      AppState.recorder = { ...AppState.recorder, active: listening };
-+    } else {
-+      AppState.recorder = recorderState;
++    for (const key of TELEMETRY_KEYS) {
++      if (key === "recorderActive") {
++        target.recorderActive = snapshot.recorderActive;
++      } else {
++        target[key] = snapshot[key];
++      }
 +    }
 +  }
 +
-+  function setAsrArmInFlight(inFlight) {
-+    setAppStateFlag("asrArmInFlight", Boolean(inFlight));
-+  }
-+
-+  function setArmAfterTtsEnd(pending) {
-+    setAppStateFlag("armAfterTtsEnd", Boolean(pending));
-+  }
-+
-+  function clearPostTtsArmTimer() {
-+    if (postTtsArmTimerId) {
-+      clearTimeout(postTtsArmTimerId);
-+      postTtsArmTimerId = null;
++  function scheduleDeltaFlush() {
++    if (pendingDeltaTimerId) {
++      return;
 +    }
-+  }
-+
-+  function clearAudioKeepaliveTimer() {
-+    if (micKeepaliveTimerId) {
-+      clearTimeout(micKeepaliveTimerId);
-+      micKeepaliveTimerId = null;
-+    }
-+  }
-+
-+  function scheduleAudioKeepalive() {
-+    clearAudioKeepaliveTimer();
-+    micKeepaliveTimerId = setTimeout(() => {
-+      micKeepaliveTimerId = null;
-+      const listening = Boolean(AppState.listening);
-+      const now = Date.now();
-+      if (!listening) {
++    pendingDeltaTimerId = setTimeout(() => {
++      pendingDeltaTimerId = null;
++      if (!pendingDelta) {
 +        return;
 +      }
-+      if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
-+        try {
-+          WSClient.send({ type: "client.ping" });
-+          logStage("client.ping", { lane: "mic" });
-+        } catch (err) {
-+          console.warn("client.ping send failed", err);
-+        }
++      const snapshot = pendingDelta.snapshot || telemetryPrev || computeTelemetrySnapshot();
++      const detail = {
++        changed: pendingDelta.changed,
++        now_ms: Date.now(),
++        wsPhase: snapshot.wsPhase,
++        recorderActive: snapshot.recorderActive,
++        listening: snapshot.listening,
++        ttsActive: snapshot.ttsActive,
++        asrArmInFlight: snapshot.asrArmInFlight,
++        armAfterTtsEnd: snapshot.armAfterTtsEnd,
++        chunkCount: snapshot.chunkCount,
++      };
++      publishTelemetry("client.appstate.delta", detail);
++      pendingDelta = null;
++    }, DELTA_COALESCE_MS);
++  }
++
++  function recordTelemetryChange(prevSnapshot, nextSnapshot) {
++    if (!prevSnapshot) {
++      return;
++    }
++    const changed = {};
++    for (const key of TELEMETRY_KEYS) {
++      if (!Object.is(prevSnapshot[key], nextSnapshot[key])) {
++        changed[key] = true;
 +      }
-+      scheduleAudioKeepalive();
-+    }, AUDIO_KEEPALIVE_MS);
-+  }
-+
-+  function stopRecorder(reason) {
-+    clearAudioKeepaliveTimer();
-+    const recorder = getRecorder();
-+    if (!recorder) {
-+      setListeningState(false);
++    }
++    const changedKeys = Object.keys(changed);
++    if (!changedKeys.length) {
 +      return;
 +    }
-+    try {
-+      recorder.stopListening({ reason: normalizeReason(reason) });
-+    } catch (err) {
-+      console.warn("Recorder stopListening failed", err);
++    if (!pendingDelta) {
++      pendingDelta = { changed: {}, snapshot: nextSnapshot };
 +    }
-+    setListeningState(false);
-+  }
-+
-+  function sendAudioHeader() {
-+    try {
-+      WSClient.send({ ...AUDIO_HEADER_FRAME });
-+      logStage("client.audio_header_send", {
-+        format: AUDIO_HEADER_FRAME.format,
-+        sample_rate: AUDIO_HEADER_FRAME.sample_rate,
-+        channels: AUDIO_HEADER_FRAME.channels,
-+      });
-+    } catch (err) {
-+      console.warn("Failed to send audio header", err);
-+    }
-+  }
-+
-+  function handleRecorderChunk(event) {
-+    if (!event) {
-+      return;
-+    }
-+    const buffer = event.buffer instanceof ArrayBuffer
-+      ? event.buffer
-+      : (ArrayBuffer.isView(event.buffer)
-+        ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-+        : null);
-+    if (!buffer) {
-+      return;
-+    }
-+    const seq = Number(event.seq) || 0;
-+    micLastChunkAt = Date.now();
-+    scheduleAudioKeepalive();
-+    if (seq === 0) {
-+      logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-+    }
-+    logStage("client.audio_chunk_send", { seq, bytes: buffer.byteLength });
-+    try {
-+      const result = sendBinary(buffer, { lane: "mic" });
-+      if (result && typeof result.catch === "function") {
-+        result.catch((err) => {
-+          console.warn("Binary send (mic) failed", err);
-+        });
++    for (const key of changedKeys) {
++      const existing = pendingDelta.changed[key];
++      if (existing) {
++        existing.new = normalizeTelemetryValue(nextSnapshot[key]);
++        continue;
 +      }
-+    } catch (err) {
-+      console.error("WSClient sendBinary mic failed", err);
++      pendingDelta.changed[key] = {
++        old: normalizeTelemetryValue(prevSnapshot[key]),
++        new: normalizeTelemetryValue(nextSnapshot[key]),
++      };
 +    }
++    pendingDelta.snapshot = nextSnapshot;
++    scheduleDeltaFlush();
 +  }
 +
-+  async function startRecorderStreaming(policy) {
-+    if (AppState.listening) {
++  function stopTelemetryHeartbeat() {
++    if (telemetryHeartbeatTimerId) {
++      clearInterval(telemetryHeartbeatTimerId);
++      telemetryHeartbeatTimerId = null;
++    }
++    lastHeartbeatPayload = null;
++  }
++
++  function heartbeatPayloadEqual(a, b) {
++    if (!a || !b) {
++      return false;
++    }
++    return (
++      a.wsPhase === b.wsPhase &&
++      a.wsConnected === b.wsConnected &&
++      a.ttsActive === b.ttsActive &&
++      a.listening === b.listening &&
++      a.recorderActive === b.recorderActive &&
++      a.chunkCount === b.chunkCount &&
++      a.lastChunkAgeMs === b.lastChunkAgeMs
++    );
++  }
++
++  function runTelemetryHeartbeat() {
++    const snapshot = telemetryPrev || computeTelemetrySnapshot();
++    if (!snapshot.wsConnected) {
++      stopTelemetryHeartbeat();
 +      return;
 +    }
-+    const recorder = getRecorder();
-+    if (!recorder) {
-+      console.warn("AudioRecorder unavailable; cannot start streaming");
++    const lastChunkAgeMs = snapshot.chunkCount > 0 && Number.isFinite(snapshot.lastChunkTs)
++      ? Math.max(0, Date.now() - snapshot.lastChunkTs)
++      : null;
++    const payload = {
++      wsPhase: snapshot.wsPhase,
++      wsConnected: snapshot.wsConnected,
++      ttsActive: snapshot.ttsActive,
++      listening: snapshot.listening,
++      recorderActive: snapshot.recorderActive,
++      chunkCount: snapshot.chunkCount,
++      lastChunkAgeMs,
++    };
++    if (heartbeatPayloadEqual(payload, lastHeartbeatPayload)) {
 +      return;
 +    }
-+    try {
-+      await recorder.start({ onChunk: handleRecorderChunk, policy });
-+    } catch (err) {
-+      if (err && err.name === "NotAllowedError") {
-+        logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
++    publishTelemetry("client.appstate.heartbeat", payload);
++    lastHeartbeatPayload = payload;
++  }
++
++  function ensureTelemetryHeartbeat(snapshot) {
++    if (snapshot.wsConnected) {
++      if (!telemetryHeartbeatTimerId) {
++        telemetryHeartbeatTimerId = setInterval(runTelemetryHeartbeat, HEARTBEAT_INTERVAL_MS);
++        runTelemetryHeartbeat();
 +      }
-+      throw err;
-+    }
-+    await recorder.startListening(policy);
-+    micLastChunkAt = Date.now();
-+    scheduleAudioKeepalive();
-+    setListeningState(true);
-+  }
-+
-+  function schedulePostTtsArm(reason) {
-+    clearPostTtsArmTimer();
-+    postTtsArmTimerId = setTimeout(() => {
-+      postTtsArmTimerId = null;
-+      requestAsrArm(reason);
-+    }, POST_TTS_ARM_DELAY_MS);
-+  }
-+
-+  function requestAsrArm(reason) {
-+    const label = normalizeReason(reason);
-+    clearPostTtsArmTimer();
-+    if (AppState.ttsActive) {
-+      setArmAfterTtsEnd(true);
-+      logStage("client.asr_arm_queued", { reason: label });
 +      return;
 +    }
-+    if (AppState.asrArmInFlight) {
-+      logStage("client.asr_rearm_blocked", { reason: label });
++    stopTelemetryHeartbeat();
++  }
++
++  function processTelemetry(nextState) {
++    const nextSnapshot = computeTelemetrySnapshot(nextState);
++    if (!telemetryPrev) {
++      telemetryPrev = nextSnapshot;
++      syncTrackedProperties(nextSnapshot);
++      ensureTelemetryHeartbeat(nextSnapshot);
 +      return;
 +    }
++    const prevSnapshot = telemetryPrev;
++    telemetryPrev = nextSnapshot;
++    syncTrackedProperties(nextSnapshot);
++    recordTelemetryChange(prevSnapshot, nextSnapshot);
++    ensureTelemetryHeartbeat(nextSnapshot);
++  }
++
++  telemetryPrev = computeTelemetrySnapshot(state);
++  syncTrackedProperties(telemetryPrev);
++
+   function snapshot() {
+     return { ...state };
+   }
+ 
+   function notify() {
+     const current = snapshot();
+     listeners.forEach((listener) => {
+       try {
+         listener(current);
+       } catch (err) {
+         console.error("AppState subscriber error", err);
+       }
+     });
+   }
+ 
+   function setState(patch) {
+     if (!patch || typeof patch !== "object") return;
+     const sanitized = { ...patch };
+     if ("resume" in sanitized) {
+       delete sanitized.resume;
+     }
+     if ("resumeError" in sanitized) {
+       delete sanitized.resumeError;
+     }
+     const preservedResume = state.resume;
+     const preservedResumeError = state.resumeError;
+     state = {
+       ...state,
+       ...sanitized,
+       resume: preservedResume,
+       resumeError: preservedResumeError
+     };
++    processTelemetry(state);
+     notify();
+   }
+ 
+   function setResume(token, ttlMs) {
+     const candidate = typeof token === "string" ? token.trim() : "";
+     const ttl = Number(ttlMs);
+     if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
+       clearResume();
+       return null;
+     }
+     const expiresAt = Date.now() + ttl;
+     const resumeState = {
+       token: candidate,
+       ttlMs: ttl,
+       expiresAt
+     };
+     state = {
+       ...state,
+       resume: resumeState,
+       resumeError: null
+     };
++    processTelemetry(state);
+     notify();
+     return resumeState;
+   }
+ 
+   function clearResume() {
+     if (state.resume !== null || state.resumeError !== null) {
+       state = { ...state, resume: null, resumeError: null };
++      processTelemetry(state);
+       notify();
+     }
+   }
+ 
+   function reset() {
+     state = { ...initialState };
++    processTelemetry(state);
+     notify();
+   }
+ 
+   function subscribe(listener) {
+     if (typeof listener !== "function") {
+       throw new TypeError("listener must be a function");
+     }
+     listeners.add(listener);
+     listener(snapshot());
+     return () => {
+       listeners.delete(listener);
+     };
+   }
+ 
+   const AppState = window.AppState = {
+     get: snapshot,
+     getState: snapshot,
+     setState,
+     reset,
+     subscribe,
+     setResume,
+     clearResume,
+     get initialState() {
+       return { ...initialState };
+     }
+   };
+ 
++  syncTrackedProperties(telemetryPrev);
++
+   const hubLogs = [];
+   const hubStartQueue = [];
+   const hubStopQueue = [];
+   let hubPendingSocket = { hasValue: false, value: null };
+   let hubImpl = null;
+ 
+   function enqueueLog(label, detail) {
+     if (hubLogs.length >= 40) {
+       hubLogs.shift();
+     }
+     hubLogs.push({ label, detail });
+   }
+ 
+   function enqueueStart(policy) {
+     if (hubStartQueue.length >= 10) {
+       hubStartQueue.shift();
+     }
+     hubStartQueue.push(policy);
+   }
+ 
+   function enqueueStop(reason) {
+     if (hubStopQueue.length >= 10) {
+       hubStopQueue.shift();
+     }
+     hubStopQueue.push(reason);
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 9bd8ff0b6213009bfa5bba67637e4b7eb95076f1..1d8a704a80983325842c963edddd7ba94b34f30e 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -480,79 +480,145 @@ import { WakeWord } from "./wake_word.js";
+   let micLastChunkAt = 0;
+   let postTtsArmTimerId = null;
+ 
+   function getRecorder() {
+     if (recorderInstance && typeof recorderInstance.startListening === "function") {
+       return recorderInstance;
+     }
+     const candidate = typeof window !== "undefined" ? window.AudioRecorder : null;
+     if (!candidate || typeof candidate.startListening !== "function") {
+       return null;
+     }
+     recorderInstance = candidate;
+     return recorderInstance;
+   }
+ 
+   function normalizeReason(reason) {
+     if (typeof reason === "string" && reason) {
+       return reason;
+     }
+     if (reason && typeof reason === "object" && typeof reason.reason === "string" && reason.reason) {
+       return reason.reason;
+     }
+     return "unspecified";
+   }
+ 
+-  function setAppStateFlag(key, value) {
++  function setAppStateValue(key, value) {
++    if (typeof key !== "string" || !key) {
++      return;
++    }
+     const state = typeof AppState.getState === "function" ? AppState.getState() : null;
+-    const current = state && key in state ? state[key] : AppState[key];
+-    if (current === value) {
++    const hasKey = state && Object.prototype.hasOwnProperty.call(state, key);
++    const current = hasKey ? state[key] : AppState[key];
++    if (Object.is(current, value)) {
+       AppState[key] = value;
+       return;
+     }
+     AppState[key] = value;
+     updateState({ [key]: value });
+   }
+ 
+   function setListeningState(active) {
+     const listening = Boolean(active);
+-    setAppStateFlag("listening", listening);
++    setAppStateValue("listening", listening);
+     const recorderState = { active: listening };
+-    updateState({ recorder: recorderState });
++    AppState.recorderActive = listening;
++    updateState({ recorder: recorderState, recorderActive: listening });
+     if (AppState.recorder && typeof AppState.recorder === "object") {
+       AppState.recorder = { ...AppState.recorder, active: listening };
+     } else {
+       AppState.recorder = recorderState;
+     }
++    if (listening) {
++      setWsPhase("streaming");
++    } else if (AppState.wsConnected) {
++      setWsPhase("connected");
++    }
+   }
+ 
+   function setAsrArmInFlight(inFlight) {
+-    setAppStateFlag("asrArmInFlight", Boolean(inFlight));
++    setAppStateValue("asrArmInFlight", Boolean(inFlight));
+   }
+ 
+   function setArmAfterTtsEnd(pending) {
+-    setAppStateFlag("armAfterTtsEnd", Boolean(pending));
++    setAppStateValue("armAfterTtsEnd", Boolean(pending));
++  }
++
++  function setWsConnected(connected) {
++    setAppStateValue("wsConnected", Boolean(connected));
++  }
++
++  function setWsPhase(phase) {
++    if (typeof phase !== "string" || !phase) {
++      return;
++    }
++    setAppStateValue("wsPhase", phase);
++  }
++
++  function resetRecorderTelemetry() {
++    setAppStateValue("chunkCount", 0);
++    setAppStateValue("lastChunkTs", null);
++  }
++
++  function recordRecorderChunk(timestampMs) {
++    const now = Number.isFinite(timestampMs) ? timestampMs : Date.now();
++    const currentCount = typeof AppState.chunkCount === "number"
++      ? AppState.chunkCount
++      : (typeof AppState.getState === "function" ? (AppState.getState().chunkCount || 0) : 0);
++    const nextCount = currentCount + 1;
++    AppState.chunkCount = nextCount;
++    AppState.lastChunkTs = now;
++    updateState({ chunkCount: nextCount, lastChunkTs: now });
++  }
++
++  function normalizeErrorDetail(detail) {
++    if (detail === null || detail === undefined) {
++      return null;
++    }
++    if (typeof detail === "string") {
++      return truncateBannerString(detail, 240);
++    }
++    if (typeof detail === "number" || typeof detail === "boolean") {
++      return truncateBannerString(String(detail), 240);
++    }
 +    try {
-+      WSClient.send({ type: "asr.open" });
-+      setAsrArmInFlight(true);
-+      logStage("client.asr_rearm_request", { reason: label });
++      const serialized = JSON.stringify(detail);
++      return truncateBannerString(serialized, 240);
 +    } catch (err) {
-+      setAsrArmInFlight(false);
-+      console.error("Failed to send asr.open", err);
-+      logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_WS_SEND, message: err?.message });
++      try {
++        return truncateBannerString(String(detail), 240);
++      } catch {
++        return null;
++      }
 +    }
 +  }
 +
-+  function requestAsrClose(reason = "client_stop") {
-+    const label = normalizeReason(reason);
-+    clearPostTtsArmTimer();
-+    setArmAfterTtsEnd(false);
-+    setAsrArmInFlight(false);
-+    try {
-+      WSClient.send({ type: "asr.close", reason: label });
-+      logStage("client.asr_close_request", { reason: label });
-+    } catch (err) {
-+      console.warn("Failed to send asr.close", err);
-+    }
-+    stopRecorder(label);
-+  }
-+
++  function recordLastError(code, detail) {
++    const normalizedCode = Number.isFinite(code) ? code : null;
++    const normalizedDetail = normalizeErrorDetail(detail);
++    setAppStateValue("lastErrorCode", normalizedCode);
++    setAppStateValue("lastErrorDetail", normalizedDetail);
+   }
+ 
+   function clearPostTtsArmTimer() {
+     if (postTtsArmTimerId) {
+       clearTimeout(postTtsArmTimerId);
+       postTtsArmTimerId = null;
+     }
+   }
+ 
+   function clearAudioKeepaliveTimer() {
+     if (micKeepaliveTimerId) {
+       clearTimeout(micKeepaliveTimerId);
+       micKeepaliveTimerId = null;
+     }
+   }
+ 
+   function scheduleAudioKeepalive() {
+     clearAudioKeepaliveTimer();
+     micKeepaliveTimerId = setTimeout(() => {
+       micKeepaliveTimerId = null;
+       const listening = Boolean(AppState.listening);
+       const now = Date.now();
+       if (!listening) {
+         return;
+       }
+@@ -589,130 +655,136 @@ import { WakeWord } from "./wake_word.js";
+       logStage("client.audio_header_send", {
+         format: AUDIO_HEADER_FRAME.format,
+         sample_rate: AUDIO_HEADER_FRAME.sample_rate,
+         channels: AUDIO_HEADER_FRAME.channels,
+       });
+     } catch (err) {
+       console.warn("Failed to send audio header", err);
+     }
+   }
+ 
+   function handleRecorderChunk(event) {
+     if (!event) {
+       return;
+     }
+     const buffer = event.buffer instanceof ArrayBuffer
+       ? event.buffer
+       : (ArrayBuffer.isView(event.buffer)
+         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
+         : null);
+     if (!buffer) {
+       return;
+     }
+     const seq = Number(event.seq) || 0;
+     micLastChunkAt = Date.now();
+     scheduleAudioKeepalive();
++    recordRecorderChunk(micLastChunkAt);
+     if (seq === 0) {
+       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
+     }
+     logStage("client.audio_chunk_send", { seq, bytes: buffer.byteLength });
+     try {
+       const result = sendBinary(buffer, { lane: "mic" });
+       if (result && typeof result.catch === "function") {
+         result.catch((err) => {
+           console.warn("Binary send (mic) failed", err);
+         });
+       }
+     } catch (err) {
+       console.error("WSClient sendBinary mic failed", err);
+     }
+   }
+ 
+   async function startRecorderStreaming(policy) {
+     if (AppState.listening) {
+       return;
+     }
+     const recorder = getRecorder();
+     if (!recorder) {
+       console.warn("AudioRecorder unavailable; cannot start streaming");
+       return;
+     }
+     try {
+       await recorder.start({ onChunk: handleRecorderChunk, policy });
+     } catch (err) {
+       if (err && err.name === "NotAllowedError") {
+         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
+       }
+       throw err;
+     }
++    resetRecorderTelemetry();
+     await recorder.startListening(policy);
+     micLastChunkAt = Date.now();
+     scheduleAudioKeepalive();
+     setListeningState(true);
+   }
+ 
+   function schedulePostTtsArm(reason) {
+     clearPostTtsArmTimer();
+     postTtsArmTimerId = setTimeout(() => {
+       postTtsArmTimerId = null;
+       requestAsrArm(reason);
+     }, POST_TTS_ARM_DELAY_MS);
+   }
+ 
+   function requestAsrArm(reason) {
+     const label = normalizeReason(reason);
+     clearPostTtsArmTimer();
+     if (AppState.ttsActive) {
+       setArmAfterTtsEnd(true);
+       logStage("client.asr_arm_queued", { reason: label });
+       return;
+     }
+     if (AppState.asrArmInFlight) {
+       logStage("client.asr_rearm_blocked", { reason: label });
+       return;
+     }
+     try {
+       WSClient.send({ type: "asr.open" });
+       setAsrArmInFlight(true);
++      setWsPhase("arming");
+       logStage("client.asr_rearm_request", { reason: label });
+     } catch (err) {
+       setAsrArmInFlight(false);
++      setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
+       console.error("Failed to send asr.open", err);
+       logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_WS_SEND, message: err?.message });
+     }
+   }
+ 
+   function requestAsrClose(reason = "client_stop") {
+     const label = normalizeReason(reason);
+     clearPostTtsArmTimer();
+     setArmAfterTtsEnd(false);
+     setAsrArmInFlight(false);
+     try {
+       WSClient.send({ type: "asr.close", reason: label });
++      setWsPhase("closing");
+       logStage("client.asr_close_request", { reason: label });
+     } catch (err) {
+       console.warn("Failed to send asr.close", err);
++      setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
+     }
+     stopRecorder(label);
+   }
+ 
    const CLIENT_BANNER_TYPE = "client.banner";
    const CLIENT_BANNER_MAX_HISTORY = 24;
    const CLIENT_BANNER_MAX_QUEUE = 24;
@@ -486,20 +662,7 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        console.info("wake_word_detected_ignore=1 reason=vad_barge_in_default");
      } catch {}
    });
- 
-   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
-   const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
- 
-@@ -589,64 +757,76 @@ import { WakeWord } from "./wake_word.js";
-             console.warn("AppState listener error", err);
-           }
-         });
-       }
-     };
-   }
- 
-   function ensureInitialAutostartState() {
-     if (!AppState || typeof AppState.getState !== "function") {
+@@ -766,71 +838,99 @@ import { WakeWord } from "./wake_word.js";
        return;
      }
      const snapshot = AppState.getState();
@@ -516,14 +679,20 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
      if (typeof snapshot.ttsActive === "undefined") {
        patch.ttsActive = false;
      }
-+    if (typeof snapshot.asrArmInFlight === "undefined") {
-+      patch.asrArmInFlight = false;
+     if (typeof snapshot.asrArmInFlight === "undefined") {
+       patch.asrArmInFlight = false;
+     }
+     if (typeof snapshot.armAfterTtsEnd === "undefined") {
+       patch.armAfterTtsEnd = false;
+     }
+     if (typeof snapshot.listening === "undefined") {
+       patch.listening = false;
+     }
++    if (typeof snapshot.wsConnected === "undefined") {
++      patch.wsConnected = Boolean(AppState.wsConnected);
 +    }
-+    if (typeof snapshot.armAfterTtsEnd === "undefined") {
-+      patch.armAfterTtsEnd = false;
-+    }
-+    if (typeof snapshot.listening === "undefined") {
-+      patch.listening = false;
++    if (typeof snapshot.wsPhase === "undefined") {
++      patch.wsPhase = typeof AppState.wsPhase === "string" ? AppState.wsPhase : "disconnected";
 +    }
      if (typeof snapshot.turnState === "undefined") {
        patch.turnState = null;
@@ -531,6 +700,21 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
      if (typeof snapshot.recorder === "undefined") {
        patch.recorder = { active: false };
      }
++    if (typeof snapshot.recorderActive === "undefined") {
++      patch.recorderActive = Boolean(AppState.recorderActive);
++    }
++    if (typeof snapshot.chunkCount === "undefined") {
++      patch.chunkCount = Number.isFinite(AppState.chunkCount) ? AppState.chunkCount : 0;
++    }
++    if (typeof snapshot.lastChunkTs === "undefined") {
++      patch.lastChunkTs = Number.isFinite(AppState.lastChunkTs) ? AppState.lastChunkTs : null;
++    }
++    if (typeof snapshot.lastErrorCode === "undefined") {
++      patch.lastErrorCode = Number.isFinite(AppState.lastErrorCode) ? AppState.lastErrorCode : null;
++    }
++    if (typeof snapshot.lastErrorDetail === "undefined") {
++      patch.lastErrorDetail = AppState.lastErrorDetail ?? null;
++    }
      if (Object.keys(patch).length) {
        updateState(patch);
      }
@@ -539,13 +723,20 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        ? snapshot.asrVendor
        : null;
      AppState.ttsActive = Boolean(snapshot.ttsActive);
-+    AppState.asrArmInFlight = Boolean(snapshot.asrArmInFlight);
-+    AppState.armAfterTtsEnd = Boolean(snapshot.armAfterTtsEnd);
-+    AppState.listening = Boolean(snapshot.listening);
+     AppState.asrArmInFlight = Boolean(snapshot.asrArmInFlight);
+     AppState.armAfterTtsEnd = Boolean(snapshot.armAfterTtsEnd);
+     AppState.listening = Boolean(snapshot.listening);
++    AppState.wsConnected = Boolean(snapshot.wsConnected);
++    AppState.wsPhase = typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected";
      AppState.turnState = typeof snapshot.turnState === "string" ? snapshot.turnState : null;
      AppState.recorder = snapshot.recorder && typeof snapshot.recorder === "object"
        ? { active: Boolean(snapshot.recorder.active) }
        : { active: false };
++    AppState.recorderActive = Boolean(snapshot.recorderActive ?? snapshot?.recorder?.active);
++    AppState.chunkCount = Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0;
++    AppState.lastChunkTs = Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null;
++    AppState.lastErrorCode = Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : null;
++    AppState.lastErrorDetail = snapshot.lastErrorDetail ?? null;
    }
  
    function attachUserGestureListeners() {
@@ -567,8 +758,11 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        const reason = event && typeof event.type === "string" ? event.type : "gesture";
        markUserGestureSatisfied(reason);
        maybeAutoStart("gesture");
-@@ -2357,75 +2537,83 @@ import { WakeWord } from "./wake_word.js";
-       if (frame.type === "chat.history") {
+     };
+     USER_GESTURE_EVENTS.forEach((eventName) => {
+       try {
+         window.addEventListener(eventName, handler, { passive: true });
+@@ -2538,82 +2638,82 @@ import { WakeWord } from "./wake_word.js";
          handleChatHistoryFrame(frame);
        } else if (frame.type === "error") {
          handleErrorFrame(frame);
@@ -593,10 +787,9 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        try {
          AppState?.hub?.stopListening?.("tts");
        } catch {}
--      AppState.ttsActive = true;
--      updateState({ ttsActive: true });
-+      stopRecorder("tts_start");
-+      setAppStateFlag("ttsActive", true);
+       stopRecorder("tts_start");
+-      setAppStateFlag("ttsActive", true);
++      setAppStateValue("ttsActive", true);
        if (typeof AppState.emit === "function") {
          AppState.emit("ttsActive", { active: true });
        }
@@ -604,15 +797,13 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
          audioPlayer.handleTtsStart(frame);
        }
--      logStage('client.tts', { outcome: 'playing', utt_id: frame?.utt_id || 'utt-00001' });
-+      const uttIdStart = frame?.utt_id || 'utt-00001';
-+      logStage('client.tts_start', { utt_id: uttIdStart });
-+      logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
+       const uttIdStart = frame?.utt_id || 'utt-00001';
+       logStage('client.tts_start', { utt_id: uttIdStart });
+       logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
      } else if (frame.type === "tts.end") {
--      AppState.ttsActive = false;
--      updateState({ ttsActive: false });
-+      setAppStateFlag("ttsActive", false);
+-      setAppStateFlag("ttsActive", false);
++      setAppStateValue("ttsActive", false);
        if (typeof AppState.emit === "function") {
          AppState.emit("ttsActive", { active: false });
        }
@@ -620,18 +811,18 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
          audioPlayer.handleTtsEnd(frame);
        }
--      logStage('client.tts', { outcome: 'ended', utt_id: frame?.utt_id || 'utt-00001', dur_ms: frame?.dur_ms });
-+      const uttIdEnd = frame?.utt_id || 'utt-00001';
-+      logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-+      logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-+      if (AppState.armAfterTtsEnd) {
-+        schedulePostTtsArm("post_greet");
-+        setArmAfterTtsEnd(false);
-+      }
+       const uttIdEnd = frame?.utt_id || 'utt-00001';
+       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+       if (AppState.armAfterTtsEnd) {
+         schedulePostTtsArm("post_greet");
+         setArmAfterTtsEnd(false);
+       }
      } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
        const uttId = frame?.utt_id || 'utt-00001';
        const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
-+      setAppStateFlag("ttsActive", false);
+-      setAppStateFlag("ttsActive", false);
++      setAppStateValue("ttsActive", false);
        logStage('client.tts', {
          outcome: 'ended',
          utt_id: uttId,
@@ -657,45 +848,7 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
          if (ar?.start) {
            await ar.start(policy);
            unifiedArmed = true;
-@@ -2460,111 +2648,116 @@ import { WakeWord } from "./wake_word.js";
-         hub = AppState?.hub;
-         if (hub && typeof hub.setPolicy === "function") {
-           hub.setPolicy(policy);
-         }
-       } catch (err) {
-         console.warn("Hub setPolicy during start_listening failed", err);
-       }
- 
-       if (hub && typeof hub.prearmListening === "function") {
-         try {
-           hub.prearmListening(policy);
-         } catch (err) {
-           console.warn("Hub prearmListening failed", err);
-         }
-         return;
-       }
- 
-       if (hub && typeof hub.startListening === "function") {
-         // Defer actual streaming until asr.ready fires.
-         return;
-       }
- 
-       console.warn('Legacy input capture deferred until asr.ready', frame);
-       return;
-     } else if (frame.type === "stop_listening") {
-+      stopRecorder("server_requested");
-+      setAsrArmInFlight(false);
-+      setArmAfterTtsEnd(false);
-       try {
-         const hub = AppState?.hub;
-         if (hub && typeof hub.stopListening === "function") {
-           hub.stopListening("server_requested");
-         } else {
-           stopInputCapture({ reason: "server_requested" });
-         }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
+@@ -2686,50 +2786,52 @@ import { WakeWord } from "./wake_word.js";
          logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
        }
        clearPendingAsrReadyStart("stop_listening");
@@ -718,33 +871,22 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        __asrReadySeen = false;
      } else if (frame.type === "asr.ready") {
        frame = handleAsrReadyFrame(frame) || frame;
--      // Only increment token once per turn; ignore repeated ready frames.
--      if (!__asrReadySeen) {
--        __readyToken += 1;
--        __asrReadySeen = true;
--      }
-+      __asrReadySeen = true;
-+      setAsrArmInFlight(false);
-+      setArmAfterTtsEnd(false);
-+      logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-+      sendAudioHeader();
+       __asrReadySeen = true;
+       setAsrArmInFlight(false);
+       setArmAfterTtsEnd(false);
++      setWsConnected(true);
++      setWsPhase("ready");
+       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
+       sendAudioHeader();
        try {
--        if (__micStartedForToken !== __readyToken) {
--          const started = await startStreamingAfterAsrReady("asr.ready");
--          if (started) {
--            __micStartedForToken = __readyToken;
--            markAutoVadActiveAfterAsrReady();
--          }
--        }
-+        await startRecorderStreaming(frame?.policy || {});
+         await startRecorderStreaming(frame?.policy || {});
        } catch (err) {
--        console.error("Deferred mic start on asr.ready failed", err);
-+        console.error("Recorder start on asr.ready failed", err);
-+        logStage("client.mic", {
-+          outcome: MIC_OUTCOME.ERROR_GUM,
-+          message: err && err.message ? err.message : String(err || ""),
-+        });
-+        setListeningState(false);
+         console.error("Recorder start on asr.ready failed", err);
+         logStage("client.mic", {
+           outcome: MIC_OUTCOME.ERROR_GUM,
+           message: err && err.message ? err.message : String(err || ""),
+         });
+         setListeningState(false);
        }
      } else if (frame.type === "asr.partial") {
        transcriptFrameAllowed(frame);
@@ -759,35 +901,250 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
        AppState.asrReady = false;
        AppState.asrVendor = null;
        updateState({ asrReady: false, asrVendor: null });
-+      stopRecorder("asr_unavailable");
-+      setAsrArmInFlight(false);
-+      setArmAfterTtsEnd(false);
-       if (typeof AppState.emit === "function") {
-         AppState.emit("asrReady", { ready: false, reason, vendor: null });
+@@ -2807,103 +2909,116 @@ import { WakeWord } from "./wake_word.js";
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
        }
-       clearPendingAsrReadyStart("asr_unavailable");
-       __asrReadySeen = false;
-       try {
-         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
-         hud?.setState?.("Chat");
-       } catch (err) {
-         console.warn("Failed to update HUD state after asr.unavailable", err);
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+       const chunk = data instanceof ArrayBuffer
+         ? data
+         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(chunk);
        }
-       try {
-         const view = window.TranscriptView;
-         view?.showSystemFromChip?.(
-           "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
-         );
-       } catch (err) {
-         console.warn("Failed to render Chip system message after asr.unavailable", err);
+       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);
+   }
+ 
+   function attachSocket(ws) {
+     ws.__intentionalClose = false;
+     const handlers = {
+       open: () => {
+         // Write live socket and mark connected so UI gates on ws.open can run
++        setWsConnected(true);
++        setWsPhase("connected");
++        recordLastError(null, null);
+         try {
+           if (typeof AppState.setState === "function") {
+             AppState.setState({ websocket: ws, connectionState: "connected" });
+           } else {
+             updateState({ websocket: ws, connectionState: "connected" });
+           }
+         } catch {
+           updateState({ websocket: ws, connectionState: "connected" });
+         }
+         try {
+           WSClient._ws = ws;
+           WSClient._connected = true;
+         } catch {}
+         try {
+           window.ws = ws;
+         } catch {}
+         try {
+           if (AppState && AppState.hub && typeof AppState.hub.bindSocket === "function") {
+             AppState.hub.bindSocket(ws);
+           }
+         } catch (err) {
+           console.warn("AppState.hub.bindSocket open failed", err);
+         }
+         try {
+           if (!Array.isArray(WSClient._queue)) {
+             WSClient._queue = [];
+           }
+           if (WSClient._queue.length) {
+             for (const { data, isBinary } of WSClient._queue) {
+               WSClient.send(data, { binary: isBinary });
+             }
+             WSClient._queue.length = 0;
+           }
+         } catch {}
+         try {
+           window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
+         } catch {}
+         try {
+           if (!WSClient._linkedProofLogged) {
+             console.info("evt=ws_linked AppState", !!AppState?.websocket, "WSClient", !!WSClient._ws);
+             WSClient._linkedProofLogged = true;
+           }
+         } catch {}
+         startHeartbeat();
+         logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
+       },
+       message: parseFrame,
+       error: (event) => {
+         console.error("WebSocket error", event);
++        const message = event && typeof event?.message === "string" && event.message
++          ? event.message
++          : "socket_error";
++        recordLastError(null, message);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         const expected = ws.__intentionalClose === true;
++        const detailReason = event && typeof event?.reason === "string" && event.reason
++          ? event.reason
++          : (expected ? "intentional_close" : "ws_close");
++        recordLastError(event && typeof event?.code === "number" ? event.code : null, detailReason);
++        setWsConnected(false);
++        setWsPhase("disconnected");
+         logStage('client.ws', { outcome: 'close', code: event?.code, reason: event?.reason });
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: event?.reason || (expected ? 'intentional_close' : 'ws_close') });
+         try {
+           WSClient._connected = false;
+           WSClient._ws = null;
+           WSClient._linkedProofLogged = false;
+         } catch {}
+         try {
+           window.ws = null;
+         } catch {}
+         try {
+           if (AppState && AppState.hub && typeof AppState.hub.bindSocket === "function") {
+             AppState.hub.bindSocket(null);
+           }
+         } catch (err) {
+           console.warn("AppState.hub.bindSocket close failed", err);
+         }
+         if (socket === ws) {
+           socket = null;
+           expectInfoFrame = true;
+           clearInfoWatchdog();
+         }
+         clearHeartbeat();
+         updateState({ websocket: null });
+         let resumed = false;
+@@ -2914,50 +3029,52 @@ import { WakeWord } from "./wake_word.js";
+           updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+         }
+         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
        }
+     };
+     ws.addEventListener("open", handlers.open);
+     ws.addEventListener("message", handlers.message);
+     ws.addEventListener("error", handlers.error);
+     ws.addEventListener("close", handlers.close);
+     ws.__handlers = handlers;
+   }
+ 
+   function detachSocket(ws) {
+     const handlers = ws && ws.__handlers;
+     if (!handlers) return;
+     ws.removeEventListener("open", handlers.open);
+     ws.removeEventListener("message", handlers.message);
+     ws.removeEventListener("error", handlers.error);
+     ws.removeEventListener("close", handlers.close);
+     delete ws.__handlers;
+     delete ws.__intentionalClose;
+   }
+ 
+   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
+     if (!ws) return;
++    setWsPhase("closing");
++    setWsConnected(false);
+     detachSocket(ws);
+     ws.__intentionalClose = true;
+     recordClientBannerEvent("ws.cleanup", { reason: truncateBannerString(reason || "", 80) });
+     try {
+       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+         ws.close(1000, reason);
+       }
+     } catch (err) {
+       console.warn("WSClient cleanup close error", err);
+     }
+     if (socket === ws) {
+       socket = null;
+       expectInfoFrame = true;
+       clearInfoWatchdog();
+       stopInputCapture();
        try {
-         window?.Banner?.show?.(
-           "Voice temporarily unavailable. You can continue via chat.",
-           { level: "warning", ttlMs: 10000 }
-         );
-       } catch (err) {
-@@ -2888,50 +3081,54 @@ import { WakeWord } from "./wake_word.js";
+         if (window.ws === ws) {
+           window.ws = null;
+         }
+       } catch {}
+     }
+     const client = WSClient;
+     if (client && typeof client === "object") {
+       client._ws = null;
+       client._connected = false;
+@@ -3020,116 +3137,131 @@ import { WakeWord } from "./wake_word.js";
+         url: bannerUrlMeta,
+       });
+       return;
+     }
+ 
+     const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+     const bannerProtocols = Array.isArray(wsProtocols)
+       ? wsProtocols
+         .filter((proto) => typeof proto === "string" && proto)
+         .map((proto) => truncateBannerString(proto, 48))
+         .slice(0, 4)
+       : (typeof wsProtocols === "string" && wsProtocols ? truncateBannerString(wsProtocols, 48) : undefined);
+     recordClientBannerEvent("ws.open.request", {
+       resume: isResuming,
+       skip_rate_limit_cancel: Boolean(skipRateLimitCancel),
+       has_access_token: hasAccessToken,
+       url: bannerUrlMeta,
+       protocols: bannerProtocols,
+     });
+     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
+     const logPayload = Array.isArray(wsProtocols)
+       ? { url: wsUrl, protocols: wsProtocols }
+       : { url: wsUrl, subprotocol: wsProtocols };
+     console.log("WS opening", logPayload);
+ 
++    setWsConnected(false);
++    setWsPhase(resumeTokenValue ? "resuming" : "connecting");
++    recordLastError(null, null);
++
+     const tokenInfo = trackTokenFromUrl(wsUrl);
+     const ws = transportFactory(wsUrl, wsProtocols);
+     ws.__accessTokenInfo = tokenInfo;
+     ws.__handshakeToastShown = false;
+     try {
+       ws.binaryType = "arraybuffer";
+     } catch (err) {
+       console.warn("Failed to set WebSocket binaryType", err);
+     }
+ 
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
+       logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || (typeof wsProtocols === "string" ? wsProtocols : null) });
+       recordClientBannerEvent("ws.socket.open", {
+         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
+       });
+       flushClientBannerQueue();
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
++      const message = e && typeof e?.message === "string" && e.message
++        ? e.message
++        : "socket_error";
++      recordLastError(null, message);
+       maybeShowHandshakeToast(ws, null);
+       recordClientBannerEvent("ws.socket.error", {
+         ready_state: ws.readyState,
+       });
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
+         code: e.code,
+         reason: e.reason,
+         wasClean: e.wasClean,
+         readyState: ws.readyState,
+       });
++      const detailReason = typeof e.reason === "string" && e.reason ? e.reason : "handshake_close";
++      recordLastError(typeof e.code === "number" ? e.code : null, detailReason);
++      setWsConnected(false);
++      setWsPhase("disconnected");
+       logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
        maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
        recordClientBannerEvent("ws.socket.close", {
          code: typeof e.code === "number" ? e.code : undefined,
@@ -813,11 +1170,15 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
  
    function close(reason = DEFAULT_CLOSE_REASON) {
      recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
-+    stopRecorder(reason || "client_shutdown");
-+    setAsrArmInFlight(false);
-+    setArmAfterTtsEnd(false);
-+    setAppStateFlag("ttsActive", false);
+     stopRecorder(reason || "client_shutdown");
+     setAsrArmInFlight(false);
+     setArmAfterTtsEnd(false);
+-    setAppStateFlag("ttsActive", false);
++    setAppStateValue("ttsActive", false);
++    setWsPhase("closing");
++    setWsConnected(false);
      if (!socket) {
++      setWsPhase("disconnected");
        updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
        return;
      }
@@ -842,50 +1203,4 @@ index a9cb1217d07897f15affe3a5a3f91f3c79a80e35..9bd8ff0b6213009bfa5bba67637e4b7e
      if (!Array.isArray(client._queue)) {
        client._queue = [];
      }
-@@ -2988,44 +3185,46 @@ import { WakeWord } from "./wake_word.js";
-     if (!socket) return 0;
-     return socket.bufferedAmount || 0;
-   }
- 
-   const debug = {
-     simulateIncomingFrame(frame) {
-       return handleMessageFrame(frame);
-     },
-     recordPing(ts) {
-       lastPingAt = ts;
-       updateState({ lastPingAt: ts });
-     },
-     setTransportFactory(factory) {
-       transportFactory = typeof factory === "function" ? factory : transportFactory;
-     },
-     resetTransportFactory() {
-       transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-     }
-   };
- 
-   WSClient.open = open;
-   WSClient.close = close;
-   WSClient.send = send;
-   WSClient.sendBinary = sendBinary;
-   WSClient.getBufferedAmount = getBufferedAmount;
-+  WSClient.requestAsrArm = requestAsrArm;
-+  WSClient.requestAsrClose = requestAsrClose;
-   Object.defineProperty(WSClient, "socket", {
-     configurable: true,
-     enumerable: true,
-     get() {
-       return socket;
-     }
-   });
-   WSClient.isConnected = function isConnected() {
-     return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
-   };
-   WSClient.__debug = debug;
-   window.WSClient = WSClient;
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-   if (typeof WSClient._linkedProofLogged !== "boolean") {
-     WSClient._linkedProofLogged = false;
-   }
- })();
+     let stateSocket = null;
