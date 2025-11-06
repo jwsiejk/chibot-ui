@@ -25,6 +25,11 @@
     chunkCount: 0,
     lastErrorCode: null,
     lastErrorDetail: null,
+    vadActive: false,
+    vadSpeech: false,
+    vadConfidence: 0,
+    vadEnergyDb: null,
+    vadNoiseDb: null,
   };
 
   let state = { ...initialState };
@@ -42,6 +47,11 @@
     "chunkCount",
     "lastErrorCode",
     "lastErrorDetail",
+    "vadActive",
+    "vadSpeech",
+    "vadConfidence",
+    "vadEnergyDb",
+    "vadNoiseDb",
   ];
   const DELTA_COALESCE_MS = 12;
   const HEARTBEAT_INTERVAL_MS = 5000;
@@ -69,6 +79,11 @@
       chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
       lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
       lastErrorDetail: snapshot.lastErrorDetail ?? null,
+      vadActive: Boolean(snapshot.vadActive),
+      vadSpeech: Boolean(snapshot.vadSpeech),
+      vadConfidence: Number.isFinite(snapshot.vadConfidence) ? snapshot.vadConfidence : 0,
+      vadEnergyDb: Number.isFinite(snapshot.vadEnergyDb) ? snapshot.vadEnergyDb : null,
+      vadNoiseDb: Number.isFinite(snapshot.vadNoiseDb) ? snapshot.vadNoiseDb : null,
     };
   }
 
@@ -113,17 +128,22 @@
         return;
       }
       const snapshot = pendingDelta.snapshot || telemetryPrev || computeTelemetrySnapshot();
-      const detail = {
-        changed: pendingDelta.changed,
-        now_ms: Date.now(),
-        wsPhase: snapshot.wsPhase,
-        recorderActive: snapshot.recorderActive,
-        listening: snapshot.listening,
-        ttsActive: snapshot.ttsActive,
-        asrArmInFlight: snapshot.asrArmInFlight,
-        armAfterTtsEnd: snapshot.armAfterTtsEnd,
-        chunkCount: snapshot.chunkCount,
-      };
+        const detail = {
+          changed: pendingDelta.changed,
+          now_ms: Date.now(),
+          wsPhase: snapshot.wsPhase,
+          recorderActive: snapshot.recorderActive,
+          listening: snapshot.listening,
+          ttsActive: snapshot.ttsActive,
+          asrArmInFlight: snapshot.asrArmInFlight,
+          armAfterTtsEnd: snapshot.armAfterTtsEnd,
+          chunkCount: snapshot.chunkCount,
+          vadActive: snapshot.vadActive,
+          vadSpeech: snapshot.vadSpeech,
+          vadConfidence: snapshot.vadConfidence,
+          vadEnergyDb: snapshot.vadEnergyDb,
+          vadNoiseDb: snapshot.vadNoiseDb,
+        };
       publishTelemetry("client.appstate.delta", detail);
       pendingDelta = null;
     }, DELTA_COALESCE_MS);
@@ -180,7 +200,12 @@
       a.listening === b.listening &&
       a.recorderActive === b.recorderActive &&
       a.chunkCount === b.chunkCount &&
-      a.lastChunkAgeMs === b.lastChunkAgeMs
+      a.lastChunkAgeMs === b.lastChunkAgeMs &&
+      a.vadActive === b.vadActive &&
+      a.vadSpeech === b.vadSpeech &&
+      a.vadConfidence === b.vadConfidence &&
+      a.vadEnergyDb === b.vadEnergyDb &&
+      a.vadNoiseDb === b.vadNoiseDb
     );
   }
 
@@ -201,6 +226,11 @@
       recorderActive: snapshot.recorderActive,
       chunkCount: snapshot.chunkCount,
       lastChunkAgeMs,
+      vadActive: snapshot.vadActive,
+      vadSpeech: snapshot.vadSpeech,
+      vadConfidence: snapshot.vadConfidence,
+      vadEnergyDb: snapshot.vadEnergyDb,
+      vadNoiseDb: snapshot.vadNoiseDb,
     };
     if (heartbeatPayloadEqual(payload, lastHeartbeatPayload)) {
       return;

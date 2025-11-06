@@ -1,4 +1,5 @@
 // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
+import { initVAD } from "./audio/vad_client.js";
 import { WakeWord } from "./wake_word.js";
 (() => {
   const HEARTBEAT_INTERVAL_MS = 20000;
@@ -8,6 +9,19 @@ import { WakeWord } from "./wake_word.js";
   const TOKEN_EXPIRY_MS = 60 * 1000;
   const TOAST_STYLE_ID = "wsclient-toast-styles";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+  const CLIENT_VAD_POLICY = Object.freeze({
+    enable: true,
+    sensitivity: 0.5,
+    min_speech_ms: 200,
+    min_silence_ms: 400,
+    hold_ms: 250,
+    echo_suppression_db: 10,
+    tts_threshold_boost_db: 12,
+    debounce_ms: 40,
+    stream_gate: "none",
+    max_gate_silence_ms: 3000,
+  });
+  const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
 
   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
 
@@ -152,6 +166,26 @@ import { WakeWord } from "./wake_word.js";
       },
     },
   };
+
+  function installClientVadPolicySnapshot() {
+    const policyRoot = AppState.policy && typeof AppState.policy === "object"
+      ? AppState.policy
+      : (AppState.policy = {});
+    const ensureVadBlock = (target) => {
+      if (!target || typeof target !== "object") {
+        return;
+      }
+      const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
+      target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
+    };
+    ensureVadBlock(policyRoot);
+    if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
+      policyRoot.policy = {};
+    }
+    ensureVadBlock(policyRoot.policy);
+  }
+
+  installClientVadPolicySnapshot();
 
   const appStateEventEmitter = createEventEmitter();
   if (typeof AppState.on !== "function") {
@@ -311,6 +345,16 @@ import { WakeWord } from "./wake_word.js";
   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
   const getAudioPlayer = () => window.AudioPlayer;
 
+  const VAD_APPSTATE_KEYS = [
+    "vadActive",
+    "vadSpeech",
+    "vadConfidence",
+    "vadEnergyDb",
+    "vadNoiseDb",
+  ];
+  let vadController = null;
+  let senderPaused = false;
+
   function hubLog(label, detail) {
     const state = typeof window !== "undefined" ? window.AppState : null;
     const hub = state && state.hub;
@@ -331,6 +375,72 @@ import { WakeWord } from "./wake_word.js";
       }
     }
     return false;
+  }
+
+  function getVadPolicySnapshot() {
+    return CLIENT_VAD_POLICY_ROOT;
+  }
+
+  function getTtsActiveSnapshot() {
+    try {
+      if (typeof AppState.getState === "function") {
+        const snapshot = AppState.getState();
+        if (snapshot && typeof snapshot.ttsActive === "boolean") {
+          return snapshot.ttsActive;
+        }
+      }
+    } catch {}
+    return Boolean(AppState?.ttsActive);
+  }
+
+  function setVadAppState(patch) {
+    if (!patch || typeof patch !== "object") {
+      return;
+    }
+    const sanitized = {};
+    for (const key of VAD_APPSTATE_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        sanitized[key] = patch[key];
+        AppState[key] = patch[key];
+      }
+    }
+    const keys = Object.keys(sanitized);
+    if (!keys.length) {
+      return;
+    }
+    updateState(sanitized);
+  }
+
+  function publishVad(event, payload) {
+    if (typeof event !== "string" || !event) {
+      return;
+    }
+    hubLog(event, payload);
+  }
+
+  function handleVadGateChange(action) {
+    if (action === "pause") {
+      senderPaused = true;
+      return;
+    }
+    if (action === "resume") {
+      senderPaused = false;
+    }
+  }
+
+  try {
+    vadController = initVAD({
+      getPolicy: () => getVadPolicySnapshot(),
+      getTtsActive: () => getTtsActiveSnapshot(),
+      onGateChange: handleVadGateChange,
+      setAppState: (patch) => setVadAppState(patch),
+      publish: (event, payload) => publishVad(event, payload),
+    });
+  } catch (err) {
+    try {
+      console.warn("VAD initialization failed", err);
+    } catch {}
+    vadController = null;
   }
 
   function getGateSnapshot() {
@@ -646,6 +756,16 @@ import { WakeWord } from "./wake_word.js";
     } catch (err) {
       console.warn("Recorder stopListening failed", err);
     }
+    senderPaused = false;
+    if (vadController && typeof vadController.reset === "function") {
+      try {
+        vadController.reset();
+      } catch (err) {
+        try {
+          console.warn("VAD reset failed", err);
+        } catch {}
+      }
+    }
     setListeningState(false);
   }
 
@@ -678,6 +798,33 @@ import { WakeWord } from "./wake_word.js";
     micLastChunkAt = Date.now();
     scheduleAudioKeepalive();
     recordRecorderChunk(micLastChunkAt);
+    const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+    if (vadController && typeof vadController.onPcmFrame === "function") {
+      try {
+        vadController.onPcmFrame(buffer, frameTimestamp);
+      } catch (err) {
+        try {
+          console.warn("VAD frame processing failed", err);
+        } catch {}
+      }
+    }
+    let asrReady = false;
+    try {
+      if (typeof AppState.getState === "function") {
+        const snapshot = AppState.getState();
+        if (snapshot && typeof snapshot.asrReady === "boolean") {
+          asrReady = snapshot.asrReady;
+        }
+      }
+    } catch {}
+    if (!asrReady) {
+      asrReady = Boolean(AppState?.asrReady);
+    }
+    if (senderPaused || !asrReady) {
+      return;
+    }
     if (seq === 0) {
       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
     }
@@ -712,6 +859,16 @@ import { WakeWord } from "./wake_word.js";
       throw err;
     }
     resetRecorderTelemetry();
+    senderPaused = false;
+    if (vadController && typeof vadController.reset === "function") {
+      try {
+        vadController.reset();
+      } catch (err) {
+        try {
+          console.warn("VAD reset failed", err);
+        } catch {}
+      }
+    }
     await recorder.startListening(policy);
     micLastChunkAt = Date.now();
     scheduleAudioKeepalive();

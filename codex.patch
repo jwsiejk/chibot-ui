@@ -1,331 +1,706 @@
-diff --git a/app/static/js/audio/vad_client.js b/app/static/js/audio/vad_client.js
-new file mode 100644
-index 0000000000000000000000000000000000000000..cc61356629e1b96762721f577f8ed3832018894e
---- /dev/null
-+++ b/app/static/js/audio/vad_client.js
-@@ -0,0 +1,325 @@
-+/* eslint-disable no-console */
-+const DB_FLOOR = -120;
-+const SAMPLE_MAX = 32768;
-+const STATE_PUBLISH_INTERVAL_MS = 500;
-+const GATE_HEARTBEAT_INTERVAL_MS = 500;
-+const NOISE_FALL_ALPHA = 0.2;
-+const NOISE_RISE_ALPHA = 0.05;
-+
-+const DEFAULTS = {
-+  noiseDb: -72,
-+  thresholdDb: 8,
-+  ttsThresholdBoostDb: 6,
-+  minSpeechMs: 120,
-+  minSilenceMs: 240,
-+  holdMs: 200,
-+};
-+
-+function clamp(value, min, max) {
-+  return Math.min(Math.max(value, min), max);
-+}
-+
-+function toInt16Frame(buffer) {
-+  if (!buffer) {
-+    return new Int16Array(0);
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index 81a1e51cc351cabe25c1937e184a8df7af2b4cf8..3b7cdecd571f62ae84bbb65bc61dcc2ef586045f 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -3,149 +3,169 @@
+     connectionState: "disconnected",
+     sid: null,
+     resume: null,
+     resumeError: null,
+     latencyMs: null,
+     lastPingAt: null,
+     heartbeatTimerId: null,
+     websocket: null,
+     infoFrame: null,
+     serverBanner: null,
+     clientBanner: {
+       info: null,
+       events: []
+     },
+     wsConnected: false,
+     wsPhase: "disconnected",
+     ttsActive: false,
+     asrArmInFlight: false,
+     armAfterTtsEnd: false,
+     listening: false,
+     recorderActive: false,
+     lastChunkTs: null,
+     chunkCount: 0,
+     lastErrorCode: null,
+     lastErrorDetail: null,
++    vadActive: false,
++    vadSpeech: false,
++    vadConfidence: 0,
++    vadEnergyDb: null,
++    vadNoiseDb: null,
+   };
+ 
+   let state = { ...initialState };
+   const listeners = new Set();
+ 
+   const TELEMETRY_KEYS = [
+     "wsConnected",
+     "wsPhase",
+     "ttsActive",
+     "asrArmInFlight",
+     "armAfterTtsEnd",
+     "listening",
+     "recorderActive",
+     "lastChunkTs",
+     "chunkCount",
+     "lastErrorCode",
+     "lastErrorDetail",
++    "vadActive",
++    "vadSpeech",
++    "vadConfidence",
++    "vadEnergyDb",
++    "vadNoiseDb",
+   ];
+   const DELTA_COALESCE_MS = 12;
+   const HEARTBEAT_INTERVAL_MS = 5000;
+ 
+   let telemetryPrev = null;
+   let pendingDelta = null;
+   let pendingDeltaTimerId = null;
+   let telemetryHeartbeatTimerId = null;
+   let lastHeartbeatPayload = null;
+ 
+   function computeTelemetrySnapshot(sourceState = state) {
+     const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
+     const recorderActive = typeof snapshot.recorderActive === "boolean"
+       ? snapshot.recorderActive
+       : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
+     return {
+       wsConnected: Boolean(snapshot.wsConnected),
+       wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
+       ttsActive: Boolean(snapshot.ttsActive),
+       asrArmInFlight: Boolean(snapshot.asrArmInFlight),
+       armAfterTtsEnd: Boolean(snapshot.armAfterTtsEnd),
+       listening: Boolean(snapshot.listening),
+       recorderActive,
+       lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
+       chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
+       lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
+       lastErrorDetail: snapshot.lastErrorDetail ?? null,
++      vadActive: Boolean(snapshot.vadActive),
++      vadSpeech: Boolean(snapshot.vadSpeech),
++      vadConfidence: Number.isFinite(snapshot.vadConfidence) ? snapshot.vadConfidence : 0,
++      vadEnergyDb: Number.isFinite(snapshot.vadEnergyDb) ? snapshot.vadEnergyDb : null,
++      vadNoiseDb: Number.isFinite(snapshot.vadNoiseDb) ? snapshot.vadNoiseDb : null,
+     };
+   }
+ 
+   function publishTelemetry(label, payload) {
+     try {
+       const hub = window.AppState && window.AppState.hub;
+       if (hub && typeof hub.log === "function") {
+         hub.log(label, payload);
+       }
+     } catch (err) {
+       try {
+         console.warn("AppState telemetry publish failed", label, err);
+       } catch {}
+     }
+   }
+ 
+   function normalizeTelemetryValue(value) {
+     return value === undefined ? null : value;
+   }
+ 
+   function syncTrackedProperties(snapshot) {
+     const target = window.AppState;
+     if (!target || typeof target !== "object") {
+       return;
+     }
+     for (const key of TELEMETRY_KEYS) {
+       if (key === "recorderActive") {
+         target.recorderActive = snapshot.recorderActive;
+       } else {
+         target[key] = snapshot[key];
+       }
+     }
+   }
+ 
+   function scheduleDeltaFlush() {
+     if (pendingDeltaTimerId) {
+       return;
+     }
+     pendingDeltaTimerId = setTimeout(() => {
+       pendingDeltaTimerId = null;
+       if (!pendingDelta) {
+         return;
+       }
+       const snapshot = pendingDelta.snapshot || telemetryPrev || computeTelemetrySnapshot();
+-      const detail = {
+-        changed: pendingDelta.changed,
+-        now_ms: Date.now(),
+-        wsPhase: snapshot.wsPhase,
+-        recorderActive: snapshot.recorderActive,
+-        listening: snapshot.listening,
+-        ttsActive: snapshot.ttsActive,
+-        asrArmInFlight: snapshot.asrArmInFlight,
+-        armAfterTtsEnd: snapshot.armAfterTtsEnd,
+-        chunkCount: snapshot.chunkCount,
+-      };
++        const detail = {
++          changed: pendingDelta.changed,
++          now_ms: Date.now(),
++          wsPhase: snapshot.wsPhase,
++          recorderActive: snapshot.recorderActive,
++          listening: snapshot.listening,
++          ttsActive: snapshot.ttsActive,
++          asrArmInFlight: snapshot.asrArmInFlight,
++          armAfterTtsEnd: snapshot.armAfterTtsEnd,
++          chunkCount: snapshot.chunkCount,
++          vadActive: snapshot.vadActive,
++          vadSpeech: snapshot.vadSpeech,
++          vadConfidence: snapshot.vadConfidence,
++          vadEnergyDb: snapshot.vadEnergyDb,
++          vadNoiseDb: snapshot.vadNoiseDb,
++        };
+       publishTelemetry("client.appstate.delta", detail);
+       pendingDelta = null;
+     }, DELTA_COALESCE_MS);
+   }
+ 
+   function recordTelemetryChange(prevSnapshot, nextSnapshot) {
+     if (!prevSnapshot) {
+       return;
+     }
+     const changed = {};
+     for (const key of TELEMETRY_KEYS) {
+       if (!Object.is(prevSnapshot[key], nextSnapshot[key])) {
+         changed[key] = true;
+       }
+     }
+     const changedKeys = Object.keys(changed);
+     if (!changedKeys.length) {
+       return;
+     }
+     if (!pendingDelta) {
+       pendingDelta = { changed: {}, snapshot: nextSnapshot };
+     }
+     for (const key of changedKeys) {
+       const existing = pendingDelta.changed[key];
+       if (existing) {
+@@ -158,71 +178,81 @@
+       };
+     }
+     pendingDelta.snapshot = nextSnapshot;
+     scheduleDeltaFlush();
+   }
+ 
+   function stopTelemetryHeartbeat() {
+     if (telemetryHeartbeatTimerId) {
+       clearInterval(telemetryHeartbeatTimerId);
+       telemetryHeartbeatTimerId = null;
+     }
+     lastHeartbeatPayload = null;
+   }
+ 
+   function heartbeatPayloadEqual(a, b) {
+     if (!a || !b) {
+       return false;
+     }
+     return (
+       a.wsPhase === b.wsPhase &&
+       a.wsConnected === b.wsConnected &&
+       a.ttsActive === b.ttsActive &&
+       a.listening === b.listening &&
+       a.recorderActive === b.recorderActive &&
+       a.chunkCount === b.chunkCount &&
+-      a.lastChunkAgeMs === b.lastChunkAgeMs
++      a.lastChunkAgeMs === b.lastChunkAgeMs &&
++      a.vadActive === b.vadActive &&
++      a.vadSpeech === b.vadSpeech &&
++      a.vadConfidence === b.vadConfidence &&
++      a.vadEnergyDb === b.vadEnergyDb &&
++      a.vadNoiseDb === b.vadNoiseDb
+     );
+   }
+ 
+   function runTelemetryHeartbeat() {
+     const snapshot = telemetryPrev || computeTelemetrySnapshot();
+     if (!snapshot.wsConnected) {
+       stopTelemetryHeartbeat();
+       return;
+     }
+     const lastChunkAgeMs = snapshot.chunkCount > 0 && Number.isFinite(snapshot.lastChunkTs)
+       ? Math.max(0, Date.now() - snapshot.lastChunkTs)
+       : null;
+     const payload = {
+       wsPhase: snapshot.wsPhase,
+       wsConnected: snapshot.wsConnected,
+       ttsActive: snapshot.ttsActive,
+       listening: snapshot.listening,
+       recorderActive: snapshot.recorderActive,
+       chunkCount: snapshot.chunkCount,
+       lastChunkAgeMs,
++      vadActive: snapshot.vadActive,
++      vadSpeech: snapshot.vadSpeech,
++      vadConfidence: snapshot.vadConfidence,
++      vadEnergyDb: snapshot.vadEnergyDb,
++      vadNoiseDb: snapshot.vadNoiseDb,
+     };
+     if (heartbeatPayloadEqual(payload, lastHeartbeatPayload)) {
+       return;
+     }
+     publishTelemetry("client.appstate.heartbeat", payload);
+     lastHeartbeatPayload = payload;
+   }
+ 
+   function ensureTelemetryHeartbeat(snapshot) {
+     if (snapshot.wsConnected) {
+       if (!telemetryHeartbeatTimerId) {
+         telemetryHeartbeatTimerId = setInterval(runTelemetryHeartbeat, HEARTBEAT_INTERVAL_MS);
+         runTelemetryHeartbeat();
+       }
+       return;
+     }
+     stopTelemetryHeartbeat();
+   }
+ 
+   function processTelemetry(nextState) {
+     const nextSnapshot = computeTelemetrySnapshot(nextState);
+     if (!telemetryPrev) {
+       telemetryPrev = nextSnapshot;
+       syncTrackedProperties(nextSnapshot);
+       ensureTelemetryHeartbeat(nextSnapshot);
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 1d8a704a80983325842c963edddd7ba94b34f30e..594817060978c2c59449a704bfc963b40294fec3 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,35 +1,49 @@
+ // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
++import { initVAD } from "./audio/vad_client.js";
+ import { WakeWord } from "./wake_word.js";
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
++  const CLIENT_VAD_POLICY = Object.freeze({
++    enable: true,
++    sensitivity: 0.5,
++    min_speech_ms: 200,
++    min_silence_ms: 400,
++    hold_ms: 250,
++    echo_suppression_db: 10,
++    tts_threshold_boost_db: 12,
++    debounce_ms: 40,
++    stream_gate: "none",
++    max_gate_silence_ms: 3000,
++  });
++  const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
+ 
+   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
+ 
+   // ---- Golden-path turn trace & mic outcomes (additive) ----
+   // ---- Telemetry (additive) ----
+   const MIC_OUTCOME = {
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+   const DEFAULT_ASR_VENDOR = 'speechmatics';
+ 
+   let __micAttempts = 0;
+   let __micChunks = 0;
+   let __micBytes = 0;
+@@ -131,50 +145,70 @@ import { WakeWord } from "./wake_word.js";
+     ...P0,
+     auto_record_after_greet: P0.auto_record_after_greet ?? true,
+     require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
+     tts_gate_enabled: P0.tts_gate_enabled ?? true,
+     autostart_retry_on: Array.isArray(P0.autostart_retry_on)
+       ? P0.autostart_retry_on.slice()
+       : ["asrReady", "ttsEnded", "turnState:Ready"],
+     autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
+       ? P0.autostart_backoff_ms.slice()
+       : [0, 300, 1000],
+     autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
+     show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
+       ? P0.show_tap_to_speak_cta_after_ms
+       : 2000,
+     reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
+     policy: {
+       ...P0Policy,
+       input: {
+         ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
+         require_hotword_to_start: false,
+         require_user_gesture_first_visit: false,
+       },
+     },
+   };
+ 
++  function installClientVadPolicySnapshot() {
++    const policyRoot = AppState.policy && typeof AppState.policy === "object"
++      ? AppState.policy
++      : (AppState.policy = {});
++    const ensureVadBlock = (target) => {
++      if (!target || typeof target !== "object") {
++        return;
++      }
++      const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
++      target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
++    };
++    ensureVadBlock(policyRoot);
++    if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
++      policyRoot.policy = {};
++    }
++    ensureVadBlock(policyRoot.policy);
 +  }
-+  if (buffer instanceof Int16Array) {
-+    return buffer;
++
++  installClientVadPolicySnapshot();
++
+   const appStateEventEmitter = createEventEmitter();
+   if (typeof AppState.on !== "function") {
+     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
+   }
+   if (typeof AppState.emit !== "function") {
+     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+   }
+   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
+     AppState.__pcmBreadcrumbHandlersInstalled = true;
+     AppState.on("recordingStarted", () => {
+       __micRecordingStartAt = Date.now();
+       __micFirstChunkBreadcrumbSent = false;
+       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
+     });
+   }
+ 
+   function clonePolicySnapshot(source) {
+     if (!source || typeof source !== "object") {
+       return {};
+     }
+     return { ...source };
+   }
+ 
+   function patchPolicyVad(patch) {
+     if (!patch || typeof patch !== "object") {
+@@ -289,72 +323,148 @@ import { WakeWord } from "./wake_word.js";
+     } catch (err) {
+       console.error("Deferred recorder start failed", err);
+       logMic({
+         outcome: MIC_OUTCOME.ERROR_GUM,
+         message: err && err.message ? err.message : String(err || ""),
+         reason,
+       });
+       __pendingAsrReadyStart = pending;
+       return false;
+     }
+   }
+ 
+   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+   let autostartAttempts = 0;
+   let autostartTimer = null;
+ 
+   const WSClient = window.WSClient = window.WSClient || {};
+   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
+     window.ws = null;
+   }
+   WSClient._ws = WSClient._ws || null;
+   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+   const getAudioPlayer = () => window.AudioPlayer;
+ 
++  const VAD_APPSTATE_KEYS = [
++    "vadActive",
++    "vadSpeech",
++    "vadConfidence",
++    "vadEnergyDb",
++    "vadNoiseDb",
++  ];
++  let vadController = null;
++  let senderPaused = false;
++
+   function hubLog(label, detail) {
+     const state = typeof window !== "undefined" ? window.AppState : null;
+     const hub = state && state.hub;
+     if (hub && typeof hub.log === "function") {
+       try {
+         hub.log(label, detail);
+         return true;
+       } catch (err) {
+         console.warn("AppState.hub.log failed", err);
+       }
+     }
+     if (typeof window !== "undefined") {
+       try {
+         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
+         return true;
+       } catch (err) {
+         console.warn("client.log dispatch failed", err);
+       }
+     }
+     return false;
+   }
+ 
++  function getVadPolicySnapshot() {
++    return CLIENT_VAD_POLICY_ROOT;
 +  }
-+  if (ArrayBuffer.isView(buffer) && buffer.BYTES_PER_ELEMENT === 2) {
++
++  function getTtsActiveSnapshot() {
 +    try {
-+      return new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length);
-+    } catch {
-+      return new Int16Array(0);
-+    }
-+  }
-+  if (buffer instanceof ArrayBuffer) {
-+    return new Int16Array(buffer);
-+  }
-+  return new Int16Array(0);
-+}
-+
-+function rmsDbFromPcm(int16Frame) {
-+  const { length } = int16Frame;
-+  if (!length) {
-+    return DB_FLOOR;
-+  }
-+  let sumSquares = 0;
-+  for (let i = 0; i < length; i += 1) {
-+    const sample = int16Frame[i] / SAMPLE_MAX;
-+    sumSquares += sample * sample;
-+  }
-+  const meanSquare = sumSquares / length;
-+  if (meanSquare <= 0) {
-+    return DB_FLOOR;
-+  }
-+  const rms = Math.sqrt(meanSquare);
-+  return 20 * Math.log10(rms);
-+}
-+
-+function lerp(current, target, alpha) {
-+  return current + (target - current) * alpha;
-+}
-+
-+function resolvePolicy(getPolicy) {
-+  if (typeof getPolicy !== "function") {
-+    return null;
-+  }
-+  try {
-+    return getPolicy() || null;
-+  } catch {
-+    return null;
-+  }
-+}
-+
-+function resolveStreamGateMode(getPolicy) {
-+  const policy = resolvePolicy(getPolicy);
-+  if (!policy || typeof policy !== "object") {
-+    return "pass";
-+  }
-+  const vadBlock = policy.vad && typeof policy.vad === "object" ? policy.vad : null;
-+  if (!vadBlock) {
-+    return "pass";
-+  }
-+  const clientBlock = vadBlock.client && typeof vadBlock.client === "object"
-+    ? vadBlock.client
-+    : null;
-+  if (!clientBlock) {
-+    return "pass";
-+  }
-+  const mode = clientBlock.stream_gate;
-+  if (mode === "gate") {
-+    return "gate";
-+  }
-+  return "pass";
-+}
-+
-+function isTtsActive(getTtsActive) {
-+  if (typeof getTtsActive !== "function") {
-+    return false;
-+  }
-+  try {
-+    return !!getTtsActive();
-+  } catch {
-+    return false;
-+  }
-+}
-+
-+function safePublish(publish, event, payload) {
-+  if (typeof publish !== "function") {
-+    return;
-+  }
-+  try {
-+    publish(event, payload);
-+  } catch (err) {
-+    if (typeof console !== "undefined" && typeof console.warn === "function") {
-+      console.warn("client.vad publish error", err);
-+    }
-+  }
-+}
-+
-+function safeSetAppState(setAppState, patch) {
-+  if (typeof setAppState !== "function" || !patch || typeof patch !== "object") {
-+    return;
-+  }
-+  try {
-+    setAppState(patch);
-+  } catch (err) {
-+    if (typeof console !== "undefined" && typeof console.warn === "function") {
-+      console.warn("client.vad setAppState error", err);
-+    }
-+  }
-+}
-+
-+export function initVAD({
-+  getPolicy,
-+  getTtsActive,
-+  onGateChange,
-+  setAppState,
-+  publish,
-+} = {}) {
-+  let vadSpeech = false;
-+  let vadEnergyDb = DB_FLOOR;
-+  let vadNoiseDb = DEFAULTS.noiseDb;
-+  let speechCandidateStart = null;
-+  let silenceCandidateStart = null;
-+  let speechStartedAt = null;
-+  let holdUntilMs = 0;
-+  let lastStatePublishAt = 0;
-+  let gatePaused = false;
-+  let gatePausedAt = 0;
-+  let lastGateHeartbeatAt = 0;
-+  let initialized = false;
-+
-+  function computeThresholdDb() {
-+    const base = DEFAULTS.thresholdDb;
-+    const ttsActive = isTtsActive(getTtsActive);
-+    const boost = ttsActive ? DEFAULTS.ttsThresholdBoostDb : 0;
-+    const effectiveNoise = Number.isFinite(vadNoiseDb) ? vadNoiseDb : DEFAULTS.noiseDb;
-+    const threshold = effectiveNoise + base + boost;
-+    return Math.max(threshold, DEFAULTS.noiseDb + base);
-+  }
-+
-+  function updateGate(nowMs, reason) {
-+    const mode = resolveStreamGateMode(getPolicy);
-+    if (mode !== "gate") {
-+      if (gatePaused && typeof onGateChange === "function") {
-+        gatePaused = false;
-+        gatePausedAt = 0;
-+        lastGateHeartbeatAt = 0;
-+        onGateChange("resume", "policy_disabled");
-+        safePublish(publish, "client.vad.gate", { action: "resume", reason: "policy_disabled" });
-+      }
-+      return;
-+    }
-+
-+    if (vadSpeech) {
-+      if (gatePaused && typeof onGateChange === "function") {
-+        gatePaused = false;
-+        gatePausedAt = 0;
-+        lastGateHeartbeatAt = 0;
-+        onGateChange("resume", reason || "speech_detected");
-+        safePublish(publish, "client.vad.gate", { action: "resume", reason: reason || "speech_detected" });
-+      }
-+    } else {
-+      if (!gatePaused && nowMs >= holdUntilMs && typeof onGateChange === "function") {
-+        gatePaused = true;
-+        gatePausedAt = nowMs;
-+        lastGateHeartbeatAt = nowMs;
-+        onGateChange("pause", reason || "silence");
-+        safePublish(publish, "client.vad.gate", { action: "pause", reason: reason || "silence" });
-+      }
-+      if (gatePaused) {
-+        if (!lastGateHeartbeatAt) {
-+          lastGateHeartbeatAt = nowMs;
-+        }
-+        if (nowMs - lastGateHeartbeatAt >= GATE_HEARTBEAT_INTERVAL_MS) {
-+          lastGateHeartbeatAt = nowMs;
-+          safePublish(publish, "client.vad.gate_heartbeat", {
-+            paused: true,
-+            ms_since_pause: nowMs - gatePausedAt,
-+          });
++      if (typeof AppState.getState === "function") {
++        const snapshot = AppState.getState();
++        if (snapshot && typeof snapshot.ttsActive === "boolean") {
++          return snapshot.ttsActive;
 +        }
 +      }
-+    }
++    } catch {}
++    return Boolean(AppState?.ttsActive);
 +  }
 +
-+  function emitState(nowMs, force = false) {
-+    if (!force && nowMs - lastStatePublishAt < STATE_PUBLISH_INTERVAL_MS) {
++  function setVadAppState(patch) {
++    if (!patch || typeof patch !== "object") {
 +      return;
 +    }
-+    lastStatePublishAt = nowMs;
-+    safePublish(publish, "client.vad.state", {
-+      speech: vadSpeech,
-+      conf: computeConfidence(nowMs),
-+      energyDb: vadEnergyDb,
-+      noiseDb: vadNoiseDb,
++    const sanitized = {};
++    for (const key of VAD_APPSTATE_KEYS) {
++      if (Object.prototype.hasOwnProperty.call(patch, key)) {
++        sanitized[key] = patch[key];
++        AppState[key] = patch[key];
++      }
++    }
++    const keys = Object.keys(sanitized);
++    if (!keys.length) {
++      return;
++    }
++    updateState(sanitized);
++  }
++
++  function publishVad(event, payload) {
++    if (typeof event !== "string" || !event) {
++      return;
++    }
++    hubLog(event, payload);
++  }
++
++  function handleVadGateChange(action) {
++    if (action === "pause") {
++      senderPaused = true;
++      return;
++    }
++    if (action === "resume") {
++      senderPaused = false;
++    }
++  }
++
++  try {
++    vadController = initVAD({
++      getPolicy: () => getVadPolicySnapshot(),
++      getTtsActive: () => getTtsActiveSnapshot(),
++      onGateChange: handleVadGateChange,
++      setAppState: (patch) => setVadAppState(patch),
++      publish: (event, payload) => publishVad(event, payload),
 +    });
++  } catch (err) {
++    try {
++      console.warn("VAD initialization failed", err);
++    } catch {}
++    vadController = null;
 +  }
 +
-+  function computeConfidence(nowMs) {
-+    const thresholdDb = computeThresholdDb();
-+    const diff = vadEnergyDb - thresholdDb;
-+    const normalized = (diff + 12) / 24;
-+    return clamp(Number.isFinite(normalized) ? normalized : 0, 0, 1);
-+  }
-+
-+  function updateAppState(nowMs) {
-+    safeSetAppState(setAppState, {
-+      vadActive: true,
-+      vadSpeech,
-+      vadConfidence: computeConfidence(nowMs),
-+      vadEnergyDb,
-+      vadNoiseDb,
-+    });
-+  }
-+
-+  function resetState(nowMs) {
-+    vadSpeech = false;
-+    vadEnergyDb = DB_FLOOR;
-+    vadNoiseDb = DEFAULTS.noiseDb;
-+    speechCandidateStart = null;
-+    silenceCandidateStart = null;
-+    speechStartedAt = null;
-+    holdUntilMs = 0;
-+    initialized = false;
-+    if (gatePaused && typeof onGateChange === "function") {
-+      onGateChange("resume", "reset");
-+      safePublish(publish, "client.vad.gate", { action: "resume", reason: "reset" });
-+    }
-+    gatePaused = false;
-+    gatePausedAt = 0;
-+    lastGateHeartbeatAt = 0;
-+    lastStatePublishAt = 0;
-+    updateAppState(nowMs || Date.now());
-+    emitState(nowMs || Date.now(), true);
-+  }
-+
-+  function onPcmFrame(buffer, timestampMs) {
-+    const nowMs = Number.isFinite(timestampMs) ? timestampMs : Date.now();
-+    const frame = toInt16Frame(buffer);
-+    vadEnergyDb = rmsDbFromPcm(frame);
-+    if (!initialized) {
-+      vadNoiseDb = Number.isFinite(vadEnergyDb) ? Math.min(vadEnergyDb, DEFAULTS.noiseDb) : DEFAULTS.noiseDb;
-+      initialized = true;
-+    }
-+    if (!Number.isFinite(vadNoiseDb)) {
-+      vadNoiseDb = DEFAULTS.noiseDb;
-+    }
-+
-+    const thresholdDb = computeThresholdDb();
-+    const aboveThreshold = vadEnergyDb > thresholdDb;
-+
-+    if (aboveThreshold) {
-+      vadNoiseDb = lerp(vadNoiseDb, vadEnergyDb - DEFAULTS.thresholdDb, NOISE_RISE_ALPHA);
-+    } else {
-+      vadNoiseDb = lerp(vadNoiseDb, vadEnergyDb, NOISE_FALL_ALPHA);
-+    }
-+    vadNoiseDb = clamp(vadNoiseDb, DB_FLOOR, vadEnergyDb);
-+
-+    if (aboveThreshold) {
-+      silenceCandidateStart = null;
-+      if (speechCandidateStart === null) {
-+        speechCandidateStart = nowMs;
-+      }
-+      if (!vadSpeech && nowMs - speechCandidateStart >= DEFAULTS.minSpeechMs) {
-+        vadSpeech = true;
-+        speechStartedAt = speechCandidateStart;
-+        safePublish(publish, "client.vad.speech_start", {
-+          conf: computeConfidence(nowMs),
-+          energyDb: vadEnergyDb,
-+          noiseDb: vadNoiseDb,
-+        });
-+        emitState(nowMs, true);
-+      }
-+    } else {
-+      speechCandidateStart = null;
-+      if (vadSpeech && silenceCandidateStart === null) {
-+        silenceCandidateStart = nowMs;
-+      }
-+      if (vadSpeech && silenceCandidateStart !== null && nowMs - silenceCandidateStart >= DEFAULTS.minSilenceMs) {
-+        vadSpeech = false;
-+        holdUntilMs = nowMs + DEFAULTS.holdMs;
-+        const durationMs = speechStartedAt ? Math.max(0, nowMs - speechStartedAt) : 0;
-+        safePublish(publish, "client.vad.speech_end", { duration_ms: durationMs });
-+        emitState(nowMs, true);
-+        speechStartedAt = null;
+   function getGateSnapshot() {
+     let snapshot = null;
+     try {
+       snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
+     } catch {}
+     const asrValue = snapshot && typeof snapshot.asrReady === "boolean"
+       ? snapshot.asrReady
+       : Boolean(AppState?.asrReady);
+     const ttsValue = snapshot && typeof snapshot.ttsActive === "boolean"
+       ? snapshot.ttsActive
+       : Boolean(AppState?.ttsActive);
+     let micPermValue = __micPermissionGranted;
+     if (snapshot && typeof snapshot.micPermissionGranted === "boolean") {
+       micPermValue = snapshot.micPermissionGranted;
+     } else if (typeof AppState?.micPermissionGranted === "boolean") {
+       micPermValue = AppState.micPermissionGranted;
+     }
+     return {
+       asrReady: Boolean(asrValue),
+       micPerm: Boolean(micPermValue),
+       ttsActive: Boolean(ttsValue),
+     };
+   }
+ 
+   function emitMicBreadcrumb(detail = {}) {
+@@ -624,116 +734,163 @@ import { WakeWord } from "./wake_word.js";
+       }
+       if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
+         try {
+           WSClient.send({ type: "client.ping" });
+           logStage("client.ping", { lane: "mic" });
+         } catch (err) {
+           console.warn("client.ping send failed", err);
+         }
+       }
+       scheduleAudioKeepalive();
+     }, AUDIO_KEEPALIVE_MS);
+   }
+ 
+   function stopRecorder(reason) {
+     clearAudioKeepaliveTimer();
+     const recorder = getRecorder();
+     if (!recorder) {
+       setListeningState(false);
+       return;
+     }
+     try {
+       recorder.stopListening({ reason: normalizeReason(reason) });
+     } catch (err) {
+       console.warn("Recorder stopListening failed", err);
+     }
++    senderPaused = false;
++    if (vadController && typeof vadController.reset === "function") {
++      try {
++        vadController.reset();
++      } catch (err) {
++        try {
++          console.warn("VAD reset failed", err);
++        } catch {}
 +      }
 +    }
-+
-+    updateAppState(nowMs);
-+    emitState(nowMs);
-+    updateGate(nowMs);
-+  }
-+
-+  const bootTs = Date.now();
-+  updateAppState(bootTs);
-+  emitState(bootTs, true);
-+
-+  return {
-+    onPcmFrame,
-+    reset() {
-+      resetState(Date.now());
-+    },
-+  };
-+}
+     setListeningState(false);
+   }
+ 
+   function sendAudioHeader() {
+     try {
+       WSClient.send({ ...AUDIO_HEADER_FRAME });
+       logStage("client.audio_header_send", {
+         format: AUDIO_HEADER_FRAME.format,
+         sample_rate: AUDIO_HEADER_FRAME.sample_rate,
+         channels: AUDIO_HEADER_FRAME.channels,
+       });
+     } catch (err) {
+       console.warn("Failed to send audio header", err);
+     }
+   }
+ 
+   function handleRecorderChunk(event) {
+     if (!event) {
+       return;
+     }
+     const buffer = event.buffer instanceof ArrayBuffer
+       ? event.buffer
+       : (ArrayBuffer.isView(event.buffer)
+         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
+         : null);
+     if (!buffer) {
+       return;
+     }
+     const seq = Number(event.seq) || 0;
+     micLastChunkAt = Date.now();
+     scheduleAudioKeepalive();
+     recordRecorderChunk(micLastChunkAt);
++    const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
++      ? performance.now()
++      : Date.now();
++    if (vadController && typeof vadController.onPcmFrame === "function") {
++      try {
++        vadController.onPcmFrame(buffer, frameTimestamp);
++      } catch (err) {
++        try {
++          console.warn("VAD frame processing failed", err);
++        } catch {}
++      }
++    }
++    let asrReady = false;
++    try {
++      if (typeof AppState.getState === "function") {
++        const snapshot = AppState.getState();
++        if (snapshot && typeof snapshot.asrReady === "boolean") {
++          asrReady = snapshot.asrReady;
++        }
++      }
++    } catch {}
++    if (!asrReady) {
++      asrReady = Boolean(AppState?.asrReady);
++    }
++    if (senderPaused || !asrReady) {
++      return;
++    }
+     if (seq === 0) {
+       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
+     }
+     logStage("client.audio_chunk_send", { seq, bytes: buffer.byteLength });
+     try {
+       const result = sendBinary(buffer, { lane: "mic" });
+       if (result && typeof result.catch === "function") {
+         result.catch((err) => {
+           console.warn("Binary send (mic) failed", err);
+         });
+       }
+     } catch (err) {
+       console.error("WSClient sendBinary mic failed", err);
+     }
+   }
+ 
+   async function startRecorderStreaming(policy) {
+     if (AppState.listening) {
+       return;
+     }
+     const recorder = getRecorder();
+     if (!recorder) {
+       console.warn("AudioRecorder unavailable; cannot start streaming");
+       return;
+     }
+     try {
+       await recorder.start({ onChunk: handleRecorderChunk, policy });
+     } catch (err) {
+       if (err && err.name === "NotAllowedError") {
+         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
+       }
+       throw err;
+     }
+     resetRecorderTelemetry();
++    senderPaused = false;
++    if (vadController && typeof vadController.reset === "function") {
++      try {
++        vadController.reset();
++      } catch (err) {
++        try {
++          console.warn("VAD reset failed", err);
++        } catch {}
++      }
++    }
+     await recorder.startListening(policy);
+     micLastChunkAt = Date.now();
+     scheduleAudioKeepalive();
+     setListeningState(true);
+   }
+ 
+   function schedulePostTtsArm(reason) {
+     clearPostTtsArmTimer();
+     postTtsArmTimerId = setTimeout(() => {
+       postTtsArmTimerId = null;
+       requestAsrArm(reason);
+     }, POST_TTS_ARM_DELAY_MS);
+   }
+ 
+   function requestAsrArm(reason) {
+     const label = normalizeReason(reason);
+     clearPostTtsArmTimer();
+     if (AppState.ttsActive) {
+       setArmAfterTtsEnd(true);
+       logStage("client.asr_arm_queued", { reason: label });
+       return;
+     }
+     if (AppState.asrArmInFlight) {
+       logStage("client.asr_rearm_blocked", { reason: label });
+       return;
