@@ -7,7 +7,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 from app.logging_setup import current_sid
 from app.telemetry import bus
 
-_ALLOWED_AUDIO_FORMATS = {"pcm"}
+_ALLOWED_AUDIO_FORMATS = {"pcm", "pcm16"}
 
 
 _logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
     if frame_type == "audio.header":
         fmt = frame.get("format")
         if fmt not in _ALLOWED_AUDIO_FORMATS:
-            return False, "audio.header requires format 'pcm'"
+            return False, "audio.header requires format 'pcm16'"
 
         sample_rate = frame.get("sample_rate")
         if sample_rate is not None and not _is_int(sample_rate):
@@ -74,7 +74,7 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
         if channels is not None and not _is_int(channels):
             return False, "audio.header requires integer channels"
 
-        if fmt == "pcm":
+        if fmt in {"pcm", "pcm16"}:
             expected_sr = 16000
             expected_channels = 1
             got_sr = sample_rate
@@ -87,7 +87,7 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
                 )
                 return (
                     False,
-                    "audio.header pcm requires sample_rate=16000 and channels=1",
+                    "audio.header pcm16 requires sample_rate=16000 and channels=1",
                 )
             if got_sr != expected_sr or got_channels != expected_channels:
                 _logger.warning(
@@ -97,7 +97,7 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
                 )
                 return (
                     False,
-                    "audio.header pcm requires sample_rate=16000 and channels=1",
+                    "audio.header pcm16 requires sample_rate=16000 and channels=1",
                 )
 
     return True, None
@@ -113,7 +113,10 @@ def validate_audio_header_against_policy(
     channels = header.get("channels")
 
     if vendor == "speechmatics":
-        if fmt != "pcm" or rate != 16000 or channels != 1:
+        normalized_fmt = fmt
+        if normalized_fmt == "pcm":
+            normalized_fmt = "pcm16"
+        if normalized_fmt != "pcm16" or rate != 16000 or channels != 1:
             _logger.warning(
                 "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
                 fmt,

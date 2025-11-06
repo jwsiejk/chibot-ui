@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 import json
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
+
+import jwt
 
 from app import config
 from app.logging_setup import current_sid
@@ -25,7 +27,9 @@ from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
 from app.voice_v2 import (
+    EVT_ASR_CLOSED,
     EVT_ASR_FINAL,
+    EVT_ASR_CLOSE,
     EVT_ASR_OPEN,
     EVT_ASR_PARTIAL,
     EVT_ASR_READY,
@@ -43,6 +47,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
+from app.services.asr.sm_rt import SMRealtimeClient
 from app.ws.validator import validate_audio_header_against_policy, validate_frame
 
 try:  # pragma: no cover - uvicorn is an optional dependency in tests
@@ -80,6 +85,18 @@ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
 EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
 EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
 EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
+WS_AUDIO_HEADER_ACCEPT = "WS_AUDIO_HEADER_ACCEPT"
+ASR_OPEN_QUEUED = "ASR_OPEN_QUEUED"
+ASR_OPEN_DEDUP = "ASR_OPEN_DEDUP"
+ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
+ASR_OPEN_AFTER_TTS = "ASR_OPEN_AFTER_TTS"
+ASR_SINGLE_STREAM_INVARIANT = "ASR_SINGLE_STREAM_INVARIANT"
+ASR_POST_CLOSE_DROP = "ASR_POST_CLOSE_DROP"
+EVT_SESSION_TRANSPORT_CLOSED = "EVT_SESSION_TRANSPORT_CLOSED"
+ASR_VENDOR_BYTES_TOTAL = "ASR_VENDOR_BYTES_TOTAL"
+ASR_ROLLUP = "ASR_ROLLUP"
+AUDIO_WIRE_ROLLUP = "AUDIO_WIRE_ROLLUP"
+SESSION_TEARDOWN_COMPLETE = "SESSION_TEARDOWN_COMPLETE"
 
 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
@@ -142,6 +159,8 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "client.telemetry",
     "client.banner",
     "asr.rearm.request",
+    "asr.open",
+    "asr.close",
 }
 
 _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
@@ -337,6 +356,7 @@ class AdapterContext:
     asr_unavailable_subscription_token: Optional[str] = None
     asr_partial_subscription_token: Optional[str] = None
     asr_final_subscription_token: Optional[str] = None
+    asr_closed_subscription_token: Optional[str] = None
     asr_recovering_until: float = 0.0
     asr_recovering_reason: Optional[str] = None
     asr_recovering_audio_logged: bool = False
@@ -346,6 +366,17 @@ class AdapterContext:
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
+    ws_send: Callable[[dict], Awaitable[None]] | None = None
+    asr_state: Literal["closed", "opening", "open", "closing"] = "closed"
+    asr: SMRealtimeClient | None = None
+    asr_open_task: asyncio.Task[None] | None = None
+    asr_bytes_sent: int = 0
+    asr_opened_ms: Optional[int] = None
+    asr_close_reason: Optional[str] = None
+    tts_active: bool = False
+    queued_arm: bool = False
+    first_chunk_sent: bool = False
+    transport_closed_ms: Optional[int] = None
     tts_end_ts: Optional[float] = None
     diag_audio_seen: bool = False
     diag_timer: asyncio.TimerHandle | None = None
@@ -410,6 +441,10 @@ class ChatV2Adapter:
         if isinstance(req_id, str) and req_id:
             return f"{ctx.sid}:{req_id}"
         return None
+
+    @staticmethod
+    def _allowed_asr_vendors() -> List[str]:
+        return ["speechmatics"]
 
     @staticmethod
     def _set_pending_for_key(ctx: AdapterContext, key: Optional[str]) -> None:
@@ -757,6 +792,7 @@ class ChatV2Adapter:
             ctx.audio_pipeline_mode = "pcm16"
         mode = ctx.audio_pipeline_mode or "pcm16"
         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
+        ctx.ws_send = send
 
         token = current_sid.set(ctx.sid)
         try:
@@ -840,9 +876,38 @@ class ChatV2Adapter:
                 raise
             finally:
                 await self._stop_server_keepalive(ctx)
+                t_close_ms = self._now_ms()
+                ctx.transport_closed_ms = t_close_ms
+                await self._publish(
+                    EVT_SESSION_TRANSPORT_CLOSED,
+                    ctx.sid,
+                    {"code": close_code, "reason": close_reason, "t_close_ms": t_close_ms},
+                )
+                await self._close_asr(ctx, reason="transport_closed")
                 await self._cleanup_outbound(ctx)
                 self._stop_asr_ready_tracker(ctx)
                 await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
+                vendor_meta = {
+                    "vendor": ctx.asr_vendor or "speechmatics",
+                    "bytes": ctx.asr_bytes_sent,
+                }
+                await self._publish(ASR_VENDOR_BYTES_TOTAL, ctx.sid, vendor_meta)
+                rollup_meta = dict(vendor_meta)
+                rollup_meta["state"] = ctx.asr_state
+                if ctx.asr_close_reason:
+                    rollup_meta["reason"] = ctx.asr_close_reason
+                await self._publish(ASR_ROLLUP, ctx.sid, rollup_meta)
+                await self._publish(
+                    AUDIO_WIRE_ROLLUP,
+                    ctx.sid,
+                    {"ingress_bytes": ctx.ingress_bytes, "packets": ctx.ingress_packets},
+                )
+                after_close_ms = max(0, self._now_ms() - t_close_ms)
+                await self._publish(
+                    SESSION_TEARDOWN_COMPLETE,
+                    ctx.sid,
+                    {"after_close_ms": after_close_ms},
+                )
                 if self.exporter:
                     self.exporter.end(ctx.sid, {"close_code": close_code})
                     self._emit_session_step(
@@ -860,6 +925,7 @@ class ChatV2Adapter:
                     meta={"close_code": close_code, "close_reason": close_reason},
                     source="ws.close",
                 )
+                ctx.ws_send = None
         finally:
             current_sid.reset(token)
 
@@ -1077,17 +1143,80 @@ class ChatV2Adapter:
                 await self._send_error(send, ctx.sid, "schema_invalid", detail)
                 return self._HandleResult(True)
 
+        if frame_type == "asr.open":
+            if ctx.tts_active:
+                ctx.queued_arm = True
+                await self._publish(
+                    ASR_OPEN_QUEUED,
+                    ctx.sid,
+                    {"reason": "tts_active", "state": ctx.asr_state},
+                )
+            elif ctx.asr_state != "closed":
+                await self._publish(
+                    ASR_OPEN_DEDUP,
+                    ctx.sid,
+                    {"state": ctx.asr_state},
+                )
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._send_json(
+                    send,
+                    ctx.sid,
+                    {"type": "asr.error", "code": "already_open"},
+                )
+                return self._HandleResult(True)
+            else:
+                try:
+                    self._schedule_asr_open(ctx)
+                except Exception:
+                    _log.exception("evt=asr_schedule_failed sid=%s", ctx.sid)
+                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                    await self._send_json(
+                        send,
+                        ctx.sid,
+                        {"type": "asr.error", "code": "open_failed"},
+                    )
+                    return self._HandleResult(True)
+
+        if frame_type == "asr.close":
+            if ctx.asr_state in {"opening", "open"}:
+                await self._publish(
+                    EVT_ASR_CLOSE,
+                    ctx.sid,
+                    {"state": ctx.asr_state},
+                )
+                await self._close_asr(ctx, reason="client_request")
+            else:
+                await self._publish(
+                    ASR_CLOSE_DEDUP,
+                    ctx.sid,
+                    {"state": ctx.asr_state},
+                )
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            return self._HandleResult(True)
+
         if frame_type == "audio.header":
+            expected = {"format": "pcm16", "sample_rate": 16000, "channels": 1}
+            fmt = frame.get("format")
             sample_rate = frame.get("sample_rate")
-            if sample_rate is None:
-                rate_candidate = frame.get("rate_hz")
-                if isinstance(rate_candidate, int):
-                    sample_rate = rate_candidate
+            channels = frame.get("channels")
+            if fmt != expected["format"] or sample_rate != expected["sample_rate"] or channels != expected["channels"]:
+                meta["error"] = "bad_header"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._send_json(
+                    send,
+                    ctx.sid,
+                    {
+                        "type": "asr.error",
+                        "code": "bad_header",
+                        "expected": expected,
+                    },
+                )
+                return self._HandleResult(True)
             profile = {
-                "format": "pcm",
+                "format": "pcm16",
                 "codec": frame.get("codec") or "pcm_s16le",
-                "sample_rate": sample_rate,
-                "channels": frame.get("channels"),
+                "sample_rate": expected["sample_rate"],
+                "channels": expected["channels"],
                 "container": "raw",
             }
             seq_start = frame.get("seq_start")
@@ -1184,6 +1313,11 @@ class ChatV2Adapter:
                 )
                 if value is not None
             }
+            await self._publish(
+                WS_AUDIO_HEADER_ACCEPT,
+                ctx.sid,
+                audio_meta,
+            )
             self._emit_session_step(
                 ctx.sid,
                 "audio.header.accepted",
@@ -1508,6 +1642,19 @@ class ChatV2Adapter:
                         )
                         return self._HandleResult(False, 1003, "audio_not_expected")
 
+        if ctx.asr_state != "open":
+            drop_meta = {
+                "reason": "not_open",
+                "byte_count": byte_count,
+                "state": ctx.asr_state,
+            }
+            if isinstance(ctx.transport_closed_ms, int):
+                drop_meta["after_close_ms"] = max(
+                    0, self._now_ms() - ctx.transport_closed_ms
+                )
+            await self._publish(ASR_POST_CLOSE_DROP, ctx.sid, drop_meta)
+            return self._HandleResult(True)
+
         if not ctx.accepting_audio:
             ctx.audio_violation_count += 1
             violation_meta = {
@@ -1817,6 +1964,16 @@ class ChatV2Adapter:
                 reason,
             )
             return
+        asr_client = ctx.asr
+        if ctx.asr_state == "open" and asr_client is not None:
+            try:
+                await asr_client.send_pcm(chunk)
+            except Exception:
+                _log.warning("evt=asr_pcm_send_failed sid=%s", ctx.sid, exc_info=True)
+            else:
+                ctx.asr_bytes_sent += byte_count
+                if not ctx.first_chunk_sent:
+                    ctx.first_chunk_sent = True
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -2125,6 +2282,26 @@ class ChatV2Adapter:
                     policy = self._policy_snapshot()
                     self._maybe_emit_await_user(ctx, policy)
                     _schedule_listen_handoff(req_value)
+                    ctx.tts_active = False
+                    if ctx.queued_arm and ctx.asr_state == "closed":
+                        ctx.queued_arm = False
+                        try:
+                            self._schedule_asr_open(ctx)
+                        except Exception:
+                            _log.exception("evt=asr_open_after_tts_failed sid=%s", ctx.sid)
+                        else:
+                            try:
+                                loop.create_task(
+                                    self._publish(
+                                        ASR_OPEN_AFTER_TTS,
+                                        ctx.sid,
+                                        {"reason": "tts_end", "state": ctx.asr_state},
+                                    )
+                                )
+                            except RuntimeError:
+                                pass
+                elif frame_type == "tts.start":
+                    ctx.tts_active = True
                 _enqueue(payload)
 
             try:
@@ -2154,6 +2331,23 @@ class ChatV2Adapter:
         )
         ctx.asr_final_subscription_token = bus.subscribe(
             EVT_ASR_FINAL, _handle_asr_event
+        )
+
+        def _handle_asr_closed_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid or ctx.outbox is None:
+                return
+
+            def _on_loop() -> None:
+                frame = {"type": "asr.closed"}
+                _enqueue(frame)
+
+            try:
+                loop.call_soon_threadsafe(_on_loop)
+            except RuntimeError:
+                pass
+
+        ctx.asr_closed_subscription_token = bus.subscribe(
+            EVT_ASR_CLOSED, _handle_asr_closed_event
         )
 
         def _handle_asr_unavailable_event(event: dict) -> None:
@@ -2640,6 +2834,8 @@ class ChatV2Adapter:
                 return
 
             ctx.asr_ready = True
+            if ctx.asr_state != "open":
+                ctx.asr_state = "open"
             ctx.awaiting_asr_ready = False
             ctx.asr_recovering_until = 0.0
             ctx.asr_recovering_reason = None
@@ -2662,7 +2858,6 @@ class ChatV2Adapter:
                         "sid": ctx.sid,
                         "who": "server",
                         "source": "ws_server",
-                        "meta": {"ws": {"from_adapter": True}},
                         "frame": frame,
                         "payload": frame,
                     }
@@ -3109,6 +3304,11 @@ class ChatV2Adapter:
         ctx.asr_final_subscription_token = None
         if final_token:
             bus.unsubscribe(final_token)
+
+        closed_token = ctx.asr_closed_subscription_token
+        ctx.asr_closed_subscription_token = None
+        if closed_token:
+            bus.unsubscribe(closed_token)
 
         mask_token = ctx.mask_subscription_token
         ctx.mask_subscription_token = None
@@ -3878,55 +4078,206 @@ class ChatV2Adapter:
         except (TypeError, ValueError):
             max_utterance_ms = 0
 
-        vendor_primary = ""
-        vendor_secondary = ""
-        if isinstance(asr_block, Mapping):
-            vendor_block = asr_block.get("vendor")
-            if isinstance(vendor_block, Mapping):
-                primary_val = vendor_block.get("primary")
-                secondary_val = vendor_block.get("secondary")
-                if isinstance(primary_val, str):
-                    vendor_primary = primary_val.strip().lower()
-                if isinstance(secondary_val, str):
-                    vendor_secondary = secondary_val.strip().lower()
-                elif secondary_val is None:
-                    vendor_secondary = ""
+    @staticmethod
+    def _speechmatics_region() -> str:
+        url = config.SPEECHMATICS_REALTIME_URL or ""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return "global"
+        host = parsed.hostname or ""
+        if not host:
+            return "global"
+        parts = host.split(".")
+        if not parts:
+            return "global"
+        region = parts[0].strip().lower()
+        return region or "global"
 
-        audio_mode = self._resolve_audio_pipeline_mode(snapshot)
+    def _mint_speechmatics_jwt(self, ctx: AdapterContext) -> str:
+        api_key = config.SPEECHMATICS_API_KEY
+        if not api_key:
+            raise RuntimeError("speechmatics api key not configured")
+        now = int(time.time())
+        payload = {
+            "iat": now,
+            "exp": now + 300,
+            "sub": ctx.sid,
+            "scope": "rt",
+        }
+        token = jwt.encode(payload, api_key, algorithm="HS256")
+        if isinstance(token, bytes):
+            token = token.decode("utf-8")
+        return token
 
-        routing_dict = dict(routing_block) if isinstance(routing_block, Mapping) else {}
-        ws_version = str(routing_dict.get("ws_version") or "").strip() or "v2"
-        if ws_version != "v2":
-            _log.warning(
-                "evt=policy_routing_normalized sid=%s configured_ws_version=%s normalized_ws_version=v2",
-                sid,
-                ws_version,
-            )
-            ws_version = "v2"
-        routing_dict["ws_version"] = ws_version
-        policy_block_mut = dict(policy_block)
-        policy_block_mut["routing"] = routing_dict
-        snapshot["policy"] = policy_block_mut
+    def _policy_to_sm_params(self, ctx: AdapterContext) -> Dict[str, Any]:
+        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+        language = "en"
+        enable_partials = True
+        if snapshot is not None:
+            policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+            if isinstance(policy_block, Mapping):
+                nlu_block = policy_block.get("nlu")
+                if isinstance(nlu_block, Mapping):
+                    lang_candidate = nlu_block.get("language")
+                    if isinstance(lang_candidate, str) and lang_candidate.strip():
+                        language = lang_candidate.strip()
+                transcription_block = policy_block.get("asr")
+                if isinstance(transcription_block, Mapping):
+                    partials_flag = transcription_block.get("enable_partials")
+                    if isinstance(partials_flag, bool):
+                        enable_partials = partials_flag
 
-        _log.info(
-            "evt=policy_snapshot sid=%s recorder.stop_on_tts_start=%s recorder.mute_send_during_tts=%s "
-            "input.require_hotword_to_start=%s asr.prearm_on_tts_end=%s asr.keep_stream_warm_ms=%s "
-            "asr.commit_on_vad_silence=%s asr.commit_silence_ms=%s asr.max_utterance_ms=%s "
-            "asr.vendor.primary=%s asr.vendor.secondary=%s audio.pipeline.mode=%s ws_version=%s",
-            sid,
-            stop_on_tts,
-            mute_during_tts,
-            require_hotword,
-            prearm_on_tts_end,
-            keep_warm_ms,
-            commit_on_vad,
-            commit_silence_ms,
-            max_utterance_ms,
-            vendor_primary or "",
-            vendor_secondary or "",
-            audio_mode,
-            ws_version,
+        audio_format = {
+            "type": "raw",
+            "encoding": "pcm_s16le",
+            "sample_rate": 16000,
+            "channels": 1,
+        }
+        transcription_config: Dict[str, Any] = {
+            "language": language,
+            "enable_partials": enable_partials,
+        }
+        params: Dict[str, Any] = {
+            "message": "StartRecognition",
+            "audio_format": audio_format,
+            "transcription_config": transcription_config,
+        }
+        return params
+
+    def _create_sm_client(self, ctx: AdapterContext) -> SMRealtimeClient:
+        loop = asyncio.get_running_loop()
+
+        def _publish_invariant(state: str, ok: bool, extra: Optional[Dict[str, Any]] = None) -> None:
+            meta: Dict[str, Any] = {"state": state, "ok": ok}
+            if extra:
+                meta.update(extra)
+            try:
+                loop.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
+            except RuntimeError:
+                try:
+                    asyncio.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
+                except RuntimeError:
+                    _log.debug("evt=asr_invariant_emit_skipped sid=%s", ctx.sid)
+
+        def _on_ready(_meta: Dict[str, Any]) -> None:
+            ctx.asr_state = "open"
+            ctx.asr_opened_ms = self._now_ms()
+            ctx.asr_close_reason = None
+            ctx.first_chunk_sent = False
+            _publish_invariant("open", True)
+
+        def _on_closed(reason: str) -> None:
+            ctx.asr = None
+            ctx.asr_state = "closed"
+            ctx.asr_close_reason = reason
+            ctx.asr_open_task = None
+            _publish_invariant("closed", True, {"reason": reason})
+
+        def _on_notice(meta: Dict[str, Any]) -> None:
+            _log.info("evt=sm_notice sid=%s meta=%s", ctx.sid, meta)
+
+        return SMRealtimeClient(
+            ctx.sid,
+            on_ready=_on_ready,
+            on_notice=_on_notice,
+            on_closed=_on_closed,
         )
+
+    def _schedule_asr_open(self, ctx: AdapterContext) -> None:
+        if ctx.ws_send is None:
+            raise RuntimeError("websocket send unavailable for asr.open")
+        if ctx.asr_state not in {"closed"}:
+            return
+        if ctx.asr_open_task and not ctx.asr_open_task.done():
+            return
+        ctx.asr_state = "opening"
+        ctx.asr_bytes_sent = 0
+        ctx.asr_opened_ms = None
+        ctx.asr_close_reason = None
+        ctx.first_chunk_sent = False
+        ctx.queued_arm = False
+        ctx.transport_closed_ms = None
+        ctx.asr = self._create_sm_client(ctx)
+        try:
+            ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
+        except RuntimeError:
+            loop = asyncio.get_running_loop()
+            ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
+
+    async def _open_asr(self, ctx: AdapterContext) -> None:
+        send = ctx.ws_send
+        if send is None:
+            ctx.asr_state = "closed"
+            ctx.asr_open_task = None
+            return
+        client = ctx.asr
+        if client is None:
+            ctx.asr_state = "closed"
+            ctx.asr_open_task = None
+            return
+        try:
+            params = self._policy_to_sm_params(ctx)
+            token = self._mint_speechmatics_jwt(ctx)
+            region = self._speechmatics_region()
+            await client.connect(token, region, params)
+        except asyncio.CancelledError:
+            ctx.asr_state = "closed"
+            ctx.asr_open_task = None
+            raise
+        except Exception:
+            ctx.asr = None
+            ctx.asr_state = "closed"
+            ctx.asr_open_task = None
+            _log.exception("evt=asr_open_failed sid=%s", ctx.sid)
+            try:
+                await self._send_json(
+                    send,
+                    ctx.sid,
+                    {"type": "asr.error", "code": "open_failed"},
+                )
+            except Exception:
+                _log.exception("evt=asr_open_error_send sid=%s", ctx.sid)
+            await self._publish(
+                ASR_SINGLE_STREAM_INVARIANT,
+                ctx.sid,
+                {"state": "closed", "ok": False, "reason": "open_failed"},
+            )
+            return
+        ctx.asr_open_task = None
+        ctx.queued_arm = False
+
+    async def _close_asr(
+        self,
+        ctx: AdapterContext,
+        *,
+        reason: Optional[str] = None,
+    ) -> None:
+        task = ctx.asr_open_task
+        ctx.asr_open_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        client = ctx.asr
+        ctx.asr = None
+        if ctx.asr_state in {"opening", "open"}:
+            ctx.asr_state = "closing"
+        if client is not None:
+            try:
+                await client.send_end_of_stream()
+            except Exception:
+                _log.warning("evt=asr_send_eos_failed sid=%s", ctx.sid, exc_info=True)
+            try:
+                await client.close()
+            except Exception:
+                _log.warning("evt=asr_close_failed sid=%s", ctx.sid, exc_info=True)
+        ctx.asr_state = "closed"
+        ctx.first_chunk_sent = False
+        ctx.queued_arm = False
+        ctx.asr_ready = False
+        if reason:
+            ctx.asr_close_reason = reason
 
     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
