@@ -29,6 +29,14 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _now_monotonic_ms() -> float:
+    """Return the current monotonic time in milliseconds."""
+    try:
+        return time.monotonic_ns() / 1_000_000.0
+    except AttributeError:  # pragma: no cover - Python < 3.7 fallback
+        return time.monotonic() * 1000.0
+
+
 _TOKEN_KEYWORDS = {"token", "key", "sig", "secret", "auth"}
 _AUTH_KEYWORDS = {"authorization", "auth"}
 _BEARER_RE = re.compile(r"(Bearer\s+)([A-Za-z0-9._\-+/=]+)")
@@ -251,18 +259,59 @@ def unsubscribe(token: str) -> bool:
 def publish(event: dict) -> None:
     """Normalize and dispatch an event to registered handlers."""
     if not isinstance(event, dict):
-        raise ValueError("event must be a dict")
+        _log.error("evt=telemetry_invalid_event payload_type=%s", type(event).__name__)
+        return
 
     normalized = dict(event)
-    event_type = normalized.get("type")
-    if not isinstance(event_type, str) or not event_type:
-        raise ValueError("event['type'] must be a non-empty string")
+    safe_event: dict[str, Any] | None = None
+
+    def _mark_error(reason: str) -> None:
+        normalized["publish_error"] = True
+        reasons = normalized.get("publish_error_reasons")
+        if isinstance(reasons, list):
+            if reason not in reasons:
+                reasons.append(reason)
+        else:
+            normalized["publish_error_reasons"] = [reason]
+        if isinstance(safe_event, dict):
+            safe_event["publish_error"] = True
+            existing = safe_event.get("publish_error_reasons")
+            if isinstance(existing, list):
+                if reason not in existing:
+                    existing.append(reason)
+            else:
+                safe_event["publish_error_reasons"] = [reason]
+
+    original_type = normalized.get("type")
+    if not isinstance(original_type, str) or not original_type:
+        keys = sorted(str(key) for key in normalized.keys())
+        _log.error("evt=telemetry_missing_type keys=%s", keys)
+        _mark_error("invalid_type")
+        info = normalized.get("publish_error_info")
+        if isinstance(info, dict):
+            info.setdefault("original_type", original_type)
+        else:
+            normalized["publish_error_info"] = {"original_type": original_type}
+        normalized["type"] = "EVT_INVALID"
+        event_type = "EVT_INVALID"
+    else:
+        event_type = original_type
 
     if "schema_version" not in normalized:
         normalized["schema_version"] = "1"
 
     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
         normalized["ts_ms"] = _now_ms()
+
+    if "ts_ms_monotonic" in normalized:
+        try:
+            normalized["ts_ms_monotonic"] = float(normalized["ts_ms_monotonic"])
+        except (TypeError, ValueError):
+            _mark_error("invalid_ts_ms_monotonic")
+            normalized["ts_ms_monotonic"] = _now_monotonic_ms()
+    else:
+        normalized["ts_ms_monotonic"] = _now_monotonic_ms()
+
     if "level" not in normalized or not isinstance(normalized["level"], str):
         normalized["level"] = "debug"
 
@@ -272,6 +321,7 @@ def publish(event: dict) -> None:
             normalized["meta"] = _redact_meta(original_meta)
         except Exception:  # pylint: disable=broad-except
             _log.warning("evt=telemetry_redact_failed", exc_info=True)
+            _mark_error("redaction_failed")
             normalized["meta"] = original_meta
 
     sid = normalized.get("sid")
@@ -327,6 +377,7 @@ def publish(event: dict) -> None:
                 payload = _clone_payload(safe_event)
             handler(payload)
         except Exception:  # pylint: disable=broad-except
+            _mark_error("handler_failed")
             handler_name = getattr(handler, "__qualname__", repr(handler))
             _log.error(
                 "evt=telemetry_sink_failed token=%s handler=%s",

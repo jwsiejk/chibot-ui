@@ -1,19 +1,69 @@
 diff --git a/app/services/asr/__init__.py b/app/services/asr/__init__.py
-index 7636df1db76285fa73f053b86eed6f806254868c..8d492775b6240c606343912e6dcb5edc213a8e95 100644
+index 8d492775b6240c606343912e6dcb5edc213a8e95..1d28c1c78266202349143233ce6344d7834fb4c4 100644
 --- a/app/services/asr/__init__.py
 +++ b/app/services/asr/__init__.py
-@@ -1,21 +1,23 @@
+@@ -1,23 +1,24 @@
  """ASR service helpers."""
  
-+from .policies import to_sm_params
- from .sm_rt import (
+-from .policies import to_sm_params
+-from .sm_rt import (
++from app.telemetry.events import (
      ASR_KEEPALIVE_PING,
      ASR_VENDOR_CLOSE_ACK,
      ASR_VENDOR_CONNECT_INTENT,
      SM_FINAL,
      SM_NOTICE,
      SM_PARTIAL,
-     SMRealtimeClient,
+-    SMRealtimeClient,
+ )
+ 
++from .policies import to_sm_params
++from .sm_rt import SMRealtimeClient
++
+ __all__ = [
+     "ASR_KEEPALIVE_PING",
+     "ASR_VENDOR_CLOSE_ACK",
+     "ASR_VENDOR_CONNECT_INTENT",
+     "SM_FINAL",
+     "SM_NOTICE",
+     "SM_PARTIAL",
+     "SMRealtimeClient",
+     "to_sm_params",
+ ]
+diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
+index c4207d5f3d56b8a4b38c821728d6b00765dbf600..08051cf16f9d9d92ff4a98311a84b398d96e3d0d 100644
+--- a/app/services/asr/sm_rt.py
++++ b/app/services/asr/sm_rt.py
+@@ -1,69 +1,69 @@
+ """Speechmatics realtime websocket client (PCM-only)."""
+ from __future__ import annotations
+ 
+ import asyncio
+ import contextlib
+ import json
+ import logging
+ import time
+ from typing import Any, Callable, Dict, Iterable, Optional
+ 
+ import websockets
+ from websockets.client import WebSocketClientProtocol
+ from websockets.exceptions import ConnectionClosed
+ 
+ from app.telemetry import bus as telemetry_bus
++from app.telemetry.events import (
++    ASR_KEEPALIVE_PING,
++    ASR_VENDOR_CLOSE_ACK,
++    ASR_VENDOR_CONNECT_INTENT,
++    SM_FINAL,
++    SM_NOTICE,
++    SM_PARTIAL,
++)
+ from app.voice_v2 import (
+     EVT_ASR_CLOSED,
+     EVT_ASR_FINAL,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
  )
  
  __all__ = [
@@ -24,369 +74,696 @@ index 7636df1db76285fa73f053b86eed6f806254868c..8d492775b6240c606343912e6dcb5edc
      "SM_NOTICE",
      "SM_PARTIAL",
      "SMRealtimeClient",
-+    "to_sm_params",
  ]
-diff --git a/app/services/asr/policies.py b/app/services/asr/policies.py
+ 
+ 
+ _log = logging.getLogger(__name__)
+ 
+-ASR_VENDOR_CONNECT_INTENT = "ASR_VENDOR_CONNECT_INTENT"
+-ASR_VENDOR_CLOSE_ACK = "ASR_VENDOR_CLOSE_ACK"
+-ASR_KEEPALIVE_PING = "ASR_KEEPALIVE_PING"
+-SM_NOTICE = "SM_NOTICE"
+-SM_PARTIAL = "SM_PARTIAL"
+-SM_FINAL = "SM_FINAL"
+-
+-
+ class SMRealtimeClient:
+     """Minimal Speechmatics realtime client with telemetry hooks."""
+ 
+     VENDOR = "speechmatics"
+     SOURCE = "speechmatics_client"
+ 
+     _READY_MESSAGES = {"RecognitionStarted", "recognition_started"}
+     _PARTIAL_MESSAGES = {
+         "AddPartialTranscript",
+         "PartialTranscript",
+         "AddPartial",
+         "add_partial_transcript",
+     }
+     _FINAL_MESSAGES = {
+         "AddTranscript",
+         "Transcript",
+         "FinalTranscript",
+         "AddFinalTranscript",
+     }
+     _CLOSE_ACK_MESSAGES = {
+         "EndOfTranscript",
+         "RecognitionEnded",
+         "EndOfStreamAcknowledged",
+         "EndOfStream",
+         "SessionEnded",
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index b013071f02859d84cf110aca3a1e4e771b4982a2..63c27f621ffe25ccec099f3d3ecbd24f976affb5 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -28,67 +28,88 @@
+       WSClient.__wrapped_send__ = true;
+     }
+ 
+     maybeWrap();
+     window.addEventListener('ws.open', maybeWrap);
+   })();
+ 
+   const STATIC_JS_BASE = (() => {
+     if (typeof document === "undefined") {
+       return "/static/js/";
+     }
+ 
+     const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
+     if (script && script.src) {
+       try {
+         const url = new URL(script.src, window.location.href);
+         return url.pathname.replace(/[^/]+$/, "");
+       } catch (err) {
+         console.warn("Failed to parse static script URL", err);
+       }
+     }
+ 
+     return "/static/js/";
+   })();
+ 
++  const VERSION_STAMP = (() => {
++    if (typeof window !== "undefined" && typeof window.BUILD_ID === "string" && window.BUILD_ID) {
++      return window.BUILD_ID;
++    }
++    if (typeof window !== "undefined") {
++      const existing = window.__APP_VERSION_STAMP__;
++      if (typeof existing === "string" && existing) {
++        return existing;
++      }
++      const generated = Date.now().toString();
++      try {
++        window.__APP_VERSION_STAMP__ = generated;
++      } catch (err) {
++        // ignore inability to persist stamp on window
++      }
++      return generated;
++    }
++    return Date.now().toString();
++  })();
++
+   const VERSION_QUERY = (() => {
++    const suffix = `?v=${encodeURIComponent(VERSION_STAMP)}`;
+     if (typeof document === "undefined") {
+-      return "";
++      return suffix;
+     }
+     try {
+       const current =
+         document.currentScript ||
+         document.querySelector('script[src*="/static/js/app.js"]') ||
+         null;
+       if (!current || !current.src) {
+-        return "";
++        return suffix;
+       }
+       const url = new URL(current.src, window.location.href);
+-      return url.search || "";
++      return url.search || suffix;
+     } catch (err) {
+       console.warn("Failed to derive version query", err);
+-      return "";
++      return suffix;
+     }
+   })();
+ 
+   function isSameOrigin(url) {
+     try {
+       if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
+         return true;
+       }
+       const parsed = new URL(url, window.location.href);
+       return parsed.origin === window.location.origin;
+     } catch (err) {
+       return false;
+     }
+   }
+ 
+   function isSpecialScheme(url) {
+     return /^(data:|blob:)/i.test(url);
+   }
+ 
+   function appendVersionQuery(url) {
+     if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
+       return url;
+     }
+     const hashIndex = url.indexOf("#");
+     if (hashIndex === -1) {
+diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
+index a1a75f7dc6f9cdff581f193da5377c3ddc511c06..95a7765fefad6cdc600ca373bec7ea18a3294327 100644
+--- a/app/static/js/audio/pcm_recorder.js
++++ b/app/static/js/audio/pcm_recorder.js
+@@ -1,37 +1,67 @@
+ (() => {
+   const TARGET_SAMPLE_RATE = 16000;
+   const MIN_FRAME_SAMPLES = 320;
+   const MAX_FRAME_SAMPLES = 640;
+   const DEFAULT_CHUNK_MS = Math.round((MIN_FRAME_SAMPLES / TARGET_SAMPLE_RATE) * 1000);
+ 
+   const BUILD_ID = typeof window !== 'undefined' && typeof window.BUILD_ID === 'string'
+     ? window.BUILD_ID
+     : null;
+-  const WORKLET_PATH = BUILD_ID
+-    ? `/static/js/audio/pcm-worklet-processor.js?v=${encodeURIComponent(BUILD_ID)}`
+-    : '/static/js/audio/pcm-worklet-processor.js';
++
++  const CACHE_STAMP = (() => {
++    if (typeof BUILD_ID === 'string' && BUILD_ID) {
++      return BUILD_ID;
++    }
++    if (typeof window !== 'undefined') {
++      const existing = window.__PCM_WORKLET_STAMP__;
++      if (typeof existing === 'string' && existing) {
++        return existing;
++      }
++      const generated = Date.now().toString();
++      try {
++        window.__PCM_WORKLET_STAMP__ = generated;
++      } catch (err) {
++        /* ignore assignment errors */
++      }
++      return generated;
++    }
++    return Date.now().toString();
++  })();
++
++  function withCacheBuster(path) {
++    if (!path || typeof path !== 'string') {
++      return path;
++    }
++    const hashIndex = path.indexOf('#');
++    const base = hashIndex === -1 ? path : path.slice(0, hashIndex);
++    const hash = hashIndex === -1 ? '' : path.slice(hashIndex);
++    const sep = base.includes('?') ? '&' : '?';
++    return `${base}${sep}v=${encodeURIComponent(CACHE_STAMP)}${hash}`;
++  }
++
++  const WORKLET_PATH = withCacheBuster('/static/js/audio/pcm-worklet-processor.js');
+ 
+   function emitClientLog(label, detail = {}) {
+     const payload = detail && typeof detail === 'object' ? detail : { value: detail };
+     const AppState = typeof window !== 'undefined' ? window.AppState : null;
+     if (AppState && AppState.hub && typeof AppState.hub.log === 'function') {
+       try {
+         AppState.hub.log(label, payload);
+         return;
+       } catch (err) {
+         try {
+           console.warn('client.log hub emit failed', err);
+         } catch (_) {}
+       }
+     }
+     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+       try {
+         window.dispatchEvent(new CustomEvent('client.log', { detail: { label, detail: payload } }));
+       } catch (err) {
+         try {
+           console.warn('client.log dispatch failed', err);
+         } catch (_) {}
+       }
+     }
+   }
+ 
+diff --git a/app/telemetry/bus.py b/app/telemetry/bus.py
+index 129e7adebb314c243e1abd6bb4ad01967211f5e8..5e4c6c6cbd4248ef735bf3078c12ee4a5d90de0a 100644
+--- a/app/telemetry/bus.py
++++ b/app/telemetry/bus.py
+@@ -7,50 +7,58 @@ import time
+ import uuid
+ from typing import Any, Callable, Dict, Tuple
+ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+ 
+ from app.voice_v2 import EVT_TTS_END, EVT_TTS_START
+ 
+ Subscription = Tuple[str, Callable[[dict], None]]
+ 
+ _log = logging.getLogger(__name__)
+ 
+ # Internal registries keyed by subscription token.
+ _subscriptions: Dict[str, Subscription] = {}
+ # Index mapping event type to tokens for quick lookup.
+ _event_index: Dict[str, set[str]] = {}
+ 
+ # Track per-session TTS metadata for sanitised audio telemetry.
+ _tts_current_utt: Dict[str, str] = {}
+ _tts_audio_totals: Dict[str, int] = {}
+ 
+ 
+ def _now_ms() -> int:
+     """Return the current time in milliseconds."""
+     return int(time.time() * 1000)
+ 
+ 
++def _now_monotonic_ms() -> float:
++    """Return the current monotonic time in milliseconds."""
++    try:
++        return time.monotonic_ns() / 1_000_000.0
++    except AttributeError:  # pragma: no cover - Python < 3.7 fallback
++        return time.monotonic() * 1000.0
++
++
+ _TOKEN_KEYWORDS = {"token", "key", "sig", "secret", "auth"}
+ _AUTH_KEYWORDS = {"authorization", "auth"}
+ _BEARER_RE = re.compile(r"(Bearer\s+)([A-Za-z0-9._\-+/=]+)")
+ _EMAIL_RE = re.compile(r"([A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+ _OPAQUE_RE = re.compile(r"^[A-Za-z0-9+/=_-]{32,64}$")
+ 
+ 
+ def _mask_tail(value: str, keep: int = 4) -> str:
+     """Return a masked token preserving only the last characters."""
+     if keep <= 0:
+         return "****"
+     if len(value) <= keep:
+         return "****"
+     return "****" + value[-keep:]
+ 
+ 
+ def _shorten_opaque(value: str) -> str:
+     """Collapse long opaque secrets to a short representation."""
+     if len(value) < 6:
+         return value
+     return f"{value[:3]}…{value[-3:]}"
+ 
+ 
+ def _shorten_generic(value: str) -> str:
+     """Collapse overly long strings while preserving edges."""
+@@ -229,71 +237,113 @@ def subscribe(event_type: str, handler: Callable[[dict], None]) -> str:
+ 
+     token = f"sub_{uuid.uuid4().hex}"
+     _subscriptions[token] = (event_type, handler)
+     _event_index.setdefault(event_type, set()).add(token)
+     return token
+ 
+ 
+ def unsubscribe(token: str) -> bool:
+     """Remove a previously registered subscription."""
+     subscription = _subscriptions.pop(token, None)
+     if not subscription:
+         return False
+ 
+     event_type, _ = subscription
+     tokens = _event_index.get(event_type)
+     if tokens is not None:
+         tokens.discard(token)
+         if not tokens:
+             _event_index.pop(event_type, None)
+     return True
+ 
+ 
+ def publish(event: dict) -> None:
+     """Normalize and dispatch an event to registered handlers."""
+     if not isinstance(event, dict):
+-        raise ValueError("event must be a dict")
++        _log.error("evt=telemetry_invalid_event payload_type=%s", type(event).__name__)
++        return
+ 
+     normalized = dict(event)
+-    event_type = normalized.get("type")
+-    if not isinstance(event_type, str) or not event_type:
+-        raise ValueError("event['type'] must be a non-empty string")
++    safe_event: dict[str, Any] | None = None
++
++    def _mark_error(reason: str) -> None:
++        normalized["publish_error"] = True
++        reasons = normalized.get("publish_error_reasons")
++        if isinstance(reasons, list):
++            if reason not in reasons:
++                reasons.append(reason)
++        else:
++            normalized["publish_error_reasons"] = [reason]
++        if isinstance(safe_event, dict):
++            safe_event["publish_error"] = True
++            existing = safe_event.get("publish_error_reasons")
++            if isinstance(existing, list):
++                if reason not in existing:
++                    existing.append(reason)
++            else:
++                safe_event["publish_error_reasons"] = [reason]
++
++    original_type = normalized.get("type")
++    if not isinstance(original_type, str) or not original_type:
++        keys = sorted(str(key) for key in normalized.keys())
++        _log.error("evt=telemetry_missing_type keys=%s", keys)
++        _mark_error("invalid_type")
++        info = normalized.get("publish_error_info")
++        if isinstance(info, dict):
++            info.setdefault("original_type", original_type)
++        else:
++            normalized["publish_error_info"] = {"original_type": original_type}
++        normalized["type"] = "EVT_INVALID"
++        event_type = "EVT_INVALID"
++    else:
++        event_type = original_type
+ 
+     if "schema_version" not in normalized:
+         normalized["schema_version"] = "1"
+ 
+     if "ts_ms" not in normalized or not isinstance(normalized["ts_ms"], int):
+         normalized["ts_ms"] = _now_ms()
++
++    if "ts_ms_monotonic" in normalized:
++        try:
++            normalized["ts_ms_monotonic"] = float(normalized["ts_ms_monotonic"])
++        except (TypeError, ValueError):
++            _mark_error("invalid_ts_ms_monotonic")
++            normalized["ts_ms_monotonic"] = _now_monotonic_ms()
++    else:
++        normalized["ts_ms_monotonic"] = _now_monotonic_ms()
++
+     if "level" not in normalized or not isinstance(normalized["level"], str):
+         normalized["level"] = "debug"
+ 
+     if "meta" in normalized:
+         original_meta = normalized["meta"]
+         try:
+             normalized["meta"] = _redact_meta(original_meta)
+         except Exception:  # pylint: disable=broad-except
+             _log.warning("evt=telemetry_redact_failed", exc_info=True)
++            _mark_error("redaction_failed")
+             normalized["meta"] = original_meta
+ 
+     sid = normalized.get("sid")
+     sid_str = sid if isinstance(sid, str) else None
+ 
+     if event_type == EVT_TTS_START and sid_str:
+         utt_meta = normalized.get("meta") or {}
+         if isinstance(utt_meta, dict):
+             tts_meta = utt_meta.get("tts")
+             if isinstance(tts_meta, dict):
+                 utt_id = tts_meta.get("utt_id")
+                 if isinstance(utt_id, str) and utt_id:
+                     note_tts_start(sid_str, utt_id)
+ 
+     safe_event = _json_safe(normalized)
+     if isinstance(safe_event, dict):
+         if event_type == "EVT_WS_AUDIO_SEND":
+             chunk_len = _extract_audio_chunk_len(normalized)
+             total_bytes = None
+             if sid_str and chunk_len is not None:
+                 total_bytes = _increment_audio_total(sid_str, chunk_len)
+                 utt_id = _tts_current_utt.get(sid_str)
+                 if utt_id:
+                     safe_event.setdefault("utt_id", utt_id)
+             safe_event.pop("chunk", None)
+@@ -305,43 +355,44 @@ def publish(event: dict) -> None:
+             total = _tts_audio_totals.get(sid_str)
+             if total is None and sid_str in _tts_current_utt:
+                 total = 0
+             if total is not None:
+                 safe_event["total_bytes"] = total
+             utt_id = _tts_current_utt.get(sid_str)
+             if utt_id:
+                 safe_event.setdefault("utt_id", utt_id)
+ 
+     tokens = set()
+     tokens.update(_event_index.get(event_type, set()))
+     tokens.update(_event_index.get("*", set()))
+ 
+     for token in list(tokens):
+         subscription = _subscriptions.get(token)
+         if not subscription:
+             continue
+         _, handler = subscription
+         try:
+             if getattr(handler, "_telemetry_accepts_binary", False):
+                 payload = _clone_payload(normalized)
+             else:
+                 payload = _clone_payload(safe_event)
+             handler(payload)
+         except Exception:  # pylint: disable=broad-except
++            _mark_error("handler_failed")
+             handler_name = getattr(handler, "__qualname__", repr(handler))
+             _log.error(
+                 "evt=telemetry_sink_failed token=%s handler=%s",
+                 token,
+                 handler_name,
+                 exc_info=True,
+             )
+ 
+     if event_type == EVT_TTS_END and sid_str:
+         note_tts_end(sid_str, _tts_current_utt.get(sid_str))
+ 
+ 
+ def reset() -> None:
+     """Clear all subscriptions (primarily for testing)."""
+     _subscriptions.clear()
+     _event_index.clear()
+     _tts_current_utt.clear()
+     _tts_audio_totals.clear()
+diff --git a/app/telemetry/events.py b/app/telemetry/events.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..8a68fa765c131425f7b8209444830a8ad6f810de
+index 0000000000000000000000000000000000000000..c1b355ec84120addf4867889b08a511c9bbcf02f
 --- /dev/null
-+++ b/app/services/asr/policies.py
-@@ -0,0 +1,264 @@
-+"""Utilities for mapping app policy to Speechmatics parameters."""
++++ b/app/telemetry/events.py
+@@ -0,0 +1,52 @@
++"""Shared telemetry event name constants used across the server."""
 +from __future__ import annotations
 +
-+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
-+
-+__all__ = ["to_sm_params"]
-+
-+
-+_SM_AUDIO_FORMAT = {
-+    "type": "raw",
-+    "encoding": "pcm_s16le",
-+    "sample_rate": 16000,
-+    "channels": 1,
-+}
-+
-+_SM_MIN_FINAL_LATENCY_MS = 400
-+_SM_MAX_FINAL_LATENCY_MS = 2000
-+
-+
-+def _as_mapping(value: Any) -> Mapping[str, Any]:
-+    if isinstance(value, Mapping):
-+        return value
-+    return {}
-+
-+
-+def _as_sequence(value: Any) -> Sequence[Any]:
-+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-+        return value
-+    return []
-+
-+
-+def _coerce_bool(value: Any) -> bool | None:
-+    if isinstance(value, bool):
-+        return value
-+    return None
-+
-+
-+def _coerce_int(value: Any) -> int | None:
-+    try:
-+        if isinstance(value, bool):
-+            return None
-+        coerced = int(value)
-+    except (TypeError, ValueError):
-+        return None
-+    return coerced
-+
-+
-+def _coerce_float(value: Any) -> float | None:
-+    try:
-+        if isinstance(value, bool):
-+            return None
-+        coerced = float(value)
-+    except (TypeError, ValueError):
-+        return None
-+    return coerced
-+
-+
-+def _normalize_language(*candidates: Any) -> str | None:
-+    for candidate in candidates:
-+        if isinstance(candidate, str):
-+            normalized = candidate.strip()
-+            if normalized:
-+                return normalized
-+    return None
-+
-+
-+def _normalize_punctuation(value: Any) -> Dict[str, Any]:
-+    result: Dict[str, Any] = {}
-+    bool_candidate = _coerce_bool(value)
-+    if bool_candidate is not None:
-+        result["enable_punctuation"] = bool_candidate
-+        return result
-+
-+    mapping = _as_mapping(value)
-+    enabled = _coerce_bool(mapping.get("enabled"))
-+    if enabled is not None:
-+        result["enable_punctuation"] = enabled
-+
-+    overrides_value = mapping.get("overrides")
-+    overrides: list[str] = []
-+    if overrides_value is not None:
-+        for item in _as_sequence(overrides_value):
-+            if isinstance(item, str):
-+                normalized = item.strip()
-+                if normalized:
-+                    overrides.append(normalized)
-+    if overrides:
-+        result["punctuation_overrides"] = overrides
-+
-+    return result
-+
-+
-+def _normalize_diarization(value: Any) -> Dict[str, Any]:
-+    result: Dict[str, Any] = {}
-+    bool_candidate = _coerce_bool(value)
-+    if bool_candidate is not None:
-+        result["diarization"] = bool_candidate
-+        return result
-+
-+    mapping = _as_mapping(value)
-+    enabled = _coerce_bool(mapping.get("enabled"))
-+    if enabled is not None:
-+        result["diarization"] = enabled
-+
-+    return result
-+
-+
-+def _normalize_max_final_latency(value: Any) -> float | None:
-+    latency_ms = _coerce_int(value)
-+    if latency_ms is None:
-+        return None
-+    clamped = max(_SM_MIN_FINAL_LATENCY_MS, min(_SM_MAX_FINAL_LATENCY_MS, latency_ms))
-+    return round(clamped / 1000.0, 3)
-+
-+
-+def _normalize_custom_vocab(value: Any) -> list[Dict[str, Any]]:
-+    entries: list[Dict[str, Any]] = []
-+
-+    def _add_entry(entry: Mapping[str, Any]) -> None:
-+        content = entry.get("content")
-+        if not isinstance(content, str):
-+            return
-+        normalized_content = content.strip()
-+        if not normalized_content:
-+            return
-+
-+        normalized_entry: Dict[str, Any] = {"content": normalized_content}
-+
-+        sounds_like_value = entry.get("sounds_like")
-+        sounds_like: list[str] = []
-+        for alt in _as_sequence(sounds_like_value):
-+            if isinstance(alt, str):
-+                normalized_alt = alt.strip()
-+                if normalized_alt:
-+                    sounds_like.append(normalized_alt)
-+        if sounds_like:
-+            normalized_entry["sounds_like"] = sounds_like
-+
-+        boost_value = entry.get("boost")
-+        boost = _coerce_float(boost_value)
-+        if boost is not None:
-+            normalized_entry["boost"] = boost
-+
-+        entries.append(normalized_entry)
-+
-+    if isinstance(value, Mapping):
-+        entries_value = value.get("entries")
-+        if entries_value is None:
-+            _add_entry(value)
-+        else:
-+            for item in _as_sequence(entries_value):
-+                if isinstance(item, Mapping):
-+                    _add_entry(item)
-+                elif isinstance(item, str):
-+                    text = item.strip()
-+                    if text:
-+                        entries.append({"content": text})
-+        return entries
-+
-+    for item in _as_sequence(value):
-+        if isinstance(item, Mapping):
-+            _add_entry(item)
-+        elif isinstance(item, str):
-+            text = item.strip()
-+            if text:
-+                entries.append({"content": text})
-+
-+    return entries
-+
-+
-+def _merge_transcription_config(*configs: Mapping[str, Any]) -> Dict[str, Any]:
-+    merged: Dict[str, Any] = {}
-+    for config in configs:
-+        for key, value in config.items():
-+            if value is None:
-+                continue
-+            if isinstance(value, (list, tuple, set)) and not value:
-+                continue
-+            if isinstance(value, dict) and not value:
-+                continue
-+            merged[key] = value
-+    return merged
-+
-+
-+def _speechmatics_policy_block(policy: Mapping[str, Any] | None) -> Mapping[str, Any]:
-+    if not isinstance(policy, Mapping):
-+        return {}
-+
-+    candidates: Iterable[Mapping[str, Any]] = (
-+        _as_mapping(policy.get("speechmatics")),
-+        _as_mapping(policy.get("asr")),
-+        _as_mapping(_as_mapping(policy.get("policy")).get("speechmatics")),
-+        _as_mapping(_as_mapping(_as_mapping(policy.get("policy")).get("asr")).get("speechmatics")),
-+    )
-+
-+    for candidate in candidates:
-+        if candidate:
-+            return candidate
-+    return {}
-+
-+
-+def to_sm_params(policy: Mapping[str, Any] | None) -> Dict[str, Any]:
-+    """Return Speechmatics realtime parameters derived from ``policy``.
-+
-+    Args:
-+        policy: The application policy snapshot or vendor-specific override block.
-+
-+    Returns:
-+        Dictionary ready to be sent as the Speechmatics ``StartRecognition`` payload.
-+    """
-+
-+    policy_mapping = _as_mapping(policy)
-+
-+    speechmatics_block = _speechmatics_policy_block(policy_mapping)
-+    asr_block = _as_mapping(policy_mapping.get("asr"))
-+    policy_block = _as_mapping(policy_mapping.get("policy"))
-+    if not asr_block:
-+        asr_block = _as_mapping(policy_block.get("asr"))
-+
-+    language = _normalize_language(
-+        speechmatics_block.get("language"),
-+        asr_block.get("language"),
-+        _as_mapping(policy_block.get("nlu")).get("language"),
-+        policy_mapping.get("language"),
-+    ) or "en"
-+
-+    enable_partials = _coerce_bool(
-+        speechmatics_block.get("enable_partials")
-+        if "enable_partials" in speechmatics_block
-+        else asr_block.get("enable_partials")
-+    )
-+    if enable_partials is None:
-+        enable_partials = True
-+
-+    punctuation_config = _normalize_punctuation(speechmatics_block.get("punctuation"))
-+    diarization_config = _normalize_diarization(speechmatics_block.get("diarization"))
-+
-+    max_delay = _normalize_max_final_latency(
-+        speechmatics_block.get("max_final_latency_ms")
-+    )
-+
-+    profanity_filter = _coerce_bool(speechmatics_block.get("profanity_filter"))
-+
-+    custom_vocab = _normalize_custom_vocab(speechmatics_block.get("custom_vocab"))
-+
-+    transcription_config = _merge_transcription_config(
-+        {
-+            "language": language,
-+            "enable_partials": enable_partials,
-+        },
-+        punctuation_config,
-+        diarization_config,
-+        {"max_delay": max_delay},
-+        {"profanity_filter": profanity_filter},
-+        {"additional_vocab": custom_vocab},
-+    )
-+
-+    params: Dict[str, Any] = {
-+        "message": "StartRecognition",
-+        "audio_format": dict(_SM_AUDIO_FORMAT),
-+        "transcription_config": transcription_config,
-+    }
-+
-+    return params
-diff --git a/tests/test_asr_policy_mapper.py b/tests/test_asr_policy_mapper.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..1dd7703027ca99138921d9ae3607f8901afcc848
---- /dev/null
-+++ b/tests/test_asr_policy_mapper.py
-@@ -0,0 +1,88 @@
-+import pytest
-+
-+from app.services.asr.policies import to_sm_params
-+
-+
-+def test_defaults_when_policy_missing():
-+    params = to_sm_params(None)
-+
-+    assert params["message"] == "StartRecognition"
-+    assert params["audio_format"] == {
-+        "type": "raw",
-+        "encoding": "pcm_s16le",
-+        "sample_rate": 16000,
-+        "channels": 1,
-+    }
-+
-+    transcription = params["transcription_config"]
-+    assert transcription["language"] == "en"
-+    assert transcription["enable_partials"] is True
-+    assert "max_delay" not in transcription
-+    assert "additional_vocab" not in transcription
-+
-+
-+def test_speechmatics_policy_mapping():
-+    policy = {
-+        "policy": {
-+            "nlu": {"language": "  EN-GB  "},
-+            "asr": {
-+                "speechmatics": {
-+                    "language": "fr",
-+                    "enable_partials": False,
-+                    "punctuation": {
-+                        "enabled": True,
-+                        "overrides": ["question_mark", "", " exclamation_mark "],
-+                    },
-+                    "diarization": {"enabled": True},
-+                    "max_final_latency_ms": 100,
-+                    "profanity_filter": True,
-+                    "custom_vocab": [
-+                        "Alice",
-+                        {"content": "Bob", "sounds_like": ["Bawb", ""], "boost": "1.5"},
-+                        {"content": "   "},
-+                    ],
-+                }
-+            },
-+        }
-+    }
-+
-+    params = to_sm_params(policy)
-+    transcription = params["transcription_config"]
-+
-+    assert transcription["language"] == "fr"
-+    assert transcription["enable_partials"] is False
-+    assert transcription["diarization"] is True
-+    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.4
-+    assert transcription["profanity_filter"] is True
-+    assert transcription["enable_punctuation"] is True
-+    assert transcription["punctuation_overrides"] == ["question_mark", "exclamation_mark"]
-+    assert transcription["additional_vocab"] == [
-+        {"content": "Alice"},
-+        {"content": "Bob", "sounds_like": ["Bawb"], "boost": pytest.approx(1.5)},
-+    ]
-+
-+
-+def test_policy_fallbacks_and_clamping():
-+    policy = {
-+        "policy": {
-+            "nlu": {"language": " es "},
-+            "asr": {
-+                "enable_partials": False,
-+                "speechmatics": {
-+                    "max_final_latency_ms": 5000,
-+                    "custom_vocab": {"entries": [{"content": "Gamma"}]},
-+                    "profanity_filter": "not-bool",
-+                },
-+            },
-+        }
-+    }
-+
-+    params = to_sm_params(policy)
-+    transcription = params["transcription_config"]
-+
-+    assert transcription["language"] == "es"
-+    assert transcription["enable_partials"] is False
-+    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 2.0
-+    assert transcription["additional_vocab"] == [{"content": "Gamma"}]
-+    assert "profanity_filter" not in transcription
-+
++EVT_SESSION_TRANSPORT_CLOSED = "EVT_SESSION_TRANSPORT_CLOSED"
++SESSION_TEARDOWN_COMPLETE = "SESSION_TEARDOWN_COMPLETE"
++
++ASR_VENDOR_CONNECT_INTENT = "ASR_VENDOR_CONNECT_INTENT"
++ASR_VENDOR_CLOSE_ACK = "ASR_VENDOR_CLOSE_ACK"
++ASR_KEEPALIVE_PING = "ASR_KEEPALIVE_PING"
++ASR_VENDOR_BYTES_TOTAL = "ASR_VENDOR_BYTES_TOTAL"
++ASR_ROLLUP = "ASR_ROLLUP"
++AUDIO_WIRE_ROLLUP = "AUDIO_WIRE_ROLLUP"
++ASR_POST_CLOSE_DROP = "ASR_POST_CLOSE_DROP"
++ASR_SINGLE_STREAM_INVARIANT = "ASR_SINGLE_STREAM_INVARIANT"
++
++EVT_ASR_OPEN = "EVT_ASR_OPEN"
++EVT_ASR_CLOSE = "EVT_ASR_CLOSE"
++ASR_READY = "EVT_ASR_READY"
++ASR_OPEN_QUEUED = "ASR_OPEN_QUEUED"
++ASR_OPEN_DEDUP = "ASR_OPEN_DEDUP"
++ASR_OPEN_AFTER_TTS = "ASR_OPEN_AFTER_TTS"
++
++WS_AUDIO_HEADER_ACCEPT = "WS_AUDIO_HEADER_ACCEPT"
++WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
++
++SM_PARTIAL = "SM_PARTIAL"
++SM_FINAL = "SM_FINAL"
++SM_NOTICE = "SM_NOTICE"
++
++__all__ = [
++    "EVT_SESSION_TRANSPORT_CLOSED",
++    "SESSION_TEARDOWN_COMPLETE",
++    "ASR_VENDOR_CONNECT_INTENT",
++    "ASR_VENDOR_CLOSE_ACK",
++    "ASR_KEEPALIVE_PING",
++    "ASR_VENDOR_BYTES_TOTAL",
++    "ASR_ROLLUP",
++    "AUDIO_WIRE_ROLLUP",
++    "ASR_POST_CLOSE_DROP",
++    "ASR_SINGLE_STREAM_INVARIANT",
++    "EVT_ASR_OPEN",
++    "EVT_ASR_CLOSE",
++    "ASR_READY",
++    "ASR_OPEN_QUEUED",
++    "ASR_OPEN_DEDUP",
++    "ASR_OPEN_AFTER_TTS",
++    "WS_AUDIO_HEADER_ACCEPT",
++    "WS_AUDIO_FIRST_CHUNK",
++    "SM_PARTIAL",
++    "SM_FINAL",
++    "SM_NOTICE",
++]
+diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
+index 4adff4d868a714858024cd86163c0b9306597535..f621bb25887e9d0b037bfa179fecacc609abe57b 100644
+--- a/app/telemetry/exporter.py
++++ b/app/telemetry/exporter.py
+@@ -1,52 +1,52 @@
+ """Minimal NDJSON file exporter for session telemetry."""
+ from __future__ import annotations
+ 
+ import hashlib
+ import json
+ import os
+ import time
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import Any, Dict, Optional
+ 
+ from app.telemetry import bus as telemetry_bus
++from app.telemetry.events import WS_AUDIO_FIRST_CHUNK
+ from app.voice_v2 import (
+     EVT_ASR_CLOSED,
+     EVT_ASR_FINAL,
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_TTS_END,
+     EVT_TTS_START,
+ )
+ 
+ 
+ EVT_ASR_OPEN_ATTEMPT = "asr.open_attempt"
+ EVT_ASR_OPEN_FAILED = "asr.open_failed"
+ EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
+ EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
+-EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
+ 
+ _ASR_LOG_TYPES = {
+     EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_FINAL,
+     EVT_ASR_CLOSED,
+     EVT_ASR_OPEN_ATTEMPT,
+     EVT_ASR_OPEN_FAILED,
+ }
+ 
+ _WS_LOG_TYPES = {
+     EVT_WS_JSON_SEND_SUMMARY,
+     EVT_WS_JSON_RECV_SUMMARY,
+     EVT_WS_AUDIO_FIRST_CHUNK,
+ }
+ 
+ _TTS_LOG_TYPES = {EVT_TTS_START, EVT_TTS_END}
+ 
+ 
+ def _now_ms() -> int:
+     """Return the current epoch timestamp in milliseconds."""
+ 
+     return int(time.time() * 1000)
+ 
+ 
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 133f2d7355ec43af3842e66c232134cecb459ab8..6c974ba23db053ca9e6b00fc89552fad18318fb3 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -3,56 +3,70 @@
+ from __future__ import annotations
+ 
+ import os
+ import asyncio
+ import contextlib
+ import logging
+ import math
+ import threading
+ import time
+ import inspect
+ import platform
+ import socket
+ import sys
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
+ 
+ import json
+ from urllib.parse import parse_qs, urlparse
+ 
+ import jwt
+ 
+ from app import config
+ from app.logging_setup import current_sid
+ from app.security.jwt_utils import verify_ws_token
+ from app.telemetry import bus
++from app.telemetry.events import (
++    AUDIO_WIRE_ROLLUP,
++    ASR_OPEN_AFTER_TTS,
++    ASR_OPEN_DEDUP,
++    ASR_OPEN_QUEUED,
++    ASR_POST_CLOSE_DROP,
++    ASR_SINGLE_STREAM_INVARIANT,
++    ASR_VENDOR_BYTES_TOTAL,
++    ASR_ROLLUP,
++    EVT_ASR_CLOSE,
++    EVT_ASR_OPEN,
++    EVT_SESSION_TRANSPORT_CLOSED,
++    SESSION_TEARDOWN_COMPLETE,
++    WS_AUDIO_FIRST_CHUNK,
++    WS_AUDIO_HEADER_ACCEPT,
++)
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ASR_CLOSED,
+     EVT_ASR_FINAL,
+-    EVT_ASR_CLOSE,
+-    EVT_ASR_OPEN,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_CHAT_USER,
+     EVT_CLIENT_BANNER,
+     EVT_CLIENT_AUTOSTART,
+     EVT_CLIENT_MIC_OPEN,
+     EVT_HUD_STATE,
+     EVT_SESSION_STEP,
+     EVT_TTS_END,
+     EVT_TTS_MASK,
+     EVT_CLIENT_LOG,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.services.asr.sm_rt import SMRealtimeClient
+ from app.ws.validator import validate_audio_header_against_policy, validate_frame
+ from app.ws.state import SessionCtx, can_open, mark
+ 
+ try:  # pragma: no cover - uvicorn is an optional dependency in tests
+     from uvicorn.protocols.utils import ClientDisconnected
+ except Exception:  # pragma: no cover - fallback when uvicorn missing
+     class ClientDisconnected(Exception):  # type: ignore[no-redef]
+         """Fallback placeholder when uvicorn is unavailable."""
+@@ -63,63 +77,51 @@ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
+ 
+ AUDIO_SEQ_WINDOW = 8
+ 
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
+ 
+ _DEFAULT_WS_PING_INTERVAL_MS = 20_000
+ _HEARTBEAT_TIMEOUT_MS = 30_000
+ 
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
+ 
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
+ 
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
+ 
+ EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
+ EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
+-EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
+-WS_AUDIO_HEADER_ACCEPT = "WS_AUDIO_HEADER_ACCEPT"
+-ASR_OPEN_QUEUED = "ASR_OPEN_QUEUED"
+-ASR_OPEN_DEDUP = "ASR_OPEN_DEDUP"
+ ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
+-ASR_OPEN_AFTER_TTS = "ASR_OPEN_AFTER_TTS"
+-ASR_SINGLE_STREAM_INVARIANT = "ASR_SINGLE_STREAM_INVARIANT"
+-ASR_POST_CLOSE_DROP = "ASR_POST_CLOSE_DROP"
+-EVT_SESSION_TRANSPORT_CLOSED = "EVT_SESSION_TRANSPORT_CLOSED"
+-ASR_VENDOR_BYTES_TOTAL = "ASR_VENDOR_BYTES_TOTAL"
+-ASR_ROLLUP = "ASR_ROLLUP"
+-AUDIO_WIRE_ROLLUP = "AUDIO_WIRE_ROLLUP"
+-SESSION_TEARDOWN_COMPLETE = "SESSION_TEARDOWN_COMPLETE"
+ 
+ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+ _MIC_OPEN_TIMEOUT_SECONDS = 2.5
+ 
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.input.start",
+     "asr.input.stop",
+     "asr.partial",
+     "asr.final",
+     "asr.unavailable",
+     "error",
+     "chat.message",
+     "chat.history",
+     "dialog.plan",
+     "hud.nudge",
+ }
+ 
+ _RATE_LIMIT_EXEMPT_TYPES = {
+     "client.autostart",
+     "client.banner",

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.telemetry import bus as telemetry_bus
+from app.telemetry.events import WS_AUDIO_FIRST_CHUNK
 from app.voice_v2 import (
     EVT_ASR_CLOSED,
     EVT_ASR_FINAL,
@@ -24,7 +25,6 @@ EVT_ASR_OPEN_ATTEMPT = "asr.open_attempt"
 EVT_ASR_OPEN_FAILED = "asr.open_failed"
 EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
 EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
-EVT_WS_AUDIO_FIRST_CHUNK = "ws.audio.first_chunk"
 
 _ASR_LOG_TYPES = {
     EVT_ASR_OPEN,

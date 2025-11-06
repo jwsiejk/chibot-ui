@@ -7,9 +7,39 @@
   const BUILD_ID = typeof window !== 'undefined' && typeof window.BUILD_ID === 'string'
     ? window.BUILD_ID
     : null;
-  const WORKLET_PATH = BUILD_ID
-    ? `/static/js/audio/pcm-worklet-processor.js?v=${encodeURIComponent(BUILD_ID)}`
-    : '/static/js/audio/pcm-worklet-processor.js';
+
+  const CACHE_STAMP = (() => {
+    if (typeof BUILD_ID === 'string' && BUILD_ID) {
+      return BUILD_ID;
+    }
+    if (typeof window !== 'undefined') {
+      const existing = window.__PCM_WORKLET_STAMP__;
+      if (typeof existing === 'string' && existing) {
+        return existing;
+      }
+      const generated = Date.now().toString();
+      try {
+        window.__PCM_WORKLET_STAMP__ = generated;
+      } catch (err) {
+        /* ignore assignment errors */
+      }
+      return generated;
+    }
+    return Date.now().toString();
+  })();
+
+  function withCacheBuster(path) {
+    if (!path || typeof path !== 'string') {
+      return path;
+    }
+    const hashIndex = path.indexOf('#');
+    const base = hashIndex === -1 ? path : path.slice(0, hashIndex);
+    const hash = hashIndex === -1 ? '' : path.slice(hashIndex);
+    const sep = base.includes('?') ? '&' : '?';
+    return `${base}${sep}v=${encodeURIComponent(CACHE_STAMP)}${hash}`;
+  }
+
+  const WORKLET_PATH = withCacheBuster('/static/js/audio/pcm-worklet-processor.js');
 
   function emitClientLog(label, detail = {}) {
     const payload = detail && typeof detail === 'object' ? detail : { value: detail };

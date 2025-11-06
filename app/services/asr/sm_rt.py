@@ -13,6 +13,14 @@ from websockets.client import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosed
 
 from app.telemetry import bus as telemetry_bus
+from app.telemetry.events import (
+    ASR_KEEPALIVE_PING,
+    ASR_VENDOR_CLOSE_ACK,
+    ASR_VENDOR_CONNECT_INTENT,
+    SM_FINAL,
+    SM_NOTICE,
+    SM_PARTIAL,
+)
 from app.voice_v2 import (
     EVT_ASR_CLOSED,
     EVT_ASR_FINAL,
@@ -33,14 +41,6 @@ __all__ = [
 
 
 _log = logging.getLogger(__name__)
-
-ASR_VENDOR_CONNECT_INTENT = "ASR_VENDOR_CONNECT_INTENT"
-ASR_VENDOR_CLOSE_ACK = "ASR_VENDOR_CLOSE_ACK"
-ASR_KEEPALIVE_PING = "ASR_KEEPALIVE_PING"
-SM_NOTICE = "SM_NOTICE"
-SM_PARTIAL = "SM_PARTIAL"
-SM_FINAL = "SM_FINAL"
-
 
 class SMRealtimeClient:
     """Minimal Speechmatics realtime client with telemetry hooks."""

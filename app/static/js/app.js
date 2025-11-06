@@ -50,9 +50,30 @@
     return "/static/js/";
   })();
 
+  const VERSION_STAMP = (() => {
+    if (typeof window !== "undefined" && typeof window.BUILD_ID === "string" && window.BUILD_ID) {
+      return window.BUILD_ID;
+    }
+    if (typeof window !== "undefined") {
+      const existing = window.__APP_VERSION_STAMP__;
+      if (typeof existing === "string" && existing) {
+        return existing;
+      }
+      const generated = Date.now().toString();
+      try {
+        window.__APP_VERSION_STAMP__ = generated;
+      } catch (err) {
+        // ignore inability to persist stamp on window
+      }
+      return generated;
+    }
+    return Date.now().toString();
+  })();
+
   const VERSION_QUERY = (() => {
+    const suffix = `?v=${encodeURIComponent(VERSION_STAMP)}`;
     if (typeof document === "undefined") {
-      return "";
+      return suffix;
     }
     try {
       const current =
@@ -60,13 +81,13 @@
         document.querySelector('script[src*="/static/js/app.js"]') ||
         null;
       if (!current || !current.src) {
-        return "";
+        return suffix;
       }
       const url = new URL(current.src, window.location.href);
-      return url.search || "";
+      return url.search || suffix;
     } catch (err) {
       console.warn("Failed to derive version query", err);
-      return "";
+      return suffix;
     }
   })();
 
