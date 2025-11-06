@@ -1,258 +1,752 @@
-diff --git a/app/services/streaming_asr/speechmatics_client.py b/app/services/streaming_asr/speechmatics_client.py
-index e0087af6174482ba68a8c41f724dbedc19e0cc97..b04f59f710e3239c0e0729828f2e667beff50a5b 100644
---- a/app/services/streaming_asr/speechmatics_client.py
-+++ b/app/services/streaming_asr/speechmatics_client.py
-@@ -373,78 +373,80 @@ class _StreamState:
-     bytes_sent: int = 0
-     first_audio_ts: float | None = None
-     last_audio_ts: float | None = None
-     last_partial_log: float = 0.0
-     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
-     ready_error: Optional[str] = None
-     ready_error_detail: Optional[str] = None
-     vendor_notices: set[str] = field(default_factory=set)
-     end_of_stream_sent: bool = False
-     recognition_started: bool = False
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index f3913a7a37fa4d315633d870c158ff1727fdf5f2..b013071f02859d84cf110aca3a1e4e771b4982a2 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -538,50 +538,53 @@
+     }
+     if (stateLabel === lastHudState) {
+       return;
+     }
+     lastHudState = stateLabel;
+     const isListening = stateLabel.toLowerCase() === 'listening';
+     const badge = isListening ? 'mic:live' : 'mic:idle';
+     const message = isListening ? 'Recorder active' : 'Recorder idle';
+     setBadge(badge);
+     sendDiagHudEvent(
+       'EVT_CLIENT_HUD_STATE',
+       detail,
+       { level: 'info', badge, message }
+     );
+   }
  
+   handleHudStateChange({ state: 'Idle', meta: { state: 'Idle', source: 'init' } });
  
- class SpeechmaticsClient:
-     """Client wrapper responsible for Speechmatics realtime streams."""
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
++    if (!window.AudioRecorder) {
++      await loadScript("audio/pcm_recorder.js");
++    }
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
  
-     def __init__(self, api_key: str, url: str, bus: Any, logger: logging.Logger) -> None:
-         self._api_key = api_key
-         self._url = url
-         self._bus = bus
-         self._logger = logger or logging.getLogger(__name__)
-         self._streams: Dict[str, _StreamState] = {}
-         # Tracks SIDs currently being opened to avoid parallel opens for the same SID
-         self._opening: set[str] = set()
+   async function init() {
+     await bootstrapClientConfig();
+     await ensureRuntimeModules();
  
-     async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
--        if not self._streams:
--            return
--
-         deadline = time.monotonic() + max(0.0, timeout)
--        while self._streams:
-+
-+        while True:
-             active_sids = [sid for sid in self._streams if sid != new_sid]
--            if not active_sids:
-+            opening_sids = [sid for sid in self._opening if sid != new_sid]
-+
-+            if not active_sids and not opening_sids:
-                 break
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     const audioRecorder = window.AudioRecorder || null;
  
-             for existing_sid in active_sids:
-                 state = self._streams.get(existing_sid)
-                 if state is None:
-                     continue
-                 if not state.closing:
-                     self._logger.warning(
-                         "evt=sm_concurrency_guard closing_sid=%s new_sid=%s",
-                         existing_sid,
-                         new_sid,
-                     )
-                     state.closing = True
-                     try:
-                         state.audio_queue.put_nowait(_AUDIO_SENTINEL)
-                     except Exception:
-                         pass
-                     state.loop.create_task(self._shutdown(state))
- 
--            if not self._streams:
--                break
-+            if not active_sids and opening_sids:
-+                # Ensure we do not spin immediately if we are only waiting on
-+                # another pending open to complete.
-+                await asyncio.sleep(0)
- 
-             if time.monotonic() >= deadline:
-                 raise RuntimeError("speechmatics_concurrency_guard_timeout")
- 
-             await asyncio.sleep(0.05)
- 
-     async def open_stream(
-         self,
-         sid: str,
-         on_partial: Callable[[str, Dict[str, object]], None],
-         on_final: Callable[[str, Dict[str, object]], None],
-         on_error: Callable[..., None],
-         *,
-         stream_id: str,
-         on_close: Optional[Callable[[int | None, str | None], None]] = None,
-         encoding: str = "pcm_s16le",
-         sample_rate: int = 16000,
-         policy: Mapping[str, Any] | None = None,
-     ) -> str:
-         if not isinstance(sid, str) or not sid:
-             raise ValueError("sid must be a non-empty string")
-         if not isinstance(stream_id, str) or not stream_id:
-             raise ValueError("stream_id must be a non-empty string")
-         if sid in self._streams or sid in self._opening:
-             # Deduplicate open attempts per sid; let the caller handle this cleanly.
-diff --git a/tests/test_speechmatics_client.py b/tests/test_speechmatics_client.py
-index 9e989e0e79433c5d55a094513fe456ae66b2351e..280be068a69e67b0ccbc1ad514ce8365458ed7cf 100644
---- a/tests/test_speechmatics_client.py
-+++ b/tests/test_speechmatics_client.py
-@@ -1,28 +1,33 @@
-+import asyncio
- import logging
- import unittest
--from types import SimpleNamespace
-+from types import MethodType, SimpleNamespace
+     function installHubInterface() {
+       const hub = AppState && AppState.hub;
+diff --git a/app/static/js/audio/pcm-worklet-processor.js b/app/static/js/audio/pcm-worklet-processor.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad99caf8035dff7d0c37be1fad04ea38f5c9fe18
+--- /dev/null
++++ b/app/static/js/audio/pcm-worklet-processor.js
+@@ -0,0 +1,150 @@
++class PCMWorkletProcessor extends AudioWorkletProcessor {
++  constructor(options = {}) {
++    super();
++    const opts = options.processorOptions || {};
++    this._targetRate = typeof opts.targetSampleRate === 'number' && opts.targetSampleRate > 0
++      ? opts.targetSampleRate
++      : 16000;
++    const minSamples = typeof opts.minFrameSamples === 'number' && opts.minFrameSamples > 0
++      ? Math.floor(opts.minFrameSamples)
++      : 320;
++    const maxSamples = typeof opts.maxFrameSamples === 'number' && opts.maxFrameSamples >= minSamples
++      ? Math.floor(opts.maxFrameSamples)
++      : Math.max(minSamples, 640);
++    this._minFrameSamples = minSamples;
++    this._maxFrameSamples = maxSamples;
++    this._sourceRate = sampleRate || this._targetRate;
++    this._needsResample = Math.abs(this._sourceRate - this._targetRate) > 0.5;
++    this._inputBuffer = [];
++    this._resampleIndex = 0;
++    this._pendingOutput = [];
++    this._int16Max = 0x7fff;
++    this._int16Min = -0x8000;
++  }
 +
-+import pytest
++  static get parameterDescriptors() {
++    return [];
++  }
 +
-+import app.services.streaming_asr.speechmatics_client as speechmatics_module
- 
- from app.services.streaming_asr.speechmatics_client import (
-     SpeechmaticsClient,
-     _coerce_max_delay_seconds,
-     _coerce_transcript_text,
-     _extract_text,
-     _is_fatal_concurrency_notice,
- )
- 
- 
- class TestSpeechmaticsConcurrencyNotices(unittest.TestCase):
-     def test_info_notice_not_fatal(self) -> None:
-         payload = {"message": "Info", "type": "concurrent_session_usage"}
-         self.assertFalse(_is_fatal_concurrency_notice(payload))
- 
-     def test_warning_notice_not_fatal(self) -> None:
-         payload = {"message": "Warning", "severity": "warning", "type": "concurrent_session_limit"}
-         self.assertFalse(_is_fatal_concurrency_notice(payload))
- 
-     def test_error_notice_fatal(self) -> None:
-         payload = {"message": "Error", "type": "concurrent_session_usage"}
-         self.assertTrue(_is_fatal_concurrency_notice(payload))
- 
-     def test_explicit_severity_error_fatal(self) -> None:
-         payload = {"severity": "critical", "type": "concurrent_session_usage"}
-@@ -123,27 +128,126 @@ class TestSpeechmaticsCloseStream(unittest.TestCase):
-                 self.items.append(item)
- 
-         class StubLoop:
-             def __init__(self) -> None:
-                 self.tasks: list[tuple[object, str | None]] = []
- 
-             def create_task(self, coro: object, name: str | None = None) -> object:
-                 self.tasks.append((coro, name))
-                 close = getattr(coro, "close", None)
-                 if callable(close):
-                     close()
-                 return object()
- 
-         client = SpeechmaticsClient("key", "ws://example", StubBus(), logging.getLogger("test"))
- 
-         state = SimpleNamespace(closing=False, audio_queue=StubQueue(), loop=StubLoop())
-         sid = "sid-123"
-         client._streams[sid] = state  # type: ignore[attr-defined]
- 
-         client.close_stream(sid)
- 
-         self.assertIn(sid, client._streams)
-         self.assertTrue(state.closing)
- 
- 
-+def test_open_stream_blocks_until_other_open_completes(monkeypatch: pytest.MonkeyPatch) -> None:
-+    class StubBus:
-+        def publish(self, event: object) -> None:
-+            pass
++  process(inputs) {
++    const channels = inputs && inputs[0] ? inputs[0] : [];
++    const frameCount = channels[0] ? channels[0].length : 0;
++    if (!frameCount) {
++      return true;
++    }
 +
-+    class StubWebSocket:
-+        def __init__(self) -> None:
-+            self.sent: list[str] = []
-+            self.closed = False
++    for (let i = 0; i < frameCount; i += 1) {
++      let mono = 0;
++      if (channels.length === 0) {
++        mono = 0;
++      } else if (channels.length === 1) {
++        mono = channels[0][i] || 0;
++      } else {
++        let sum = 0;
++        for (let ch = 0; ch < channels.length; ch += 1) {
++          sum += channels[ch][i] || 0;
++        }
++        mono = sum / channels.length;
++      }
 +
-+        async def send(self, data: str) -> None:
-+            self.sent.append(data)
++      if (this._needsResample) {
++        this._inputBuffer.push(mono);
++      } else {
++        this._pendingOutput.push(this._floatToInt16(mono));
++        this._flushPending(false);
++      }
++    }
 +
-+        async def close(self) -> None:
-+            self.closed = True
++    if (this._needsResample && this._inputBuffer.length) {
++      this._resamplePending();
++    }
 +
-+        async def wait_closed(self) -> None:
-+            return
++    return true;
++  }
 +
-+    async def run_test() -> None:
-+        client = SpeechmaticsClient("key", "ws://example", StubBus(), logging.getLogger("test"))
++  _resamplePending() {
++    const step = this._sourceRate / this._targetRate;
++    if (!isFinite(step) || step <= 0) {
++      return;
++    }
++    let index = this._resampleIndex;
++    const buffer = this._inputBuffer;
 +
-+        async def sender_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
-+            await state.ready_event.wait()
++    while (buffer.length - 1 > index) {
++      const baseIndex = Math.floor(index);
++      const nextIndex = baseIndex + 1;
++      if (nextIndex >= buffer.length) {
++        break;
++      }
++      const frac = index - baseIndex;
++      const sampleA = buffer[baseIndex];
++      const sampleB = buffer[nextIndex];
++      const interpolated = sampleA + (sampleB - sampleA) * frac;
++      this._pendingOutput.push(this._floatToInt16(interpolated));
++      this._flushPending(false);
++      index += step;
++    }
 +
-+        async def receiver_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
-+            state.ready_event.set()
++    const consumed = Math.floor(index);
++    if (consumed > 0) {
++      this._inputBuffer = buffer.slice(consumed);
++      index -= consumed;
++    }
++    this._resampleIndex = index;
++  }
 +
-+        async def shutdown_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
-+            state.closed = True
-+            state.ready_event.set()
-+            self._streams.pop(state.sid, None)
++  _floatToInt16(sample) {
++    const clamped = Math.max(-1, Math.min(1, sample || 0));
++    const scaled = Math.round(clamped * this._int16Max);
++    if (scaled < this._int16Min) {
++      return this._int16Min;
++    }
++    if (scaled > this._int16Max) {
++      return this._int16Max;
++    }
++    return scaled;
++  }
 +
-+        client._sender_loop = MethodType(sender_stub, client)  # type: ignore[assignment]
-+        client._receiver_loop = MethodType(receiver_stub, client)  # type: ignore[assignment]
-+        client._shutdown = MethodType(shutdown_stub, client)  # type: ignore[assignment]
++  _flushPending(force) {
++    const pending = this._pendingOutput;
++    if (!pending.length) {
++      return;
++    }
++    if (!force && pending.length < this._minFrameSamples) {
++      return;
++    }
 +
-+        first_sid = "sid-1"
-+        second_sid = "sid-2"
-+        first_stream_populated = asyncio.Event()
++    while (pending.length >= this._minFrameSamples || force) {
++      const take = force
++        ? pending.length
++        : Math.min(Math.max(this._minFrameSamples, pending.length), this._maxFrameSamples);
++      if (!take) {
++        break;
++      }
++      const frame = new Int16Array(take);
++      for (let i = 0; i < take; i += 1) {
++        frame[i] = pending[i] || 0;
++      }
++      pending.splice(0, take);
++      const buffer = frame.buffer;
++      this.port.postMessage({
++        type: 'pcm16',
++        buffer,
++        samples: take,
++        sampleRate: this._targetRate,
++      }, [buffer]);
++      if (pending.length < this._minFrameSamples) {
++        break;
++      }
++      if (force) {
++        force = false;
++      }
++    }
++  }
 +
-+        class TrackingStreams(dict[str, speechmatics_module._StreamState]):  # type: ignore[name-defined]
-+            def __setitem__(self, key: str, value: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
-+                super().__setitem__(key, value)
-+                if key == first_sid:
-+                    first_stream_populated.set()
++  flush() {
++    this._flushPending(true);
++  }
++}
 +
-+        client._streams = TrackingStreams()
++registerProcessor('pcm-worklet-processor', PCMWorkletProcessor);
+diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..a1a75f7dc6f9cdff581f193da5377c3ddc511c06
+--- /dev/null
++++ b/app/static/js/audio/pcm_recorder.js
+@@ -0,0 +1,532 @@
++(() => {
++  const TARGET_SAMPLE_RATE = 16000;
++  const MIN_FRAME_SAMPLES = 320;
++  const MAX_FRAME_SAMPLES = 640;
++  const DEFAULT_CHUNK_MS = Math.round((MIN_FRAME_SAMPLES / TARGET_SAMPLE_RATE) * 1000);
 +
-+        connect_calls: list[int] = []
-+        first_connect_started = asyncio.Event()
-+        allow_first_to_finish = asyncio.Event()
-+        second_connect_started = asyncio.Event()
++  const BUILD_ID = typeof window !== 'undefined' && typeof window.BUILD_ID === 'string'
++    ? window.BUILD_ID
++    : null;
++  const WORKLET_PATH = BUILD_ID
++    ? `/static/js/audio/pcm-worklet-processor.js?v=${encodeURIComponent(BUILD_ID)}`
++    : '/static/js/audio/pcm-worklet-processor.js';
 +
-+        async def fake_connect(url: str, **_: object) -> StubWebSocket:
-+            call_index = len(connect_calls)
-+            connect_calls.append(call_index)
-+            if call_index == 0:
-+                first_connect_started.set()
-+                await allow_first_to_finish.wait()
-+            else:
-+                second_connect_started.set()
-+            return StubWebSocket()
++  function emitClientLog(label, detail = {}) {
++    const payload = detail && typeof detail === 'object' ? detail : { value: detail };
++    const AppState = typeof window !== 'undefined' ? window.AppState : null;
++    if (AppState && AppState.hub && typeof AppState.hub.log === 'function') {
++      try {
++        AppState.hub.log(label, payload);
++        return;
++      } catch (err) {
++        try {
++          console.warn('client.log hub emit failed', err);
++        } catch (_) {}
++      }
++    }
++    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
++      try {
++        window.dispatchEvent(new CustomEvent('client.log', { detail: { label, detail: payload } }));
++      } catch (err) {
++        try {
++          console.warn('client.log dispatch failed', err);
++        } catch (_) {}
++      }
++    }
++  }
 +
-+        monkeypatch.setattr(speechmatics_module.websockets, "connect", fake_connect)
++  function normalizeReason(reason) {
++    if (typeof reason === 'string' && reason) {
++      return reason;
++    }
++    if (reason && typeof reason === 'object') {
++      if (typeof reason.reason === 'string' && reason.reason) {
++        return reason.reason;
++      }
++      if (typeof reason.code === 'string' && reason.code) {
++        return reason.code;
++      }
++      if (typeof reason.message === 'string' && reason.message) {
++        return reason.message;
++      }
++    }
++    return 'unknown';
++  }
 +
-+        async def open_for_sid(sid: str) -> str:
-+            return await client.open_stream(
-+                sid=sid,
-+                stream_id=f"stream-{sid}",
-+                on_partial=lambda *_: None,
-+                on_final=lambda *_: None,
-+                on_error=lambda *_: None,
-+            )
++  function emitAppStateRecordingStarted(policy) {
++    const AppState = typeof window !== 'undefined' ? window.AppState : null;
++    if (!AppState || typeof AppState.emit !== 'function') {
++      return;
++    }
++    try {
++      AppState.emit('recordingStarted', { policy: policy || null, source: 'pcm_recorder' });
++    } catch (err) {
++      try {
++        console.warn('recordingStarted emit failed', err);
++      } catch (_) {}
++    }
++  }
 +
-+        first_task = asyncio.create_task(open_for_sid(first_sid))
-+        await first_connect_started.wait()
++  class PcmRecorder {
++    constructor() {
++      this._audioContext = null;
++      this._sourceNode = null;
++      this._workletNode = null;
++      this._stream = null;
++      this._socket = null;
++      this._active = false;
++      this._listening = false;
++      this._muted = false;
++      this._chunkSeq = 0;
++      this._listeningStartedAt = 0;
++      this._firstChunkSent = false;
++      this._policy = {};
++      this._shouldMuteOnTts = true;
++      this._stopOnTts = false;
++      this._onChunk = null;
++      this._deviceSampleRate = null;
++      this._initializing = null;
++      this._workletLoaded = false;
++      this._tearDownPromise = null;
++    }
 +
-+        second_task = asyncio.create_task(open_for_sid(second_sid))
-+        await asyncio.sleep(0.05)
++    get listening() {
++      return this._listening;
++    }
 +
-+        assert len(connect_calls) == 1
-+        assert not second_connect_started.is_set()
++    isActive() {
++      return this._active;
++    }
 +
-+        allow_first_to_finish.set()
-+        await asyncio.wait_for(first_stream_populated.wait(), timeout=1.0)
-+        await asyncio.wait_for(first_task, timeout=1.0)
++    isListening() {
++      return this._listening;
++    }
 +
-+        client.close_stream(first_sid)
-+        await asyncio.sleep(0.05)
++    async init() {
++      if (this._initializing) {
++        return this._initializing;
++      }
++      if (this._audioContext && this._audioContext.state === 'closed') {
++        this._audioContext = null;
++        this._workletLoaded = false;
++      }
++      if (this._audioContext && this._workletLoaded) {
++        return this._audioContext;
++      }
 +
-+        await asyncio.wait_for(second_connect_started.wait(), timeout=1.0)
-+        await asyncio.wait_for(second_task, timeout=1.0)
++      const initializer = (async () => {
++        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
++        if (!AudioContextCtor) {
++          throw new Error('Web Audio API is not supported');
++        }
++        const context = new AudioContextCtor();
++        this._audioContext = context;
++        this._deviceSampleRate = context.sampleRate || null;
++        if (!context.audioWorklet || typeof context.audioWorklet.addModule !== 'function') {
++          throw new Error('AudioWorklet is not supported');
++        }
++        try {
++          await context.audioWorklet.addModule(WORKLET_PATH);
++          this._workletLoaded = true;
++          emitClientLog('client.audio.worklet_load_ok', {
++            sample_rate: this._deviceSampleRate,
++            target_rate: TARGET_SAMPLE_RATE,
++            url: WORKLET_PATH,
++          });
++        } catch (err) {
++          emitClientLog('client.audio.worklet_load_fail', {
++            message: err && err.message ? err.message : String(err),
++          });
++          try {
++            context.close();
++          } catch (_) {}
++          this._audioContext = null;
++          this._workletLoaded = false;
++          throw err;
++        }
++        return context;
++      })();
 +
-+        assert len(connect_calls) == 2
++      this._initializing = initializer
++        .catch((err) => {
++          this._initializing = null;
++          throw err;
++        })
++        .then((ctx) => {
++          this._initializing = null;
++          return ctx;
++        });
 +
-+    asyncio.run(run_test())
++      return this._initializing;
++    }
 +
++    async start(options = {}) {
++      const config = (options && typeof options === 'object') ? options : {};
++      if (typeof config.onChunk === 'function') {
++        this._onChunk = config.onChunk;
++      }
++      const policyCandidate = this._extractPolicyFromConfig(config);
++      if (policyCandidate) {
++        this.setPolicy(policyCandidate);
++      }
++      if (this._active) {
++        return this._audioContext;
++      }
++      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
++        throw new Error('MediaDevices.getUserMedia is not available');
++      }
 +
- if __name__ == "__main__":
-     unittest.main()
++      const context = await this.init();
++      if (!context) {
++        throw new Error('Audio context unavailable');
++      }
++
++      if (context.state === 'suspended') {
++        try {
++          await context.resume();
++        } catch (err) {
++          console.warn('Failed to resume audio context', err);
++        }
++      }
++
++      let stream;
++      try {
++        stream = await navigator.mediaDevices.getUserMedia({
++          audio: {
++            channelCount: { ideal: 1, max: 2 },
++            sampleRate: { ideal: 48000 },
++            sampleSize: 16,
++            echoCancellation: false,
++            noiseSuppression: false,
++            autoGainControl: false,
++          },
++          video: false,
++        });
++      } catch (err) {
++        emitClientLog('client.pcm.capture_error', {
++          stage: 'getUserMedia',
++          message: err && err.message ? err.message : String(err),
++        });
++        throw err;
++      }
++
++      const sourceNode = context.createMediaStreamSource(stream);
++      let workletNode;
++      try {
++        workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
++          numberOfOutputs: 0,
++          processorOptions: {
++            targetSampleRate: TARGET_SAMPLE_RATE,
++            minFrameSamples: MIN_FRAME_SAMPLES,
++            maxFrameSamples: MAX_FRAME_SAMPLES,
++          },
++        });
++      } catch (err) {
++        emitClientLog('client.pcm.capture_error', {
++          stage: 'createWorkletNode',
++          message: err && err.message ? err.message : String(err),
++        });
++        stream.getTracks().forEach((track) => {
++          try { track.stop(); } catch (_) {}
++        });
++        throw err;
++      }
++
++      this._attachPort(workletNode.port);
++      try {
++        sourceNode.connect(workletNode);
++      } catch (err) {
++        emitClientLog('client.pcm.capture_error', {
++          stage: 'connectWorklet',
++          message: err && err.message ? err.message : String(err),
++        });
++        workletNode.port.onmessage = null;
++        try { workletNode.disconnect(); } catch (_) {}
++        try { sourceNode.disconnect(); } catch (_) {}
++        stream.getTracks().forEach((track) => {
++          try { track.stop(); } catch (_) {}
++        });
++        throw err;
++      }
++
++      this._stream = stream;
++      this._sourceNode = sourceNode;
++      this._workletNode = workletNode;
++      this._active = true;
++      this._muted = false;
++      this._firstChunkSent = false;
++      return context;
++    }
++
++    async startListening(policy = {}) {
++      if (policy && typeof policy === 'object' && Object.keys(policy).length) {
++        this.setPolicy(policy);
++      }
++      if (!this._active) {
++        await this.start(policy || {});
++      }
++      if (this._listening) {
++        return;
++      }
++      this._listening = true;
++      this._chunkSeq = 0;
++      this._firstChunkSent = false;
++      this._listeningStartedAt = Date.now();
++      const chunkMs = DEFAULT_CHUNK_MS;
++      emitClientLog('client.pcm.capture_start', {
++        device_rate: this._deviceSampleRate || null,
++        target_rate: TARGET_SAMPLE_RATE,
++        chunk_ms: chunkMs,
++      });
++      emitAppStateRecordingStarted(this._policy);
++    }
++
++    stopListening(reason = {}) {
++      if (!this._listening) {
++        return;
++      }
++      const reasonLabel = normalizeReason(reason);
++      this._listening = false;
++      this._muted = false;
++      emitClientLog('client.pcm.capture_stop', { reason: reasonLabel });
++    }
++
++    async stop(reason = {}) {
++      this.stopListening(reason);
++      if (!this._active) {
++        return;
++      }
++      if (this._tearDownPromise) {
++        return this._tearDownPromise;
++      }
++      const cleanup = (async () => {
++        const stream = this._stream;
++        const source = this._sourceNode;
++        const worklet = this._workletNode;
++        this._stream = null;
++        this._sourceNode = null;
++        this._workletNode = null;
++        this._active = false;
++        this._muted = false;
++        this._onChunk = null;
++        if (worklet && worklet.port) {
++          try {
++            worklet.port.onmessage = null;
++          } catch (_) {}
++        }
++        try {
++          if (source) {
++            source.disconnect();
++          }
++        } catch (_) {}
++        try {
++          if (worklet) {
++            worklet.disconnect();
++          }
++        } catch (_) {}
++        if (stream) {
++          stream.getTracks().forEach((track) => {
++            try { track.stop(); } catch (_) {}
++          });
++        }
++        if (this._audioContext && this._audioContext.state === 'running') {
++          try {
++            await this._audioContext.suspend();
++          } catch (err) {
++            console.warn('AudioContext suspend failed', err);
++          }
++        }
++      })();
++
++      this._tearDownPromise = cleanup
++        .catch((err) => {
++          this._tearDownPromise = null;
++          throw err;
++        })
++        .then((value) => {
++          this._tearDownPromise = null;
++          return value;
++        });
++
++      return this._tearDownPromise;
++    }
++
++    setSocket(ws) {
++      this._socket = ws || null;
++    }
++
++    setPolicy(policy) {
++      if (!policy || typeof policy !== 'object') {
++        this._policy = {};
++        this._applyPolicyDefaults();
++        return;
++      }
++      this._policy = { ...policy };
++      this._applyPolicyDefaults();
++    }
++
++    handleTtsStart() {
++      if (this._stopOnTts) {
++        this.stopListening({ reason: 'tts_start_policy' });
++        return;
++      }
++      if (this._shouldMuteOnTts) {
++        this._muted = true;
++      }
++    }
++
++    handleTtsEnd() {
++      this._muted = false;
++    }
++
++    startMicCaptureIfIdle() {
++      if (this._active || this._initializing) {
++        return this._initializing || Promise.resolve(null);
++      }
++      return this.start();
++    }
++
++    _attachPort(port) {
++      if (!port) {
++        return;
++      }
++      port.onmessage = (event) => {
++        const data = event ? event.data : null;
++        if (!data || data.type !== 'pcm16' || !data.buffer) {
++          return;
++        }
++        const buffer = data.buffer;
++        const byteLength = buffer.byteLength || 0;
++        if (byteLength === 0) {
++          return;
++        }
++        if (!this._listening || this._muted) {
++          return;
++        }
++        const seq = this._chunkSeq;
++        this._chunkSeq += 1;
++        if (!this._firstChunkSent) {
++          this._firstChunkSent = true;
++          emitClientLog('client.audio_first_chunk', {
++            bytes: byteLength,
++            seq,
++          });
++        }
++        const startedAt = this._listeningStartedAt || Date.now();
++        const msSinceStart = Math.max(0, Date.now() - startedAt);
++        emitClientLog('client.pcm.chunk', {
++          seq,
++          bytes: byteLength,
++          ms_since_start: msSinceStart,
++        });
++        const delivered = this._deliverChunk(buffer, seq);
++        if (!delivered) {
++          emitClientLog('client.pcm.chunk_drop', {
++            seq,
++            bytes: byteLength,
++            reason: 'delivery_failed',
++          });
++        }
++      };
++    }
++
++    _deliverChunk(buffer, seq) {
++      let delivered = false;
++      if (typeof this._onChunk === 'function') {
++        try {
++          this._onChunk({ buffer, seq });
++          delivered = true;
++        } catch (err) {
++          emitClientLog('client.pcm.chunk_callback_error', {
++            seq,
++            message: err && err.message ? err.message : String(err),
++          });
++        }
++      }
++
++      if (!delivered) {
++        delivered = this._sendViaSocket(buffer, seq);
++      }
++
++      return delivered;
++    }
++
++    _sendViaSocket(buffer, seq) {
++      const byteLength = buffer.byteLength || 0;
++      if (!byteLength) {
++        return true;
++      }
++      const wsClient = typeof window !== 'undefined' ? window.WSClient : null;
++      if (wsClient && typeof wsClient.send === 'function') {
++        try {
++          wsClient.send(buffer, { binary: true });
++          return true;
++        } catch (err) {
++          emitClientLog('client.pcm.send_error', {
++            seq,
++            message: err && err.message ? err.message : String(err),
++            path: 'wsclient.send',
++          });
++        }
++      }
++      const socket = this._socket;
++      if (socket && socket.readyState === WebSocket.OPEN) {
++        try {
++          socket.send(buffer);
++          return true;
++        } catch (err) {
++          emitClientLog('client.pcm.send_error', {
++            seq,
++            message: err && err.message ? err.message : String(err),
++            path: 'socket.send',
++          });
++        }
++      }
++      return false;
++    }
++
++    _applyPolicyDefaults() {
++      const recorderPolicy = this._extractRecorderPolicy(this._policy);
++      if (recorderPolicy && typeof recorderPolicy === 'object') {
++        this._shouldMuteOnTts = recorderPolicy.mute_send_during_tts !== false;
++        this._stopOnTts = recorderPolicy.stop_on_tts_start === true;
++      } else {
++        this._shouldMuteOnTts = true;
++        this._stopOnTts = false;
++      }
++    }
++
++    _extractRecorderPolicy(policy) {
++      if (!policy || typeof policy !== 'object') {
++        return null;
++      }
++      if (policy.recorder && typeof policy.recorder === 'object') {
++        return policy.recorder;
++      }
++      if (policy.policy && typeof policy.policy === 'object' && policy.policy.recorder) {
++        return policy.policy.recorder;
++      }
++      return null;
++    }
++
++    _extractPolicyFromConfig(config) {
++      if (!config || typeof config !== 'object') {
++        return null;
++      }
++      if (config.policy && typeof config.policy === 'object') {
++        return config.policy;
++      }
++      const knownKeys = new Set(['onChunk']);
++      const hasOnlyPolicyKeys = Object.keys(config).every((key) => knownKeys.has(key));
++      if (!hasOnlyPolicyKeys) {
++        return config;
++      }
++      return null;
++    }
++  }
++
++  const recorder = new PcmRecorder();
++  if (typeof window !== 'undefined') {
++    window.AudioRecorder = recorder;
++  }
++})();
