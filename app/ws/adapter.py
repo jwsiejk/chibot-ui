@@ -2179,7 +2179,7 @@ class ChatV2Adapter:
             )
             bus.publish(
                 {
-                    "type": EVT_WS_AUDIO_FIRST_CHUNK,
+                    "type": WS_AUDIO_FIRST_CHUNK,
                     "sid": ctx.sid,
                     "who": "server",
                     "source": "ws.adapter",
