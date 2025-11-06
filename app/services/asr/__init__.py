@@ -1,5 +1,6 @@
 """ASR service helpers."""
 
+from .policies import to_sm_params
 from .sm_rt import (
     ASR_KEEPALIVE_PING,
     ASR_VENDOR_CLOSE_ACK,
@@ -18,4 +19,5 @@ __all__ = [
     "SM_NOTICE",
     "SM_PARTIAL",
     "SMRealtimeClient",
+    "to_sm_params",
 ]
