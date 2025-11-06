@@ -1574,8 +1574,6 @@
       return Promise.resolve(outcome);
     }
 
-    }
-
     function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
       const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
       const gateSnapshot = {

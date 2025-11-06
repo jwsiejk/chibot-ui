@@ -1,193 +1,57 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 863e4146b756d71483f331c7bb4f95e49fe6ee3c..3a5ae1b3a8508ae72c9969639f14f19264cde1bc 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -123,51 +123,50 @@ _POLICY_STABLE_KEYS = (
-     "suggestions",
-     "actions",
-     "telemetry",
-     "media",
-     "capture",
-     "audio",
-     "policy",
- )
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 8a5fdb6bac01b80097cf3802cb4f0bc621f31993..16bc5940abe8c55cdc6b89989f086209e78fe12f 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1552,52 +1552,50 @@
  
- _log = logging.getLogger(__name__)
+     function startMicCapture() {
+       if (!audioRecorder || typeof audioRecorder.startMicCaptureIfIdle !== 'function') {
+         return Promise.reject(new Error('startMicCapture_unavailable'));
+       }
+       let outcome;
+       try {
+         outcome = audioRecorder.startMicCaptureIfIdle();
+       } catch (err) {
+         return Promise.reject(err);
+       }
+       if (outcome && typeof outcome.then === 'function') {
+         return outcome.then((value) => {
+           if (value) {
+             setMicPermissionGranted(true, 'startMicCapture');
+           }
+           return value;
+         });
+       }
+       if (outcome) {
+         setMicPermissionGranted(true, 'startMicCapture');
+       }
+       return Promise.resolve(outcome);
+     }
  
- _ALLOWED_TEXT_FRAME_TYPES = {
-     "client.ready",
-     "audio.header",
-     "admin.toggle",
-     "chat.user",
-     "client.diag",
-     "client.log",
-     "client.autostart",
-     "client.telemetry",
-     "client.banner",
-     "asr.rearm.request",
- }
- 
- _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
--    "EVT_RECORDER_STARTED",
-     "EVT_AUDIO_CHUNK_SENT_CLIENT",
- }
- 
- _CLIENT_AUTOSTART_ALLOWED_EVENTS = {
-     "attempt",
-     "armed",
-     "blocked",
-     "cta_click",
-     "cta_shown",
-     "error",
-     "gesture",
-     "max_attempts",
-     "recording_started",
-     "recording_stopped",
-     "rejected",
- }
- 
- 
- class TokenBucket:
-     """Simple in-memory token bucket."""
- 
-     def __init__(self, capacity: int, refill_seconds: float) -> None:
-         self.capacity = capacity
-         self.tokens = float(capacity)
-         self.refill_seconds = refill_seconds
-diff --git a/tests/test_client_diag_events.py b/tests/test_client_diag_events.py
-index 6f184a8fafaa7b735cf031ce353b0b6e1313bd23..b7414a8f8bfac3499a91eb51ee59228b9d30cd08 100644
---- a/tests/test_client_diag_events.py
-+++ b/tests/test_client_diag_events.py
-@@ -1,68 +1,68 @@
- from __future__ import annotations
- 
- import unittest
- 
- from app import config
- from app.telemetry import bus
- from app.voice_v2.engine import EngineV2
- 
- 
- class ClientDiagEventsTest(unittest.TestCase):
-     def setUp(self) -> None:
-         self._original_flag = config.DIAG_CLIENT_HUD
-         config.DIAG_CLIENT_HUD = True
-         bus.reset()
-         self._events = []
-         self._token = bus.subscribe("*", self._events.append)
-         self.engine = EngineV2()
- 
-     def tearDown(self) -> None:
-         bus.reset()
-         config.DIAG_CLIENT_HUD = self._original_flag
- 
-     def test_emits_diag_event_when_enabled(self) -> None:
-         frame = {
-             "type": "client.diag",
--            "event": "EVT_CLIENT_RECORDER_STARTED",
--            "data": {"foo": "bar"},
-+            "event": "EVT_CLIENT_MIC_OPEN",
-+            "data": {"vendor": "pcm16"},
-             "level": "info",
--            "badge": "rec:start",
-+            "badge": "mic:open",
-             "ts": 1_234_567,
-             "sample": True,
--            "message": "Recorder started",
-+            "message": "Mic open",
+-    }
+-
+     function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
+       const cap = (runtimeState && runtimeState.policy && runtimeState.policy.capture) || {};
+       const gateSnapshot = {
+         asrReady: !!runtimeState.asrReady,
+         turnState: runtimeState.turnState || '',
+         micPerm: !!runtimeState.micPermissionGranted,
+         start_on_asr_ready: !!cap.start_on_asr_ready,
+         start_on_turn_ready: !!cap.start_on_turn_ready
+       };
+       if (typeof logClient === 'function') {
+         try {
+           const gatesJson = JSON.stringify(gateSnapshot);
+           logClient('client.mic', `evt=maybe_autostart_blocked gates=${gatesJson} trigger=${triggerLabel} reason=${reasonLabel}`);
+         } catch (err) {
+           logClient('client.mic', `evt=maybe_autostart_blocked gates_error trigger=${triggerLabel} reason=${reasonLabel}`);
          }
- 
-         self.engine.on_json("sid-diag", frame)
- 
-         diag_events = [evt for evt in self._events if evt.get("type") == "EVT_DIAG_HUD"]
-         self.assertEqual(len(diag_events), 1)
-         diag = diag_events[0]
- 
-         self.assertEqual(diag.get("sid"), "sid-diag")
-         self.assertEqual(diag.get("who"), "client")
-         self.assertEqual(diag.get("source"), "client_hud")
-         self.assertEqual(diag.get("level"), "info")
- 
-         meta = diag.get("meta") or {}
--        self.assertEqual(meta.get("event"), "EVT_CLIENT_RECORDER_STARTED")
--        self.assertEqual(meta.get("badge"), "rec:start")
-+        self.assertEqual(meta.get("event"), "EVT_CLIENT_MIC_OPEN")
-+        self.assertEqual(meta.get("badge"), "mic:open")
-         self.assertTrue(meta.get("sample"))
-         self.assertEqual(meta.get("client_ts"), 1_234_567)
-         self.assertEqual(meta.get("dir"), "in")
-         self.assertIn("data", meta)
- 
-     def test_does_not_emit_when_disabled(self) -> None:
-         config.DIAG_CLIENT_HUD = False
-         frame = {
-             "type": "client.diag",
--            "event": "EVT_CLIENT_RECORDER_STARTED",
-+            "event": "EVT_CLIENT_MIC_OPEN",
-         }
- 
-         self.engine.on_json("sid-diag", frame)
- 
-         diag_events = [evt for evt in self._events if evt.get("type") == "EVT_DIAG_HUD"]
-         self.assertEqual(diag_events, [])
- 
- 
- if __name__ == "__main__":
-     unittest.main()
-diff --git a/tests/test_flow_zip_packaging.py b/tests/test_flow_zip_packaging.py
-index a756a3337e92debca2e83f6d1e9158cd4c315e74..a2a1498fab9d3278d182fc4e8cb6084554135080 100644
---- a/tests/test_flow_zip_packaging.py
-+++ b/tests/test_flow_zip_packaging.py
-@@ -19,51 +19,51 @@ _NLG = "nlg.ndjson"
- _NLU = "nlu.ndjson"
- _LOGS = "logs.ndjson"
- 
- class BuildFlowZipPackagingTest(unittest.TestCase):
-     def test_redaction_and_sha_integrity(self) -> None:
-         with tempfile.TemporaryDirectory() as tmp:
-             root = Path(tmp) / "exports"
-             sid = "sid-redaction"
-             session_dir = self._prepare_session(root, sid)
- 
-             events = [
-                 {
-                     "type": "EVT_WS_JSON_RECV",
-                     "sid": sid,
-                     "ts_ms": 111,
-                     "meta": {
-                         "authorization": "Bearer supersecretvalue",
-                         "email": "agent@example.com",
-                     },
-                 },
-                 {
-                     "type": "EVT_DIAG_HUD",
-                     "sid": sid,
-                     "ts_ms": 444,
-                     "level": "info",
--                    "meta": {"event": "EVT_CLIENT_RECORDER_STARTED", "badge": "rec:start"},
-+                    "meta": {"event": "EVT_CLIENT_MIC_OPEN", "badge": "mic:open"},
-                 },
-                 {
-                     "type": "EVT_NLU",
-                     "sid": sid,
-                     "ts_ms": 222,
-                     "meta": {"intent": "help_install"},
-                 },
-                 {
-                     "type": "EVT_NLG",
-                     "sid": sid,
-                     "ts_ms": 333,
-                     "meta": {"utterance": "Masked"},
-                 },
-             ]
-             self._write_events(session_dir, events)
- 
-             logs = [
-                 {
-                     "sid": sid,
-                     "ts": 111.1,
-                     "level": "INFO",
-                     "logger": "test",
-                     "msg": "first",
-                 },
-                 {
+       }
+       const parts = [
+         `asrReady=${gates.asrReady}`,
+         `turnState=${gates.turnState === null ? 'null' : gates.turnState}`,
+         `micPerm=${gates.micPerm}`,
+         `recording=${gates.recording}`,
+       ];
+       const detail = {
+         event: 'maybe_autostart_blocked',
