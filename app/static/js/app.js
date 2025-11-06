@@ -584,6 +584,7 @@
     if (!window.AudioRecorder) {
       await loadScript("audio/pcm_recorder.js");
     }
+    await loadScript("audio/vad_client.js");
     if (!window.WSClient) {
       await loadScript("ws_client.js");
     }

@@ -21,6 +21,11 @@ class SessionCtx:
     queued_arm: bool = False
     first_chunk_sent: bool = False
     closed_at_ms: Optional[int] = None
+    server_vad_speech: bool = False
+    server_vad_since_ms: Optional[float] = None
+    last_pcm_ms: Optional[float] = None
+    last_vendor_activity_ms: Optional[float] = None
+    eot_armed: bool = False
 
 
 def can_open(ctx: SessionCtx) -> bool:

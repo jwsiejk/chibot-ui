@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import array
 import asyncio
 import contextlib
 import logging
@@ -168,7 +169,59 @@ _ALLOWED_TEXT_FRAME_TYPES = {
 
 _CLIENT_TELEMETRY_ALLOWED_EVENTS = {
     "EVT_AUDIO_CHUNK_SENT_CLIENT",
+    "client.vad.speech_start",
+    "client.vad.speech_end",
+    "client.vad.state",
+    "client.vad.gate",
+    "client.vad.gate_heartbeat",
+    "client.appstate.delta",
+    "client.appstate.heartbeat",
 }
+
+_SERVER_VAD_DEFAULT_POLICY = {
+    "enable": True,
+    "min_speech_ms": 200,
+    "min_silence_ms": 700,
+    "eot_silence_ms": 800,
+    "fuse_mode": "and",
+    "weight_client": 0.5,
+    "weight_vendor": 0.5,
+    "energy_threshold_dbfs": -45.0,
+}
+
+_SERVER_VAD_EVAL_INTERVAL_MS = 100
+_PCM_INT16_MAX = 32768.0
+_DB_FLOOR = -120.0
+
+
+def _pcm16_rms_dbfs(payload: bytes) -> float:
+    if not payload:
+        return _DB_FLOOR
+    view = memoryview(payload)
+    sample_count = len(view) // 2
+    if sample_count <= 0:
+        return _DB_FLOOR
+    samples = array.array("h")
+    samples.frombytes(view[: sample_count * 2])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return _DB_FLOOR
+    acc = 0.0
+    for sample in samples:
+        normalized = sample / _PCM_INT16_MAX
+        acc += normalized * normalized
+    mean_square = acc / len(samples)
+    if mean_square <= 0.0:
+        return _DB_FLOOR
+    rms = math.sqrt(mean_square)
+    if rms <= 0.0:
+        return _DB_FLOOR
+    return 20.0 * math.log10(rms)
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
 
 _CLIENT_AUTOSTART_ALLOWED_EVENTS = {
     "attempt",
@@ -409,6 +462,17 @@ class AdapterContext:
     audio_pipeline_mode: Optional[str] = None
     asr_vendor_logged: bool = False
     session_capture_policy: Optional[Dict[str, Any]] = None
+    client_vad_speech: bool = False
+    client_vad_since_ms: Optional[int] = None
+    client_vad_last_event_ms: Optional[int] = None
+    client_vad_last_speech_end_ms: Optional[int] = None
+    client_vad_confidence: float = 0.0
+    client_vad_energy_db: Optional[float] = None
+    client_vad_noise_db: Optional[float] = None
+    server_vad_candidate_start_ms: Optional[int] = None
+    server_vad_silence_candidate_ms: Optional[int] = None
+    server_vad_energy_db: Optional[float] = None
+    vad_fusion_task: asyncio.Task[None] | None = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -446,6 +510,401 @@ class ChatV2Adapter:
     @staticmethod
     def _allowed_asr_vendors() -> List[str]:
         return ["speechmatics"]
+
+    @staticmethod
+    def _coerce_non_negative_int(value: Any, default: int) -> int:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return default
+        if candidate < 0:
+            return default
+        return candidate
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float | None) -> float | None:
+        try:
+            candidate = float(value)
+        except (TypeError, ValueError):
+            return default
+        if math.isnan(candidate) or math.isinf(candidate):
+            return default
+        return candidate
+
+    @staticmethod
+    def _set_client_vad_state(ctx: AdapterContext, speech: bool, now_ms: int) -> None:
+        if speech == ctx.client_vad_speech and ctx.client_vad_since_ms is not None:
+            return
+        ctx.client_vad_speech = speech
+        ctx.client_vad_since_ms = now_ms
+        if speech:
+            ctx.client_vad_last_speech_end_ms = None
+        else:
+            ctx.client_vad_last_speech_end_ms = now_ms
+
+    def _resolve_server_vad_policy(self, ctx: AdapterContext) -> Dict[str, Any]:
+        policy = dict(_SERVER_VAD_DEFAULT_POLICY)
+        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+        if isinstance(snapshot, Mapping):
+            policy_block = snapshot.get("policy")
+            if isinstance(policy_block, Mapping):
+                vad_block = policy_block.get("vad")
+                if isinstance(vad_block, Mapping):
+                    server_block = vad_block.get("server")
+                    if isinstance(server_block, Mapping):
+                        enable_flag = server_block.get("enable")
+                        if isinstance(enable_flag, bool):
+                            policy["enable"] = enable_flag
+                        policy["min_speech_ms"] = self._coerce_non_negative_int(
+                            server_block.get("min_speech_ms"), policy["min_speech_ms"]
+                        )
+                        policy["min_silence_ms"] = self._coerce_non_negative_int(
+                            server_block.get("min_silence_ms"), policy["min_silence_ms"]
+                        )
+                        policy["eot_silence_ms"] = self._coerce_non_negative_int(
+                            server_block.get("eot_silence_ms"), policy["eot_silence_ms"]
+                        )
+                        fuse_mode_value = server_block.get("fuse_mode")
+                        if isinstance(fuse_mode_value, str):
+                            normalized = fuse_mode_value.strip().lower()
+                            if normalized in {"and", "or", "weighted"}:
+                                policy["fuse_mode"] = normalized
+                        weight_client = self._coerce_float(
+                            server_block.get("weight_client"), policy["weight_client"]
+                        )
+                        if weight_client is not None:
+                            policy["weight_client"] = max(0.0, weight_client)
+                        weight_vendor = self._coerce_float(
+                            server_block.get("weight_vendor"), policy["weight_vendor"]
+                        )
+                        if weight_vendor is not None:
+                            policy["weight_vendor"] = max(0.0, weight_vendor)
+                        threshold_value = self._coerce_float(
+                            server_block.get("energy_threshold_dbfs"),
+                            policy["energy_threshold_dbfs"],
+                        )
+                        if threshold_value is not None:
+                            policy["energy_threshold_dbfs"] = threshold_value
+        return policy
+
+    def _publish_server_vad_event(
+        self, ctx: AdapterContext, event_type: str, meta: Mapping[str, Any]
+    ) -> None:
+        try:
+            payload = {
+                "schema_version": "1",
+                "type": event_type,
+                "sid": ctx.sid,
+                "who": "server",
+                "source": "ws_server",
+                "meta": dict(meta),
+            }
+            bus.publish(payload)
+        except Exception:  # pragma: no cover - defensive logging
+            _log.exception("evt=server_vad_event_publish_failed sid=%s event=%s", ctx.sid, event_type)
+
+    def _update_server_vad_state(
+        self,
+        ctx: AdapterContext,
+        energy_db: float,
+        now_ms: int,
+        policy: Mapping[str, Any],
+    ) -> None:
+        threshold = float(policy.get("energy_threshold_dbfs", _SERVER_VAD_DEFAULT_POLICY["energy_threshold_dbfs"]))
+        min_speech_ms = max(0, int(policy.get("min_speech_ms", _SERVER_VAD_DEFAULT_POLICY["min_speech_ms"])))
+        min_silence_ms = max(0, int(policy.get("min_silence_ms", _SERVER_VAD_DEFAULT_POLICY["min_silence_ms"])))
+        above_threshold = energy_db > threshold
+        ctx.server_vad_energy_db = energy_db
+        if above_threshold:
+            ctx.server_vad_silence_candidate_ms = None
+            if ctx.server_vad_candidate_start_ms is None:
+                ctx.server_vad_candidate_start_ms = now_ms
+            if not ctx.session.server_vad_speech:
+                candidate = ctx.server_vad_candidate_start_ms or now_ms
+                if now_ms - candidate >= min_speech_ms:
+                    ctx.session.server_vad_speech = True
+                    ctx.session.server_vad_since_ms = float(candidate)
+                    ctx.server_vad_candidate_start_ms = None
+                    meta = {
+                        "energy_db": energy_db,
+                        "threshold_db": threshold,
+                        "since_ms": candidate,
+                    }
+                    self._publish_server_vad_event(ctx, "server.vad.speech_start", meta)
+                    state_meta = dict(meta)
+                    state_meta["speech"] = True
+                    self._publish_server_vad_event(ctx, "server.vad.state", state_meta)
+        else:
+            ctx.server_vad_candidate_start_ms = None
+            if ctx.session.server_vad_speech and ctx.server_vad_silence_candidate_ms is None:
+                ctx.server_vad_silence_candidate_ms = now_ms
+            if ctx.session.server_vad_speech:
+                silence_candidate = ctx.server_vad_silence_candidate_ms or now_ms
+                if now_ms - silence_candidate >= min_silence_ms:
+                    previous_start = ctx.session.server_vad_since_ms
+                    duration_ms = 0
+                    if previous_start is not None:
+                        duration_ms = max(0, now_ms - int(previous_start))
+                    ctx.session.server_vad_speech = False
+                    ctx.session.server_vad_since_ms = float(now_ms)
+                    ctx.server_vad_silence_candidate_ms = None
+                    meta = {
+                        "energy_db": energy_db,
+                        "threshold_db": threshold,
+                        "since_ms": now_ms,
+                        "duration_ms": duration_ms,
+                    }
+                    self._publish_server_vad_event(ctx, "server.vad.speech_end", meta)
+                    state_meta = {
+                        "speech": False,
+                        "energy_db": energy_db,
+                        "threshold_db": threshold,
+                        "since_ms": now_ms,
+                    }
+                    self._publish_server_vad_event(ctx, "server.vad.state", state_meta)
+            else:
+                if ctx.session.server_vad_since_ms is None:
+                    ctx.session.server_vad_since_ms = float(now_ms)
+
+    def _maybe_update_server_vad(self, ctx: AdapterContext, chunk: bytes, now_ms: int) -> None:
+        policy = self._resolve_server_vad_policy(ctx)
+        ctx.session.last_pcm_ms = float(now_ms)
+        if not policy.get("enable", True):
+            ctx.session.server_vad_speech = False
+            if ctx.session.server_vad_since_ms is None:
+                ctx.session.server_vad_since_ms = float(now_ms)
+            ctx.server_vad_candidate_start_ms = None
+            ctx.server_vad_silence_candidate_ms = None
+            ctx.server_vad_energy_db = _DB_FLOOR
+            return
+        energy_db = _pcm16_rms_dbfs(chunk)
+        self._update_server_vad_state(ctx, energy_db, now_ms, policy)
+
+    def _ensure_vad_fusion_task(self, ctx: AdapterContext) -> None:
+        task = ctx.vad_fusion_task
+        if task is not None and not task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            ctx.vad_fusion_task = loop.create_task(self._run_vad_fusion(ctx))
+        else:
+            ctx.vad_fusion_task = asyncio.create_task(self._run_vad_fusion(ctx))
+
+    async def _run_vad_fusion(self, ctx: AdapterContext) -> None:
+        interval = max(0.05, _SERVER_VAD_EVAL_INTERVAL_MS / 1000.0)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                if ctx.ws_send is None:
+                    break
+                if not ctx.session.eot_armed:
+                    continue
+                if ctx.session.tts_active:
+                    continue
+                if ctx.session.asr_state != "open":
+                    continue
+                if ctx.session.last_pcm_ms is None:
+                    continue
+                now_ms = self._now_ms()
+                policy = self._resolve_server_vad_policy(ctx)
+                client_silence_ms = self._compute_client_silence_ms(ctx, now_ms)
+                server_silence_ms = self._compute_server_silence_ms(
+                    ctx, now_ms, policy, client_silence_ms
+                )
+                vendor_idle_ms = self._compute_vendor_idle_ms(ctx, now_ms)
+                min_silence_ms = max(0, int(policy.get("min_silence_ms", 0)))
+                eot_silence_ms = max(0, int(policy.get("eot_silence_ms", 0)))
+                client_ok = client_silence_ms >= min_silence_ms
+                server_ok = (not policy.get("enable", True)) or server_silence_ms >= min_silence_ms
+                silence_ok = client_ok and server_ok
+                vendor_ok = vendor_idle_ms >= eot_silence_ms
+                denom_client = max(1, min_silence_ms)
+                client_norm = _clamp(client_silence_ms / denom_client, 0.0, 1.0)
+                if policy.get("enable", True):
+                    server_norm = _clamp(server_silence_ms / denom_client, 0.0, 1.0)
+                    combined_norm = min(client_norm, server_norm)
+                else:
+                    combined_norm = client_norm
+                denom_vendor = max(1, eot_silence_ms)
+                vendor_norm = _clamp(vendor_idle_ms / denom_vendor, 0.0, 1.0)
+                fuse_mode = str(policy.get("fuse_mode", "and")).strip().lower()
+                if fuse_mode not in {"and", "or", "weighted"}:
+                    fuse_mode = "and"
+                should_close = False
+                if fuse_mode == "and":
+                    should_close = silence_ok and vendor_ok
+                elif fuse_mode == "or":
+                    should_close = silence_ok or vendor_ok
+                elif fuse_mode == "weighted":
+                    weight_client = float(policy.get("weight_client", 0.5) or 0.0)
+                    weight_vendor = float(policy.get("weight_vendor", 0.5) or 0.0)
+                    score = (weight_client * combined_norm) + (weight_vendor * vendor_norm)
+                    should_close = score >= 1.0 and (combined_norm > 0.0 or vendor_norm > 0.0)
+                if not should_close:
+                    continue
+                reason = "silence_final"
+                if silence_ok and not vendor_ok:
+                    reason = "silence_only"
+                elif not silence_ok and vendor_ok:
+                    reason = "policy_close"
+                await self._handle_vad_eot(
+                    ctx,
+                    reason,
+                    fuse_mode,
+                    client_silence_ms,
+                    vendor_idle_ms,
+                    server_silence_ms,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - defensive logging
+            _log.exception("evt=server_vad_fusion_loop_error sid=%s", ctx.sid)
+        finally:
+            ctx.vad_fusion_task = None
+
+    def _compute_client_silence_ms(self, ctx: AdapterContext, now_ms: int) -> int:
+        if ctx.client_vad_speech:
+            return 0
+        if ctx.client_vad_since_ms is not None and not ctx.client_vad_speech:
+            return max(0, now_ms - int(ctx.client_vad_since_ms))
+        if ctx.client_vad_last_speech_end_ms is not None:
+            return max(0, now_ms - int(ctx.client_vad_last_speech_end_ms))
+        if ctx.session.last_pcm_ms is not None:
+            return max(0, now_ms - int(ctx.session.last_pcm_ms))
+        return 0
+
+    def _compute_server_silence_ms(
+        self,
+        ctx: AdapterContext,
+        now_ms: int,
+        policy: Mapping[str, Any],
+        client_silence_ms: int,
+    ) -> int:
+        if not policy.get("enable", True):
+            if ctx.session.server_vad_since_ms is None:
+                ctx.session.server_vad_since_ms = float(now_ms)
+            return client_silence_ms
+        if ctx.session.server_vad_speech:
+            return 0
+        if ctx.session.server_vad_since_ms is not None:
+            return max(0, now_ms - int(ctx.session.server_vad_since_ms))
+        return client_silence_ms
+
+    def _compute_vendor_idle_ms(self, ctx: AdapterContext, now_ms: int) -> int:
+        last_vendor = ctx.session.last_vendor_activity_ms
+        if last_vendor is None:
+            last_vendor = ctx.session.last_pcm_ms
+        if last_vendor is None:
+            return 0
+        return max(0, now_ms - int(last_vendor))
+
+    async def _handle_vad_eot(
+        self,
+        ctx: AdapterContext,
+        reason: str,
+        fuse_mode: str,
+        client_silence_ms: int,
+        vendor_idle_ms: int,
+        server_silence_ms: int,
+    ) -> None:
+        if not ctx.session.eot_armed:
+            return
+        ctx.session.eot_armed = False
+        _log.info(
+            "evt=vad_eot sid=%s reason=%s fuse_mode=%s client_silence_ms=%d vendor_idle_ms=%d server_silence_ms=%d",
+            ctx.sid,
+            reason,
+            fuse_mode,
+            client_silence_ms,
+            vendor_idle_ms,
+            server_silence_ms,
+        )
+        meta = {
+            "reason": reason,
+            "fuse_mode": fuse_mode,
+            "client_silence_ms": int(client_silence_ms),
+            "vendor_idle_ms": int(vendor_idle_ms),
+            "server_silence_ms": int(server_silence_ms),
+        }
+        await self._publish("asr.turn_ended", ctx.sid, meta)
+        send = ctx.ws_send
+        if send is not None:
+            try:
+                await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
+            except Exception:  # pragma: no cover - defensive logging
+                _log.warning("evt=vad_eot_send_failed sid=%s", ctx.sid, exc_info=True)
+        await self._close_asr(ctx, reason="eot")
+
+    def _handle_client_telemetry(
+        self, ctx: AdapterContext, event_name: str, meta: Mapping[str, Any]
+    ) -> None:
+        now_ms = self._now_ms()
+        if event_name == "client.vad.speech_start":
+            self._set_client_vad_state(ctx, True, now_ms)
+            ctx.client_vad_last_event_ms = now_ms
+            conf = self._coerce_float(meta.get("conf"), ctx.client_vad_confidence)
+            if conf is not None:
+                ctx.client_vad_confidence = _clamp(conf, 0.0, 1.0)
+            energy = self._coerce_float(meta.get("energyDb"), ctx.client_vad_energy_db)
+            if energy is not None:
+                ctx.client_vad_energy_db = energy
+            noise = self._coerce_float(meta.get("noiseDb"), ctx.client_vad_noise_db)
+            if noise is not None:
+                ctx.client_vad_noise_db = noise
+        elif event_name == "client.vad.speech_end":
+            self._set_client_vad_state(ctx, False, now_ms)
+            ctx.client_vad_last_event_ms = now_ms
+            ctx.client_vad_last_speech_end_ms = now_ms
+        elif event_name == "client.vad.state":
+            speech_value = meta.get("speech")
+            if isinstance(speech_value, bool):
+                self._set_client_vad_state(ctx, speech_value, now_ms)
+            ctx.client_vad_last_event_ms = now_ms
+            conf = self._coerce_float(meta.get("conf"), ctx.client_vad_confidence)
+            if conf is not None:
+                ctx.client_vad_confidence = _clamp(conf, 0.0, 1.0)
+            energy = self._coerce_float(meta.get("energyDb"), ctx.client_vad_energy_db)
+            if energy is not None:
+                ctx.client_vad_energy_db = energy
+            noise = self._coerce_float(meta.get("noiseDb"), ctx.client_vad_noise_db)
+            if noise is not None:
+                ctx.client_vad_noise_db = noise
+        elif event_name in {"client.vad.gate", "client.vad.gate_heartbeat"}:
+            ctx.client_vad_last_event_ms = now_ms
+        elif event_name in {"client.appstate.delta", "client.appstate.heartbeat"}:
+            speech_value = meta.get("vadSpeech")
+            if isinstance(speech_value, bool):
+                self._set_client_vad_state(ctx, speech_value, now_ms)
+            ctx.client_vad_last_event_ms = now_ms
+            conf = self._coerce_float(meta.get("vadConfidence"), ctx.client_vad_confidence)
+            if conf is not None:
+                ctx.client_vad_confidence = _clamp(conf, 0.0, 1.0)
+            energy = self._coerce_float(meta.get("vadEnergyDb"), ctx.client_vad_energy_db)
+            if energy is not None:
+                ctx.client_vad_energy_db = energy
+            noise = self._coerce_float(meta.get("vadNoiseDb"), ctx.client_vad_noise_db)
+            if noise is not None:
+                ctx.client_vad_noise_db = noise
+        else:
+            ctx.client_vad_last_event_ms = now_ms
+
+    def _emit_server_vendor_activity(
+        self, ctx: AdapterContext, event_type: str, event: Mapping[str, Any], now_ms: int
+    ) -> None:
+        meta: Dict[str, Any] = {
+            "kind": "partial" if event_type == EVT_ASR_PARTIAL else "final",
+            "ts_ms": now_ms,
+        }
+        text_value = event.get("text")
+        if isinstance(text_value, str):
+            meta["text_length"] = len(text_value)
+        req_id = event.get("req_id")
+        if isinstance(req_id, str) and req_id:
+            meta["req_id"] = req_id
+        self._publish_server_vad_event(ctx, "server.vendor_activity", meta)
 
     @staticmethod
     def _set_pending_for_key(ctx: AdapterContext, key: Optional[str]) -> None:
@@ -1558,6 +2017,8 @@ class ChatV2Adapter:
                 )
                 return self._HandleResult(True)
 
+            if isinstance(event_name, str):
+                self._handle_client_telemetry(ctx, event_name, telemetry_meta_dict)
             bus.publish(
                 {
                     "schema_version": "1",
@@ -1911,6 +2372,8 @@ class ChatV2Adapter:
             "ws": {"dir": "in", "size": byte_count},
         }
         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+        now_ms = self._now_ms()
+        self._maybe_update_server_vad(ctx, chunk, now_ms)
         if ctx.audio_chunks_recv == 1:
             self._emit_session_step(
                 ctx.sid,
@@ -2321,6 +2784,13 @@ class ChatV2Adapter:
             if event.get("sid") != ctx.sid or ctx.outbox is None:
                 return
 
+            event_type = event.get("type")
+            if event_type in {EVT_ASR_PARTIAL, EVT_ASR_FINAL}:
+                now_ms = self._now_ms()
+                ctx.session.last_vendor_activity_ms = float(now_ms)
+                if isinstance(event, Mapping):
+                    self._emit_server_vendor_activity(ctx, event_type, event, now_ms)
+
             def _on_loop() -> None:
                 frame = self._coerce_asr_frame(ctx, event)
                 if frame is None:
@@ -2366,6 +2836,9 @@ class ChatV2Adapter:
                 ctx.asr_ready = False
                 ctx.awaiting_asr_ready = False
                 ctx.client_capture_armed = False
+                ctx.session.eot_armed = False
+                ctx.session.server_vad_speech = False
+                ctx.session.server_vad_since_ms = None
                 ctx.pending_start_listening = None
                 ctx.pending_start_listening_sent = False
                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
@@ -2847,6 +3320,30 @@ class ChatV2Adapter:
             ctx.asr_recovering_reason = None
             ctx.asr_recovering_audio_logged = False
             ctx.client_capture_armed = True
+            now_ms = self._now_ms()
+            ctx.session.eot_armed = True
+            ctx.session.last_pcm_ms = float(now_ms)
+            ctx.session.last_vendor_activity_ms = float(now_ms)
+            ctx.session.server_vad_speech = False
+            ctx.session.server_vad_since_ms = float(now_ms)
+            ctx.server_vad_candidate_start_ms = None
+            ctx.server_vad_silence_candidate_ms = None
+            ctx.server_vad_energy_db = _DB_FLOOR
+            ctx.client_vad_speech = False
+            ctx.client_vad_since_ms = now_ms
+            policy = self._resolve_server_vad_policy(ctx)
+            if policy.get("enable", True):
+                threshold = float(
+                    policy.get("energy_threshold_dbfs", _SERVER_VAD_DEFAULT_POLICY["energy_threshold_dbfs"])
+                )
+                state_meta = {
+                    "speech": False,
+                    "energy_db": _DB_FLOOR,
+                    "threshold_db": threshold,
+                    "since_ms": now_ms,
+                }
+                self._publish_server_vad_event(ctx, "server.vad.state", state_meta)
+            self._ensure_vad_fusion_task(ctx)
 
             frame: Dict[str, Any] = {"type": "asr.ready"}
             vendor = event.get("vendor")
@@ -3341,6 +3838,13 @@ class ChatV2Adapter:
 
         ctx.partial_coalescer.cancel()
 
+        fusion_task = ctx.vad_fusion_task
+        ctx.vad_fusion_task = None
+        if fusion_task is not None:
+            fusion_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await fusion_task
+
         pending_handoff = ctx.listen_handoff_task
         ctx.listen_handoff_task = None
         ctx.listen_handoff_task_key = None
@@ -3598,6 +4102,9 @@ class ChatV2Adapter:
         ctx.asr_ready = False
         ctx.awaiting_asr_ready = False
         ctx.client_capture_armed = False
+        ctx.session.eot_armed = False
+        ctx.session.server_vad_speech = False
+        ctx.session.server_vad_since_ms = None
         ctx.pending_start_listening = None
         ctx.pending_start_listening_sent = False
         ctx.asr_recovering_until = 0.0
@@ -4285,6 +4792,9 @@ class ChatV2Adapter:
         ctx.asr_ready = False
         if reason:
             ctx.asr_close_reason = reason
+        ctx.session.eot_armed = False
+        ctx.session.server_vad_speech = False
+        ctx.session.server_vad_since_ms = None
 
     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
