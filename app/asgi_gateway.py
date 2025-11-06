@@ -34,11 +34,9 @@ from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
 from app.middlewares import apply_cache_headers
 from app.versioning import get_build_id, inject_static_version
-from app.voice_v2.asr_runtime import ASRRuntime
 from app.voice_v2.engine import EngineV2
 from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
-from app.services.streaming_asr.speechmatics_client import SpeechmaticsClient
 
 
 configure_logging()
@@ -855,24 +853,6 @@ def _get_adapter() -> ChatV2Adapter:
         tts_runtime = TTSRuntime(engine=engine)
         _adapter = ChatV2Adapter(engine=engine, exporter=exporter)
         _adapter.tts_runtime = tts_runtime
-        runtime_vendor: Optional[str] = None
-        asr_runtime: Optional[ASRRuntime] = None
-
-        sm_enabled = bool(getattr(config, "ASR_SPEECHMATICS_ENABLED", False))
-        sm_key = getattr(config, "SPEECHMATICS_API_KEY", None)
-        sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
-        if sm_enabled and sm_key and sm_url:
-            sm_client = SpeechmaticsClient(sm_key, sm_url, telemetry_bus, _log)
-            asr_runtime = ASRRuntime(
-                engine=engine,
-                client=sm_client,
-                telemetry_bus=telemetry_bus,
-            )
-            runtime_vendor = "speechmatics"
-
-        if asr_runtime is not None:
-            _adapter.asr_runtime = asr_runtime
-            _adapter._asr_runtime_vendor = runtime_vendor
     return _adapter
 
 
