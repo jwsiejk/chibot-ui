@@ -4,7 +4,7 @@ AskChip is a **voice-driven, real-time conversational platform** that hosts virt
 
 ## v2 Scope (locked)
 - **Single WS endpoint:** `/ws/v2/chat` (subprotocol **`chat.v2`**). No v1 path.
-- **ASR:** Deepgram (primary), Speechmatics (secondary). *Whisper is not used.*
+- **ASR:** Speechmatics PCM16 pipeline only.
 - **Barge-in:** **Automatic only** (no PTT). Policy toggle: `barge_in_enabled`.
 - **UI:** waveform + state badges (Ready / Listening / Thinking / Responding). No avatar/visemes yet.
 - **Policy frames ALWAYS include:** `mode`, `allow_auto_vad`, `barge_in_enabled`, `auto_commit_when_ready`, and **`telemetry`** block.

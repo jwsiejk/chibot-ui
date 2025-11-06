@@ -40,25 +40,6 @@ class RecordingEngine:
         self.open_sid = sid
 
 
-class _StubAsrRuntime:
-    """ASR runtime stub that records prearm invocations."""
-
-    def __init__(self) -> None:
-        self.prearm_calls: list[str] = []
-
-    def on_ws_open(self, sid: str) -> None:  # pragma: no cover - noop for tests
-        return
-
-    def on_ws_close(self, sid: str) -> None:  # pragma: no cover - noop for tests
-        return
-
-    def on_ws_audio(self, sid: str, chunk: bytes) -> None:  # pragma: no cover - noop
-        return
-
-    def prearm(self, sid: str, *, keep_warm_ms: int | None = None) -> None:
-        self.prearm_calls.append(sid)
-
-
 class OutboundHarness:
     """Helper for driving the adapter within an asyncio test."""
 
@@ -391,8 +372,6 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     async def _test_start_listening_handoff(self) -> None:
         engine = RecordingEngine()
         adapter = ChatV2Adapter(engine=engine)
-        runtime = _StubAsrRuntime()
-        adapter.asr_runtime = runtime
         harness = OutboundHarness(adapter, engine)
         await harness.start()
         hud_events: list[dict] = []
@@ -411,9 +390,6 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
             tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
-
-            await harness.wait_for(lambda: bool(runtime.prearm_calls))
-            self.assertEqual(runtime.prearm_calls, [sid])
 
             bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
 
@@ -503,8 +479,6 @@ class TestAdapterOutboundBridge(unittest.TestCase):
     async def _test_listen_handoff_waits_for_mask_off(self) -> None:
         engine = RecordingEngine()
         adapter = ChatV2Adapter(engine=engine)
-        runtime = _StubAsrRuntime()
-        adapter.asr_runtime = runtime
         harness = OutboundHarness(adapter, engine)
         await harness.start()
 
@@ -532,9 +506,6 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
             tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
-
-            await harness.wait_for(lambda: bool(runtime.prearm_calls))
-            self.assertEqual(runtime.prearm_calls, [sid])
 
             bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
 
@@ -696,8 +667,6 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         with mock.patch("app.ws.adapter._MIC_OPEN_TIMEOUT_SECONDS", 0.05):
             engine = RecordingEngine()
             adapter = ChatV2Adapter(engine=engine)
-            runtime = _StubAsrRuntime()
-            adapter.asr_runtime = runtime
             harness = OutboundHarness(adapter, engine)
             await harness.start()
 
@@ -716,7 +685,6 @@ class TestAdapterOutboundBridge(unittest.TestCase):
                 tts_end_payload = {"type": "tts.end", "utt_id": "utt-1"}
                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
 
-                await harness.wait_for(lambda: bool(runtime.prearm_calls))
                 bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
                 bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
 

@@ -25,7 +25,6 @@ _RUNTIME_CATEGORY_LOGGERS: tuple[str, ...] = (
     "app.auth.http",
     "app.ws.adapter",
     "app.voice_v2.tts_runtime",
-    "app.voice_v2.asr_runtime",
     "app.voice_v2.tts_provider",
     "app.telemetry.bus",
     "app.admin.flow",

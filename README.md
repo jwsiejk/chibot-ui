@@ -6,8 +6,8 @@ This project contains the web client for the AskChip experience.
 
 ```
 /**
- * POLICY: The PCM s16le capture pipeline lives entirely in app/static/js/audio_recorder.js.
- * AudioRecorder is the sole owner of MediaRecorder, the microphone stream, and the send-gate.
+ * POLICY: The PCM s16le capture pipeline lives entirely inside the websocket client.
+ * Legacy browser recording primitives and send-gate helpers have been removed.
  * No manual or VAD-based barge-in; wake-word only.
  */
 ```

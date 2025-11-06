@@ -1,6 +1,5 @@
+// CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
 import { WakeWord } from "./wake_word.js";
-
-/** POLICY: MediaRecorder only in audio_recorder.js; no PTT; VAD-driven barge-in. */
 (() => {
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
