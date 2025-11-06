@@ -1,114 +1,111 @@
-diff --git a/app/telemetry/exporter.py b/app/telemetry/exporter.py
-index f621bb25887e9d0b037bfa179fecacc609abe57b..8f97f5c215ba8a1f67f93e5089c13c404079090d 100644
---- a/app/telemetry/exporter.py
-+++ b/app/telemetry/exporter.py
-@@ -16,51 +16,51 @@ from app.voice_v2 import (
-     EVT_ASR_FINAL,
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_TTS_END,
-     EVT_TTS_START,
- )
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index ebea2f04f61dd82973ee95ebced60b6deb76d65d..71da3f48e529193d2e93b24d2189db967dd76c2a 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -586,50 +586,53 @@
+     }
+     await loadScript("audio/vad_client.js");
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.PolicyBadges) {
+       await loadScript("policy_badges.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
  
+   async function init() {
+     await bootstrapClientConfig();
+     await ensureRuntimeModules();
  
- EVT_ASR_OPEN_ATTEMPT = "asr.open_attempt"
- EVT_ASR_OPEN_FAILED = "asr.open_failed"
- EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
- EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     const audioRecorder = window.AudioRecorder || null;
  
- _ASR_LOG_TYPES = {
-     EVT_ASR_OPEN,
-     EVT_ASR_PARTIAL,
-     EVT_ASR_FINAL,
-     EVT_ASR_CLOSED,
-     EVT_ASR_OPEN_ATTEMPT,
-     EVT_ASR_OPEN_FAILED,
- }
++    const deferredClientLogs = [];
++    let deferredClientLogFlushTimer = null;
++
+     function installHubInterface() {
+       const hub = AppState && AppState.hub;
+       if (!hub || typeof hub._install !== "function") {
+         return;
+       }
  
- _WS_LOG_TYPES = {
-     EVT_WS_JSON_SEND_SUMMARY,
-     EVT_WS_JSON_RECV_SUMMARY,
--    EVT_WS_AUDIO_FIRST_CHUNK,
-+    WS_AUDIO_FIRST_CHUNK,
- }
+       const sendThroughPipe = (label, detail) => {
+         if (!sendClientLog(label, detail)) {
+           enqueueDeferredClientLog(label, detail);
+         }
+       };
  
- _TTS_LOG_TYPES = {EVT_TTS_START, EVT_TTS_END}
+       const buildMirrorDetail = (detail, stageLabel) => {
+         let payload;
+         if (detail && typeof detail === "object") {
+           payload = cloneDiagDetail(detail);
+           if (!payload || typeof payload !== "object") {
+             payload = { value: payload };
+           }
+         } else if (detail === undefined) {
+           payload = {};
+         } else if (typeof detail === "string") {
+           payload = { message: detail };
+         } else {
+           payload = { value: detail };
+@@ -1133,52 +1136,50 @@
  
+     function getCaptureTimesliceMs() {
+       const capture = getCapturePolicy();
+       if (!capture) {
+         return null;
+       }
+       const raw = capture.timeslice_ms;
+       const numeric = Number(raw);
+       if (Number.isFinite(numeric) && numeric > 0) {
+         return Math.round(numeric);
+       }
+       return null;
+     }
  
- def _now_ms() -> int:
-     """Return the current epoch timestamp in milliseconds."""
+     const micSessionTelemetry = {
+       micOpenLogged: false,
+       recBadgeLogged: false,
+     };
+     let micPermissionTelemetryLogged = false;
  
-     return int(time.time() * 1000)
+     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
+     const CLIENT_HUD_STATE_EVENT = 'EVT_HUD_STATE';
+     let pendingClientReady = null;
+     let clientReadyTimerId = null;
+     let clientReadyStats = null;
+-    const deferredClientLogs = [];
+-    let deferredClientLogFlushTimer = null;
  
+     function scheduleDeferredClientLogFlush(delayMs = CLIENT_LOG_RATE_LIMIT_WINDOW_MS) {
+       if (typeof window === 'undefined') {
+         return;
+       }
+       if (deferredClientLogFlushTimer) {
+         return;
+       }
+       const delay = Number.isFinite(delayMs) && delayMs > 0
+         ? delayMs
+         : CLIENT_LOG_RATE_LIMIT_WINDOW_MS;
+       deferredClientLogFlushTimer = window.setTimeout(() => {
+         deferredClientLogFlushTimer = null;
+         try {
+           flushDeferredClientLogs();
+         } catch (err) {
+           try {
+             console.warn('deferred client log flush failed', err);
+           } catch (_) {}
+         }
+       }, delay);
+     }
  
- @dataclass
- class _SessionStats:
-     """In-memory counters tracked for each active session."""
- 
-     directory: Path
-     events_path: Path
-     manifest_path: Path
-     logs_path: Path
-     logs_asr_path: Path
-     logs_ws_path: Path
-     logs_tts_path: Path
-     events_written: int = 0
-     by_type: Dict[str, int] = field(default_factory=dict)
-     started_ms: Optional[int] = None
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 815f4b9dc7f308b016cbd7b8c24de83168cde9c5..70b3dba7a290136f15c306a5beda90af5269131d 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -2157,51 +2157,51 @@ class ChatV2Adapter:
-             buffer_bytes = 0
-             if ctx.audio_buffer:
-                 buffer_bytes = sum(
-                     len(chunk)
-                     for chunk in ctx.audio_buffer.values()
-                     if isinstance(chunk, (bytes, bytearray, memoryview))
-                 )
-             ready_delta_value = ready_delta if ready_delta is not None else -1
-             _log.info(
-                 "evt=ws_audio_ingress sid=%s first_chunk=1 bytes=%s first_chunk_ms_since_mic_armed=%s ms_since_asr_ready_bundle=%s buffer_bytes=%s",
-                 ctx.sid,
-                 pkt_len,
-                 delta,
-                 ready_delta_value,
-                 buffer_bytes,
-             )
-             delta_ms = ready_delta_value
-             _log.info(
-                 "evt=ws_audio_first_chunk sid=%s bytes=%d ms_since_asr_ready_bundle=%d",
-                 ctx.sid,
-                 pkt_len,
-                 delta_ms,
-             )
-             bus.publish(
-                 {
--                    "type": EVT_WS_AUDIO_FIRST_CHUNK,
-+                    "type": WS_AUDIO_FIRST_CHUNK,
-                     "sid": ctx.sid,
-                     "who": "server",
-                     "source": "ws.adapter",
-                     "meta": {
-                         "bytes": pkt_len,
-                         "ms_since_ready": delta_ms,
-                     },
-                 }
-             )
-         elif ctx.ingress_packets % 50 == 0:
-             _log.info(
-                 "evt=ws_audio_ingress sid=%s packets=%s bytes=%s",
-                 ctx.sid,
-                 ctx.ingress_packets,
-                 ctx.ingress_bytes,
-             )
- 
-         if (
-             ctx.asr_vendor == "speechmatics"
-             and ctx.audio_chunks_recv == 0
-             and data.startswith(b"\x1A\x45\xDF\xA3")
-         ):
-             meta = {
-                 "byte_count": byte_count,
-                 "error": "unexpected_container",
+     function startClientReadyTracking(detail) {
+       clientReadyStats = {

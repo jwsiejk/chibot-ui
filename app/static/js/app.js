@@ -608,6 +608,9 @@
     const WSClient = window.WSClient;
     const audioRecorder = window.AudioRecorder || null;
 
+    const deferredClientLogs = [];
+    let deferredClientLogFlushTimer = null;
+
     function installHubInterface() {
       const hub = AppState && AppState.hub;
       if (!hub || typeof hub._install !== "function") {
@@ -1155,8 +1158,6 @@
     let pendingClientReady = null;
     let clientReadyTimerId = null;
     let clientReadyStats = null;
-    const deferredClientLogs = [];
-    let deferredClientLogFlushTimer = null;
 
     function scheduleDeferredClientLogFlush(delayMs = CLIENT_LOG_RATE_LIMIT_WINDOW_MS) {
       if (typeof window === 'undefined') {
