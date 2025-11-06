@@ -1,4 +1,0 @@
-{"type":"tts.start","sid":"164cfc3bd5584920b00e263fff1a4bda","meta":{"tts":{"utt_id":"utt-00001","post_hold_ms":200},"voice_id":"alloy-en-US-001","locale":"en-US"},"ts_ms":1762402539836,"who":"server","source":"voice_engine","level":"debug","schema_version":"1"}
-{"type":"tts.start","sid":"164cfc3bd5584920b00e263fff1a4bda","who":"server","source":"tts","meta":{"provider":"elevenlabs","voice":"MIAWBMadvHL0ek6oJEXD","chars":45},"schema_version":"1","ts_ms":1762402539837,"level":"debug"}
-{"type":"tts.end","sid":"164cfc3bd5584920b00e263fff1a4bda","meta":{"tts":{"utt_id":"utt-00001"}},"ts_ms":1762402540247,"who":"server","source":"voice_engine","level":"debug","schema_version":"1","total_bytes":90652,"utt_id":"utt-00001"}
-{"type":"tts.end","sid":"164cfc3bd5584920b00e263fff1a4bda","who":"server","source":"tts","meta":{"ms_elapsed":409,"provider":"elevenlabs"},"schema_version":"1","ts_ms":1762402540249,"level":"debug"}

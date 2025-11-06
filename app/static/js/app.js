@@ -560,9 +560,6 @@
     if (!window.AudioPlayer) {
       await loadScript("audio_player.js");
     }
-    if (!window.AudioRecorder) {
-      await loadScript("audio_recorder.js");
-    }
     if (!window.WSClient) {
       await loadScript("ws_client.js");
     }

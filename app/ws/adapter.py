@@ -1,3 +1,4 @@
+# // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
 """chat.v2 WebSocket adapter for AskChip."""
 from __future__ import annotations
 
@@ -8,7 +9,10 @@ import logging
 import math
 import threading
 import time
-import sys, platform, socket, os, inspect
+import inspect
+import platform
+import socket
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
 
@@ -20,10 +24,6 @@ from app.logging_setup import current_sid
 from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.exporter import FileExporter
-from app.services.streaming_asr.speechmatics_client import (
-    OfflineSpeechmaticsClient,
-    SpeechmaticsClient,
-)
 from app.voice_v2 import (
     EVT_ASR_FINAL,
     EVT_ASR_OPEN,
@@ -358,6 +358,7 @@ class AdapterContext:
     tts_mask_phase: str = "off"
     mask_subscription_token: Optional[str] = None
     pending_start_listening: Optional[Dict[str, Any]] = None
+    pending_start_listening_sent: bool = False
     tts_end_subscription_token: Optional[str] = None
     turn_state_subscription_token: Optional[str] = None
     hud_state: Optional[str] = None
@@ -402,9 +403,6 @@ class ChatV2Adapter:
             0,
             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
         )
-        self.tts_runtime = None
-        self.asr_runtime = None
-        self._asr_runtime_vendor: Optional[str] = None
         self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
 
     @staticmethod
@@ -478,6 +476,12 @@ class ChatV2Adapter:
                 pass
             return
         ctx.await_user_cue_emitted = True
+        _log.info(
+            "evt=await_user_emit sid=%s req_id=%s start_on_ready=%s",
+            sid,
+            req_value or "",
+            start_on_ready,
+        )
 
     def _publish_pending_start_listening(
         self, ctx: AdapterContext, telemetry_bus: Any
@@ -487,6 +491,10 @@ class ChatV2Adapter:
             return
         frame = dict(payload)
         ctx.pending_start_listening = None
+        was_sent = getattr(ctx, "pending_start_listening_sent", False)
+        ctx.pending_start_listening_sent = False
+        if was_sent:
+            return
         outbox = ctx.outbox
         if outbox is not None:
             try:
@@ -630,13 +638,9 @@ class ChatV2Adapter:
         try:
             adapter_file = __file__
             engine_file = None
-            asr_file = None
             if self.engine is not None:
                 eng_mod = sys.modules.get(self.engine.__class__.__module__)
                 engine_file = getattr(eng_mod, "__file__", None)
-            if getattr(self, "asr_runtime", None) is not None:
-                asr_mod = sys.modules.get(self.asr_runtime.__class__.__module__)
-                asr_file = getattr(asr_mod, "__file__", None)
 
             build_id = os.getenv("BUILD_ID", "") or os.getenv("SOURCE_VERSION", "") or "unknown"
             host = socket.gethostname()
@@ -659,12 +663,11 @@ class ChatV2Adapter:
                 "subprotocol_selected": selected,
                 "adapter_file": adapter_file,
                 "engine_file": engine_file,
-                "asr_file": asr_file,
             }
 
             await self._send_json(send, sid, banner)
             _log.info(
-                "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s asr=%s",
+                "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s",
                 build_id,
                 host,
                 pid,
@@ -672,7 +675,6 @@ class ChatV2Adapter:
                 selected,
                 adapter_file,
                 engine_file,
-                asr_file,
             )
             self._emit_session_step(
                 sid,
@@ -699,7 +701,7 @@ class ChatV2Adapter:
         }
         info_frame["meta"] = {"sid": sid}
         policy_snapshot = self._policy_snapshot()
-        allowed_asr_vendors = self._allowed_asr_vendors()
+        allowed_asr_vendors = ["speechmatics"]
         snapshot_mapping: Mapping[str, Any] | None
         if isinstance(policy_snapshot, Mapping):
             snapshot_mapping = policy_snapshot
@@ -714,12 +716,8 @@ class ChatV2Adapter:
             is_admin=is_admin,
         )
         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-        selected_vendor, selection_reason = self._select_asr_vendor(
-            provisional_ctx,
-            snapshot_mapping,
-            allowed_asr_vendors,
-            log_selection=False,
-        )
+        selected_vendor = "speechmatics"
+        selection_reason = "pcm16_only"
         if policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
             info_frame["policy"] = policy_snapshot
@@ -745,7 +743,7 @@ class ChatV2Adapter:
         snapshot_mapping = (
             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
         )
-        ctx.asr_vendor = selected_vendor or "speechmatics"
+        ctx.asr_vendor = selected_vendor
         allowed_display = ",".join(ctx.allowed_asr_vendors)
         _log.info(
             "asr_vendor_selected primary=%s allowed=%s reason=%s",
@@ -778,86 +776,9 @@ class ChatV2Adapter:
                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
                 )
 
-            had_active_contexts = bool(self._contexts)
             self._contexts[ctx.sid] = ctx
-            current_runtime = getattr(self, "asr_runtime", None)
-            current_vendor = getattr(self, "_asr_runtime_vendor", None)
-            if (
-                current_runtime is not None
-                and isinstance(ctx.asr_vendor, str)
-                and ctx.asr_vendor
-                and current_vendor
-                and ctx.asr_vendor != current_vendor
-                and not had_active_contexts
-            ):
-                self.asr_runtime = None
-                current_runtime = None
-                self._asr_runtime_vendor = None
-
-            if getattr(self, "asr_runtime", None) is None:
-                try:
-                    from app.voice_v2.asr_runtime import ASRRuntime
-
-                    engine = getattr(self, "engine", None)
-                    vendor = ctx.asr_vendor or "speechmatics"
-                    client = None
-                    if engine is not None and vendor:
-                        if vendor == "speechmatics":
-                            sm_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", False)
-                            sm_key = getattr(config, "SPEECHMATICS_API_KEY", "")
-                            sm_url = getattr(config, "SPEECHMATICS_REALTIME_URL", "")
-                            if sm_enabled and sm_key and sm_url:
-                                client = SpeechmaticsClient(sm_key, sm_url, bus, _log)
-                            elif sm_enabled:
-                                client = OfflineSpeechmaticsClient(bus, _log)
-                            else:
-                                _log.warning(
-                                    "evt=ws_asr_runtime_unavailable sid=%s vendor=%s has_engine=%s has_api_key=%s has_url=%s",
-                                    ctx.sid,
-                                    vendor,
-                                    bool(engine),
-                                    bool(sm_key),
-                                    bool(sm_url),
-                                )
-                        else:
-                            _log.warning(
-                                "evt=ws_asr_runtime_unsupported_vendor sid=%s vendor=%s",
-                                ctx.sid,
-                                vendor,
-                            )
-
-                    if engine is not None and client is not None:
-                        self.asr_runtime = ASRRuntime(
-                            engine=engine,
-                            client=client,
-                            telemetry_bus=bus,
-                        )
-                        self._asr_runtime_vendor = vendor or None
-                    elif engine is None:
-                        _log.warning(
-                            "evt=ws_asr_runtime_unavailable sid=%s has_engine=%s vendor=%s",
-                            ctx.sid,
-                            bool(engine),
-                            vendor or "",
-                        )
-                except Exception:  # pragma: no cover - defensive logging
-                    _log.exception("evt=ws_asr_runtime_attach_failed sid=%s", ctx.sid)
-
-            asr_runtime = getattr(self, "asr_runtime", None)
-            if asr_runtime is not None and hasattr(asr_runtime, "set_bus"):
-                try:
-                    asr_runtime.set_bus(bus)
-                except Exception:  # pragma: no cover - defensive logging
-                    _log.exception("evt=ws_asr_set_bus_failed sid=%s", ctx.sid)
 
             _log.info("evt=ws_open sid=%s", ctx.sid)
-            runtime_name = type(asr_runtime).__name__ if asr_runtime is not None else "None"
-            _log.info("evt=ws_open sid=%s asr_runtime=%s", ctx.sid, runtime_name)
-            if asr_runtime is not None:
-                try:
-                    asr_runtime.on_ws_open(ctx.sid)
-                except Exception:  # pragma: no cover - defensive logging
-                    _log.exception("evt=ws_asr_open_failed sid=%s", ctx.sid)
             self._start_asr_ready_tracker(ctx, bus)
             self._start_outbound_bridge(ctx, send)
             self._start_server_keepalive(ctx, send)
@@ -921,12 +842,6 @@ class ChatV2Adapter:
                 await self._stop_server_keepalive(ctx)
                 await self._cleanup_outbound(ctx)
                 self._stop_asr_ready_tracker(ctx)
-                asr_runtime = getattr(self, "asr_runtime", None)
-                if asr_runtime is not None:
-                    try:
-                        asr_runtime.on_ws_close(ctx.sid)
-                    except Exception:  # pragma: no cover - defensive logging
-                        _log.exception("evt=ws_asr_close_failed sid=%s", ctx.sid)
                 await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
                 if self.exporter:
                     self.exporter.end(ctx.sid, {"close_code": close_code})
@@ -1279,16 +1194,6 @@ class ChatV2Adapter:
 
         if frame_type == "asr.rearm.request":
             keep_warm_ms = self._policy_keep_warm_ms(ctx)
-            runtime = getattr(self, "asr_runtime", None)
-            if runtime is not None:
-                prearm = getattr(runtime, "prearm", None)
-                if callable(prearm):
-                    try:
-                        prearm(ctx.sid, keep_warm_ms=keep_warm_ms)
-                    except TypeError:
-                        prearm(ctx.sid)
-                    except Exception:  # pragma: no cover - defensive logging
-                        _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
             _log.info(
                 "evt=asr_prearm_requested sid=%s source=client keep_stream_warm_ms=%s",
                 ctx.sid,
@@ -1912,16 +1817,6 @@ class ChatV2Adapter:
                 reason,
             )
             return
-        asr_runtime = getattr(self, "asr_runtime", None)
-        if asr_runtime is not None:
-            profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
-            fmt = str(profile.get("format") or "") if profile else ""
-            codec = str(profile.get("codec") or "") if profile else ""
-            if fmt == "pcm" or codec.startswith("pcm"):
-                try:
-                    asr_runtime.on_ws_audio(ctx.sid, chunk)
-                except Exception:  # pragma: no cover - defensive logging
-                    _log.exception("evt=ws_asr_audio_failed sid=%s", ctx.sid)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -2272,6 +2167,7 @@ class ChatV2Adapter:
                 ctx.awaiting_asr_ready = False
                 ctx.client_capture_armed = False
                 ctx.pending_start_listening = None
+                ctx.pending_start_listening_sent = False
                 payload: Dict[str, Any] = {"type": "asr.unavailable", "sid": ctx.sid}
                 reason = event.get("reason")
                 if isinstance(reason, str) and reason:
@@ -2313,13 +2209,6 @@ class ChatV2Adapter:
 
         async def _perform_listen_handoff(req_id: str) -> None:
             key = self._turn_key(ctx, req_id)
-            runtime = getattr(self, "asr_runtime", None)
-            if runtime is None:
-                self._clear_pending_for_key(ctx, key)
-                return
-            open_if_needed = getattr(runtime, "open_if_needed", None)
-            should_wait_for_ready = callable(open_if_needed)
-
             if ctx.tts_mask_phase != "off":
                 self._set_after_mask_for_key(ctx, key)
                 self._clear_pending_for_key(ctx, key)
@@ -2329,34 +2218,6 @@ class ChatV2Adapter:
                     req_id,
                 )
                 return
-
-            if callable(open_if_needed):
-                try:
-                    await open_if_needed(ctx.sid, req_id=req_id)
-                except asyncio.CancelledError:
-                    self._clear_pending_for_key(ctx, key)
-                    raise
-                except Exception:  # pragma: no cover - defensive logging
-                    self._clear_pending_for_key(ctx, key)
-                    _log.exception("evt=listen_handoff_open_failed sid=%s req_id=%s", ctx.sid, req_id)
-                    return
-
-            if should_wait_for_ready:
-                deadline = time.monotonic() + 1.0
-                while not ctx.asr_ready and time.monotonic() < deadline:
-                    if ctx.tts_mask_phase != "off":
-                        self._set_after_mask_for_key(ctx, key)
-                        self._clear_pending_for_key(ctx, key)
-                        _log.info(
-                            "evt=listen_handoff_aborted reason=mask_on sid=%s req_id=%s",
-                            ctx.sid,
-                            req_id,
-                        )
-                        return
-                    await asyncio.sleep(0.01)
-
-                if not ctx.asr_ready:
-                    _log.warning("evt=listen_handoff_asr_not_ready sid=%s req_id=%s", ctx.sid, req_id)
 
             if ctx.outbox is None:
                 self._clear_pending_for_key(ctx, key)
@@ -2406,9 +2267,8 @@ class ChatV2Adapter:
             if session_policy:
                 start_payload["policy"] = session_policy
             ctx.pending_start_listening = dict(start_payload)
-            if ctx.asr_ready:
-                _enqueue(start_payload)
-                ctx.pending_start_listening = None
+            ctx.pending_start_listening_sent = True
+            _enqueue(start_payload)
 
             if key is not None:
                 ctx.listen_handoff_done.add(key)
@@ -2915,20 +2775,22 @@ class ChatV2Adapter:
             policy_payload = normalized.get("policy")
             if isinstance(policy_payload, dict):
                 ctx.policy_snapshot = policy_payload
-                ctx.allowed_asr_vendors = self._allowed_asr_vendors()
+                ctx.allowed_asr_vendors = ["speechmatics"]
                 snapshot_mapping = policy_payload
-                selected_vendor, _ = self._select_asr_vendor(
-                    ctx,
-                    snapshot_mapping,
-                    ctx.allowed_asr_vendors,
-                    log_selection=not ctx.asr_vendor_logged,
-                )
-                ctx.asr_vendor = selected_vendor or "speechmatics"
+                ctx.asr_vendor = "speechmatics"
+                if not ctx.asr_vendor_logged:
+                    allowed_display = ",".join(ctx.allowed_asr_vendors)
+                    _log.info(
+                        "asr_vendor_selected primary=%s allowed=%s reason=%s",
+                        ctx.asr_vendor,
+                        allowed_display,
+                        "pcm16_only",
+                    )
+                    ctx.asr_vendor_logged = True
                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
                     snapshot_mapping
                 )
-                if ctx.asr_vendor == "speechmatics":
-                    ctx.audio_pipeline_mode = "pcm16"
+                ctx.audio_pipeline_mode = "pcm16"
                 mode = ctx.audio_pipeline_mode or "pcm16"
                 ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
         return normalized
@@ -3513,24 +3375,10 @@ class ChatV2Adapter:
         if not ctx.await_user_expected or ctx.await_user_pending:
             return False
 
-        runtime = getattr(self, "asr_runtime", None)
-        if runtime is None:
-            return False
-
-        prearm = getattr(runtime, "prearm", None)
-        if not callable(prearm):
-            return False
-
         key = self._turn_key(ctx, req_id)
         self._set_pending_for_key(ctx, key)
         self._clear_after_mask_for_key(ctx, key)
-        try:
-            prearm(ctx.sid)
-        except Exception:  # pragma: no cover - defensive logging
-            self._clear_pending_for_key(ctx, key)
-            _log.exception("evt=ws_asr_prearm_failed sid=%s", ctx.sid)
-            return False
-
+        _log.info("evt=listen_handoff_pending sid=%s req_id=%s", ctx.sid, req_id)
         return True
 
     def _stop_asr_ready_tracker(self, ctx: AdapterContext) -> None:
@@ -3544,6 +3392,7 @@ class ChatV2Adapter:
         ctx.awaiting_asr_ready = False
         ctx.client_capture_armed = False
         ctx.pending_start_listening = None
+        ctx.pending_start_listening_sent = False
         ctx.asr_recovering_until = 0.0
         ctx.asr_recovering_reason = None
         ctx.asr_recovering_audio_logged = False
@@ -3889,111 +3738,6 @@ class ChatV2Adapter:
                 self._publish_session_step_meta(sid_for_publish, policy_meta)
         return stable
 
-    def _allowed_asr_vendors(self) -> List[str]:
-        allowed: List[str] = []
-        vendor = "speechmatics"
-        speechmatics_enabled = getattr(config, "ASR_SPEECHMATICS_ENABLED", True)
-        api_key = getattr(config, "SPEECHMATICS_API_KEY", None)
-        url = getattr(config, "SPEECHMATICS_REALTIME_URL", None)
-
-        if not speechmatics_enabled:
-            _log.warning(
-                "evt=asr_vendor_disabled sid=%s vendor=%s scope=config",
-                current_sid.get(None),
-                vendor,
-            )
-        if not api_key:
-            _log.warning(
-                "evt=asr_vendor_missing sid=%s vendor=%s missing=api_key",
-                current_sid.get(None),
-                vendor,
-            )
-        if not url:
-            _log.warning(
-                "evt=asr_vendor_missing sid=%s vendor=%s missing=url",
-                current_sid.get(None),
-                vendor,
-            )
-
-        allowed.append(vendor)
-        return allowed
-
-    @staticmethod
-    def _extract_policy_vendor(snapshot: Mapping[str, Any] | None) -> tuple[Optional[str], Optional[str]]:
-        if not isinstance(snapshot, Mapping):
-            return None, None
-        policy_block = snapshot.get("policy")
-        if not isinstance(policy_block, Mapping):
-            return None, None
-        asr_block = policy_block.get("asr")
-        if not isinstance(asr_block, Mapping):
-            return None, None
-        vendor_block = asr_block.get("vendor")
-        if not isinstance(vendor_block, Mapping):
-            return None, None
-        primary = vendor_block.get("primary")
-        secondary = vendor_block.get("secondary")
-        normalized_primary = (
-            primary.strip().lower()
-            if isinstance(primary, str) and primary.strip()
-            else None
-        )
-        normalized_secondary: Optional[str]
-        if secondary is None:
-            normalized_secondary = None
-        elif isinstance(secondary, str) and secondary.strip():
-            normalized_secondary = secondary.strip().lower()
-        else:
-            normalized_secondary = None
-        return normalized_primary, normalized_secondary
-
-    def _select_asr_vendor(
-        self,
-        ctx: AdapterContext,
-        snapshot: Mapping[str, Any] | None,
-        allowed: List[str],
-        *,
-        log_selection: bool = True,
-    ) -> tuple[Optional[str], str]:
-        primary_policy, secondary_policy = self._extract_policy_vendor(snapshot)
-        reason = "fallback"
-        selected: Optional[str] = None
-
-        if primary_policy:
-            if primary_policy in allowed:
-                selected = primary_policy
-                reason = "policy"
-            else:
-                _log.warning(
-                    "evt=policy_violation sid=%s vendor=%s scope=asr.vendor.primary",
-                    ctx.sid,
-                    primary_policy,
-                )
-        if selected is None and secondary_policy:
-            if secondary_policy in allowed:
-                selected = secondary_policy
-                reason = "policy"
-            else:
-                _log.warning(
-                    "evt=policy_violation sid=%s vendor=%s scope=asr.vendor.secondary",
-                    ctx.sid,
-                    secondary_policy,
-                )
-        if selected is None:
-            selected = "speechmatics"
-            reason = "forced"
-
-        if log_selection:
-            allowed_display = ",".join(allowed)
-            _log.info(
-                "asr_vendor_selected primary=%s allowed=%s reason=%s",
-                selected or "",
-                allowed_display,
-                reason,
-            )
-            ctx.asr_vendor_logged = True
-        return selected, reason
-
     @staticmethod
     def _resolve_audio_pipeline_mode(snapshot: Mapping[str, Any] | None) -> str:
         if isinstance(snapshot, Mapping):
@@ -4245,9 +3989,11 @@ class ChatV2Adapter:
         await self._send_json(send, ctx.sid, ready_frame)
         await self._send_json(send, ctx.sid, input_start)
         ctx.pending_start_listening = dict(start_payload)
+        ctx.pending_start_listening_sent = False
         if ctx.asr_ready:
             await self._send_json(send, ctx.sid, start_payload)
             ctx.pending_start_listening = None
+            ctx.pending_start_listening_sent = False
         _log.info(
             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
             ctx.sid,
