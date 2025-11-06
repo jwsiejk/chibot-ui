@@ -182,6 +182,9 @@ def test_open_stream_blocks_until_other_open_completes(monkeypatch: pytest.Monke
             state.closed = True
             state.ready_event.set()
             self._streams.pop(state.sid, None)
+            event = self._closing.pop(state.sid, None)
+            if event is not None:
+                event.set()
 
         client._sender_loop = MethodType(sender_stub, client)  # type: ignore[assignment]
         client._receiver_loop = MethodType(receiver_stub, client)  # type: ignore[assignment]
@@ -245,6 +248,97 @@ def test_open_stream_blocks_until_other_open_completes(monkeypatch: pytest.Monke
         await asyncio.wait_for(second_task, timeout=1.0)
 
         assert len(connect_calls) == 2
+
+    asyncio.run(run_test())
+
+
+def test_reopen_waits_for_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StubBus:
+        def publish(self, event: object) -> None:
+            pass
+
+    class StubWebSocket:
+        async def send(self, data: object) -> None:
+            return
+
+        async def close(self) -> None:
+            return
+
+        async def wait_closed(self) -> None:
+            return
+
+    async def run_test() -> None:
+        client = SpeechmaticsClient("key", "ws://example", StubBus(), logging.getLogger("test"))
+
+        async def sender_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
+            await state.ready_event.wait()
+
+        async def receiver_stub(self: SpeechmaticsClient, state: speechmatics_module._StreamState) -> None:  # type: ignore[attr-defined]
+            state.ready_event.set()
+
+        original_finalize_close = client._finalize_close
+
+        finalize_started = asyncio.Event()
+        allow_finalize = asyncio.Event()
+
+        async def finalize_stub(
+            self: SpeechmaticsClient,
+            state: speechmatics_module._StreamState,
+            code: int | None,
+            reason: str | None,
+        ) -> None:  # type: ignore[attr-defined]
+            finalize_started.set()
+            await allow_finalize.wait()
+            await original_finalize_close(state, code, reason)
+
+        client._sender_loop = MethodType(sender_stub, client)  # type: ignore[assignment]
+        client._receiver_loop = MethodType(receiver_stub, client)  # type: ignore[assignment]
+        client._finalize_close = MethodType(finalize_stub, client)  # type: ignore[assignment]
+
+        connect_calls: list[int] = []
+        second_connect_started = asyncio.Event()
+
+        async def fake_connect(url: str, **_: object) -> StubWebSocket:
+            call_index = len(connect_calls)
+            connect_calls.append(call_index)
+            if call_index == 1:
+                second_connect_started.set()
+            return StubWebSocket()
+
+        monkeypatch.setattr(speechmatics_module.websockets, "connect", fake_connect)
+
+        async def open_for_sid() -> str:
+            return await client.open_stream(
+                sid="sid-1",
+                stream_id="stream-sid-1",
+                on_partial=lambda *_: None,
+                on_final=lambda *_: None,
+                on_error=lambda *_: None,
+            )
+
+        first_task = asyncio.create_task(open_for_sid())
+        await asyncio.wait_for(first_task, timeout=1.0)
+
+        assert len(connect_calls) == 1
+
+        client.close_stream("sid-1")
+        await asyncio.wait_for(finalize_started.wait(), timeout=1.0)
+
+        second_task = asyncio.create_task(open_for_sid())
+        await asyncio.sleep(0.05)
+
+        assert len(connect_calls) == 1
+        assert not second_connect_started.is_set()
+
+        allow_finalize.set()
+
+        await asyncio.wait_for(second_connect_started.wait(), timeout=1.0)
+        await asyncio.wait_for(second_task, timeout=1.0)
+
+        assert len(connect_calls) == 2
+
+        client.close_stream("sid-1")
+        await asyncio.sleep(0.05)
 
     asyncio.run(run_test())
 

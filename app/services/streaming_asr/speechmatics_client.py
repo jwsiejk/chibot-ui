@@ -393,15 +393,27 @@ class SpeechmaticsClient:
         self._streams: Dict[str, _StreamState] = {}
         # Tracks SIDs currently being opened to avoid parallel opens for the same SID
         self._opening: set[str] = set()
+        # Tracks SIDs that are in the process of shutting down
+        self._closing: Dict[str, asyncio.Event] = {}
+
+    def _ensure_closing_event(self, sid: str) -> asyncio.Event:
+        event = self._closing.get(sid)
+        if event is None:
+            event = asyncio.Event()
+            self._closing[sid] = event
+        return event
 
     async def _await_capacity(self, new_sid: str, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + max(0.0, timeout)
 
         while True:
-            active_sids = [sid for sid in self._streams if sid != new_sid]
+            active_sids = list(self._streams)
             opening_sids = [sid for sid in self._opening if sid != new_sid]
+            pending_closing = [
+                sid for sid, event in self._closing.items() if not event.is_set()
+            ]
 
-            if not active_sids and not opening_sids:
+            if not active_sids and not opening_sids and not pending_closing:
                 break
 
             for existing_sid in active_sids:
@@ -419,11 +431,12 @@ class SpeechmaticsClient:
                         state.audio_queue.put_nowait(_AUDIO_SENTINEL)
                     except Exception:
                         pass
+                    self._ensure_closing_event(existing_sid)
                     state.loop.create_task(self._shutdown(state))
 
-            if not active_sids and opening_sids:
+            if not active_sids and (opening_sids or pending_closing):
                 # Ensure we do not spin immediately if we are only waiting on
-                # another pending open to complete.
+                # another pending open or shutdown to complete.
                 await asyncio.sleep(0)
 
             if time.monotonic() >= deadline:
@@ -448,10 +461,22 @@ class SpeechmaticsClient:
             raise ValueError("sid must be a non-empty string")
         if not isinstance(stream_id, str) or not stream_id:
             raise ValueError("stream_id must be a non-empty string")
-        if sid in self._streams or sid in self._opening:
+        if sid in self._opening:
             # Deduplicate open attempts per sid; let the caller handle this cleanly.
             self._logger.warning("evt=asr_open_dedup sid=%s", sid)
             raise SpeechmaticsOpenBusy(sid)
+        existing_state = self._streams.get(sid)
+        if existing_state is not None:
+            if not existing_state.closing:
+                self._logger.warning("evt=asr_open_dedup sid=%s", sid)
+                raise SpeechmaticsOpenBusy(sid)
+            closing_event = self._ensure_closing_event(sid)
+            await closing_event.wait()
+            # ensure the previous state is no longer tracked
+            existing_state = self._streams.get(sid)
+            if existing_state is not None and not existing_state.closing:
+                self._logger.warning("evt=asr_open_dedup sid=%s", sid)
+                raise SpeechmaticsOpenBusy(sid)
 
         language = _coerce_language(policy)
         normalized_language = language.strip().lower() if isinstance(language, str) else ""
@@ -601,12 +626,14 @@ class SpeechmaticsClient:
         if state is None:
             return
         if state.closing:
+            self._ensure_closing_event(sid)
             return
         state.closing = True
         try:
             state.audio_queue.put_nowait(_AUDIO_SENTINEL)
         except Exception:
             pass
+        self._ensure_closing_event(sid)
         state.loop.create_task(self._shutdown(state))
 
     async def _sender_loop(self, state: _StreamState) -> None:
@@ -941,6 +968,7 @@ class SpeechmaticsClient:
                 state.audio_queue.put_nowait(_AUDIO_SENTINEL)
             except Exception:
                 pass
+            self._ensure_closing_event(state.sid)
             state.loop.create_task(self._shutdown(state))
 
     async def _shutdown(self, state: _StreamState) -> None:
@@ -1008,6 +1036,9 @@ class SpeechmaticsClient:
         current = self._streams.get(state.sid)
         if current is state:
             self._streams.pop(state.sid, None)
+        closing_event = self._closing.pop(state.sid, None)
+        if closing_event is not None and not closing_event.is_set():
+            closing_event.set()
         if state.on_close is not None:
             try:
                 _invoke_callback(state.on_close, code, reason)
