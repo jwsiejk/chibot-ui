@@ -49,6 +49,7 @@ from app.voice_v2 import (
 )
 from app.services.asr.sm_rt import SMRealtimeClient
 from app.ws.validator import validate_audio_header_against_policy, validate_frame
+from app.ws.state import SessionCtx, can_open, mark
 
 try:  # pragma: no cover - uvicorn is an optional dependency in tests
     from uvicorn.protocols.utils import ClientDisconnected
@@ -314,6 +315,7 @@ class AdapterContext:
 
     sid: str
     headers: Dict[str, str]
+    session: SessionCtx = field(init=False)
     user_id: Optional[str] = None
     is_admin: bool = False
     principal: Dict[str, Any] = field(default_factory=dict)
@@ -367,16 +369,10 @@ class AdapterContext:
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
     ws_send: Callable[[dict], Awaitable[None]] | None = None
-    asr_state: Literal["closed", "opening", "open", "closing"] = "closed"
-    asr: SMRealtimeClient | None = None
     asr_open_task: asyncio.Task[None] | None = None
     asr_bytes_sent: int = 0
     asr_opened_ms: Optional[int] = None
     asr_close_reason: Optional[str] = None
-    tts_active: bool = False
-    queued_arm: bool = False
-    first_chunk_sent: bool = False
-    transport_closed_ms: Optional[int] = None
     tts_end_ts: Optional[float] = None
     diag_audio_seen: bool = False
     diag_timer: asyncio.TimerHandle | None = None
@@ -411,6 +407,9 @@ class AdapterContext:
     audio_pipeline_mode: Optional[str] = None
     asr_vendor_logged: bool = False
     session_capture_policy: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        self.session = SessionCtx(sid=self.sid, policy=None)
 
 
 class ChatV2Adapter:
@@ -750,6 +749,7 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
+        provisional_ctx.session.policy = policy_snapshot
         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
         selected_vendor = "speechmatics"
         selection_reason = "pcm16_only"
@@ -773,6 +773,7 @@ class ChatV2Adapter:
             is_admin=is_admin,
         )
         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+        ctx.session.policy = ctx.policy_snapshot
         ctx.last_client_activity_ms = now_ms
         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
         snapshot_mapping = (
@@ -877,7 +878,7 @@ class ChatV2Adapter:
             finally:
                 await self._stop_server_keepalive(ctx)
                 t_close_ms = self._now_ms()
-                ctx.transport_closed_ms = t_close_ms
+                ctx.session.closed_at_ms = t_close_ms
                 await self._publish(
                     EVT_SESSION_TRANSPORT_CLOSED,
                     ctx.sid,
@@ -893,7 +894,7 @@ class ChatV2Adapter:
                 }
                 await self._publish(ASR_VENDOR_BYTES_TOTAL, ctx.sid, vendor_meta)
                 rollup_meta = dict(vendor_meta)
-                rollup_meta["state"] = ctx.asr_state
+                rollup_meta["state"] = ctx.session.asr_state
                 if ctx.asr_close_reason:
                     rollup_meta["reason"] = ctx.asr_close_reason
                 await self._publish(ASR_ROLLUP, ctx.sid, rollup_meta)
@@ -1144,18 +1145,18 @@ class ChatV2Adapter:
                 return self._HandleResult(True)
 
         if frame_type == "asr.open":
-            if ctx.tts_active:
-                ctx.queued_arm = True
+            if ctx.session.tts_active:
+                ctx.session.queued_arm = True
                 await self._publish(
                     ASR_OPEN_QUEUED,
                     ctx.sid,
-                    {"reason": "tts_active", "state": ctx.asr_state},
+                    {"reason": "tts_active", "state": ctx.session.asr_state},
                 )
-            elif ctx.asr_state != "closed":
+            elif not can_open(ctx.session):
                 await self._publish(
                     ASR_OPEN_DEDUP,
                     ctx.sid,
-                    {"state": ctx.asr_state},
+                    {"state": ctx.session.asr_state},
                 )
                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_json(
@@ -1178,18 +1179,18 @@ class ChatV2Adapter:
                     return self._HandleResult(True)
 
         if frame_type == "asr.close":
-            if ctx.asr_state in {"opening", "open"}:
+            if ctx.session.asr_state in {"opening", "open"}:
                 await self._publish(
                     EVT_ASR_CLOSE,
                     ctx.sid,
-                    {"state": ctx.asr_state},
+                    {"state": ctx.session.asr_state},
                 )
                 await self._close_asr(ctx, reason="client_request")
             else:
                 await self._publish(
                     ASR_CLOSE_DEDUP,
                     ctx.sid,
-                    {"state": ctx.asr_state},
+                    {"state": ctx.session.asr_state},
                 )
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
             return self._HandleResult(True)
@@ -1642,15 +1643,15 @@ class ChatV2Adapter:
                         )
                         return self._HandleResult(False, 1003, "audio_not_expected")
 
-        if ctx.asr_state != "open":
+        if ctx.session.asr_state != "open":
             drop_meta = {
                 "reason": "not_open",
                 "byte_count": byte_count,
-                "state": ctx.asr_state,
+                "state": ctx.session.asr_state,
             }
-            if isinstance(ctx.transport_closed_ms, int):
+            if isinstance(ctx.session.closed_at_ms, int):
                 drop_meta["after_close_ms"] = max(
-                    0, self._now_ms() - ctx.transport_closed_ms
+                    0, self._now_ms() - ctx.session.closed_at_ms
                 )
             await self._publish(ASR_POST_CLOSE_DROP, ctx.sid, drop_meta)
             return self._HandleResult(True)
@@ -1964,16 +1965,16 @@ class ChatV2Adapter:
                 reason,
             )
             return
-        asr_client = ctx.asr
-        if ctx.asr_state == "open" and asr_client is not None:
+        asr_client = ctx.session.asr
+        if ctx.session.asr_state == "open" and asr_client is not None:
             try:
                 await asr_client.send_pcm(chunk)
             except Exception:
                 _log.warning("evt=asr_pcm_send_failed sid=%s", ctx.sid, exc_info=True)
             else:
                 ctx.asr_bytes_sent += byte_count
-                if not ctx.first_chunk_sent:
-                    ctx.first_chunk_sent = True
+                if not ctx.session.first_chunk_sent:
+                    ctx.session.first_chunk_sent = True
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -2282,9 +2283,9 @@ class ChatV2Adapter:
                     policy = self._policy_snapshot()
                     self._maybe_emit_await_user(ctx, policy)
                     _schedule_listen_handoff(req_value)
-                    ctx.tts_active = False
-                    if ctx.queued_arm and ctx.asr_state == "closed":
-                        ctx.queued_arm = False
+                    ctx.session.tts_active = False
+                    if ctx.session.queued_arm and can_open(ctx.session):
+                        ctx.session.queued_arm = False
                         try:
                             self._schedule_asr_open(ctx)
                         except Exception:
@@ -2295,13 +2296,16 @@ class ChatV2Adapter:
                                     self._publish(
                                         ASR_OPEN_AFTER_TTS,
                                         ctx.sid,
-                                        {"reason": "tts_end", "state": ctx.asr_state},
+                                        {
+                                            "reason": "tts_end",
+                                            "state": ctx.session.asr_state,
+                                        },
                                     )
                                 )
                             except RuntimeError:
                                 pass
                 elif frame_type == "tts.start":
-                    ctx.tts_active = True
+                    ctx.session.tts_active = True
                 _enqueue(payload)
 
             try:
@@ -2834,8 +2838,8 @@ class ChatV2Adapter:
                 return
 
             ctx.asr_ready = True
-            if ctx.asr_state != "open":
-                ctx.asr_state = "open"
+            if ctx.session.asr_state != "open":
+                mark(ctx.session, "open")
             ctx.awaiting_asr_ready = False
             ctx.asr_recovering_until = 0.0
             ctx.asr_recovering_reason = None
@@ -2970,6 +2974,7 @@ class ChatV2Adapter:
             policy_payload = normalized.get("policy")
             if isinstance(policy_payload, dict):
                 ctx.policy_snapshot = policy_payload
+                ctx.session.policy = ctx.policy_snapshot
                 ctx.allowed_asr_vendors = ["speechmatics"]
                 snapshot_mapping = policy_payload
                 ctx.asr_vendor = "speechmatics"
@@ -4161,15 +4166,15 @@ class ChatV2Adapter:
                     _log.debug("evt=asr_invariant_emit_skipped sid=%s", ctx.sid)
 
         def _on_ready(_meta: Dict[str, Any]) -> None:
-            ctx.asr_state = "open"
+            mark(ctx.session, "open")
             ctx.asr_opened_ms = self._now_ms()
             ctx.asr_close_reason = None
-            ctx.first_chunk_sent = False
+            ctx.session.first_chunk_sent = False
             _publish_invariant("open", True)
 
         def _on_closed(reason: str) -> None:
-            ctx.asr = None
-            ctx.asr_state = "closed"
+            ctx.session.asr = None
+            mark(ctx.session, "closed")
             ctx.asr_close_reason = reason
             ctx.asr_open_task = None
             _publish_invariant("closed", True, {"reason": reason})
@@ -4187,18 +4192,18 @@ class ChatV2Adapter:
     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
         if ctx.ws_send is None:
             raise RuntimeError("websocket send unavailable for asr.open")
-        if ctx.asr_state not in {"closed"}:
+        if not can_open(ctx.session):
             return
         if ctx.asr_open_task and not ctx.asr_open_task.done():
             return
-        ctx.asr_state = "opening"
+        mark(ctx.session, "opening")
         ctx.asr_bytes_sent = 0
         ctx.asr_opened_ms = None
         ctx.asr_close_reason = None
-        ctx.first_chunk_sent = False
-        ctx.queued_arm = False
-        ctx.transport_closed_ms = None
-        ctx.asr = self._create_sm_client(ctx)
+        ctx.session.first_chunk_sent = False
+        ctx.session.queued_arm = False
+        ctx.session.closed_at_ms = None
+        ctx.session.asr = self._create_sm_client(ctx)
         try:
             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
         except RuntimeError:
@@ -4208,12 +4213,12 @@ class ChatV2Adapter:
     async def _open_asr(self, ctx: AdapterContext) -> None:
         send = ctx.ws_send
         if send is None:
-            ctx.asr_state = "closed"
+            mark(ctx.session, "closed")
             ctx.asr_open_task = None
             return
-        client = ctx.asr
+        client = ctx.session.asr
         if client is None:
-            ctx.asr_state = "closed"
+            mark(ctx.session, "closed")
             ctx.asr_open_task = None
             return
         try:
@@ -4222,12 +4227,12 @@ class ChatV2Adapter:
             region = self._speechmatics_region()
             await client.connect(token, region, params)
         except asyncio.CancelledError:
-            ctx.asr_state = "closed"
+            mark(ctx.session, "closed")
             ctx.asr_open_task = None
             raise
         except Exception:
-            ctx.asr = None
-            ctx.asr_state = "closed"
+            ctx.session.asr = None
+            mark(ctx.session, "closed")
             ctx.asr_open_task = None
             _log.exception("evt=asr_open_failed sid=%s", ctx.sid)
             try:
@@ -4245,7 +4250,7 @@ class ChatV2Adapter:
             )
             return
         ctx.asr_open_task = None
-        ctx.queued_arm = False
+        ctx.session.queued_arm = False
 
     async def _close_asr(
         self,
@@ -4259,10 +4264,10 @@ class ChatV2Adapter:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        client = ctx.asr
-        ctx.asr = None
-        if ctx.asr_state in {"opening", "open"}:
-            ctx.asr_state = "closing"
+        client = ctx.session.asr
+        ctx.session.asr = None
+        if ctx.session.asr_state in {"opening", "open"}:
+            mark(ctx.session, "closing")
         if client is not None:
             try:
                 await client.send_end_of_stream()
@@ -4272,9 +4277,9 @@ class ChatV2Adapter:
                 await client.close()
             except Exception:
                 _log.warning("evt=asr_close_failed sid=%s", ctx.sid, exc_info=True)
-        ctx.asr_state = "closed"
-        ctx.first_chunk_sent = False
-        ctx.queued_arm = False
+        mark(ctx.session, "closed")
+        ctx.session.first_chunk_sent = False
+        ctx.session.queued_arm = False
         ctx.asr_ready = False
         if reason:
             ctx.asr_close_reason = reason
