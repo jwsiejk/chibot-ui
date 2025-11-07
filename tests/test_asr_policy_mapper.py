@@ -11,12 +11,12 @@ def test_defaults_when_policy_missing():
         "type": "raw",
         "encoding": "pcm_s16le",
         "sample_rate": 16000,
-        "channels": 1,
     }
 
     transcription = params["transcription_config"]
     assert transcription["language"] == "en"
     assert transcription["enable_partials"] is True
+    assert transcription["operating_point"] == "standard"
     assert "max_delay" not in transcription
     assert "additional_vocab" not in transcription
 
@@ -51,6 +51,7 @@ def test_speechmatics_policy_mapping():
 
     assert transcription["language"] == "fr"
     assert transcription["enable_partials"] is False
+    assert transcription["operating_point"] == "standard"
     assert transcription["diarization"] is True
     assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.7
     assert transcription["profanity_filter"] is True
@@ -84,6 +85,7 @@ def test_policy_fallbacks_and_clamping():
 
     assert transcription["language"] == "es"
     assert transcription["enable_partials"] is False
+    assert transcription["operating_point"] == "standard"
     assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 4.0
     assert transcription["additional_vocab"] == [{"content": "Gamma"}]
     assert "profanity_filter" not in transcription

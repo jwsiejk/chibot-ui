@@ -11,7 +11,6 @@ _SM_AUDIO_FORMAT = {
     "type": "raw",
     "encoding": "pcm_s16le",
     "sample_rate": 16000,
-    "channels": 1,
 }
 
 _SM_MIN_FINAL_LATENCY_MS = 700
@@ -284,6 +283,7 @@ def to_sm_params(policy: Mapping[str, Any] | None) -> Dict[str, Any]:
         {
             "language": language,
             "enable_partials": enable_partials,
+            "operating_point": "standard",
         },
         punctuation_config,
         diarization_config,
@@ -292,6 +292,7 @@ def to_sm_params(policy: Mapping[str, Any] | None) -> Dict[str, Any]:
         {"additional_vocab": custom_vocab},
     )
 
+    # EXACT envelope per docs (Raw audio allows ONLY type/encoding/sample_rate)
     params: Dict[str, Any] = {
         "message": "StartRecognition",
         "audio_format": dict(_SM_AUDIO_FORMAT),
