@@ -18,9 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 import json
+import urllib.request
 from urllib.parse import parse_qs
-
-import jwt
 
 from app import config
 from app.logging_setup import current_sid
@@ -151,6 +150,8 @@ _POLICY_STABLE_KEYS = (
 )
 
 _log = logging.getLogger(__name__)
+
+_SM_JWT_CACHE = {"token": None, "exp": 0}
 
 _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
@@ -4890,20 +4891,50 @@ class ChatV2Adapter:
             raise RuntimeError("speechmatics realtime url not configured")
         return url
 
-    def _mint_speechmatics_jwt(self, ctx: AdapterContext) -> str:
-        api_key = config.SPEECHMATICS_API_KEY
+    def _mint_speechmatics_jwt(self, ctx: AdapterContext) -> str | None:
+        """Ask Speechmatics for a short-lived realtime JWT."""
+
+        api_key = os.getenv("SPEECHMATICS_API_KEY", "").strip()
         if not api_key:
-            raise RuntimeError("speechmatics api key not configured")
+            _log.warning("evt=sm_jwt_skip reason=no_api_key")
+            return None
+
         now = int(time.time())
-        payload = {
-            "iat": now,
-            "exp": now + 300,
-            "sub": ctx.sid,
-            "scope": "rt",
-        }
-        token = jwt.encode(payload, api_key, algorithm="HS256")
-        if isinstance(token, bytes):
-            token = token.decode("utf-8")
+        cache_token = _SM_JWT_CACHE.get("token")
+        cache_exp = int(_SM_JWT_CACHE.get("exp") or 0)
+        if cache_token and cache_exp > now + 10:
+            return cache_token
+
+        request = urllib.request.Request(
+            "https://mp.speechmatics.com/v1/api_keys?type=rt",
+            data=json.dumps({"ttl": 60}).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:  # pragma: no cover - network call
+            _log.error("evt=sm_jwt_mint_failed err=%s", exc)
+            return None
+
+        token = payload.get("key") or payload.get("jwt") or payload.get("token")
+        if not token:
+            _log.error("evt=sm_jwt_response_missing_token obj=%s", payload)
+            return None
+
+        ttl_raw = payload.get("ttl", 60)
+        try:
+            ttl = int(ttl_raw)
+        except (TypeError, ValueError):
+            ttl = 60
+
+        _SM_JWT_CACHE.update({"token": token, "exp": now + max(ttl, 1)})
+        _log.info("evt=sm_jwt_minted ttl=%s", ttl)
         return token
 
     def _policy_to_sm_params(self, ctx: AdapterContext) -> Dict[str, Any]:
@@ -5015,7 +5046,7 @@ class ChatV2Adapter:
             return
         try:
             params = self._policy_to_sm_params(ctx)
-            token = self._mint_speechmatics_jwt(ctx)
+            token = self._mint_speechmatics_jwt(ctx)  # returns None if mint fails; header fallback handles auth
             endpoint_url = self._speechmatics_rt_url()
             _log.info("evt=asr_open_begin sid=%s endpoint=%s", ctx.sid, endpoint_url)
             await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
