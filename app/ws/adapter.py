@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 import json
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs
 
 import jwt
 
@@ -4613,20 +4613,11 @@ class ChatV2Adapter:
             max_utterance_ms = 0
 
     @staticmethod
-    def _speechmatics_region() -> str:
-        url = config.SPEECHMATICS_REALTIME_URL or ""
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            return "global"
-        host = parsed.hostname or ""
-        if not host:
-            return "global"
-        parts = host.split(".")
-        if not parts:
-            return "global"
-        region = parts[0].strip().lower()
-        return region or "global"
+    def _speechmatics_rt_url() -> str:
+        url = config.SPEECHMATICS_REALTIME_URL
+        if not isinstance(url, str) or not url.strip():
+            raise RuntimeError("speechmatics realtime url not configured")
+        return url
 
     def _mint_speechmatics_jwt(self, ctx: AdapterContext) -> str:
         api_key = config.SPEECHMATICS_API_KEY
@@ -4753,8 +4744,8 @@ class ChatV2Adapter:
         try:
             params = self._policy_to_sm_params(ctx)
             token = self._mint_speechmatics_jwt(ctx)
-            region = self._speechmatics_region()
-            await client.connect(token, region, params)
+            endpoint_url = self._speechmatics_rt_url()
+            await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
         except asyncio.CancelledError:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None

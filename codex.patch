@@ -1,77 +1,350 @@
-diff --git a/app/config.py b/app/config.py
-index 345519384145df7fcf4b19361430244ab56f7b11..d7b55fa0b91ed511951ee9fd478c28b973bb1f60 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -14,53 +14,69 @@ except ImportError:  # pragma: no cover - optional dependency
-     load_dotenv = None
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
+diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
+index 08051cf16f9d9d92ff4a98311a84b398d96e3d0d..839a3784251789f4830576f05524113d6b24da06 100644
+--- a/app/services/asr/sm_rt.py
++++ b/app/services/asr/sm_rt.py
+@@ -73,148 +73,155 @@ class SMRealtimeClient:
+     READY_TIMEOUT_S = 5.0
+     CLOSE_ACK_TIMEOUT_S = 5.0
+     KEEPALIVE_INTERVAL_S = 30.0
  
+     def __init__(
+         self,
+         sid: str,
+         *,
+         telemetry_bus=telemetry_bus,
+         on_ready: Optional[Callable[[Dict[str, Any]], None]] = None,
+         on_partial: Optional[Callable[[str, int], None]] = None,
+         on_final: Optional[Callable[[str, int], None]] = None,
+         on_notice: Optional[Callable[[Dict[str, Any]], None]] = None,
+         on_closed: Optional[Callable[[str], None]] = None,
+         ready_timeout_s: Optional[float] = None,
+         close_ack_timeout_s: Optional[float] = None,
+         keepalive_interval_s: Optional[float] = None,
+     ) -> None:
+         if not sid:
+             raise ValueError("sid must be provided")
+         self._sid = sid
+         self._bus = telemetry_bus
+         self._state = "idle"
+         self._state_lock = asyncio.Lock()
+         self._ws: WebSocketClientProtocol | None = None
+-        self._region: str | None = None
++        self._endpoint_url: str | None = None
+         self._url: str | None = None
+         self._connected_at = 0.0
+         self._last_activity = time.monotonic()
+         self._partial_seq = 0
+         self._ready_event = asyncio.Event()
+         self._close_ack_event = asyncio.Event()
+         self._stop_event = asyncio.Event()
+         self._pcm_queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
+         self._pcm_sentinel: object = object()
+         self._receiver_task: asyncio.Task[None] | None = None
+         self._sender_task: asyncio.Task[None] | None = None
+         self._keepalive_task: asyncio.Task[None] | None = None
+         self._closing = False
+         self._closed_event = asyncio.Event()
+         self._close_reason: str | None = None
+         self._sent_end_of_stream = False
+         self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
+         self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
+         self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
  
- def env_bool(name: str, default: bool = False) -> bool:
-     """Return an environment variable parsed as a boolean."""
+         self._on_ready = on_ready or (lambda info: None)
+         self._on_partial = on_partial or (lambda text, latency: None)
+         self._on_final = on_final or (lambda text, latency: None)
+         self._on_notice = on_notice or (lambda meta: None)
+         self._on_closed = on_closed or (lambda reason: None)
  
-     value = os.getenv(name)
-     if value is None:
-         return bool(default)
-     value = value.strip().lower()
-     if value in {"1", "true", "t", "yes", "y", "on"}:
-         return True
-     if value in {"0", "false", "f", "no", "n", "off"}:
-         return False
-     return bool(default)
+     # ------------------------------------------------------------------
+     # Public properties
+     # ------------------------------------------------------------------
+     @property
+     def state(self) -> str:
+         """Return the current connection state."""
  
+         return self._state
  
- # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
- # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
- DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
- ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
- ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
- SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
--SPEECHMATICS_REALTIME_URL = os.getenv(
--    "SPEECHMATICS_REALTIME_URL", "wss://mp.speechmatics.com/v2"
--)
-+def _resolve_speechmatics_realtime_url() -> str:
-+    """Canonical Speechmatics Realtime URL (full URL, not just a region token).
-+
-+    Example: ``wss://us2.rt.speechmatics.com/v2``.
-+    """
-+
-+    default_url = "wss://us2.rt.speechmatics.com/v2"
-+    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
-+    candidate = (raw_value or "").strip()
-+    if not candidate:
-+        candidate = default_url
-+    if not candidate.startswith("wss://"):
-+        raise ValueError(
-+            f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
-+        )
-+    return candidate
-+
-+
-+SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()
- ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
-     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
+     # ------------------------------------------------------------------
+     # Lifecycle management
+     # ------------------------------------------------------------------
+-    async def connect(self, jwt: str, region: str, params: Dict[str, Any]) -> None:
++    async def open(
++        self, *, endpoint_url: str, jwt_token: str, params: Dict[str, Any]
++    ) -> None:
+         """Open the Speechmatics websocket and wait for RecognitionStarted."""
+ 
+         if not isinstance(params, dict):
+             raise TypeError("params must be a dict")
+-        if not jwt:
+-            raise ValueError("jwt must be provided")
+-        if not region:
+-            raise ValueError("region must be provided")
++        if not jwt_token:
++            raise ValueError("jwt_token must be provided")
++        if not endpoint_url:
++            raise ValueError("endpoint_url must be provided")
+ 
+         async with self._state_lock:
+             if self._state not in {"idle", "closed"}:
+                 raise RuntimeError(f"client state {self._state} cannot connect")
+             self._state = "opening"
+ 
+         self._stop_event = asyncio.Event()
+         self._ready_event = asyncio.Event()
+         self._close_ack_event = asyncio.Event()
+         self._closed_event = asyncio.Event()
+         self._close_reason = None
+         self._sent_end_of_stream = False
+         self._pcm_queue = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
+ 
+-        self._region = region.strip()
++        url = endpoint_url.strip()
++        if not url:
++            raise ValueError("endpoint_url must be provided")
++        if not url.startswith("wss://"):
++            raise ValueError(f"Invalid Speechmatics endpoint (must be wss://): {url!r}")
++        self._endpoint_url = url
+         self._publish_event(
+             ASR_VENDOR_CONNECT_INTENT,
+             {
+                 "vendor": self.VENDOR,
+-                "region": self._region,
+-                "meta": {"reason": "connect"},
++                "meta": {"reason": "connect", "endpoint": url},
+             },
+         )
+ 
+-        url = f"wss://{self._region}.rt.speechmatics.com/v2?jwt={jwt}"
+-        self._url = url
++        sep = "&" if ("?" in url) else "?"
++        ws_url = f"{url}{sep}jwt={jwt_token}"
++        self._url = ws_url
+ 
+         try:
+             ws = await websockets.connect(
+-                url,
++                ws_url,
+                 ping_interval=None,
+                 ping_timeout=None,
+                 max_size=None,
+             )
+         except Exception:
+             async with self._state_lock:
+                 self._state = "closed"
+             raise
+ 
+         self._ws = ws
+         self._connected_at = time.monotonic()
+         self._last_activity = self._connected_at
+ 
+         await self._send_json(params)
+ 
+         self._publish_event(
+             EVT_ASR_OPEN,
+             {
+                 "vendor": self.VENDOR,
+-                "meta": {"url": url},
++                "meta": {"url": ws_url},
+             },
+         )
+ 
+         extra_messages: list[dict] = []
+         try:
+             extra_messages = await self._await_ready(ws)
+         except Exception:
+             with contextlib.suppress(Exception):
+                 await ws.close()
+             await self._finalize_close(reason="ready_failed", publish_close=True)
+             raise
+ 
+         self._ready_event.set()
+ 
+         self._receiver_task = asyncio.create_task(self._receive_loop())
+         self._sender_task = asyncio.create_task(self._pcm_sender_loop())
+         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+ 
+         for message in extra_messages:
+             self._process_message(message)
+ 
+     async def send_pcm(self, chunk: bytes) -> None:
+         """Queue PCM16 audio bytes for transmission."""
+ 
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 23742e24772f66a14d4d8611aea33707a8ecbc32..0c63088723d69f06754328651fa9c3a57ceb273c 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1,46 +1,46 @@
+ # // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
+ """chat.v2 WebSocket adapter for AskChip."""
+ from __future__ import annotations
+ 
+ import os
+ import array
+ import asyncio
+ import contextlib
+ import logging
+ import math
+ import threading
+ import time
+ import inspect
+ import platform
+ import socket
+ import sys
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
+ 
+ import json
+-from urllib.parse import parse_qs, urlparse
++from urllib.parse import parse_qs
+ 
+ import jwt
+ 
+ from app import config
+ from app.logging_setup import current_sid
+ from app.security.jwt_utils import verify_ws_token
+ from app.telemetry import bus
+ from app.telemetry.events import (
+     AUDIO_WIRE_ROLLUP,
+     ASR_OPEN_AFTER_TTS,
+     ASR_OPEN_DEDUP,
+     ASR_OPEN_QUEUED,
+     ASR_POST_CLOSE_DROP,
+     ASR_SINGLE_STREAM_INVARIANT,
+     ASR_VENDOR_BYTES_TOTAL,
+     ASR_ROLLUP,
+     EVT_ASR_CLOSE,
+     EVT_ASR_OPEN,
+     EVT_SESSION_TRANSPORT_CLOSED,
+     SESSION_TEARDOWN_COMPLETE,
+     WS_AUDIO_FIRST_CHUNK,
+     WS_AUDIO_HEADER_ACCEPT,
  )
- ASR_IDLE_CLOSE_MS = 15000
- ASR_TRACE = env_bool("ASR_TRACE", False)
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+@@ -4591,64 +4591,55 @@ class ChatV2Adapter:
+         )
+         try:
+             keep_warm_ms = int(keep_warm_raw)
+         except (TypeError, ValueError):
+             keep_warm_ms = 0
  
+         commit_on_vad = bool(
+             asr_block.get("commit_on_vad_silence") if isinstance(asr_block, Mapping) else False
+         )
+         commit_silence_raw = (
+             asr_block.get("commit_silence_ms") if isinstance(asr_block, Mapping) else 0
+         )
+         try:
+             commit_silence_ms = int(commit_silence_raw)
+         except (TypeError, ValueError):
+             commit_silence_ms = 0
+         max_utterance_raw = (
+             asr_block.get("max_utterance_ms") if isinstance(asr_block, Mapping) else 0
+         )
+         try:
+             max_utterance_ms = int(max_utterance_raw)
+         except (TypeError, ValueError):
+             max_utterance_ms = 0
  
- def get_env(name: str, default=None):
-     """Retrieve an environment variable with an optional default."""
+     @staticmethod
+-    def _speechmatics_region() -> str:
+-        url = config.SPEECHMATICS_REALTIME_URL or ""
+-        try:
+-            parsed = urlparse(url)
+-        except Exception:
+-            return "global"
+-        host = parsed.hostname or ""
+-        if not host:
+-            return "global"
+-        parts = host.split(".")
+-        if not parts:
+-            return "global"
+-        region = parts[0].strip().lower()
+-        return region or "global"
++    def _speechmatics_rt_url() -> str:
++        url = config.SPEECHMATICS_REALTIME_URL
++        if not isinstance(url, str) or not url.strip():
++            raise RuntimeError("speechmatics realtime url not configured")
++        return url
  
-     value = os.getenv(name)
-     return value if value is not None else default
+     def _mint_speechmatics_jwt(self, ctx: AdapterContext) -> str:
+         api_key = config.SPEECHMATICS_API_KEY
+         if not api_key:
+             raise RuntimeError("speechmatics api key not configured")
+         now = int(time.time())
+         payload = {
+             "iat": now,
+             "exp": now + 300,
+             "sub": ctx.sid,
+             "scope": "rt",
+         }
+         token = jwt.encode(payload, api_key, algorithm="HS256")
+         if isinstance(token, bytes):
+             token = token.decode("utf-8")
+         return token
  
+     def _policy_to_sm_params(self, ctx: AdapterContext) -> Dict[str, Any]:
+         snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+         language = "en"
+         enable_partials = True
+         if snapshot is not None:
+             policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+             if isinstance(policy_block, Mapping):
+                 nlu_block = policy_block.get("nlu")
+@@ -4731,52 +4722,52 @@ class ChatV2Adapter:
+         ctx.asr_close_reason = None
+         ctx.session.first_chunk_sent = False
+         ctx.session.queued_arm = False
+         ctx.session.closed_at_ms = None
+         ctx.session.asr = self._create_sm_client(ctx)
+         try:
+             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
+         except RuntimeError:
+             loop = asyncio.get_running_loop()
+             ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
  
- _log = logging.getLogger(__name__)
- 
- _ADMIN_SETTINGS_LOCK = threading.RLock()
- _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
- _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
- _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
- 
- _ALLOWED_ASR_INPUTS = {"pcm_16k"}
- _SUPPORTED_ASR_VENDORS = {"speechmatics"}
- _AUDIO_PIPELINE_MODES = {"pcm16"}
- _CAPTURE_TIMESLICE_MIN_MS = 20
+     async def _open_asr(self, ctx: AdapterContext) -> None:
+         send = ctx.ws_send
+         if send is None:
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             return
+         client = ctx.session.asr
+         if client is None:
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             return
+         try:
+             params = self._policy_to_sm_params(ctx)
+             token = self._mint_speechmatics_jwt(ctx)
+-            region = self._speechmatics_region()
+-            await client.connect(token, region, params)
++            endpoint_url = self._speechmatics_rt_url()
++            await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
+         except asyncio.CancelledError:
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             raise
+         except Exception:
+             ctx.session.asr = None
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             _log.exception("evt=asr_open_failed sid=%s", ctx.sid)
+             try:
+                 await self._send_json(
+                     send,
+                     ctx.sid,
+                     {"type": "asr.error", "code": "open_failed"},
+                 )
+             except Exception:
+                 _log.exception("evt=asr_open_error_send sid=%s", ctx.sid)
+             await self._publish(
+                 ASR_SINGLE_STREAM_INVARIANT,
+                 ctx.sid,
+                 {"state": "closed", "ok": False, "reason": "open_failed"},
+             )
+             return
+         ctx.asr_open_task = None
+         ctx.session.queued_arm = False

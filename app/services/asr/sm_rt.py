@@ -95,7 +95,7 @@ class SMRealtimeClient:
         self._state = "idle"
         self._state_lock = asyncio.Lock()
         self._ws: WebSocketClientProtocol | None = None
-        self._region: str | None = None
+        self._endpoint_url: str | None = None
         self._url: str | None = None
         self._connected_at = 0.0
         self._last_activity = time.monotonic()
@@ -134,15 +134,17 @@ class SMRealtimeClient:
     # ------------------------------------------------------------------
     # Lifecycle management
     # ------------------------------------------------------------------
-    async def connect(self, jwt: str, region: str, params: Dict[str, Any]) -> None:
+    async def open(
+        self, *, endpoint_url: str, jwt_token: str, params: Dict[str, Any]
+    ) -> None:
         """Open the Speechmatics websocket and wait for RecognitionStarted."""
 
         if not isinstance(params, dict):
             raise TypeError("params must be a dict")
-        if not jwt:
-            raise ValueError("jwt must be provided")
-        if not region:
-            raise ValueError("region must be provided")
+        if not jwt_token:
+            raise ValueError("jwt_token must be provided")
+        if not endpoint_url:
+            raise ValueError("endpoint_url must be provided")
 
         async with self._state_lock:
             if self._state not in {"idle", "closed"}:
@@ -157,22 +159,27 @@ class SMRealtimeClient:
         self._sent_end_of_stream = False
         self._pcm_queue = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
 
-        self._region = region.strip()
+        url = endpoint_url.strip()
+        if not url:
+            raise ValueError("endpoint_url must be provided")
+        if not url.startswith("wss://"):
+            raise ValueError(f"Invalid Speechmatics endpoint (must be wss://): {url!r}")
+        self._endpoint_url = url
         self._publish_event(
             ASR_VENDOR_CONNECT_INTENT,
             {
                 "vendor": self.VENDOR,
-                "region": self._region,
-                "meta": {"reason": "connect"},
+                "meta": {"reason": "connect", "endpoint": url},
             },
         )
 
-        url = f"wss://{self._region}.rt.speechmatics.com/v2?jwt={jwt}"
-        self._url = url
+        sep = "&" if ("?" in url) else "?"
+        ws_url = f"{url}{sep}jwt={jwt_token}"
+        self._url = ws_url
 
         try:
             ws = await websockets.connect(
-                url,
+                ws_url,
                 ping_interval=None,
                 ping_timeout=None,
                 max_size=None,
@@ -192,7 +199,7 @@ class SMRealtimeClient:
             EVT_ASR_OPEN,
             {
                 "vendor": self.VENDOR,
-                "meta": {"url": url},
+                "meta": {"url": ws_url},
             },
         )
 
