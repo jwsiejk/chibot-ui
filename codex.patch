@@ -1,235 +1,156 @@
-diff --git a/app/services/asr/policies.py b/app/services/asr/policies.py
-index b9459964c58ca321e6f7b59bd04701f441ac81ba..25f931c1a0f417df89e920d7a602ed38df928041 100644
---- a/app/services/asr/policies.py
-+++ b/app/services/asr/policies.py
-@@ -119,55 +119,55 @@ def _normalize_diarization(value: Any) -> Dict[str, Any]:
-     if bool_candidate is not None:
-         result["diarization"] = bool_candidate
-         return result
+diff --git a/tests/test_asr_policy_mapper.py b/tests/test_asr_policy_mapper.py
+index 1dd7703027ca99138921d9ae3607f8901afcc848..edd5656a81583d7c19f8be2be1d2bdfa9dfc927f 100644
+--- a/tests/test_asr_policy_mapper.py
++++ b/tests/test_asr_policy_mapper.py
+@@ -30,59 +30,61 @@ def test_speechmatics_policy_mapping():
+                     "language": "fr",
+                     "enable_partials": False,
+                     "punctuation": {
+                         "enabled": True,
+                         "overrides": ["question_mark", "", " exclamation_mark "],
+                     },
+                     "diarization": {"enabled": True},
+                     "max_final_latency_ms": 100,
+                     "profanity_filter": True,
+                     "custom_vocab": [
+                         "Alice",
+                         {"content": "Bob", "sounds_like": ["Bawb", ""], "boost": "1.5"},
+                         {"content": "   "},
+                     ],
+                 }
+             },
+         }
+     }
  
-     mapping = _as_mapping(value)
-     enabled = _coerce_bool(mapping.get("enabled"))
-     if enabled is not None:
-         result["diarization"] = enabled
+     params = to_sm_params(policy)
+     transcription = params["transcription_config"]
  
-     return result
- 
- 
- def _normalize_max_final_latency(value: Any) -> float | None:
-     latency_ms = _coerce_int(value)
-     if latency_ms is None:
-         return None
-     clamped = _clamp_final_latency(latency_ms, _log)
-     return round(clamped / 1000.0, 3)
- 
- 
- def _clamp_final_latency(ms: int, log) -> int:
-     lo, hi = _SM_MIN_FINAL_LATENCY_MS, _SM_MAX_FINAL_LATENCY_MS
-     clamped = max(lo, min(ms, hi))
-     if clamped != ms:
-         log.info(
--            "sm.max_delay.clamped",
--            wanted_ms=ms,
--            clamped_ms=clamped,
--            lo_ms=lo,
--            hi_ms=hi,
-+            "sm.max_delay.clamped wanted_ms=%s clamped_ms=%s lo_ms=%s hi_ms=%s",
-+            ms,
-+            clamped,
-+            lo,
-+            hi,
-         )
-     return clamped
- 
- 
- def _normalize_custom_vocab(value: Any) -> list[Dict[str, Any]]:
-     entries: list[Dict[str, Any]] = []
- 
-     def _add_entry(entry: Mapping[str, Any]) -> None:
-         content = entry.get("content")
-         if not isinstance(content, str):
-             return
-         normalized_content = content.strip()
-         if not normalized_content:
-             return
- 
-         normalized_entry: Dict[str, Any] = {"content": normalized_content}
- 
-         sounds_like_value = entry.get("sounds_like")
-         sounds_like: list[str] = []
-         for alt in _as_sequence(sounds_like_value):
-             if isinstance(alt, str):
-                 normalized_alt = alt.strip()
-                 if normalized_alt:
-                     sounds_like.append(normalized_alt)
-         if sounds_like:
-diff --git a/app/ws/validator.py b/app/ws/validator.py
-index 693bdb40c514c8810133ed6d9185a499315affe6..0cb682e6a8de328207a11ca51cfdae6fde9ca3c9 100644
---- a/app/ws/validator.py
-+++ b/app/ws/validator.py
-@@ -42,132 +42,165 @@ def _is_int(value: object) -> bool:
- def validate_frame(frame: dict) -> Tuple[bool, str | None]:
-     """Validate a decoded JSON frame.
- 
-     Parameters
-     ----------
-     frame:
-         JSON object parsed from the WebSocket text frame.
- 
-     Returns
-     -------
-     (ok, hint):
-         ok is ``True`` when the frame passes validation. hint contains a
-         human-readable detail when validation fails.
-     """
- 
-     if not isinstance(frame, dict):
-         return False, "Frame must be a JSON object"
- 
-     frame_type = frame.get("type")
-     if not isinstance(frame_type, str):
-         return False, "Frame requires a string 'type' field"
- 
-     if frame_type == "audio.header":
-         fmt = frame.get("format")
-         if fmt is not None and fmt not in _ALLOWED_AUDIO_FORMATS:
-+            _logger.info(
-+                "audio.header.reject reason=format got=%s want=pcm16",
-+                fmt,
-+            )
-             return False, "audio.header requires format 'pcm16'"
- 
-         sample_rate = frame.get("sample_rate")
-         if sample_rate is not None and not _is_int(sample_rate):
-             return False, "audio.header requires integer sample_rate"
- 
-         channels = frame.get("channels")
-         if channels is not None and not _is_int(channels):
-             return False, "audio.header requires integer channels"
- 
-         normalized_fmt = fmt or "pcm16"
-         if normalized_fmt in {"pcm", "pcm16"}:
-             expected_sr = 16000
-             expected_channels = 1
- 
-             if sample_rate is not None and sample_rate != expected_sr:
-+                _logger.info(
-+                    "audio.header.reject reason=sample_rate got=%s want=%s",
-+                    sample_rate,
-+                    expected_sr,
-+                )
-                 _logger.warning(
-                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
-                     sample_rate,
-                     channels,
-                 )
-                 return (
-                     False,
-                     "audio.header pcm16 requires sample_rate=16000 and channels=1",
-                 )
-             if channels is not None and channels != expected_channels:
-+                _logger.info(
-+                    "audio.header.reject reason=channels got=%s want=%s",
-+                    channels,
-+                    expected_channels,
-+                )
-                 _logger.warning(
-                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
-                     sample_rate,
-                     channels,
-                 )
-                 return (
-                     False,
-                     "audio.header pcm16 requires sample_rate=16000 and channels=1",
-                 )
- 
-     return True, None
+     assert transcription["language"] == "fr"
+     assert transcription["enable_partials"] is False
+     assert transcription["diarization"] is True
+-    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.4
++    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.7
+     assert transcription["profanity_filter"] is True
+     assert transcription["enable_punctuation"] is True
+-    assert transcription["punctuation_overrides"] == ["question_mark", "exclamation_mark"]
++    assert transcription["punctuation_overrides"] == {
++        "permitted_marks": ["question_mark", "exclamation_mark"]
++    }
+     assert transcription["additional_vocab"] == [
+         {"content": "Alice"},
+         {"content": "Bob", "sounds_like": ["Bawb"], "boost": pytest.approx(1.5)},
+     ]
  
  
- def validate_audio_header_against_policy(
-     header: Dict[str, Any],
-     policy: Policy | Mapping[str, Any] | None,
-     vendor: Optional[str] = None,
- ) -> Optional[str]:
-     fmt = header.get("format")
-     rate = header.get("sample_rate")
-     channels = header.get("channels")
+ def test_policy_fallbacks_and_clamping():
+     policy = {
+         "policy": {
+             "nlu": {"language": " es "},
+             "asr": {
+                 "enable_partials": False,
+                 "speechmatics": {
+                     "max_final_latency_ms": 5000,
+                     "custom_vocab": {"entries": [{"content": "Gamma"}]},
+                     "profanity_filter": "not-bool",
+                 },
+             },
+         }
+     }
  
-     if vendor == "speechmatics":
-         normalized_fmt = fmt
-         if normalized_fmt == "pcm":
-             normalized_fmt = "pcm16"
-         if normalized_fmt != "pcm16" or rate != 16000 or channels != 1:
-+            if normalized_fmt != "pcm16":
-+                _logger.info(
-+                    "audio.header.reject reason=format got=%s want=pcm16",
-+                    fmt,
-+                )
-+            elif rate != 16000:
-+                _logger.info(
-+                    "audio.header.reject reason=sample_rate got=%s want=16000",
-+                    rate,
-+                )
-+            elif channels != 1:
-+                _logger.info(
-+                    "audio.header.reject reason=channels got=%s want=1",
-+                    channels,
-+                )
-             _logger.warning(
-                 "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
-                 fmt,
-                 rate,
-                 channels,
-             )
-             _emit_validator_log(
-                 "WARNING",
-                 "audio.header_rejected reason=vendor_requires_pcm vendor=speechmatics",
-             )
-             return "speechmatics requires pcm@16k mono"
+     params = to_sm_params(policy)
+     transcription = params["transcription_config"]
  
-     if policy is None:
-         return None
+     assert transcription["language"] == "es"
+     assert transcription["enable_partials"] is False
+-    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 2.0
++    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 4.0
+     assert transcription["additional_vocab"] == [{"content": "Gamma"}]
+     assert "profanity_filter" not in transcription
  
-     if isinstance(policy, Mapping):
-         media = policy.get("media")
-     else:
-         media = getattr(policy, "media", None)
- 
-     if media is None:
-         return None
- 
-     if isinstance(media, Mapping):
-         get_value = media.get
-     else:
-         get_value = lambda key, default=None: getattr(media, key, default)
- 
-     asr_input = get_value("asr_input")
-     if asr_input == "pcm_16k":
-         if fmt != "pcm":
-+            _logger.info(
-+                "audio.header.reject reason=format got=%s want=pcm",
-+                fmt,
-+            )
-             msg = "policy_violation: expected format=pcm"
-             _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
-             return msg
-         if rate is not None and rate != 16000:
-             msg = f"evt=audio_header_rate_mismatch expected=16000 got={rate}"
-             _logger.warning(msg)
-             _emit_validator_log("WARNING", msg)
-         if channels is not None and channels != 1:
-             msg = f"evt=audio_header_channels_mismatch expected=1 got={channels}"
-             _logger.warning(msg)
-             _emit_validator_log("WARNING", msg)
-     else:
-         if asr_input:
-             detail = f"policy_violation: media.asr_input must be pcm_16k (got {asr_input})"
-         else:
-             detail = "policy_violation: media.asr_input must be pcm_16k"
-         _emit_validator_log("WARNING", f"evt=policy_violation detail={detail}")
-         return detail
- 
-     return None
- 
- 
- __all__ = ["validate_frame", "validate_audio_header_against_policy"]
+diff --git a/tests/test_max_delay_clamp.py b/tests/test_max_delay_clamp.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b5d47f36ea81f620a8007b701b683d4d827b0468
+--- /dev/null
++++ b/tests/test_max_delay_clamp.py
+@@ -0,0 +1,18 @@
++import logging
++
++import pytest
++
++from app.services.asr.policies import to_sm_params
++
++
++def test_max_delay_clamped_emits_log(caplog):
++    policy = {"speechmatics": {"max_final_latency_ms": 400}}
++
++    logger_name = "app.services.asr.policies"
++    with caplog.at_level(logging.INFO, logger=logger_name):
++        params = to_sm_params(policy)
++
++    transcription = params["transcription_config"]
++
++    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.7
++    assert any("sm.max_delay.clamped" in message for message in caplog.messages)
+diff --git a/tests/test_punctuation_overrides.py b/tests/test_punctuation_overrides.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7ababfdd495975124e1ee20b26e292e9e485fd4a
+--- /dev/null
++++ b/tests/test_punctuation_overrides.py
+@@ -0,0 +1,19 @@
++from app.services.asr.policies import to_sm_params
++
++
++def test_punctuation_overrides_object_shape():
++    policy = {
++        "speechmatics": {
++            "punctuation": {
++                "overrides": {
++                    "permitted_marks": ["?", "!"],
++                    "sensitivity": 0.3,
++                }
++            }
++        }
++    }
++
++    params = to_sm_params(policy)
++    overrides = params["transcription_config"]["punctuation_overrides"]
++
++    assert overrides == {"permitted_marks": ["?", "!"], "sensitivity": 0.3}
+diff --git a/tests/test_sm_url_passthrough.py b/tests/test_sm_url_passthrough.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c3a498ccdcbd5a77bd308baf5cf05c067aea81a7
+--- /dev/null
++++ b/tests/test_sm_url_passthrough.py
+@@ -0,0 +1,32 @@
++import asyncio
++from unittest.mock import AsyncMock
++
++from app.services.asr.sm_rt import SMRealtimeClient
++
++
++def test_rt_uses_full_url(monkeypatch):
++    url = "wss://eu2.rt.speechmatics.com/v2"
++    client = SMRealtimeClient("sid-test")
++
++    mock_ws = AsyncMock()
++    mock_ws.send = AsyncMock()
++    mock_connect = AsyncMock(return_value=mock_ws)
++    monkeypatch.setattr("app.services.asr.sm_rt.websockets.connect", mock_connect)
++
++    client._await_ready = AsyncMock(return_value=[])
++    client._receive_loop = AsyncMock()
++    client._pcm_sender_loop = AsyncMock()
++    client._ws_ping_loop = AsyncMock()
++
++    token = "dummy.jwt"
++    params: dict = {}
++
++    async def run_test():
++        await client.open(endpoint_url=url, jwt_token=token, params=params)
++        assert client._url.startswith(f"{url}?jwt=")
++        client._sender_task = None
++        client._receiver_task = None
++        client._ws_ping_task = None
++        await client.close()
++
++    asyncio.run(run_test())

@@ -52,10 +52,12 @@ def test_speechmatics_policy_mapping():
     assert transcription["language"] == "fr"
     assert transcription["enable_partials"] is False
     assert transcription["diarization"] is True
-    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.4
+    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.7
     assert transcription["profanity_filter"] is True
     assert transcription["enable_punctuation"] is True
-    assert transcription["punctuation_overrides"] == ["question_mark", "exclamation_mark"]
+    assert transcription["punctuation_overrides"] == {
+        "permitted_marks": ["question_mark", "exclamation_mark"]
+    }
     assert transcription["additional_vocab"] == [
         {"content": "Alice"},
         {"content": "Bob", "sounds_like": ["Bawb"], "boost": pytest.approx(1.5)},
@@ -82,7 +84,7 @@ def test_policy_fallbacks_and_clamping():
 
     assert transcription["language"] == "es"
     assert transcription["enable_partials"] is False
-    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 2.0
+    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 4.0
     assert transcription["additional_vocab"] == [{"content": "Gamma"}]
     assert "profanity_filter" not in transcription
 
