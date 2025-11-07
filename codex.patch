@@ -1,156 +1,73 @@
-diff --git a/tests/test_asr_policy_mapper.py b/tests/test_asr_policy_mapper.py
-index 1dd7703027ca99138921d9ae3607f8901afcc848..edd5656a81583d7c19f8be2be1d2bdfa9dfc927f 100644
---- a/tests/test_asr_policy_mapper.py
-+++ b/tests/test_asr_policy_mapper.py
-@@ -30,59 +30,61 @@ def test_speechmatics_policy_mapping():
-                     "language": "fr",
-                     "enable_partials": False,
-                     "punctuation": {
-                         "enabled": True,
-                         "overrides": ["question_mark", "", " exclamation_mark "],
-                     },
-                     "diarization": {"enabled": True},
-                     "max_final_latency_ms": 100,
-                     "profanity_filter": True,
-                     "custom_vocab": [
-                         "Alice",
-                         {"content": "Bob", "sounds_like": ["Bawb", ""], "boost": "1.5"},
-                         {"content": "   "},
-                     ],
-                 }
-             },
-         }
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index d03ec2196271b9f1f5cfa3d42b92892bfb740553..6c142e37e2238b6154fb5ea8fe23e5891effd156 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -853,61 +853,61 @@ import { WakeWord } from "./wake_word.js";
+     pcmBatchQueue = [];
+     pcmBatchSampleCount = 0;
+     clearPcmFlushTimer();
+     if (!totalSamples) {
+       return;
      }
- 
-     params = to_sm_params(policy)
-     transcription = params["transcription_config"]
- 
-     assert transcription["language"] == "fr"
-     assert transcription["enable_partials"] is False
-     assert transcription["diarization"] is True
--    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.4
-+    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.7
-     assert transcription["profanity_filter"] is True
-     assert transcription["enable_punctuation"] is True
--    assert transcription["punctuation_overrides"] == ["question_mark", "exclamation_mark"]
-+    assert transcription["punctuation_overrides"] == {
-+        "permitted_marks": ["question_mark", "exclamation_mark"]
-+    }
-     assert transcription["additional_vocab"] == [
-         {"content": "Alice"},
-         {"content": "Bob", "sounds_like": ["Bawb"], "boost": pytest.approx(1.5)},
-     ]
- 
- 
- def test_policy_fallbacks_and_clamping():
-     policy = {
-         "policy": {
-             "nlu": {"language": " es "},
-             "asr": {
-                 "enable_partials": False,
-                 "speechmatics": {
-                     "max_final_latency_ms": 5000,
-                     "custom_vocab": {"entries": [{"content": "Gamma"}]},
-                     "profanity_filter": "not-bool",
-                 },
-             },
-         }
+     const out = new Int16Array(totalSamples);
+     let offset = 0;
+     let firstSeq = 0;
+     let batchChunks = 0;
+     for (const entry of frames) {
+       if (!batchChunks && entry && entry.meta && Number.isFinite(entry.meta.seq)) {
+         firstSeq = Number(entry.meta.seq);
+       }
+       if (entry && entry.frame) {
+         out.set(entry.frame, offset);
+         offset += entry.frame.length;
+         batchChunks += 1;
+       }
      }
- 
-     params = to_sm_params(policy)
-     transcription = params["transcription_config"]
- 
-     assert transcription["language"] == "es"
-     assert transcription["enable_partials"] is False
--    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 2.0
-+    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 4.0
-     assert transcription["additional_vocab"] == [{"content": "Gamma"}]
-     assert "profanity_filter" not in transcription
- 
-diff --git a/tests/test_max_delay_clamp.py b/tests/test_max_delay_clamp.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..b5d47f36ea81f620a8007b701b683d4d827b0468
---- /dev/null
-+++ b/tests/test_max_delay_clamp.py
-@@ -0,0 +1,18 @@
-+import logging
-+
-+import pytest
-+
-+from app.services.asr.policies import to_sm_params
-+
-+
-+def test_max_delay_clamped_emits_log(caplog):
-+    policy = {"speechmatics": {"max_final_latency_ms": 400}}
-+
-+    logger_name = "app.services.asr.policies"
-+    with caplog.at_level(logging.INFO, logger=logger_name):
-+        params = to_sm_params(policy)
-+
-+    transcription = params["transcription_config"]
-+
-+    assert pytest.approx(transcription["max_delay"], rel=0, abs=1e-6) == 0.7
-+    assert any("sm.max_delay.clamped" in message for message in caplog.messages)
-diff --git a/tests/test_punctuation_overrides.py b/tests/test_punctuation_overrides.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..7ababfdd495975124e1ee20b26e292e9e485fd4a
---- /dev/null
-+++ b/tests/test_punctuation_overrides.py
-@@ -0,0 +1,19 @@
-+from app.services.asr.policies import to_sm_params
-+
-+
-+def test_punctuation_overrides_object_shape():
-+    policy = {
-+        "speechmatics": {
-+            "punctuation": {
-+                "overrides": {
-+                    "permitted_marks": ["?", "!"],
-+                    "sensitivity": 0.3,
-+                }
-+            }
-+        }
+     if (!batchChunks) {
+       return;
+     }
+     const bytes = out.byteLength;
+     logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
++    const ws = socket || (WSClient && WSClient._ws) || null;
++    if (!ws || ws.readyState !== WebSocket.OPEN) {
++      console.warn("pcm.send.skipped", { readyState: ws ? ws.readyState : undefined });
++      return;
 +    }
-+
-+    params = to_sm_params(policy)
-+    overrides = params["transcription_config"]["punctuation_overrides"]
-+
-+    assert overrides == {"permitted_marks": ["?", "!"], "sensitivity": 0.3}
-diff --git a/tests/test_sm_url_passthrough.py b/tests/test_sm_url_passthrough.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..c3a498ccdcbd5a77bd308baf5cf05c067aea81a7
---- /dev/null
-+++ b/tests/test_sm_url_passthrough.py
-@@ -0,0 +1,32 @@
-+import asyncio
-+from unittest.mock import AsyncMock
-+
-+from app.services.asr.sm_rt import SMRealtimeClient
-+
-+
-+def test_rt_uses_full_url(monkeypatch):
-+    url = "wss://eu2.rt.speechmatics.com/v2"
-+    client = SMRealtimeClient("sid-test")
-+
-+    mock_ws = AsyncMock()
-+    mock_ws.send = AsyncMock()
-+    mock_connect = AsyncMock(return_value=mock_ws)
-+    monkeypatch.setattr("app.services.asr.sm_rt.websockets.connect", mock_connect)
-+
-+    client._await_ready = AsyncMock(return_value=[])
-+    client._receive_loop = AsyncMock()
-+    client._pcm_sender_loop = AsyncMock()
-+    client._ws_ping_loop = AsyncMock()
-+
-+    token = "dummy.jwt"
-+    params: dict = {}
-+
-+    async def run_test():
-+        await client.open(endpoint_url=url, jwt_token=token, params=params)
-+        assert client._url.startswith(f"{url}?jwt=")
-+        client._sender_task = None
-+        client._receiver_task = None
-+        client._ws_ping_task = None
-+        await client.close()
-+
-+    asyncio.run(run_test())
+     try {
+-      const result = sendBinary(out.buffer, { lane: "mic" });
++      ws.send(out.buffer);
+       __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
+       __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
+-      if (result && typeof result.catch === "function") {
+-        result.catch((err) => {
+-          console.warn("Binary send (mic) failed", err);
+-        });
+-      }
+     } catch (err) {
+-      console.error("WSClient sendBinary mic failed", err);
++      console.warn("pcm.send.error", err);
+     }
+   }
+ 
+   function stopRecorder(reason) {
+     clearAudioKeepaliveTimer();
+     const recorder = getRecorder();
+     if (!recorder) {
+       setListeningState(false);
+       return;
+     }
+     try {
+       recorder.stopListening({ reason: normalizeReason(reason) });
+     } catch (err) {
+       console.warn("Recorder stopListening failed", err);
+     }
+     senderPaused = false;
+     flushPcmBatch();
+     if (vadController && typeof vadController.reset === "function") {
+       try {
+         vadController.reset();
+       } catch (err) {
+         try {
+           console.warn("VAD reset failed", err);
+         } catch {}
+       }

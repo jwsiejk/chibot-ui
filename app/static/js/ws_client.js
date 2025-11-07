@@ -875,17 +875,17 @@ import { WakeWord } from "./wake_word.js";
     }
     const bytes = out.byteLength;
     logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
+    const ws = socket || (WSClient && WSClient._ws) || null;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn("pcm.send.skipped", { readyState: ws ? ws.readyState : undefined });
+      return;
+    }
     try {
-      const result = sendBinary(out.buffer, { lane: "mic" });
+      ws.send(out.buffer);
       __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
       __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-      if (result && typeof result.catch === "function") {
-        result.catch((err) => {
-          console.warn("Binary send (mic) failed", err);
-        });
-      }
     } catch (err) {
-      console.error("WSClient sendBinary mic failed", err);
+      console.warn("pcm.send.error", err);
     }
   }
 
