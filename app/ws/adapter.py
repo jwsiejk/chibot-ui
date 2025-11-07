@@ -1268,6 +1268,7 @@ class ChatV2Adapter:
         mode = ctx.audio_pipeline_mode or "pcm16"
         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
         ctx.ws_send = send
+        self._ensure_ingress_tick_timer(ctx)
 
         token = current_sid.set(ctx.sid)
         try:

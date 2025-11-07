@@ -1,249 +1,56 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 3a7e53bbc7c3047e63176a61a1889e9ee4037ed3..717e12ec86b37388c720213dff37dadbbbaf6c77 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -785,53 +785,51 @@ import { WakeWord } from "./wake_word.js";
-     if (typeof key !== "string" || !key) {
-       return;
-     }
-     const state = typeof AppState.getState === "function" ? AppState.getState() : null;
-     const hasKey = state && Object.prototype.hasOwnProperty.call(state, key);
-     const current = hasKey ? state[key] : AppState[key];
-     if (Object.is(current, value)) {
-       AppState[key] = value;
-       return;
-     }
-     AppState[key] = value;
-     updateState({ [key]: value });
-   }
- 
-   function setListeningState(active) {
-     const listening = Boolean(active);
-     setAppStateValue("listening", listening);
-     const recorderState = { active: listening };
-     AppState.recorderActive = listening;
-     updateState({ recorder: recorderState, recorderActive: listening });
-     if (AppState.recorder && typeof AppState.recorder === "object") {
-       AppState.recorder = { ...AppState.recorder, active: listening };
-     } else {
-       AppState.recorder = recorderState;
-     }
--    if (listening) {
--      setWsPhase("streaming");
--    } else if (AppState.wsConnected) {
-+    if (!listening && AppState.wsConnected) {
-       setWsPhase("connected");
-     }
-   }
- 
-   function setAsrArmInFlight(inFlight) {
-     setAppStateValue("asrArmInFlight", Boolean(inFlight));
-   }
- 
-   function setArmAfterTtsEnd(pending) {
-     setAppStateValue("armAfterTtsEnd", Boolean(pending));
-   }
- 
-   function setWsConnected(connected) {
-     setAppStateValue("wsConnected", Boolean(connected));
-   }
- 
-   function setWsPhase(phase) {
-     if (typeof phase !== "string" || !phase) {
-       return;
-     }
-     setAppStateValue("wsPhase", phase);
-   }
- 
-   function resetRecorderTelemetry() {
-     setAppStateValue("chunkCount", 0);
-@@ -1120,51 +1118,51 @@ import { WakeWord } from "./wake_word.js";
-   }
- 
-   function schedulePostTtsArm(reason) {
-     clearPostTtsArmTimer();
-     postTtsArmTimerId = setTimeout(() => {
-       postTtsArmTimerId = null;
-       requestAsrArm(reason);
-     }, POST_TTS_ARM_DELAY_MS);
-   }
- 
-   function requestAsrArm(reason) {
-     const label = normalizeReason(reason);
-     clearPostTtsArmTimer();
-     if (AppState.ttsActive) {
-       setArmAfterTtsEnd(true);
-       logStage("client.asr_arm_queued", { reason: label });
-       return;
-     }
-     if (AppState.asrArmInFlight) {
-       logStage("client.asr_rearm_blocked", { reason: label });
-       return;
-     }
-     try {
-       setAsrArmInFlight(true);
-       logStage("client.asr_rearm_request", { reason: label });
--      WSClient.send({ type: "asr.open" });
-+      WSClient.send({ type: "asr.open" }); // send first so it's not phase-blocked
-       setWsPhase("arming");
-     } catch (err) {
-       setAsrArmInFlight(false);
-       setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
-       console.error("Failed to send asr.open", err);
-       logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_WS_SEND, message: err?.message });
-     }
-   }
- 
-   function requestAsrClose(reason = "client_stop") {
-     const label = normalizeReason(reason);
-     clearPostTtsArmTimer();
-     setArmAfterTtsEnd(false);
-     setAsrArmInFlight(false);
-     try {
-       WSClient.send({ type: "asr.close", reason: label });
-       setWsPhase("closing");
-       logStage("client.asr_close_request", { reason: label });
-     } catch (err) {
-       console.warn("Failed to send asr.close", err);
-       setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
-     }
-     stopRecorder(label);
-   }
- 
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index f8fba5e1202c3dee6b7997a74764a1eb3b0a3b47..ef3938efa851a498aac3e89d59485b2141c11ba8 100644
+index ef3938efa851a498aac3e89d59485b2141c11ba8..9372e0f227a8cf4c14c0eb700fce76e511832ea6 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -462,50 +462,52 @@ class AdapterContext:
-     listen_handoff_task: asyncio.Task[None] | None = None
-     listen_handoff_task_key: Optional[str] = None
-     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-     client_banner_info: Optional[Dict[str, Any]] = None
-     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
-     allowed_asr_vendors: List[str] = field(default_factory=list)
-     asr_vendor: Optional[str] = None
-     audio_pipeline_mode: Optional[str] = None
-     asr_vendor_logged: bool = False
-     session_capture_policy: Optional[Dict[str, Any]] = None
-     client_vad_speech: bool = False
-     client_vad_since_ms: Optional[int] = None
-     client_vad_last_event_ms: Optional[int] = None
-     client_vad_last_speech_end_ms: Optional[int] = None
-     client_vad_confidence: float = 0.0
-     client_vad_energy_db: Optional[float] = None
-     client_vad_noise_db: Optional[float] = None
-     server_vad_candidate_start_ms: Optional[int] = None
-     server_vad_silence_candidate_ms: Optional[int] = None
-     server_vad_energy_db: Optional[float] = None
-     vad_fusion_task: asyncio.Task[None] | None = None
-     input_start_ms: Optional[int] = None
-     first_partial_logged: bool = False
-     first_final_logged: bool = False
-     active_asr_config: Optional[Dict[str, Any]] = None
-+    hub_log_last_turn: Optional[str] = None
-+    hub_log_seq: int = 0
+@@ -1246,50 +1246,51 @@ class ChatV2Adapter:
+             user_id=sub,
+             is_admin=is_admin,
+         )
+         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+         ctx.session.policy = ctx.policy_snapshot
+         ctx.last_client_activity_ms = now_ms
+         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
+         snapshot_mapping = (
+             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+         )
+         ctx.asr_vendor = selected_vendor
+         allowed_display = ",".join(ctx.allowed_asr_vendors)
+         _log.info(
+             "asr_vendor_selected primary=%s allowed=%s reason=%s",
+             ctx.asr_vendor,
+             allowed_display,
+             selection_reason,
+         )
+         ctx.asr_vendor_logged = True
+         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
+         if ctx.asr_vendor == "speechmatics":
+             ctx.audio_pipeline_mode = "pcm16"
+         mode = ctx.audio_pipeline_mode or "pcm16"
+         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
+         ctx.ws_send = send
++        self._ensure_ingress_tick_timer(ctx)
  
-     def __post_init__(self) -> None:
-         self.session = SessionCtx(sid=self.sid, policy=None)
- 
- 
- class ChatV2Adapter:
-     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
- 
-     def __init__(
-         self,
-         engine: EngineHooks | None = None,
-         exporter: FileExporter | None = None,
-         *,
-         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
-         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
-     ) -> None:
-         self.engine = engine
-         self.exporter = exporter
-         self.text_limit_bytes = text_limit_bytes
-         self.binary_limit_bytes = binary_limit_bytes
-         self._ip_buckets: Dict[str, TokenBucket] = {}
-         self._contexts: Dict[str, AdapterContext] = {}
-         self._ping_interval_ms = max(
-             0,
-             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
-@@ -4159,54 +4161,77 @@ class ChatV2Adapter:
-             getattr(ctx.session, "turn_phase", None),
-             getattr(ctx.session, "turn_state", None),
-             ctx.hud_state,
-         ]
-         mask_phase = ctx.tts_mask_phase if isinstance(ctx.tts_mask_phase, str) else None
-         if mask_phase and mask_phase != "off":
-             candidates.append(mask_phase)
-         candidates.append(ctx.session.asr_state)
-         for candidate in candidates:
-             if isinstance(candidate, str) and candidate.strip():
-                 return candidate
-         return None
- 
-     def _emit_hub_watchdog_log(self, ctx: AdapterContext, detail: Mapping[str, Any]) -> None:
+         token = current_sid.set(ctx.sid)
          try:
-             self._emit_hub_log(ctx, "asr.no_audio_after_header", detail)
-         except Exception:
-             _log.exception("evt=asr_no_audio_watchdog_emit_failed sid=%s", ctx.sid)
+             if not (
+                 inspect.iscoroutinefunction(self._on_open_and_greet)
+                 and inspect.iscoroutinefunction(self._invoke_engine)
+             ):
+                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+                 raise RuntimeError("WebSocket async contract violation")
  
-     def _emit_hub_log(
-         self,
-         ctx: AdapterContext,
-         label: str,
-         detail: Mapping[str, Any],
-     ) -> None:
-+        if isinstance(detail, Mapping):
-+            enriched_detail: Dict[str, Any] = dict(detail)
-+        else:
-+            enriched_detail = {"detail": detail}
-+
-+        sid = enriched_detail.get("session_id") or ctx.sid
-+        turn_id = enriched_detail.get("turn_id")
-+        ctx_turn_id = getattr(ctx.session, "turn_id", None)
-+        if not isinstance(turn_id, str) or not turn_id:
-+            if isinstance(ctx_turn_id, str) and ctx_turn_id:
-+                turn_id = ctx_turn_id
-+
-+        if turn_id != ctx.hub_log_last_turn:
-+            ctx.hub_log_last_turn = turn_id
-+            ctx.hub_log_seq = 0
-+
-+        if "seq" not in enriched_detail:
-+            enriched_detail["seq"] = ctx.hub_log_seq
-+            ctx.hub_log_seq += 1
-+
-+        enriched_detail.setdefault("session_id", sid)
-+        enriched_detail.setdefault("turn_id", turn_id)
-+
-         try:
--            sanitized = bus.redact_payload(detail)
-+            sanitized = bus.redact_payload(enriched_detail)
-         except Exception:
--            sanitized = detail
-+            sanitized = enriched_detail
-         payload = {
-             "type": EVT_CLIENT_LOG,
-             "sid": ctx.sid,
-             "who": "server",
-             "source": "ws.adapter",
-             "meta": {
-                 "label": label,
-                 "detail": sanitized,
-             },
-         }
-         bus.publish(payload)
+             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+             client = scope.get("client")
+             ctx.ip = client[0] if isinstance(client, tuple) and client else None
+             if ctx.ip:
+                 ctx.ip_bucket = self._ip_buckets.setdefault(
+                     ctx.ip,
+                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+                 )
  
-     def _mark_input_start(self, ctx: AdapterContext) -> None:
-         now_ms = self._now_ms()
-         ctx.input_start_ms = now_ms
-         ctx.first_partial_logged = False
-         ctx.first_final_logged = False
+             self._contexts[ctx.sid] = ctx
  
-     def _maybe_emit_first_token_latency(
-         self, ctx: AdapterContext, kind: Literal["partial", "final"], now_ms: int
-     ) -> None:
-         start_ms = ctx.input_start_ms
-         if start_ms is None:
-             return
-         elapsed_ms = max(0, now_ms - int(start_ms))
+             _log.info("evt=ws_open sid=%s", ctx.sid)
+             self._start_asr_ready_tracker(ctx, bus)
+             self._start_outbound_bridge(ctx, send)
+             self._start_server_keepalive(ctx, send)
