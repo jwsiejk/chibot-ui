@@ -1,8 +1,43 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 1aacbdae8d09ac819ca8defa49490e69704cebc8..b29283b16feacd3800595428a7705ab396ebb55b 100644
+index b29283b16feacd3800595428a7705ab396ebb55b..3a7e53bbc7c3047e63176a61a1889e9ee4037ed3 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -3237,51 +3237,54 @@ import { WakeWord } from "./wake_word.js";
+@@ -3204,65 +3204,69 @@ import { WakeWord } from "./wake_word.js";
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+         } else {
+           stopInputCapture({ reason: "server_requested" });
+         }
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
+       clearPendingAsrReadyStart("stop_listening");
+       __asrReadySeen = false;
+       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+         try {
+           const reason =
+             (typeof frame?.reason === "string" && frame.reason) ||
+             "server_requested";
+           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
+         } catch (err) {
+           console.warn("stop_listening event dispatch failed", err);
+         }
+       }
+     } else if (frame.type === "input.start") {
+       _audioStreaming = true;
++      setListeningState(true);
++      emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
+       const reason = typeof frame?.reason === "string" && frame.reason
+         ? frame.reason
+         : frame?.type || "input.start";
+       hubLog("client.stream.on", { reason });
+       await handleInputStartFrame(frame);
+     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
+       __resetAudioHeaderSent();
+     } else if (frame.type === "input.stop") {
        if (_audioStreaming) {
          const reason = typeof frame?.reason === "string" && frame.reason
            ? frame.reason
@@ -10,6 +45,8 @@ index 1aacbdae8d09ac819ca8defa49490e69704cebc8..b29283b16feacd3800595428a7705ab3
          hubLog("client.stream.off", { reason });
        }
        _audioStreaming = false;
++      setListeningState(false);
++      emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
        stopInputCapture({ reason: "input.stop" });
        clearPendingAsrReadyStart("input.stop");
        __asrReadySeen = false;
@@ -28,32 +65,10 @@ index 1aacbdae8d09ac819ca8defa49490e69704cebc8..b29283b16feacd3800595428a7705ab3
        setAsrArmInFlight(false);
        setArmAfterTtsEnd(false);
        setWsConnected(true);
-+      AppState.asrReady = true;
+       AppState.asrReady = true;
        setWsPhase("ready");
-+      emitConsoleBusEvent("client.asr.ready", { asrReady: true });
-+      logStage("diag", { label: "asr.ready" });
+       emitConsoleBusEvent("client.asr.ready", { asrReady: true });
+       logStage("diag", { label: "asr.ready" });
        logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
        __resetAudioHeaderSent();
        sendAudioHeader(frame);
-       try {
-         await startRecorderStreaming(frame?.policy || {});
-       } catch (err) {
-         console.error("Recorder start on asr.ready failed", err);
-         logStage("client.mic", {
-           outcome: MIC_OUTCOME.ERROR_GUM,
-           message: err && err.message ? err.message : String(err || ""),
-         });
-         setListeningState(false);
-       }
-     } else if (frame.type === "asr.partial") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.final") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.unavailable") {
-       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-       const details = frame && typeof frame.details === "string"
-         ? frame.details
-         : (frame && typeof frame.detail === "string" ? frame.detail : "");
-       console.warn("asr.unavailable", reason, details);
-       AppState.asrReady = false;
-       AppState.asrVendor = null;

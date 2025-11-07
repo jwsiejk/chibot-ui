@@ -3226,6 +3226,8 @@ import { WakeWord } from "./wake_word.js";
       }
     } else if (frame.type === "input.start") {
       _audioStreaming = true;
+      setListeningState(true);
+      emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
       const reason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
         : frame?.type || "input.start";
@@ -3241,6 +3243,8 @@ import { WakeWord } from "./wake_word.js";
         hubLog("client.stream.off", { reason });
       }
       _audioStreaming = false;
+      setListeningState(false);
+      emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
       __asrReadySeen = false;
