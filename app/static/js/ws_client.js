@@ -3537,6 +3537,13 @@ import { WakeWord } from "./wake_word.js";
       }
     }
     const live = client._ws || stateSocket;
+    try {
+      const phase = AppState?.wsPhase || AppState?.connectionState;
+      if (!binary && (phase !== "connected" && phase !== "ready" && phase !== "resuming")) {
+        console.warn("WSClient.send skipped (phase not ready)", { phase });
+        return;
+      }
+    } catch {}
     if (!live || live.readyState !== WebSocket.OPEN) {
       client._queue.push({ data: payload, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");
