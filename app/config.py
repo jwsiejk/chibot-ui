@@ -39,8 +39,8 @@ SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
 def _resolve_speechmatics_realtime_url() -> str:
     """Return the configured Speechmatics realtime endpoint URL.
 
-    Historically the deployment accepted short region tokens (``us1``) or a bare
-    hostname (``us1.rt.speechmatics.com``).  The Speechmatics client, however,
+    Historically the deployment accepted short region tokens (``wus``) or a bare
+    hostname (``wus.rt.speechmatics.com``).  The Speechmatics client, however,
     requires a fully qualified ``wss://`` URL.  Render environments that still
     provide the short form were failing DNS lookups which manifested as
     ``socket.gaierror: [Errno -2]`` during the websocket connection attempt.
@@ -49,7 +49,7 @@ def _resolve_speechmatics_realtime_url() -> str:
     URL shape while still validating explicit URLs for correctness.
     """
 
-    default_url = "wss://us1.rt.speechmatics.com/v2"
+    default_url = "wss://wus.rt.speechmatics.com/v2"
     raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
     expanded_value = os.path.expandvars(raw_value or "")
     expanded_value = os.path.expanduser(expanded_value)
@@ -67,7 +67,7 @@ def _resolve_speechmatics_realtime_url() -> str:
             )
         return candidate
 
-    # Support legacy tokens such as "us1" or "us1.rt.speechmatics.com/v2".
+    # Support legacy tokens such as "wus" or "wus.rt.speechmatics.com/v2".
     legacy = candidate.lstrip("/")
     host_part, _, path_part = legacy.partition("/")
     host_part = host_part.strip().lower()
@@ -76,7 +76,7 @@ def _resolve_speechmatics_realtime_url() -> str:
             f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
         )
 
-    allowed_regions = {"us1", "eu1", "ap1"}
+    allowed_regions = {"wus", "eu1", "ap1"}
     if "." not in host_part:
         # Region token only
         if host_part not in allowed_regions:
