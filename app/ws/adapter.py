@@ -4922,12 +4922,17 @@ class ChatV2Adapter:
             _log.error("evt=sm_jwt_mint_failed err=%s", exc)
             return None
 
-        token = payload.get("key") or payload.get("jwt") or payload.get("token")
+        token = (
+            payload.get("key")
+            or payload.get("jwt")
+            or payload.get("token")
+            or payload.get("key_value")
+        )
         if not token:
             _log.error("evt=sm_jwt_response_missing_token obj=%s", payload)
             return None
 
-        ttl_raw = payload.get("ttl", 60)
+        ttl_raw = payload.get("ttl", 60)  # many responses omit TTL for temp keys
         try:
             ttl = int(ttl_raw)
         except (TypeError, ValueError):
