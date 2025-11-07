@@ -81,15 +81,34 @@ def _normalize_punctuation(value: Any) -> Dict[str, Any]:
         result["enable_punctuation"] = enabled
 
     overrides_value = mapping.get("overrides")
-    overrides: list[str] = []
+    permitted_marks: list[str] = []
+    sensitivity: float | None = None
     if overrides_value is not None:
-        for item in _as_sequence(overrides_value):
-            if isinstance(item, str):
-                normalized = item.strip()
-                if normalized:
-                    overrides.append(normalized)
-    if overrides:
-        result["punctuation_overrides"] = overrides
+        overrides_mapping = _as_mapping(overrides_value)
+        if overrides_mapping:
+            permitted_value = overrides_mapping.get("permitted_marks")
+            for item in _as_sequence(permitted_value):
+                if isinstance(item, str):
+                    normalized = item.strip()
+                    if normalized:
+                        permitted_marks.append(normalized)
+            sensitivity_value = overrides_mapping.get("sensitivity")
+            if isinstance(sensitivity_value, (int, float)):
+                clamped = max(0.0, min(1.0, float(sensitivity_value)))
+                sensitivity = clamped
+        else:
+            for item in _as_sequence(overrides_value):
+                if isinstance(item, str):
+                    normalized = item.strip()
+                    if normalized:
+                        permitted_marks.append(normalized)
+    if permitted_marks or (sensitivity is not None):
+        overrides_config: Dict[str, Any] = {}
+        if permitted_marks:
+            overrides_config["permitted_marks"] = permitted_marks
+        if sensitivity is not None:
+            overrides_config["sensitivity"] = sensitivity
+        result["punctuation_overrides"] = overrides_config
 
     return result
 
