@@ -37,23 +37,49 @@ ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
 ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
 SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
 def _resolve_speechmatics_realtime_url() -> str:
-    """Canonical Speechmatics Realtime URL (full URL, not just a region token).
+    """Return the configured Speechmatics realtime endpoint URL.
 
-    Example: ``wss://us1.rt.speechmatics.com/v2``.
+    Historically the deployment accepted short region tokens (``us1``) or a bare
+    hostname (``us1.rt.speechmatics.com``).  The Speechmatics client, however,
+    requires a fully qualified ``wss://`` URL.  Render environments that still
+    provide the short form were failing DNS lookups which manifested as
+    ``socket.gaierror: [Errno -2]`` during the websocket connection attempt.
+
+    To remain backwards compatible we normalise older inputs into the canonical
+    URL shape while still validating explicit URLs for correctness.
     """
 
     default_url = "wss://us1.rt.speechmatics.com/v2"
-    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
+    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
     expanded_value = os.path.expandvars(raw_value or "")
     expanded_value = os.path.expanduser(expanded_value)
     candidate = expanded_value.strip()
+
     if not candidate:
-        candidate = default_url
-    if not candidate.startswith("wss://"):
+        return default_url
+
+    lowered = candidate.lower()
+    if "://" in candidate:
+        if not lowered.startswith("wss://"):
+            raise ValueError(
+                f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
+            )
+        return candidate
+
+    # Support legacy tokens such as "us1" or "us1.rt.speechmatics.com/v2".
+    legacy = candidate.lstrip("/")
+    host_part, _, path_part = legacy.partition("/")
+    host_part = host_part.strip()
+    if not host_part:
         raise ValueError(
-            f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
+            f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
         )
-    return candidate
+
+    if "." not in host_part:
+        host_part = f"{host_part}.rt.speechmatics.com"
+
+    path = f"/{path_part}" if path_part else "/v2"
+    return f"wss://{host_part}{path}"
 
 
 SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()

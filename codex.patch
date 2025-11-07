@@ -1,56 +1,155 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index ef3938efa851a498aac3e89d59485b2141c11ba8..9372e0f227a8cf4c14c0eb700fce76e511832ea6 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1246,50 +1246,51 @@ class ChatV2Adapter:
-             user_id=sub,
-             is_admin=is_admin,
+diff --git a/app/config.py b/app/config.py
+index 9c555758eaf742f40bc73a29188632f5dccaeeb4..2eeb182cc6a32dc3f1d6a21dedc101859c59c2f2 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -15,67 +15,93 @@ except ImportError:  # pragma: no cover - optional dependency
+ else:  # pragma: no branch
+     load_dotenv(dotenv_path=".env", override=False)
+ 
+ 
+ def env_bool(name: str, default: bool = False) -> bool:
+     """Return an environment variable parsed as a boolean."""
+ 
+     value = os.getenv(name)
+     if value is None:
+         return bool(default)
+     value = value.strip().lower()
+     if value in {"1", "true", "t", "yes", "y", "on"}:
+         return True
+     if value in {"0", "false", "f", "no", "n", "off"}:
+         return False
+     return bool(default)
+ 
+ 
+ # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+ # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
+ DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
+ ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
+ ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
+ SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
+ def _resolve_speechmatics_realtime_url() -> str:
+-    """Canonical Speechmatics Realtime URL (full URL, not just a region token).
++    """Return the configured Speechmatics realtime endpoint URL.
+ 
+-    Example: ``wss://us1.rt.speechmatics.com/v2``.
++    Historically the deployment accepted short region tokens (``us1``) or a bare
++    hostname (``us1.rt.speechmatics.com``).  The Speechmatics client, however,
++    requires a fully qualified ``wss://`` URL.  Render environments that still
++    provide the short form were failing DNS lookups which manifested as
++    ``socket.gaierror: [Errno -2]`` during the websocket connection attempt.
++
++    To remain backwards compatible we normalise older inputs into the canonical
++    URL shape while still validating explicit URLs for correctness.
+     """
+ 
+     default_url = "wss://us1.rt.speechmatics.com/v2"
+-    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
++    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
+     expanded_value = os.path.expandvars(raw_value or "")
+     expanded_value = os.path.expanduser(expanded_value)
+     candidate = expanded_value.strip()
++
+     if not candidate:
+-        candidate = default_url
+-    if not candidate.startswith("wss://"):
++        return default_url
++
++    lowered = candidate.lower()
++    if "://" in candidate:
++        if not lowered.startswith("wss://"):
++            raise ValueError(
++                f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
++            )
++        return candidate
++
++    # Support legacy tokens such as "us1" or "us1.rt.speechmatics.com/v2".
++    legacy = candidate.lstrip("/")
++    host_part, _, path_part = legacy.partition("/")
++    host_part = host_part.strip()
++    if not host_part:
+         raise ValueError(
+-            f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
++            f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
          )
-         ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
-         ctx.session.policy = ctx.policy_snapshot
-         ctx.last_client_activity_ms = now_ms
-         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-         snapshot_mapping = (
-             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-         )
-         ctx.asr_vendor = selected_vendor
-         allowed_display = ",".join(ctx.allowed_asr_vendors)
-         _log.info(
-             "asr_vendor_selected primary=%s allowed=%s reason=%s",
-             ctx.asr_vendor,
-             allowed_display,
-             selection_reason,
-         )
-         ctx.asr_vendor_logged = True
-         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
-         if ctx.asr_vendor == "speechmatics":
-             ctx.audio_pipeline_mode = "pcm16"
-         mode = ctx.audio_pipeline_mode or "pcm16"
-         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
-         ctx.ws_send = send
-+        self._ensure_ingress_tick_timer(ctx)
+-    return candidate
++
++    if "." not in host_part:
++        host_part = f"{host_part}.rt.speechmatics.com"
++
++    path = f"/{path_part}" if path_part else "/v2"
++    return f"wss://{host_part}{path}"
  
-         token = current_sid.set(ctx.sid)
-         try:
-             if not (
-                 inspect.iscoroutinefunction(self._on_open_and_greet)
-                 and inspect.iscoroutinefunction(self._invoke_engine)
-             ):
-                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-                 raise RuntimeError("WebSocket async contract violation")
  
-             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-             client = scope.get("client")
-             ctx.ip = client[0] if isinstance(client, tuple) and client else None
-             if ctx.ip:
-                 ctx.ip_bucket = self._ip_buckets.setdefault(
-                     ctx.ip,
-                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-                 )
+ SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()
+ ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
+     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
+ )
+ ASR_IDLE_CLOSE_MS = 15000
+ ASR_TRACE = env_bool("ASR_TRACE", False)
  
-             self._contexts[ctx.sid] = ctx
  
-             _log.info("evt=ws_open sid=%s", ctx.sid)
-             self._start_asr_ready_tracker(ctx, bus)
-             self._start_outbound_bridge(ctx, send)
-             self._start_server_keepalive(ctx, send)
+ def get_env(name: str, default=None):
+     """Retrieve an environment variable with an optional default."""
+ 
+     value = os.getenv(name)
+     return value if value is not None else default
+ 
+ 
+ _log = logging.getLogger(__name__)
+ 
+ _ADMIN_SETTINGS_LOCK = threading.RLock()
+ _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
+ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
+ _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
+ 
+ _ALLOWED_ASR_INPUTS = {"pcm_16k"}
+diff --git a/tests/test_config_speechmatics_url.py b/tests/test_config_speechmatics_url.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..515dbe434213f5f8ccdd11ca33725495a77beb3e
+--- /dev/null
++++ b/tests/test_config_speechmatics_url.py
+@@ -0,0 +1,44 @@
++import importlib
++
++import pytest
++
++
++def _reload_config(monkeypatch, value):
++    if value is None:
++        monkeypatch.delenv("SPEECHMATICS_REALTIME_URL", raising=False)
++    else:
++        monkeypatch.setenv("SPEECHMATICS_REALTIME_URL", value)
++
++    module = importlib.import_module("app.config")
++    importlib.reload(module)
++    return module
++
++
++def test_default_url_when_missing(monkeypatch):
++    module = _reload_config(monkeypatch, None)
++    assert module.SPEECHMATICS_REALTIME_URL == "wss://us1.rt.speechmatics.com/v2"
++
++
++@pytest.mark.parametrize(
++    "value, expected",
++    [
++        ("wss://eu2.rt.speechmatics.com/v2", "wss://eu2.rt.speechmatics.com/v2"),
++        ("us1", "wss://us1.rt.speechmatics.com/v2"),
++        (
++            "eu2.rt.speechmatics.com/v2",
++            "wss://eu2.rt.speechmatics.com/v2",
++        ),
++        (
++            "us1.rt.speechmatics.com/custom",
++            "wss://us1.rt.speechmatics.com/custom",
++        ),
++    ],
++)
++def test_legacy_inputs_are_normalised(monkeypatch, value, expected):
++    module = _reload_config(monkeypatch, value)
++    assert module.SPEECHMATICS_REALTIME_URL == expected
++
++
++def test_rejects_non_wss_urls(monkeypatch):
++    with pytest.raises(ValueError):
++        _reload_config(monkeypatch, "http://us1.rt.speechmatics.com/v2")
