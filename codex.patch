@@ -1,319 +1,280 @@
-diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
-index 839a3784251789f4830576f05524113d6b24da06..db32a2488ad9628114a3c0f7c123a1fe64d6238d 100644
---- a/app/services/asr/sm_rt.py
-+++ b/app/services/asr/sm_rt.py
-@@ -85,51 +85,51 @@ class SMRealtimeClient:
-         on_notice: Optional[Callable[[Dict[str, Any]], None]] = None,
-         on_closed: Optional[Callable[[str], None]] = None,
-         ready_timeout_s: Optional[float] = None,
-         close_ack_timeout_s: Optional[float] = None,
-         keepalive_interval_s: Optional[float] = None,
-     ) -> None:
-         if not sid:
-             raise ValueError("sid must be provided")
-         self._sid = sid
-         self._bus = telemetry_bus
-         self._state = "idle"
-         self._state_lock = asyncio.Lock()
-         self._ws: WebSocketClientProtocol | None = None
-         self._endpoint_url: str | None = None
-         self._url: str | None = None
-         self._connected_at = 0.0
-         self._last_activity = time.monotonic()
-         self._partial_seq = 0
-         self._ready_event = asyncio.Event()
-         self._close_ack_event = asyncio.Event()
-         self._stop_event = asyncio.Event()
-         self._pcm_queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
-         self._pcm_sentinel: object = object()
-         self._receiver_task: asyncio.Task[None] | None = None
-         self._sender_task: asyncio.Task[None] | None = None
--        self._keepalive_task: asyncio.Task[None] | None = None
-+        self._ws_ping_task: asyncio.Task[None] | None = None
-         self._closing = False
-         self._closed_event = asyncio.Event()
-         self._close_reason: str | None = None
-         self._sent_end_of_stream = False
-         self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
-         self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
-         self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index c5d1d7934269aff068b57259059021e53cd423ac..d03ec2196271b9f1f5cfa3d42b92892bfb740553 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -332,50 +332,57 @@ import { WakeWord } from "./wake_word.js";
+     }
+   }
  
-         self._on_ready = on_ready or (lambda info: None)
-         self._on_partial = on_partial or (lambda text, latency: None)
-         self._on_final = on_final or (lambda text, latency: None)
-         self._on_notice = on_notice or (lambda meta: None)
-         self._on_closed = on_closed or (lambda reason: None)
+   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+   let autostartAttempts = 0;
+   let autostartTimer = null;
  
-     # ------------------------------------------------------------------
-     # Public properties
-     # ------------------------------------------------------------------
-     @property
-     def state(self) -> str:
-         """Return the current connection state."""
+   const WSClient = window.WSClient = window.WSClient || {};
+   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
+     window.ws = null;
+   }
+   WSClient._ws = WSClient._ws || null;
+   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+   const getAudioPlayer = () => window.AudioPlayer;
  
-         return self._state
+   const VAD_APPSTATE_KEYS = [
+     "vadActive",
+     "vadSpeech",
+     "vadConfidence",
+     "vadEnergyDb",
+     "vadNoiseDb",
+   ];
+   let vadController = null;
+   let senderPaused = false;
++  const PCM_TARGET_BATCH_MS = 60;
++  const PCM_FLUSH_TIMER_MS = 50;
++  const PCM_SAMPLE_RATE = 16000;
++  const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
++  let pcmBatchQueue = [];
++  let pcmBatchSampleCount = 0;
++  let pcmFlushTimerId = null;
  
-     # ------------------------------------------------------------------
-     # Lifecycle management
-@@ -194,51 +194,51 @@ class SMRealtimeClient:
-         self._last_activity = self._connected_at
+   function hubLog(label, detail) {
+     const state = typeof window !== "undefined" ? window.AppState : null;
+     const hub = state && state.hub;
+     if (hub && typeof hub.log === "function") {
+       try {
+         hub.log(label, detail);
+         return true;
+       } catch (err) {
+         console.warn("AppState.hub.log failed", err);
+       }
+     }
+     if (typeof window !== "undefined") {
+       try {
+         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
+         return true;
+       } catch (err) {
+         console.warn("client.log dispatch failed", err);
+       }
+     }
+     return false;
+   }
  
-         await self._send_json(params)
+   function getVadPolicySnapshot() {
+     return CLIENT_VAD_POLICY_ROOT;
+@@ -778,63 +785,146 @@ import { WakeWord } from "./wake_word.js";
+       micKeepaliveTimerId = null;
+     }
+   }
  
-         self._publish_event(
-             EVT_ASR_OPEN,
-             {
-                 "vendor": self.VENDOR,
-                 "meta": {"url": ws_url},
-             },
-         )
+   function scheduleAudioKeepalive() {
+     clearAudioKeepaliveTimer();
+     micKeepaliveTimerId = setTimeout(() => {
+       micKeepaliveTimerId = null;
+       const listening = Boolean(AppState.listening);
+       const now = Date.now();
+       if (!listening) {
+         return;
+       }
+       if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
+         try {
+           WSClient.send({ type: "client.ping" });
+           logStage("client.ping", { lane: "mic" });
+         } catch (err) {
+           console.warn("client.ping send failed", err);
+         }
+       }
+       scheduleAudioKeepalive();
+     }, AUDIO_KEEPALIVE_MS);
+   }
  
-         extra_messages: list[dict] = []
-         try:
-             extra_messages = await self._await_ready(ws)
-         except Exception:
-             with contextlib.suppress(Exception):
-                 await ws.close()
-             await self._finalize_close(reason="ready_failed", publish_close=True)
-             raise
++  function clearPcmFlushTimer() {
++    if (pcmFlushTimerId) {
++      clearTimeout(pcmFlushTimerId);
++      pcmFlushTimerId = null;
++    }
++  }
++
++  function resetPcmBatchState() {
++    pcmBatchQueue = [];
++    pcmBatchSampleCount = 0;
++    clearPcmFlushTimer();
++  }
++
++  function schedulePcmFlushTimer() {
++    if (!pcmFlushTimerId) {
++      pcmFlushTimerId = setTimeout(() => {
++        pcmFlushTimerId = null;
++        flushPcmBatch();
++      }, PCM_FLUSH_TIMER_MS);
++    }
++  }
++
++  function enqueuePcmFrame(frame, meta) {
++    if (!(frame instanceof Int16Array) || frame.length === 0) {
++      return;
++    }
++    const metadata = meta && typeof meta === "object" ? { ...meta } : {};
++    pcmBatchQueue.push({ frame, meta: metadata });
++    pcmBatchSampleCount += frame.length;
++    schedulePcmFlushTimer();
++    const accumulatedMs = pcmBatchSampleCount / PCM_SAMPLES_PER_MS;
++    if (accumulatedMs >= PCM_TARGET_BATCH_MS) {
++      flushPcmBatch();
++    }
++  }
++
++  function flushPcmBatch() {
++    if (!pcmBatchQueue.length || pcmBatchSampleCount <= 0) {
++      resetPcmBatchState();
++      return;
++    }
++    const frames = pcmBatchQueue;
++    const totalSamples = pcmBatchSampleCount;
++    pcmBatchQueue = [];
++    pcmBatchSampleCount = 0;
++    clearPcmFlushTimer();
++    if (!totalSamples) {
++      return;
++    }
++    const out = new Int16Array(totalSamples);
++    let offset = 0;
++    let firstSeq = 0;
++    let batchChunks = 0;
++    for (const entry of frames) {
++      if (!batchChunks && entry && entry.meta && Number.isFinite(entry.meta.seq)) {
++        firstSeq = Number(entry.meta.seq);
++      }
++      if (entry && entry.frame) {
++        out.set(entry.frame, offset);
++        offset += entry.frame.length;
++        batchChunks += 1;
++      }
++    }
++    if (!batchChunks) {
++      return;
++    }
++    const bytes = out.byteLength;
++    logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
++    try {
++      const result = sendBinary(out.buffer, { lane: "mic" });
++      __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
++      __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
++      if (result && typeof result.catch === "function") {
++        result.catch((err) => {
++          console.warn("Binary send (mic) failed", err);
++        });
++      }
++    } catch (err) {
++      console.error("WSClient sendBinary mic failed", err);
++    }
++  }
++
+   function stopRecorder(reason) {
+     clearAudioKeepaliveTimer();
+     const recorder = getRecorder();
+     if (!recorder) {
+       setListeningState(false);
+       return;
+     }
+     try {
+       recorder.stopListening({ reason: normalizeReason(reason) });
+     } catch (err) {
+       console.warn("Recorder stopListening failed", err);
+     }
+     senderPaused = false;
++    flushPcmBatch();
+     if (vadController && typeof vadController.reset === "function") {
+       try {
+         vadController.reset();
+       } catch (err) {
+         try {
+           console.warn("VAD reset failed", err);
+         } catch {}
+       }
+     }
+     setListeningState(false);
+   }
  
-         self._ready_event.set()
+   function handleRecorderChunk(event) {
+     if (!event) {
+       return;
+     }
+     const buffer = event.buffer instanceof ArrayBuffer
+       ? event.buffer
+       : (ArrayBuffer.isView(event.buffer)
+         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
+         : null);
+     if (!buffer) {
+       return;
+     }
+     const seq = Number(event.seq) || 0;
+@@ -849,67 +939,59 @@ import { WakeWord } from "./wake_word.js";
+         vadController.onPcmFrame(buffer, frameTimestamp);
+       } catch (err) {
+         try {
+           console.warn("VAD frame processing failed", err);
+         } catch {}
+       }
+     }
+     let asrReady = false;
+     try {
+       if (typeof AppState.getState === "function") {
+         const snapshot = AppState.getState();
+         if (snapshot && typeof snapshot.asrReady === "boolean") {
+           asrReady = snapshot.asrReady;
+         }
+       }
+     } catch {}
+     if (!asrReady) {
+       asrReady = Boolean(AppState?.asrReady);
+     }
+     if (senderPaused || !asrReady) {
+       return;
+     }
+     if (seq === 0) {
+       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
+     }
+-    logStage("client.audio_chunk_send", { seq, bytes: buffer.byteLength });
+-    try {
+-      const result = sendBinary(buffer, { lane: "mic" });
+-      if (result && typeof result.catch === "function") {
+-        result.catch((err) => {
+-          console.warn("Binary send (mic) failed", err);
+-        });
+-      }
+-    } catch (err) {
+-      console.error("WSClient sendBinary mic failed", err);
+-    }
++    const frame = new Int16Array(buffer);
++    enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
+   }
  
-         self._receiver_task = asyncio.create_task(self._receive_loop())
-         self._sender_task = asyncio.create_task(self._pcm_sender_loop())
--        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
-+        self._ws_ping_task = asyncio.create_task(self._ws_ping_loop())
- 
-         for message in extra_messages:
-             self._process_message(message)
- 
-     async def send_pcm(self, chunk: bytes) -> None:
-         """Queue PCM16 audio bytes for transmission."""
- 
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
-         if len(data) % 2 != 0:
-             raise ValueError("pcm chunk must contain complete 16-bit samples")
- 
-         if self._state != "open":
-             self._emit_notice({"kind": "pcm_ignored_state", "state": self._state})
-             return
- 
-         queue = self._pcm_queue
-         if queue.full():
-             try:
-                 dropped = queue.get_nowait()
-             except asyncio.QueueEmpty:  # pragma: no cover - defensive
-                 dropped = None
-@@ -254,51 +254,51 @@ class SMRealtimeClient:
-         """Send the vendor end-of-stream marker and await acknowledgement."""
- 
-         if self._state != "open":
-             return
-         if self._sent_end_of_stream:
-             await self._wait_for_close_ack()
-             return
- 
-         self._sent_end_of_stream = True
-         payload = {"message": "EndOfStream"}
-         await self._send_json(payload)
-         await self._wait_for_close_ack()
- 
-     async def close(self) -> None:
-         """Gracefully close the websocket connection."""
- 
-         if self._state in {"idle", "closed"}:
-             return
-         if self._closing:
-             await self._closed_event.wait()
-             return
- 
-         self._closing = True
-         await self._stop_sender()
-         await self._stop_receiver()
--        await self._stop_keepalive()
-+        await self._stop_ws_ping()
- 
-         ws = self._ws
-         if ws is not None:
-             try:
-                 await ws.close(code=1000)
-             except Exception:  # pragma: no cover - defensive
-                 pass
- 
-         await self._finalize_close(reason=self._close_reason or "client_close")
- 
-     # ------------------------------------------------------------------
-     # Internal helpers
-     # ------------------------------------------------------------------
-     async def _await_ready(self, ws: WebSocketClientProtocol) -> list[dict]:
-         """Wait for the RecognitionStarted message."""
- 
-         deadline = self._ready_timeout_s
-         extra: list[dict] = []
-         start = time.monotonic()
-         while True:
-             remaining = deadline - (time.monotonic() - start)
-             if remaining <= 0:
-                 raise TimeoutError("speechmatics ready timeout")
-             raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-             self._last_activity = time.monotonic()
-@@ -343,78 +343,95 @@ class SMRealtimeClient:
-                     self._pcm_queue.task_done()
-                     break
-                 if not isinstance(item, (bytes, bytearray)):
-                     self._pcm_queue.task_done()
-                     continue
-                 data = bytes(item)
-                 ws = self._ws
-                 if ws is None:
-                     self._pcm_queue.task_done()
-                     break
-                 try:
-                     await ws.send(data)
-                     self._last_activity = time.monotonic()
-                 except ConnectionClosed:
-                     self._pcm_queue.task_done()
-                     break
-                 except Exception:  # pragma: no cover - defensive
-                     _log.exception("speechmatics pcm send failed")
-                     self._pcm_queue.task_done()
-                     break
-                 else:
-                     self._pcm_queue.task_done()
-         except asyncio.CancelledError:  # pragma: no cover - cooperative cancel
-             raise
- 
--    async def _keepalive_loop(self) -> None:
-+    async def _ws_ping_loop(self) -> None:
-         try:
-             while not self._stop_event.is_set():
-                 await asyncio.sleep(self._keepalive_interval_s)
-                 if self._stop_event.is_set():
-                     break
-                 if self._state != "open":
-                     continue
-                 now = time.monotonic()
-                 if now - self._last_activity < self._keepalive_interval_s:
-                     continue
-                 ws = self._ws
-                 if ws is None:
-                     continue
-                 try:
--                    await ws.ping()
--                    self._last_activity = time.monotonic()
-+                    pong_waiter = await ws.ping()
-                 except ConnectionClosed:
-                     break
-                 except Exception:  # pragma: no cover - defensive
--                    _log.exception("speechmatics ping failed")
-+                    _log.warning("speechmatics ws ping send failed", exc_info=True)
-+                    break
-+                try:
-+                    timeout_s = max(1.0, self._keepalive_interval_s / 2)
-+                    latency_s = await asyncio.wait_for(pong_waiter, timeout=timeout_s)
-+                except asyncio.TimeoutError:
-+                    _log.warning(
-+                        "speechmatics ws ping timeout",
-+                        extra={"timeout_s": timeout_s},
-+                    )
-+                    continue
-+                except ConnectionClosed:
-                     break
-+                except Exception:  # pragma: no cover - defensive
-+                    _log.warning("speechmatics ws ping wait failed", exc_info=True)
-+                    continue
-                 else:
-+                    self._last_activity = time.monotonic()
-                     self._publish_event(
-                         ASR_KEEPALIVE_PING,
-                         {
-                             "vendor": self.VENDOR,
--                            "meta": {"idle_ms": int(self._keepalive_interval_s * 1000)},
-+                            "meta": {
-+                                "idle_ms": int(self._keepalive_interval_s * 1000),
-+                                "latency_ms": int(latency_s * 1000),
-+                            },
-                         },
-                     )
-         except asyncio.CancelledError:  # pragma: no cover
-             raise
- 
-     def _decode_message(self, raw: Any) -> Any:
-         if isinstance(raw, bytes):
-             return raw
-         if isinstance(raw, str):
-             try:
-                 return json.loads(raw)
-             except json.JSONDecodeError as exc:
-                 self._emit_notice(
-                     {"kind": "json_decode_error", "error": str(exc), "raw": raw[:80]}
-                 )
-                 return {}
-         return raw
- 
-     def _process_message(self, message: Any) -> None:
-         if isinstance(message, dict):
-             self._handle_dict_message(message)
-         elif message:
-             self._emit_notice(
-                 {
-                     "kind": "unexpected_binary",
-@@ -512,52 +529,52 @@ class SMRealtimeClient:
-             with contextlib.suppress(asyncio.QueueEmpty):
-                 while True:
-                     item = self._pcm_queue.get_nowait()
-                     self._pcm_queue.task_done()
-         try:
-             self._pcm_queue.put_nowait(self._pcm_sentinel)
-         except asyncio.QueueFull:
-             with contextlib.suppress(asyncio.QueueEmpty):
-                 _ = self._pcm_queue.get_nowait()
-                 self._pcm_queue.task_done()
-             with contextlib.suppress(asyncio.QueueFull):
-                 self._pcm_queue.put_nowait(self._pcm_sentinel)
-         sender = self._sender_task
-         if sender is not None:
-             sender.cancel()
-             with contextlib.suppress(Exception):
-                 await sender
- 
-     async def _stop_receiver(self) -> None:
-         receiver = self._receiver_task
-         if receiver is not None:
-             receiver.cancel()
-             with contextlib.suppress(Exception):
-                 await receiver
- 
--    async def _stop_keepalive(self) -> None:
--        task = self._keepalive_task
-+    async def _stop_ws_ping(self) -> None:
-+        task = self._ws_ping_task
-         if task is not None:
-             task.cancel()
-             with contextlib.suppress(Exception):
-                 await task
- 
-     async def _finalize_close(self, *, reason: str, publish_close: bool = True) -> None:
-         self._stop_event.set()
-         self._ready_event.set()
-         self._close_ack_event.set()
-         async with self._state_lock:
-             if self._state == "closed":
-                 self._closed_event.set()
-                 return
-             self._state = "closed"
-         self._close_reason = reason
-         if publish_close:
-             self._publish_event(
-                 EVT_ASR_CLOSED,
-                 {
-                     "vendor": self.VENDOR,
-                     "meta": {"reason": reason},
-                 },
-             )
-         self._call_callback(self._on_closed, reason)
-         self._closed_event.set()
+   async function startRecorderStreaming(policy) {
+     if (AppState.listening) {
+       return;
+     }
++    resetPcmBatchState();
+     const recorder = getRecorder();
+     if (!recorder) {
+       console.warn("AudioRecorder unavailable; cannot start streaming");
+       return;
+     }
+     // The server owns the input.start lifecycle; never emit it from the client.
+     try {
+       await recorder.start({ onChunk: handleRecorderChunk, policy });
+     } catch (err) {
+       if (err && err.name === "NotAllowedError") {
+         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
+       }
+       throw err;
+     }
+     resetRecorderTelemetry();
+     senderPaused = false;
+     if (vadController && typeof vadController.reset === "function") {
+       try {
+         vadController.reset();
+       } catch (err) {
+         try {
+           console.warn("VAD reset failed", err);
+         } catch {}
+       }
+     }

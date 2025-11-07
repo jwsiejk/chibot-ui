@@ -354,6 +354,13 @@ import { WakeWord } from "./wake_word.js";
   ];
   let vadController = null;
   let senderPaused = false;
+  const PCM_TARGET_BATCH_MS = 60;
+  const PCM_FLUSH_TIMER_MS = 50;
+  const PCM_SAMPLE_RATE = 16000;
+  const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
+  let pcmBatchQueue = [];
+  let pcmBatchSampleCount = 0;
+  let pcmFlushTimerId = null;
 
   function hubLog(label, detail) {
     const state = typeof window !== "undefined" ? window.AppState : null;
@@ -800,6 +807,88 @@ import { WakeWord } from "./wake_word.js";
     }, AUDIO_KEEPALIVE_MS);
   }
 
+  function clearPcmFlushTimer() {
+    if (pcmFlushTimerId) {
+      clearTimeout(pcmFlushTimerId);
+      pcmFlushTimerId = null;
+    }
+  }
+
+  function resetPcmBatchState() {
+    pcmBatchQueue = [];
+    pcmBatchSampleCount = 0;
+    clearPcmFlushTimer();
+  }
+
+  function schedulePcmFlushTimer() {
+    if (!pcmFlushTimerId) {
+      pcmFlushTimerId = setTimeout(() => {
+        pcmFlushTimerId = null;
+        flushPcmBatch();
+      }, PCM_FLUSH_TIMER_MS);
+    }
+  }
+
+  function enqueuePcmFrame(frame, meta) {
+    if (!(frame instanceof Int16Array) || frame.length === 0) {
+      return;
+    }
+    const metadata = meta && typeof meta === "object" ? { ...meta } : {};
+    pcmBatchQueue.push({ frame, meta: metadata });
+    pcmBatchSampleCount += frame.length;
+    schedulePcmFlushTimer();
+    const accumulatedMs = pcmBatchSampleCount / PCM_SAMPLES_PER_MS;
+    if (accumulatedMs >= PCM_TARGET_BATCH_MS) {
+      flushPcmBatch();
+    }
+  }
+
+  function flushPcmBatch() {
+    if (!pcmBatchQueue.length || pcmBatchSampleCount <= 0) {
+      resetPcmBatchState();
+      return;
+    }
+    const frames = pcmBatchQueue;
+    const totalSamples = pcmBatchSampleCount;
+    pcmBatchQueue = [];
+    pcmBatchSampleCount = 0;
+    clearPcmFlushTimer();
+    if (!totalSamples) {
+      return;
+    }
+    const out = new Int16Array(totalSamples);
+    let offset = 0;
+    let firstSeq = 0;
+    let batchChunks = 0;
+    for (const entry of frames) {
+      if (!batchChunks && entry && entry.meta && Number.isFinite(entry.meta.seq)) {
+        firstSeq = Number(entry.meta.seq);
+      }
+      if (entry && entry.frame) {
+        out.set(entry.frame, offset);
+        offset += entry.frame.length;
+        batchChunks += 1;
+      }
+    }
+    if (!batchChunks) {
+      return;
+    }
+    const bytes = out.byteLength;
+    logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
+    try {
+      const result = sendBinary(out.buffer, { lane: "mic" });
+      __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
+      __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
+      if (result && typeof result.catch === "function") {
+        result.catch((err) => {
+          console.warn("Binary send (mic) failed", err);
+        });
+      }
+    } catch (err) {
+      console.error("WSClient sendBinary mic failed", err);
+    }
+  }
+
   function stopRecorder(reason) {
     clearAudioKeepaliveTimer();
     const recorder = getRecorder();
@@ -813,6 +902,7 @@ import { WakeWord } from "./wake_word.js";
       console.warn("Recorder stopListening failed", err);
     }
     senderPaused = false;
+    flushPcmBatch();
     if (vadController && typeof vadController.reset === "function") {
       try {
         vadController.reset();
@@ -871,23 +961,15 @@ import { WakeWord } from "./wake_word.js";
     if (seq === 0) {
       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
     }
-    logStage("client.audio_chunk_send", { seq, bytes: buffer.byteLength });
-    try {
-      const result = sendBinary(buffer, { lane: "mic" });
-      if (result && typeof result.catch === "function") {
-        result.catch((err) => {
-          console.warn("Binary send (mic) failed", err);
-        });
-      }
-    } catch (err) {
-      console.error("WSClient sendBinary mic failed", err);
-    }
+    const frame = new Int16Array(buffer);
+    enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
   }
 
   async function startRecorderStreaming(policy) {
     if (AppState.listening) {
       return;
     }
+    resetPcmBatchState();
     const recorder = getRecorder();
     if (!recorder) {
       console.warn("AudioRecorder unavailable; cannot start streaming");
