@@ -480,6 +480,10 @@ class AdapterContext:
     server_vad_silence_candidate_ms: Optional[int] = None
     server_vad_energy_db: Optional[float] = None
     vad_fusion_task: asyncio.Task[None] | None = None
+    input_start_ms: Optional[int] = None
+    first_partial_logged: bool = False
+    first_final_logged: bool = False
+    active_asr_config: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -2754,7 +2758,10 @@ class ChatV2Adapter:
                     pass
 
         def _enqueue(payload: Dict[str, Any]) -> None:
-            if payload.get("type") == "asr.partial":
+            frame_type = payload.get("type")
+            if frame_type == "input.start":
+                self._mark_input_start(ctx)
+            if frame_type == "asr.partial":
                 self._offer_partial_frame(
                     ctx,
                     loop,
@@ -2832,6 +2839,10 @@ class ChatV2Adapter:
                 ctx.session.last_vendor_activity_ms = float(now_ms)
                 if isinstance(event, Mapping):
                     self._emit_server_vendor_activity(ctx, event_type, event, now_ms)
+                if event_type == EVT_ASR_PARTIAL:
+                    self._maybe_emit_first_token_latency(ctx, "partial", now_ms)
+                else:
+                    self._maybe_emit_first_token_latency(ctx, "final", now_ms)
 
             def _on_loop() -> None:
                 frame = self._coerce_asr_frame(ctx, event)
@@ -4177,6 +4188,45 @@ class ChatV2Adapter:
         }
         bus.publish(payload)
 
+    def _mark_input_start(self, ctx: AdapterContext) -> None:
+        now_ms = self._now_ms()
+        ctx.input_start_ms = now_ms
+        ctx.first_partial_logged = False
+        ctx.first_final_logged = False
+
+    def _maybe_emit_first_token_latency(
+        self, ctx: AdapterContext, kind: Literal["partial", "final"], now_ms: int
+    ) -> None:
+        start_ms = ctx.input_start_ms
+        if start_ms is None:
+            return
+        elapsed_ms = max(0, now_ms - int(start_ms))
+        turn_id = getattr(ctx.session, "turn_id", None)
+        detail: Dict[str, Any] = {
+            "session_id": ctx.sid,
+            "turn_id": turn_id if isinstance(turn_id, str) and turn_id else None,
+            "elapsed_ms": int(elapsed_ms),
+        }
+        if kind == "partial":
+            if ctx.first_partial_logged:
+                return
+            ctx.first_partial_logged = True
+            self._emit_hub_log(ctx, "asr.first_partial", detail)
+            return
+        if ctx.first_final_logged:
+            return
+        ctx.first_final_logged = True
+        config = ctx.active_asr_config if isinstance(ctx.active_asr_config, Mapping) else None
+        max_delay = None
+        if config is not None:
+            candidate = config.get("max_delay")
+            if isinstance(candidate, (int, float)):
+                max_delay = float(candidate)
+        final_detail = dict(detail)
+        if max_delay is not None:
+            final_detail["max_delay_s"] = max_delay
+        self._emit_hub_log(ctx, "asr.first_final", final_detail)
+
     def _emit_client_mic_open(
         self,
         ctx: AdapterContext,
@@ -4849,6 +4899,7 @@ class ChatV2Adapter:
             "language": language,
             "enable_partials": enable_partials,
         }
+        ctx.active_asr_config = dict(transcription_config)
         params: Dict[str, Any] = {
             "message": "StartRecognition",
             "audio_format": audio_format,
@@ -5052,6 +5103,7 @@ class ChatV2Adapter:
         ctx.asr_ready_bundle_sent_ms = now_ms
 
         await self._send_json(send, ctx.sid, ready_frame)
+        self._mark_input_start(ctx)
         await self._send_json(send, ctx.sid, input_start)
         ctx.pending_start_listening = dict(start_payload)
         ctx.pending_start_listening_sent = False

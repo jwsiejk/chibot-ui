@@ -1,341 +1,364 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 9f5b77f8483d6b8ddcf53d4b1240382755b44e34..0d6c1762071eb76fdced118f92e643e04a770f89 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -867,50 +867,54 @@ import { WakeWord } from "./wake_word.js";
-     let offset = 0;
-     let firstSeq = 0;
-     let batchChunks = 0;
-     for (const entry of frames) {
-       if (!batchChunks && entry && entry.meta && Number.isFinite(entry.meta.seq)) {
-         firstSeq = Number(entry.meta.seq);
-       }
-       if (entry && entry.frame) {
-         out.set(entry.frame, offset);
-         offset += entry.frame.length;
-         batchChunks += 1;
-       }
-     }
-     if (!batchChunks) {
-       return;
-     }
-     const bytes = out.byteLength;
-     logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
-     const ws = socket || (WSClient && WSClient._ws) || null;
-     if (!ws || ws.readyState !== WebSocket.OPEN) {
-       console.warn("pcm.send.skipped", { readyState: ws ? ws.readyState : undefined });
-       return;
-     }
-     try {
-       ws.send(out.buffer);
-+      if ((Math.random() * 50 | 0) === 0) {
-+        const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
-+        hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
-+      }
-       __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-       __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-     } catch (err) {
-       console.warn("pcm.send.error", err);
-     }
-   }
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 4cd5685a1aefebdb4c00b4683ff03637fd4a12d0..4885814d0ab9150c18ca0f02ba175dd8da48d72f 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -458,50 +458,54 @@ class AdapterContext:
+     last_tts_end_req_id: Optional[str] = None
+     await_user_cue_emitted: bool = False
+     await_user_vad_check_pending: bool = False
+     listen_handoff_done: set[str] = field(default_factory=set)
+     listen_handoff_task: asyncio.Task[None] | None = None
+     listen_handoff_task_key: Optional[str] = None
+     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+     client_banner_info: Optional[Dict[str, Any]] = None
+     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
+     allowed_asr_vendors: List[str] = field(default_factory=list)
+     asr_vendor: Optional[str] = None
+     audio_pipeline_mode: Optional[str] = None
+     asr_vendor_logged: bool = False
+     session_capture_policy: Optional[Dict[str, Any]] = None
+     client_vad_speech: bool = False
+     client_vad_since_ms: Optional[int] = None
+     client_vad_last_event_ms: Optional[int] = None
+     client_vad_last_speech_end_ms: Optional[int] = None
+     client_vad_confidence: float = 0.0
+     client_vad_energy_db: Optional[float] = None
+     client_vad_noise_db: Optional[float] = None
+     server_vad_candidate_start_ms: Optional[int] = None
+     server_vad_silence_candidate_ms: Optional[int] = None
+     server_vad_energy_db: Optional[float] = None
+     vad_fusion_task: asyncio.Task[None] | None = None
++    input_start_ms: Optional[int] = None
++    first_partial_logged: bool = False
++    first_final_logged: bool = False
++    active_asr_config: Optional[Dict[str, Any]] = None
  
-   function stopRecorder(reason) {
-     _audioStreaming = false;
-     clearAudioKeepaliveTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       setListeningState(false);
-       return;
-     }
-     try {
-       recorder.stopListening({ reason: normalizeReason(reason) });
-     } catch (err) {
-       console.warn("Recorder stopListening failed", err);
-     }
-     senderPaused = false;
-     flushPcmBatch();
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-@@ -3058,90 +3062,112 @@ import { WakeWord } from "./wake_word.js";
-         hub = AppState?.hub;
-         if (hub && typeof hub.setPolicy === "function") {
-           hub.setPolicy(policy);
-         }
-       } catch (err) {
-         console.warn("Hub setPolicy during start_listening failed", err);
-       }
+     def __post_init__(self) -> None:
+         self.session = SessionCtx(sid=self.sid, policy=None)
  
-       if (hub && typeof hub.prearmListening === "function") {
-         try {
-           hub.prearmListening(policy);
-         } catch (err) {
-           console.warn("Hub prearmListening failed", err);
-         }
-         return;
-       }
  
-       if (hub && typeof hub.startListening === "function") {
-         // Defer actual streaming until asr.ready fires.
-         return;
-       }
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
  
-       console.warn('Legacy input capture deferred until asr.ready', frame);
-       return;
-     } else if (frame.type === "stop_listening") {
-+      if (_audioStreaming) {
-+        const reason = typeof frame?.reason === "string" && frame.reason
-+          ? frame.reason
-+          : frame?.type || "stop_listening";
-+        hubLog("client.stream.off", { reason });
-+      }
-       _audioStreaming = false;
-       stopRecorder("server_requested");
-       setAsrArmInFlight(false);
-       setArmAfterTtsEnd(false);
-       try {
-         const hub = AppState?.hub;
-         if (hub && typeof hub.stopListening === "function") {
-           hub.stopListening("server_requested");
-         } else {
-           stopInputCapture({ reason: "server_requested" });
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+@@ -2732,51 +2736,54 @@ class ChatV2Adapter:
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         loop = asyncio.get_running_loop()
+         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
+ 
+         def _queue_payload(payload: Dict[str, Any], *, clone: bool = True) -> None:
+             if ctx.outbox is None:
+                 return
+             item = dict(payload) if clone else payload
+             try:
+                 ctx.outbox.put_nowait(item)
+             except asyncio.QueueFull:
+                 now = ctx.outbox.qsize()
+                 try:
+                     asyncio.create_task(
+                         self._publish(
+                             EVT_WS_OUTBOX_DROP,
+                             ctx.sid,
+                             {"sid": ctx.sid, "dropped": 1, "now": now},
+                         )
+                     )
+                 except RuntimeError:
+                     pass
+ 
+         def _enqueue(payload: Dict[str, Any]) -> None:
+-            if payload.get("type") == "asr.partial":
++            frame_type = payload.get("type")
++            if frame_type == "input.start":
++                self._mark_input_start(ctx)
++            if frame_type == "asr.partial":
+                 self._offer_partial_frame(
+                     ctx,
+                     loop,
+                     payload,
+                     lambda frame: _queue_payload(frame, clone=False),
+                 )
+                 return
+             _queue_payload(payload)
+ 
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             meta_obj = event.get("meta")
+             if isinstance(meta_obj, Mapping):
+                 ws_meta = meta_obj.get("ws")
+                 if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
+                     return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 frame_type = payload.get("type")
+                 if frame_type == "tts.end":
+                     self._handle_tts_end_diag(ctx, loop, payload)
+@@ -2810,50 +2817,54 @@ class ChatV2Adapter:
+                                     )
+                                 )
+                             except RuntimeError:
+                                 pass
+                 elif frame_type == "tts.start":
+                     ctx.session.tts_active = True
+                 _enqueue(payload)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+ 
+         def _handle_asr_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+ 
+             event_type = event.get("type")
+             if event_type in {EVT_ASR_PARTIAL, EVT_ASR_FINAL}:
+                 now_ms = self._now_ms()
+                 ctx.session.last_vendor_activity_ms = float(now_ms)
+                 if isinstance(event, Mapping):
+                     self._emit_server_vendor_activity(ctx, event_type, event, now_ms)
++                if event_type == EVT_ASR_PARTIAL:
++                    self._maybe_emit_first_token_latency(ctx, "partial", now_ms)
++                else:
++                    self._maybe_emit_first_token_latency(ctx, "final", now_ms)
+ 
+             def _on_loop() -> None:
+                 frame = self._coerce_asr_frame(ctx, event)
+                 if frame is None:
+                     return
+                 _enqueue(frame)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.asr_partial_subscription_token = bus.subscribe(
+             EVT_ASR_PARTIAL, _handle_asr_event
+         )
+         ctx.asr_final_subscription_token = bus.subscribe(
+             EVT_ASR_FINAL, _handle_asr_event
+         )
+ 
+         def _handle_asr_closed_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 frame = {"type": "asr.closed"}
+@@ -4155,50 +4166,89 @@ class ChatV2Adapter:
+         except Exception:
+             _log.exception("evt=asr_no_audio_watchdog_emit_failed sid=%s", ctx.sid)
+ 
+     def _emit_hub_log(
+         self,
+         ctx: AdapterContext,
+         label: str,
+         detail: Mapping[str, Any],
+     ) -> None:
+         try:
+             sanitized = bus.redact_payload(detail)
+         except Exception:
+             sanitized = detail
+         payload = {
+             "type": EVT_CLIENT_LOG,
+             "sid": ctx.sid,
+             "who": "server",
+             "source": "ws.adapter",
+             "meta": {
+                 "label": label,
+                 "detail": sanitized,
+             },
          }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-       clearPendingAsrReadyStart("stop_listening");
-       __asrReadySeen = false;
-       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-         try {
-           const reason =
-             (typeof frame?.reason === "string" && frame.reason) ||
-             "server_requested";
-           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
-         } catch (err) {
-           console.warn("stop_listening event dispatch failed", err);
-         }
-       }
-     } else if (frame.type === "input.start") {
-       _audioStreaming = true;
-+      const reason = typeof frame?.reason === "string" && frame.reason
-+        ? frame.reason
-+        : frame?.type || "input.start";
-+      hubLog("client.stream.on", { reason });
-       await handleInputStartFrame(frame);
-     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
-       __resetAudioHeaderSent();
-     } else if (frame.type === "input.stop") {
-+      if (_audioStreaming) {
-+        const reason = typeof frame?.reason === "string" && frame.reason
-+          ? frame.reason
-+          : frame?.type || "input.stop";
-+        hubLog("client.stream.off", { reason });
-+      }
-       _audioStreaming = false;
-       stopInputCapture({ reason: "input.stop" });
-       clearPendingAsrReadyStart("input.stop");
-       __asrReadySeen = false;
-       __resetAudioHeaderSent();
-     } else if (frame.type === "assistant.await_user") {
-+      if (_audioStreaming) {
-+        const reason = typeof frame?.reason === "string" && frame.reason
-+          ? frame.reason
-+          : frame?.type || "assistant.await_user";
-+        hubLog("client.stream.off", { reason });
-+      }
-       _audioStreaming = false;
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-       __asrReadySeen = true;
-       setAsrArmInFlight(false);
-       setArmAfterTtsEnd(false);
-       setWsConnected(true);
-       setWsPhase("ready");
-       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-       __resetAudioHeaderSent();
-       sendAudioHeader(frame);
-       try {
-         await startRecorderStreaming(frame?.policy || {});
-       } catch (err) {
-         console.error("Recorder start on asr.ready failed", err);
-         logStage("client.mic", {
-           outcome: MIC_OUTCOME.ERROR_GUM,
-           message: err && err.message ? err.message : String(err || ""),
-         });
-         setListeningState(false);
-       }
-     } else if (frame.type === "asr.partial") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.final") {
-       transcriptFrameAllowed(frame);
-@@ -3330,50 +3356,58 @@ import { WakeWord } from "./wake_word.js";
-           window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
-         } catch {}
-         try {
-           if (!WSClient._linkedProofLogged) {
-             console.info("evt=ws_linked AppState", !!AppState?.websocket, "WSClient", !!WSClient._ws);
-             WSClient._linkedProofLogged = true;
-           }
-         } catch {}
-         startHeartbeat();
-         logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
-       },
-       message: parseFrame,
-       error: (event) => {
-         console.error("WebSocket error", event);
-         const message = event && typeof event?.message === "string" && event.message
-           ? event.message
-           : "socket_error";
-         recordLastError(null, message);
-         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
-       },
-       close: (event) => {
-         const expected = ws.__intentionalClose === true;
-         const detailReason = event && typeof event?.reason === "string" && event.reason
-           ? event.reason
-           : (expected ? "intentional_close" : "ws_close");
-+        if (_audioStreaming) {
-+          const offReason = detailReason || (expected ? "intentional_close" : "ws_close");
-+          hubLog("client.stream.off", {
-+            reason: offReason,
-+            code: typeof event?.code === "number" ? event.code : undefined,
-+          });
-+          _audioStreaming = false;
+         bus.publish(payload)
+ 
++    def _mark_input_start(self, ctx: AdapterContext) -> None:
++        now_ms = self._now_ms()
++        ctx.input_start_ms = now_ms
++        ctx.first_partial_logged = False
++        ctx.first_final_logged = False
++
++    def _maybe_emit_first_token_latency(
++        self, ctx: AdapterContext, kind: Literal["partial", "final"], now_ms: int
++    ) -> None:
++        start_ms = ctx.input_start_ms
++        if start_ms is None:
++            return
++        elapsed_ms = max(0, now_ms - int(start_ms))
++        turn_id = getattr(ctx.session, "turn_id", None)
++        detail: Dict[str, Any] = {
++            "session_id": ctx.sid,
++            "turn_id": turn_id if isinstance(turn_id, str) and turn_id else None,
++            "elapsed_ms": int(elapsed_ms),
 +        }
-         recordLastError(event && typeof event?.code === "number" ? event.code : null, detailReason);
-         setWsConnected(false);
-         setWsPhase("disconnected");
-         logStage('client.ws', { outcome: 'close', code: event?.code, reason: event?.reason });
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: event?.reason || (expected ? 'intentional_close' : 'ws_close') });
-         try {
-           WSClient._connected = false;
-           WSClient._ws = null;
-           WSClient._linkedProofLogged = false;
-         } catch {}
-         try {
-           window.ws = null;
-         } catch {}
-         try {
-           if (AppState && AppState.hub && typeof AppState.hub.bindSocket === "function") {
-             AppState.hub.bindSocket(null);
-           }
-         } catch (err) {
-           console.warn("AppState.hub.bindSocket close failed", err);
++        if kind == "partial":
++            if ctx.first_partial_logged:
++                return
++            ctx.first_partial_logged = True
++            self._emit_hub_log(ctx, "asr.first_partial", detail)
++            return
++        if ctx.first_final_logged:
++            return
++        ctx.first_final_logged = True
++        config = ctx.active_asr_config if isinstance(ctx.active_asr_config, Mapping) else None
++        max_delay = None
++        if config is not None:
++            candidate = config.get("max_delay")
++            if isinstance(candidate, (int, float)):
++                max_delay = float(candidate)
++        final_detail = dict(detail)
++        if max_delay is not None:
++            final_detail["max_delay_s"] = max_delay
++        self._emit_hub_log(ctx, "asr.first_final", final_detail)
++
+     def _emit_client_mic_open(
+         self,
+         ctx: AdapterContext,
+         *,
+         vendor: Optional[str] = None,
+         opened_ts: Optional[int] = None,
+     ) -> None:
+         if ctx.client_mic_open:
+             return
+ 
+         self._cancel_mic_open_timer(ctx)
+         ctx.client_mic_open = True
+         payload: Dict[str, object] = {"state": "open"}
+         if isinstance(vendor, str) and vendor:
+             payload["vendor"] = vendor[:64]
+         if isinstance(opened_ts, int):
+             payload["ts"] = opened_ts
+         _log.info(
+             "evt=ws_client_mic_open sid=%s vendor=%s ts=%s",
+             ctx.sid,
+             payload.get("vendor") or "",
+             payload.get("ts"),
+         )
+         try:
+             asyncio.create_task(
+@@ -4827,50 +4877,51 @@ class ChatV2Adapter:
+         enable_partials = True
+         if snapshot is not None:
+             policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+             if isinstance(policy_block, Mapping):
+                 nlu_block = policy_block.get("nlu")
+                 if isinstance(nlu_block, Mapping):
+                     lang_candidate = nlu_block.get("language")
+                     if isinstance(lang_candidate, str) and lang_candidate.strip():
+                         language = lang_candidate.strip()
+                 transcription_block = policy_block.get("asr")
+                 if isinstance(transcription_block, Mapping):
+                     partials_flag = transcription_block.get("enable_partials")
+                     if isinstance(partials_flag, bool):
+                         enable_partials = partials_flag
+ 
+         audio_format = {
+             "type": "raw",
+             "encoding": "pcm_s16le",
+             "sample_rate": 16000,
+             "channels": 1,
          }
-         if (socket === ws) {
-           socket = null;
-           expectInfoFrame = true;
-           clearInfoWatchdog();
+         transcription_config: Dict[str, Any] = {
+             "language": language,
+             "enable_partials": enable_partials,
          }
-@@ -3403,50 +3437,54 @@ import { WakeWord } from "./wake_word.js";
-     ws.removeEventListener("message", handlers.message);
-     ws.removeEventListener("error", handlers.error);
-     ws.removeEventListener("close", handlers.close);
-     delete ws.__handlers;
-     delete ws.__intentionalClose;
-   }
- 
-   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
-     if (!ws) return;
-     setWsPhase("closing");
-     setWsConnected(false);
-     detachSocket(ws);
-     ws.__intentionalClose = true;
-     recordClientBannerEvent("ws.cleanup", { reason: truncateBannerString(reason || "", 80) });
-     try {
-       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-         ws.close(1000, reason);
-       }
-     } catch (err) {
-       console.warn("WSClient cleanup close error", err);
-     }
-     if (socket === ws) {
-       socket = null;
-       expectInfoFrame = true;
-       clearInfoWatchdog();
-+      if (_audioStreaming) {
-+        const offReason = typeof reason === "string" && reason ? reason : "ws.cleanup";
-+        hubLog("client.stream.off", { reason: offReason });
-+      }
-       _audioStreaming = false;
-       stopInputCapture();
-       try {
-         if (window.ws === ws) {
-           window.ws = null;
++        ctx.active_asr_config = dict(transcription_config)
+         params: Dict[str, Any] = {
+             "message": "StartRecognition",
+             "audio_format": audio_format,
+             "transcription_config": transcription_config,
          }
-       } catch {}
-     }
-     const client = WSClient;
-     if (client && typeof client === "object") {
-       client._ws = null;
-       client._connected = false;
-     }
-   }
+         return params
  
-   // OPEN: Use the EXACT URL provided (must include ?access_token=... unless resuming)
-   function open(options = {}, protocolsOverride) {
-     let resumeTokenValue = null;
-     let skipRateLimitCancel = false;
-     let urlOverride = null;
-     let protocols = protocolsOverride;
+     def _create_sm_client(self, ctx: AdapterContext) -> SMRealtimeClient:
+         loop = asyncio.get_running_loop()
  
-     if (typeof options === "string") {
-       urlOverride = options;
-     } else if (options && typeof options === "object") {
-@@ -3568,50 +3606,54 @@ import { WakeWord } from "./wake_word.js";
-       logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
-       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
-       recordClientBannerEvent("ws.socket.close", {
-         code: typeof e.code === "number" ? e.code : undefined,
-         reason: truncateBannerString(e.reason || "", 160),
-         was_clean: Boolean(e.wasClean),
-         ready_state: ws.readyState,
-       });
-     };
+         def _publish_invariant(state: str, ok: bool, extra: Optional[Dict[str, Any]] = None) -> None:
+             meta: Dict[str, Any] = {"state": state, "ok": ok}
+             if extra:
+                 meta.update(extra)
+             try:
+                 loop.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
+             except RuntimeError:
+                 try:
+                     asyncio.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
+                 except RuntimeError:
+                     _log.debug("evt=asr_invariant_emit_skipped sid=%s", ctx.sid)
  
-     socket = ws;
-     updateState({
-       connectionState: resumeTokenValue ? "resuming" : "connecting",
-       websocket: ws,
-       latencyMs: null,
-       lastPingAt: null,
-       resumeError: null,
-       infoFrame: null,
-       serverBanner: null
-     });
-     attachSocket(ws);
-     return ws;
-   }
+         def _on_ready(_meta: Dict[str, Any]) -> None:
+             mark(ctx.session, "open")
+             ctx.asr_opened_ms = self._now_ms()
+@@ -5030,50 +5081,51 @@ class ChatV2Adapter:
+         session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+         input_start = {
+             "type": "input.start",
+             "capture": capture,
+         }
+         if session_policy:
+             input_start["policy"] = session_policy
  
-   function close(reason = DEFAULT_CLOSE_REASON) {
-+    if (_audioStreaming) {
-+      const offReason = typeof reason === "string" && reason ? reason : "client_shutdown";
-+      hubLog("client.stream.off", { reason: offReason });
-+    }
-     _audioStreaming = false;
-     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
-     stopRecorder(reason || "client_shutdown");
-     setAsrArmInFlight(false);
-     setArmAfterTtsEnd(false);
-     setAppStateValue("ttsActive", false);
-     setWsPhase("closing");
-     setWsConnected(false);
-     const emitResumeInvalid = () => {
-       if (reason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-         try {
-           window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason } }));
-         } catch {}
-       }
-     };
-     if (!socket) {
-       setWsPhase("disconnected");
-       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-       emitResumeInvalid();
-       return;
-     }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
+         start_payload: Dict[str, Any] = {"type": "start_listening"}
+         if session_policy:
+             start_payload["policy"] = session_policy
+ 
+         now_ms = int(time.time() * 1000)
+         ctx.awaiting_asr_ready = True
+         ctx.client_capture_armed = True
+         ctx.asr_recovering_until = 0.0
+         ctx.asr_recovering_reason = None
+         ctx.asr_recovering_audio_logged = False
+         ctx.ingress_packets = 0
+         ctx.ingress_bytes = 0
+         ctx.first_ingress_ms = None
+         ctx.mic_armed_ms = now_ms
+         ctx.asr_ready_bundle_sent_ms = now_ms
+ 
+         await self._send_json(send, ctx.sid, ready_frame)
++        self._mark_input_start(ctx)
+         await self._send_json(send, ctx.sid, input_start)
+         ctx.pending_start_listening = dict(start_payload)
+         ctx.pending_start_listening_sent = False
+         if ctx.asr_ready:
+             await self._send_json(send, ctx.sid, start_payload)
+             ctx.pending_start_listening = None
+             ctx.pending_start_listening_sent = False
+         _log.info(
+             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
+             ctx.sid,
+             mode,
+             descriptor.get("mime", ""),
+             timeslice_ms,
+             vendor,
+         )
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
