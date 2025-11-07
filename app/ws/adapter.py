@@ -1661,7 +1661,20 @@ class ChatV2Adapter:
             fmt = frame.get("format")
             sample_rate = frame.get("sample_rate")
             channels = frame.get("channels")
-            if fmt != expected["format"] or sample_rate != expected["sample_rate"] or channels != expected["channels"]:
+            normalized_fmt = fmt or expected["format"]
+            if normalized_fmt == "pcm":
+                normalized_fmt = expected["format"]
+            normalized_sr = (
+                sample_rate if sample_rate is not None else expected["sample_rate"]
+            )
+            normalized_ch = (
+                channels if channels is not None else expected["channels"]
+            )
+            if (
+                normalized_fmt != expected["format"]
+                or normalized_sr != expected["sample_rate"]
+                or normalized_ch != expected["channels"]
+            ):
                 meta["error"] = "bad_header"
                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 await self._send_json(
@@ -1740,8 +1753,12 @@ class ChatV2Adapter:
                     "duplicate or conflicting audio.header",
                 )
                 return self._HandleResult(True)
+            normalized_header = dict(frame)
+            normalized_header.setdefault("format", expected["format"])
+            normalized_header.setdefault("sample_rate", expected["sample_rate"])
+            normalized_header.setdefault("channels", expected["channels"])
             err = validate_audio_header_against_policy(
-                frame, ctx.policy_snapshot, ctx.asr_vendor
+                normalized_header, ctx.policy_snapshot, ctx.asr_vendor
             )
             if err:
                 meta["error"] = "policy_violation"

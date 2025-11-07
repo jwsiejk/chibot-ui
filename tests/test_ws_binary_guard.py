@@ -169,6 +169,31 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
         self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload))
         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
 
+    def test_audio_header_missing_fields_defaults_to_expected(self) -> None:
+        adapter = ChatV2Adapter()
+        engine = RecordingEngine(adapter)
+        adapter.engine = engine
+
+        header = {
+            "type": "audio.header",
+            "seq_start": 5,
+        }
+        payload = b"\x04" * 6
+        events = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "text": json.dumps(header)},
+            {"type": "websocket.receive", "bytes": payload},
+            {"type": "websocket.disconnect", "code": 1000},
+        ]
+
+        sent = self._drive(adapter, events)
+
+        self.assertEqual(len(engine.audio_calls), 1)
+        self.assertEqual(engine.audio_calls[0][2], 5)
+
+        errors = self._extract_error_frames(sent)
+        self.assertFalse(errors)
+
     def test_duplicate_audio_header_is_ignored(self) -> None:
         adapter = ChatV2Adapter()
         engine = RecordingEngine(adapter)
