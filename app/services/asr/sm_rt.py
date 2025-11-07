@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import time
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Literal
 
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -126,6 +126,10 @@ class SMRealtimeClient:
         self._on_final = on_final or (lambda text, latency: None)
         self._on_notice = on_notice or (lambda meta: None)
         self._on_closed = on_closed or (lambda reason: None)
+
+        self._input_start_ms: Optional[int] = None
+        self._first_partial_logged = False
+        self._first_final_logged = False
 
     # ------------------------------------------------------------------
     # Public properties
@@ -484,6 +488,9 @@ class SMRealtimeClient:
     def _handle_ready(self, message: Dict[str, Any]) -> None:
         if self._state != "open":
             self._state = "open"
+        self._input_start_ms = self._now_ms()
+        self._first_partial_logged = False
+        self._first_final_logged = False
         meta = self._extract_meta(message)
         self._publish_event(EVT_ASR_READY, {"vendor": self.VENDOR, "meta": meta})
         self._call_callback(self._on_ready, meta)
@@ -493,6 +500,7 @@ class SMRealtimeClient:
         if not text:
             return
         latency_ms = self._extract_latency_ms(message)
+        self._maybe_emit_first_token_latency("partial")
         self._partial_seq += 1
         payload = {
             "text": text,
@@ -510,6 +518,7 @@ class SMRealtimeClient:
         if not text:
             return
         latency_ms = self._extract_latency_ms(message)
+        self._maybe_emit_first_token_latency("final")
         payload = {
             "text": text,
             "latency_ms": latency_ms,
@@ -538,6 +547,34 @@ class SMRealtimeClient:
             {"vendor": self.VENDOR, "meta": meta},
         )
         self._close_ack_event.set()
+
+    def _maybe_emit_first_token_latency(
+        self, kind: Literal["partial", "final"], *, now_ms: Optional[int] = None
+    ) -> None:
+        start_ms = self._input_start_ms
+        if start_ms is None:
+            return
+        current_ms: int
+        if isinstance(now_ms, (int, float)):
+            current_ms = int(now_ms)
+        else:
+            current_ms = self._now_ms()
+        elapsed_ms = max(0, current_ms - int(start_ms))
+        detail: Dict[str, Any] = {
+            "session_id": self.session_id,
+            "turn_id": self.turn_id if isinstance(self.turn_id, str) and self.turn_id else None,
+            "elapsed_ms": int(elapsed_ms),
+        }
+        if kind == "partial":
+            if self._first_partial_logged:
+                return
+            self._first_partial_logged = True
+            self._emit_hub_log("asr.first_partial", detail)
+            return
+        if self._first_final_logged:
+            return
+        self._first_final_logged = True
+        self._emit_hub_log("asr.first_final", detail)
 
     def _emit_hub_log(self, label: str, detail: Mapping[str, Any]) -> None:
         payload = dict(detail)
