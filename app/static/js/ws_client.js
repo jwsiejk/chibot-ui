@@ -3458,10 +3458,45 @@ import { WakeWord } from "./wake_word.js";
     updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
   }
 
+  function isTypedObjectPayload(payload) {
+    if (!payload || typeof payload !== "object") {
+      return false;
+    }
+    if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+      return false;
+    }
+    return Object.prototype.toString.call(payload) === "[object Object]";
+  }
+
+  function validatePayloadForSend(payload) {
+    if (!isTypedObjectPayload(payload)) {
+      return true;
+    }
+    const { type } = payload;
+    if (typeof type === "string" && type.trim().length > 0) {
+      return true;
+    }
+    const keys = Object.keys(payload || {});
+    console.warn("WSClient send skipped object payload without type", { keys, payload });
+    try {
+      recordClientBannerEvent("ws.send.invalid_payload", {
+        reason: "missing_type",
+        keys: keys.slice(0, 6),
+      });
+    } catch {}
+    try {
+      logStage("client.ws", { outcome: "send_skipped_missing_type", keys: keys.slice(0, 6) });
+    } catch {}
+    return false;
+  }
+
   function send(payload, { binary = false } = {}) {
     const client = (this && typeof this === "object") ? this : WSClient;
     if (!Array.isArray(client._queue)) {
       client._queue = [];
+    }
+    if (!binary && !validatePayloadForSend(payload)) {
+      return;
     }
     let stateSocket = null;
     if (typeof AppState !== "undefined" && AppState) {
@@ -3503,6 +3538,9 @@ import { WakeWord } from "./wake_word.js";
         }
         return;
       }
+    }
+    if (!binary && !validatePayloadForSend(payload)) {
+      return;
     }
     const text = typeof payload === "string" ? payload : JSON.stringify(payload);
     try {

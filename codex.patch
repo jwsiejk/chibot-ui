@@ -1,166 +1,139 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 594817060978c2c59449a704bfc963b40294fec3..8cb3f9c2c411f7d9817f5d8e413761369ea995ec 100644
+index 8cb3f9c2c411f7d9817f5d8e413761369ea995ec..a59ec1be834d8abb7d1f80eea22f515c4ab8001d 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -2719,50 +2719,54 @@ import { WakeWord } from "./wake_word.js";
-     if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+@@ -3436,96 +3436,134 @@ import { WakeWord } from "./wake_word.js";
+     setArmAfterTtsEnd(false);
+     setAppStateValue("ttsActive", false);
+     setWsPhase("closing");
+     setWsConnected(false);
+     if (!socket) {
+       setWsPhase("disconnected");
+       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       return;
+     }
+     const ws = socket;
+     cleanupSocket(ws, reason);
+     clearHeartbeat();
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
        try {
-         window.WSErrorUI.handleFrame(frame, {
-           scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
-         });
+         window.WSErrorUI.cancelRateLimitCountdown(reason);
        } catch (err) {
-         console.warn("Error handler threw", err);
+         console.warn("Failed to cancel countdown on close", err);
        }
      }
-     try {
-       const reason = typeof frame?.detail === "string" && frame.detail
-         ? frame.detail
-         : (typeof frame?.message === "string" ? frame.message : null);
-       logStage('client.ws', {
-         outcome: 'auth_fail',
-         code: typeof frame?.code === 'string' ? frame.code : null,
-         reason: reason || null,
-       });
-     } catch {}
-     if (isResumeInvalid) {
-       close("resume_invalid");
-     }
+     autoResumeAttemptToken = null;
+     updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
    }
  
-   async function handleMessageFrame(frame) {
-+    if (!frame || typeof frame.type !== "string") {
-+      console.warn("Ignoring WS frame without type", frame);
-+      return;
++  function isTypedObjectPayload(payload) {
++    if (!payload || typeof payload !== "object") {
++      return false;
 +    }
-     if (frame.type === "keepalive") {
-       return;
-     }
- 
-     if (frame.type === "server.ping") {
-       const response = { type: "client.pong", ts: Date.now() };
-       if (typeof frame.ts === "number") {
-         response.echo = frame.ts;
-       }
-       sendJson(response);
-       return;
-     }
- 
-     if (frame.type === "ping") {
-       sendJson({ type: "pong", t: Date.now() });
-       return;
-     }
- 
-     if (frame.type === "config.updated" || frame.type === "config_updated") {
-       const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
-       const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
-       const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
-       if (incomingType !== 'config.updated') {
-         dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
-       }
-@@ -3019,65 +3023,103 @@ import { WakeWord } from "./wake_word.js";
-           "Voice temporarily unavailable. You can continue via chat.",
-           { level: "warning", ttlMs: 10000 }
-         );
-       } catch (err) {
-         console.warn("Failed to show voice unavailable banner", err);
-       }
-     } else if (frame.type === "chat.message" || frame.type === "message") {
-       if (!transcriptFrameAllowed(frame)) {
-         // Keep frame flowing to other listeners without rendering in transcript.
-       } else {
-         const view = window.TranscriptView;
-         if (view && typeof view.handleChatMessage === "function") {
-           try {
-             view.handleChatMessage(frame);
-           } catch (err) {
-             console.warn("TranscriptView chat handler error", err);
-           }
-         }
-       }
-     } else if (frame.type === "chat.history") {
-       handleChatHistoryFrame(frame);
-     }
-     dispatchFrame(frame);
-   }
- 
-+  function normalizeIncomingFrame(frame) {
-+    if (!frame || typeof frame !== "object") {
-+      return null;
++    if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
++      return false;
 +    }
-+    if (typeof frame.type === "string" && frame.type) {
-+      return frame;
-+    }
-+    let inferredType = null;
-+    if (typeof frame.kind === "string" && frame.kind) {
-+      inferredType = frame.kind;
-+    } else if (typeof frame.event === "string" && frame.event) {
-+      inferredType = frame.event;
-+    } else if (
-+      typeof frame.code === "string" ||
-+      typeof frame.detail === "string" ||
-+      typeof frame.message === "string"
-+    ) {
-+      inferredType = "error";
-+    }
-+    if (!inferredType) {
-+      return null;
-+    }
-+    return { ...frame, type: inferredType };
++    return Object.prototype.toString.call(payload) === "[object Object]";
 +  }
 +
-   async function parseFrame(event) {
-     const { data } = event;
-     if (typeof data === "string") {
-       try {
-         const frame = JSON.parse(data);
-         if (frame && typeof frame.message === "string") {
-           if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-             return;
++  function validatePayloadForSend(payload) {
++    if (!isTypedObjectPayload(payload)) {
++      return true;
++    }
++    const { type } = payload;
++    if (typeof type === "string" && type.trim().length > 0) {
++      return true;
++    }
++    const keys = Object.keys(payload || {});
++    console.warn("WSClient send skipped object payload without type", { keys, payload });
++    try {
++      recordClientBannerEvent("ws.send.invalid_payload", {
++        reason: "missing_type",
++        keys: keys.slice(0, 6),
++      });
++    } catch {}
++    try {
++      logStage("client.ws", { outcome: "send_skipped_missing_type", keys: keys.slice(0, 6) });
++    } catch {}
++    return false;
++  }
++
+   function send(payload, { binary = false } = {}) {
+     const client = (this && typeof this === "object") ? this : WSClient;
+     if (!Array.isArray(client._queue)) {
+       client._queue = [];
+     }
++    if (!binary && !validatePayloadForSend(payload)) {
++      return;
++    }
+     let stateSocket = null;
+     if (typeof AppState !== "undefined" && AppState) {
+       stateSocket = AppState.websocket || null;
+       if (!stateSocket && typeof AppState.getState === "function") {
+         try {
+           const snapshot = AppState.getState();
+           stateSocket = snapshot && snapshot.websocket ? snapshot.websocket : null;
+         } catch {}
+       }
+     }
+     const live = client._ws || stateSocket;
+     if (!live || live.readyState !== WebSocket.OPEN) {
+       client._queue.push({ data: payload, isBinary: !!binary });
+       console.warn("WSClient.send queued (socket not open)");
+       return;
+     }
+     client._ws = live;
+     client._connected = true;
+     try { live.binaryType = "arraybuffer"; } catch {}
+     if (binary) {
+       if (payload instanceof Blob) {
+         return payload.arrayBuffer().then((buf) => {
+           try {
+             live.send(buf);
+           } catch (err) {
+             console.error("WSClient binary send error", err);
            }
+         });
+       }
+       if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+         const buffer = payload instanceof ArrayBuffer
+           ? payload
+           : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+         try {
+           live.send(buffer);
+         } catch (err) {
+           console.error("WSClient binary send error", err);
          }
--        if (frame && frame.type === "server.ping") {
--          send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
-+        const normalizedFrame = normalizeIncomingFrame(frame);
-+        if (!normalizedFrame) {
-+          console.warn("Dropping WS frame without recognizable type", frame);
-+          handleErrorFrame({
-+            type: "error",
-+            code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
-+            detail:
-+              typeof frame?.detail === "string"
-+                ? frame.detail
-+                : "Frame missing type field",
-+          });
-+          return;
-+        }
-+        if (normalizedFrame.type === "server.ping") {
-+          send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
-           return;
-         }
--        await handleMessageFrame(frame);
-+        await handleMessageFrame(normalizedFrame);
-       } catch (err) {
-         console.error("Failed to parse WS frame", err, data);
+         return;
        }
-       return;
      }
-     if (data instanceof Blob) {
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(data);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-       return;
++    if (!binary && !validatePayloadForSend(payload)) {
++      return;
++    }
+     const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+     try {
+       live.send(text);
+     } catch (err) {
+       console.error("WSClient send error", err);
      }
-     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-       const chunk = data instanceof ArrayBuffer
-         ? data
-         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-         audioPlayer.enqueueChunk(chunk);
-       }
-       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-       return;
-     }
-     console.warn("Unknown WS frame type", data);
+   }
+ 
+   function getBufferedAmount() {
+     if (!socket) return 0;
+     return socket.bufferedAmount || 0;
+   }
+ 
+   const debug = {
+     simulateIncomingFrame(frame) {
+       return handleMessageFrame(frame);
+     },
+     recordPing(ts) {
+       lastPingAt = ts;
+       updateState({ lastPingAt: ts });
+     },
+     setTransportFactory(factory) {
+       transportFactory = typeof factory === "function" ? factory : transportFactory;
+     },
+     resetTransportFactory() {
