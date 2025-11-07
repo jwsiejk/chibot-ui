@@ -64,6 +64,10 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
     if frame_type == "audio.header":
         fmt = frame.get("format")
         if fmt is not None and fmt not in _ALLOWED_AUDIO_FORMATS:
+            _logger.info(
+                "audio.header.reject reason=format got=%s want=pcm16",
+                fmt,
+            )
             return False, "audio.header requires format 'pcm16'"
 
         sample_rate = frame.get("sample_rate")
@@ -80,6 +84,11 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
             expected_channels = 1
 
             if sample_rate is not None and sample_rate != expected_sr:
+                _logger.info(
+                    "audio.header.reject reason=sample_rate got=%s want=%s",
+                    sample_rate,
+                    expected_sr,
+                )
                 _logger.warning(
                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
                     sample_rate,
@@ -90,6 +99,11 @@ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
                     "audio.header pcm16 requires sample_rate=16000 and channels=1",
                 )
             if channels is not None and channels != expected_channels:
+                _logger.info(
+                    "audio.header.reject reason=channels got=%s want=%s",
+                    channels,
+                    expected_channels,
+                )
                 _logger.warning(
                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
                     sample_rate,
@@ -117,6 +131,21 @@ def validate_audio_header_against_policy(
         if normalized_fmt == "pcm":
             normalized_fmt = "pcm16"
         if normalized_fmt != "pcm16" or rate != 16000 or channels != 1:
+            if normalized_fmt != "pcm16":
+                _logger.info(
+                    "audio.header.reject reason=format got=%s want=pcm16",
+                    fmt,
+                )
+            elif rate != 16000:
+                _logger.info(
+                    "audio.header.reject reason=sample_rate got=%s want=16000",
+                    rate,
+                )
+            elif channels != 1:
+                _logger.info(
+                    "audio.header.reject reason=channels got=%s want=1",
+                    channels,
+                )
             _logger.warning(
                 "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
                 fmt,
@@ -148,6 +177,10 @@ def validate_audio_header_against_policy(
     asr_input = get_value("asr_input")
     if asr_input == "pcm_16k":
         if fmt != "pcm":
+            _logger.info(
+                "audio.header.reject reason=format got=%s want=pcm",
+                fmt,
+            )
             msg = "policy_violation: expected format=pcm"
             _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
             return msg

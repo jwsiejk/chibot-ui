@@ -141,11 +141,11 @@ def _clamp_final_latency(ms: int, log) -> int:
     clamped = max(lo, min(ms, hi))
     if clamped != ms:
         log.info(
-            "sm.max_delay.clamped",
-            wanted_ms=ms,
-            clamped_ms=clamped,
-            lo_ms=lo,
-            hi_ms=hi,
+            "sm.max_delay.clamped wanted_ms=%s clamped_ms=%s lo_ms=%s hi_ms=%s",
+            ms,
+            clamped,
+            lo,
+            hi,
         )
     return clamped
 

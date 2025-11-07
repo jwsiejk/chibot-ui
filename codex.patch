@@ -1,280 +1,235 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index c5d1d7934269aff068b57259059021e53cd423ac..d03ec2196271b9f1f5cfa3d42b92892bfb740553 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -332,50 +332,57 @@ import { WakeWord } from "./wake_word.js";
-     }
-   }
+diff --git a/app/services/asr/policies.py b/app/services/asr/policies.py
+index b9459964c58ca321e6f7b59bd04701f441ac81ba..25f931c1a0f417df89e920d7a602ed38df928041 100644
+--- a/app/services/asr/policies.py
++++ b/app/services/asr/policies.py
+@@ -119,55 +119,55 @@ def _normalize_diarization(value: Any) -> Dict[str, Any]:
+     if bool_candidate is not None:
+         result["diarization"] = bool_candidate
+         return result
  
-   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
-   let autostartAttempts = 0;
-   let autostartTimer = null;
+     mapping = _as_mapping(value)
+     enabled = _coerce_bool(mapping.get("enabled"))
+     if enabled is not None:
+         result["diarization"] = enabled
  
-   const WSClient = window.WSClient = window.WSClient || {};
-   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
-     window.ws = null;
-   }
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-   const getAudioPlayer = () => window.AudioPlayer;
+     return result
  
-   const VAD_APPSTATE_KEYS = [
-     "vadActive",
-     "vadSpeech",
-     "vadConfidence",
-     "vadEnergyDb",
-     "vadNoiseDb",
-   ];
-   let vadController = null;
-   let senderPaused = false;
-+  const PCM_TARGET_BATCH_MS = 60;
-+  const PCM_FLUSH_TIMER_MS = 50;
-+  const PCM_SAMPLE_RATE = 16000;
-+  const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
-+  let pcmBatchQueue = [];
-+  let pcmBatchSampleCount = 0;
-+  let pcmFlushTimerId = null;
  
-   function hubLog(label, detail) {
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-       try {
-         hub.log(label, detail);
-         return true;
-       } catch (err) {
-         console.warn("AppState.hub.log failed", err);
-       }
-     }
-     if (typeof window !== "undefined") {
-       try {
-         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
-         return true;
-       } catch (err) {
-         console.warn("client.log dispatch failed", err);
-       }
-     }
-     return false;
-   }
+ def _normalize_max_final_latency(value: Any) -> float | None:
+     latency_ms = _coerce_int(value)
+     if latency_ms is None:
+         return None
+     clamped = _clamp_final_latency(latency_ms, _log)
+     return round(clamped / 1000.0, 3)
  
-   function getVadPolicySnapshot() {
-     return CLIENT_VAD_POLICY_ROOT;
-@@ -778,63 +785,146 @@ import { WakeWord } from "./wake_word.js";
-       micKeepaliveTimerId = null;
-     }
-   }
  
-   function scheduleAudioKeepalive() {
-     clearAudioKeepaliveTimer();
-     micKeepaliveTimerId = setTimeout(() => {
-       micKeepaliveTimerId = null;
-       const listening = Boolean(AppState.listening);
-       const now = Date.now();
-       if (!listening) {
-         return;
-       }
-       if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
-         try {
-           WSClient.send({ type: "client.ping" });
-           logStage("client.ping", { lane: "mic" });
-         } catch (err) {
-           console.warn("client.ping send failed", err);
-         }
-       }
-       scheduleAudioKeepalive();
-     }, AUDIO_KEEPALIVE_MS);
-   }
+ def _clamp_final_latency(ms: int, log) -> int:
+     lo, hi = _SM_MIN_FINAL_LATENCY_MS, _SM_MAX_FINAL_LATENCY_MS
+     clamped = max(lo, min(ms, hi))
+     if clamped != ms:
+         log.info(
+-            "sm.max_delay.clamped",
+-            wanted_ms=ms,
+-            clamped_ms=clamped,
+-            lo_ms=lo,
+-            hi_ms=hi,
++            "sm.max_delay.clamped wanted_ms=%s clamped_ms=%s lo_ms=%s hi_ms=%s",
++            ms,
++            clamped,
++            lo,
++            hi,
+         )
+     return clamped
  
-+  function clearPcmFlushTimer() {
-+    if (pcmFlushTimerId) {
-+      clearTimeout(pcmFlushTimerId);
-+      pcmFlushTimerId = null;
-+    }
-+  }
-+
-+  function resetPcmBatchState() {
-+    pcmBatchQueue = [];
-+    pcmBatchSampleCount = 0;
-+    clearPcmFlushTimer();
-+  }
-+
-+  function schedulePcmFlushTimer() {
-+    if (!pcmFlushTimerId) {
-+      pcmFlushTimerId = setTimeout(() => {
-+        pcmFlushTimerId = null;
-+        flushPcmBatch();
-+      }, PCM_FLUSH_TIMER_MS);
-+    }
-+  }
-+
-+  function enqueuePcmFrame(frame, meta) {
-+    if (!(frame instanceof Int16Array) || frame.length === 0) {
-+      return;
-+    }
-+    const metadata = meta && typeof meta === "object" ? { ...meta } : {};
-+    pcmBatchQueue.push({ frame, meta: metadata });
-+    pcmBatchSampleCount += frame.length;
-+    schedulePcmFlushTimer();
-+    const accumulatedMs = pcmBatchSampleCount / PCM_SAMPLES_PER_MS;
-+    if (accumulatedMs >= PCM_TARGET_BATCH_MS) {
-+      flushPcmBatch();
-+    }
-+  }
-+
-+  function flushPcmBatch() {
-+    if (!pcmBatchQueue.length || pcmBatchSampleCount <= 0) {
-+      resetPcmBatchState();
-+      return;
-+    }
-+    const frames = pcmBatchQueue;
-+    const totalSamples = pcmBatchSampleCount;
-+    pcmBatchQueue = [];
-+    pcmBatchSampleCount = 0;
-+    clearPcmFlushTimer();
-+    if (!totalSamples) {
-+      return;
-+    }
-+    const out = new Int16Array(totalSamples);
-+    let offset = 0;
-+    let firstSeq = 0;
-+    let batchChunks = 0;
-+    for (const entry of frames) {
-+      if (!batchChunks && entry && entry.meta && Number.isFinite(entry.meta.seq)) {
-+        firstSeq = Number(entry.meta.seq);
-+      }
-+      if (entry && entry.frame) {
-+        out.set(entry.frame, offset);
-+        offset += entry.frame.length;
-+        batchChunks += 1;
-+      }
-+    }
-+    if (!batchChunks) {
-+      return;
-+    }
-+    const bytes = out.byteLength;
-+    logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
-+    try {
-+      const result = sendBinary(out.buffer, { lane: "mic" });
-+      __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-+      __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-+      if (result && typeof result.catch === "function") {
-+        result.catch((err) => {
-+          console.warn("Binary send (mic) failed", err);
-+        });
-+      }
-+    } catch (err) {
-+      console.error("WSClient sendBinary mic failed", err);
-+    }
-+  }
-+
-   function stopRecorder(reason) {
-     clearAudioKeepaliveTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       setListeningState(false);
-       return;
-     }
-     try {
-       recorder.stopListening({ reason: normalizeReason(reason) });
-     } catch (err) {
-       console.warn("Recorder stopListening failed", err);
-     }
-     senderPaused = false;
-+    flushPcmBatch();
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
-     }
-     setListeningState(false);
-   }
  
-   function handleRecorderChunk(event) {
-     if (!event) {
-       return;
-     }
-     const buffer = event.buffer instanceof ArrayBuffer
-       ? event.buffer
-       : (ArrayBuffer.isView(event.buffer)
-         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-         : null);
-     if (!buffer) {
-       return;
-     }
-     const seq = Number(event.seq) || 0;
-@@ -849,67 +939,59 @@ import { WakeWord } from "./wake_word.js";
-         vadController.onPcmFrame(buffer, frameTimestamp);
-       } catch (err) {
-         try {
-           console.warn("VAD frame processing failed", err);
-         } catch {}
-       }
-     }
-     let asrReady = false;
-     try {
-       if (typeof AppState.getState === "function") {
-         const snapshot = AppState.getState();
-         if (snapshot && typeof snapshot.asrReady === "boolean") {
-           asrReady = snapshot.asrReady;
-         }
-       }
-     } catch {}
-     if (!asrReady) {
-       asrReady = Boolean(AppState?.asrReady);
-     }
-     if (senderPaused || !asrReady) {
-       return;
-     }
-     if (seq === 0) {
-       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-     }
--    logStage("client.audio_chunk_send", { seq, bytes: buffer.byteLength });
--    try {
--      const result = sendBinary(buffer, { lane: "mic" });
--      if (result && typeof result.catch === "function") {
--        result.catch((err) => {
--          console.warn("Binary send (mic) failed", err);
--        });
--      }
--    } catch (err) {
--      console.error("WSClient sendBinary mic failed", err);
--    }
-+    const frame = new Int16Array(buffer);
-+    enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
-   }
+ def _normalize_custom_vocab(value: Any) -> list[Dict[str, Any]]:
+     entries: list[Dict[str, Any]] = []
  
-   async function startRecorderStreaming(policy) {
-     if (AppState.listening) {
-       return;
-     }
-+    resetPcmBatchState();
-     const recorder = getRecorder();
-     if (!recorder) {
-       console.warn("AudioRecorder unavailable; cannot start streaming");
-       return;
-     }
-     // The server owns the input.start lifecycle; never emit it from the client.
-     try {
-       await recorder.start({ onChunk: handleRecorderChunk, policy });
-     } catch (err) {
-       if (err && err.name === "NotAllowedError") {
-         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
-       }
-       throw err;
-     }
-     resetRecorderTelemetry();
-     senderPaused = false;
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
-     }
+     def _add_entry(entry: Mapping[str, Any]) -> None:
+         content = entry.get("content")
+         if not isinstance(content, str):
+             return
+         normalized_content = content.strip()
+         if not normalized_content:
+             return
+ 
+         normalized_entry: Dict[str, Any] = {"content": normalized_content}
+ 
+         sounds_like_value = entry.get("sounds_like")
+         sounds_like: list[str] = []
+         for alt in _as_sequence(sounds_like_value):
+             if isinstance(alt, str):
+                 normalized_alt = alt.strip()
+                 if normalized_alt:
+                     sounds_like.append(normalized_alt)
+         if sounds_like:
+diff --git a/app/ws/validator.py b/app/ws/validator.py
+index 693bdb40c514c8810133ed6d9185a499315affe6..0cb682e6a8de328207a11ca51cfdae6fde9ca3c9 100644
+--- a/app/ws/validator.py
++++ b/app/ws/validator.py
+@@ -42,132 +42,165 @@ def _is_int(value: object) -> bool:
+ def validate_frame(frame: dict) -> Tuple[bool, str | None]:
+     """Validate a decoded JSON frame.
+ 
+     Parameters
+     ----------
+     frame:
+         JSON object parsed from the WebSocket text frame.
+ 
+     Returns
+     -------
+     (ok, hint):
+         ok is ``True`` when the frame passes validation. hint contains a
+         human-readable detail when validation fails.
+     """
+ 
+     if not isinstance(frame, dict):
+         return False, "Frame must be a JSON object"
+ 
+     frame_type = frame.get("type")
+     if not isinstance(frame_type, str):
+         return False, "Frame requires a string 'type' field"
+ 
+     if frame_type == "audio.header":
+         fmt = frame.get("format")
+         if fmt is not None and fmt not in _ALLOWED_AUDIO_FORMATS:
++            _logger.info(
++                "audio.header.reject reason=format got=%s want=pcm16",
++                fmt,
++            )
+             return False, "audio.header requires format 'pcm16'"
+ 
+         sample_rate = frame.get("sample_rate")
+         if sample_rate is not None and not _is_int(sample_rate):
+             return False, "audio.header requires integer sample_rate"
+ 
+         channels = frame.get("channels")
+         if channels is not None and not _is_int(channels):
+             return False, "audio.header requires integer channels"
+ 
+         normalized_fmt = fmt or "pcm16"
+         if normalized_fmt in {"pcm", "pcm16"}:
+             expected_sr = 16000
+             expected_channels = 1
+ 
+             if sample_rate is not None and sample_rate != expected_sr:
++                _logger.info(
++                    "audio.header.reject reason=sample_rate got=%s want=%s",
++                    sample_rate,
++                    expected_sr,
++                )
+                 _logger.warning(
+                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
+                     sample_rate,
+                     channels,
+                 )
+                 return (
+                     False,
+                     "audio.header pcm16 requires sample_rate=16000 and channels=1",
+                 )
+             if channels is not None and channels != expected_channels:
++                _logger.info(
++                    "audio.header.reject reason=channels got=%s want=%s",
++                    channels,
++                    expected_channels,
++                )
+                 _logger.warning(
+                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
+                     sample_rate,
+                     channels,
+                 )
+                 return (
+                     False,
+                     "audio.header pcm16 requires sample_rate=16000 and channels=1",
+                 )
+ 
+     return True, None
+ 
+ 
+ def validate_audio_header_against_policy(
+     header: Dict[str, Any],
+     policy: Policy | Mapping[str, Any] | None,
+     vendor: Optional[str] = None,
+ ) -> Optional[str]:
+     fmt = header.get("format")
+     rate = header.get("sample_rate")
+     channels = header.get("channels")
+ 
+     if vendor == "speechmatics":
+         normalized_fmt = fmt
+         if normalized_fmt == "pcm":
+             normalized_fmt = "pcm16"
+         if normalized_fmt != "pcm16" or rate != 16000 or channels != 1:
++            if normalized_fmt != "pcm16":
++                _logger.info(
++                    "audio.header.reject reason=format got=%s want=pcm16",
++                    fmt,
++                )
++            elif rate != 16000:
++                _logger.info(
++                    "audio.header.reject reason=sample_rate got=%s want=16000",
++                    rate,
++                )
++            elif channels != 1:
++                _logger.info(
++                    "audio.header.reject reason=channels got=%s want=1",
++                    channels,
++                )
+             _logger.warning(
+                 "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
+                 fmt,
+                 rate,
+                 channels,
+             )
+             _emit_validator_log(
+                 "WARNING",
+                 "audio.header_rejected reason=vendor_requires_pcm vendor=speechmatics",
+             )
+             return "speechmatics requires pcm@16k mono"
+ 
+     if policy is None:
+         return None
+ 
+     if isinstance(policy, Mapping):
+         media = policy.get("media")
+     else:
+         media = getattr(policy, "media", None)
+ 
+     if media is None:
+         return None
+ 
+     if isinstance(media, Mapping):
+         get_value = media.get
+     else:
+         get_value = lambda key, default=None: getattr(media, key, default)
+ 
+     asr_input = get_value("asr_input")
+     if asr_input == "pcm_16k":
+         if fmt != "pcm":
++            _logger.info(
++                "audio.header.reject reason=format got=%s want=pcm",
++                fmt,
++            )
+             msg = "policy_violation: expected format=pcm"
+             _emit_validator_log("WARNING", f"evt=policy_violation detail={msg}")
+             return msg
+         if rate is not None and rate != 16000:
+             msg = f"evt=audio_header_rate_mismatch expected=16000 got={rate}"
+             _logger.warning(msg)
+             _emit_validator_log("WARNING", msg)
+         if channels is not None and channels != 1:
+             msg = f"evt=audio_header_channels_mismatch expected=1 got={channels}"
+             _logger.warning(msg)
+             _emit_validator_log("WARNING", msg)
+     else:
+         if asr_input:
+             detail = f"policy_violation: media.asr_input must be pcm_16k (got {asr_input})"
+         else:
+             detail = "policy_violation: media.asr_input must be pcm_16k"
+         _emit_validator_log("WARNING", f"evt=policy_violation detail={detail}")
+         return detail
+ 
+     return None
+ 
+ 
+ __all__ = ["validate_frame", "validate_audio_header_against_policy"]
