@@ -807,9 +807,7 @@ import { WakeWord } from "./wake_word.js";
     } else {
       AppState.recorder = recorderState;
     }
-    if (listening) {
-      setWsPhase("streaming");
-    } else if (AppState.wsConnected) {
+    if (!listening && AppState.wsConnected) {
       setWsPhase("connected");
     }
   }
@@ -1142,7 +1140,7 @@ import { WakeWord } from "./wake_word.js";
     try {
       setAsrArmInFlight(true);
       logStage("client.asr_rearm_request", { reason: label });
-      WSClient.send({ type: "asr.open" });
+      WSClient.send({ type: "asr.open" }); // send first so it's not phase-blocked
       setWsPhase("arming");
     } catch (err) {
       setAsrArmInFlight(false);

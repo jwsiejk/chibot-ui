@@ -484,6 +484,8 @@ class AdapterContext:
     first_partial_logged: bool = False
     first_final_logged: bool = False
     active_asr_config: Optional[Dict[str, Any]] = None
+    hub_log_last_turn: Optional[str] = None
+    hub_log_seq: int = 0
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -4181,10 +4183,33 @@ class ChatV2Adapter:
         label: str,
         detail: Mapping[str, Any],
     ) -> None:
+        if isinstance(detail, Mapping):
+            enriched_detail: Dict[str, Any] = dict(detail)
+        else:
+            enriched_detail = {"detail": detail}
+
+        sid = enriched_detail.get("session_id") or ctx.sid
+        turn_id = enriched_detail.get("turn_id")
+        ctx_turn_id = getattr(ctx.session, "turn_id", None)
+        if not isinstance(turn_id, str) or not turn_id:
+            if isinstance(ctx_turn_id, str) and ctx_turn_id:
+                turn_id = ctx_turn_id
+
+        if turn_id != ctx.hub_log_last_turn:
+            ctx.hub_log_last_turn = turn_id
+            ctx.hub_log_seq = 0
+
+        if "seq" not in enriched_detail:
+            enriched_detail["seq"] = ctx.hub_log_seq
+            ctx.hub_log_seq += 1
+
+        enriched_detail.setdefault("session_id", sid)
+        enriched_detail.setdefault("turn_id", turn_id)
+
         try:
-            sanitized = bus.redact_payload(detail)
+            sanitized = bus.redact_payload(enriched_detail)
         except Exception:
-            sanitized = detail
+            sanitized = enriched_detail
         payload = {
             "type": EVT_CLIENT_LOG,
             "sid": ctx.sid,
