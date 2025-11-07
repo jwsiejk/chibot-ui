@@ -817,7 +817,7 @@ class SMRealtimeClient:
         ws = self._ws
         if ws is None:
             raise RuntimeError("websocket not connected")
-        data = json.dumps(payload)
+        data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         await ws.send(data)
 
     def _now_ms(self) -> int:
