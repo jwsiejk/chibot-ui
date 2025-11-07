@@ -244,6 +244,7 @@ class SMRealtimeClient:
         self._last_activity = self._connected_at
 
         try:
+            _log.info("evt=sm_startrecognition payload=%s", params)
             await self._send_json(params)
         except ConnectionClosedError as exc:
             if getattr(exc, "code", None) == 4001:
