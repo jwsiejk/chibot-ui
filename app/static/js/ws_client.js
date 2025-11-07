@@ -58,6 +58,8 @@ import { WakeWord } from "./wake_word.js";
   // Per-turn readiness/start tokens to prevent re-arm loops
   let __asrReadySeen = false;
 
+  let _audioStreaming = false;
+
   if (typeof window !== "undefined") {
     try {
       Object.defineProperty(window, "__micAttempts", {
@@ -856,6 +858,11 @@ import { WakeWord } from "./wake_word.js";
     if (!totalSamples) {
       return;
     }
+    if (!_audioStreaming) {
+      resetPcmBatchState();
+      return;
+    }
+
     const out = new Int16Array(totalSamples);
     let offset = 0;
     let firstSeq = 0;
@@ -890,6 +897,7 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function stopRecorder(reason) {
+    _audioStreaming = false;
     clearAudioKeepaliveTimer();
     const recorder = getRecorder();
     if (!recorder) {
@@ -3072,6 +3080,7 @@ import { WakeWord } from "./wake_word.js";
       console.warn('Legacy input capture deferred until asr.ready', frame);
       return;
     } else if (frame.type === "stop_listening") {
+      _audioStreaming = false;
       stopRecorder("server_requested");
       setAsrArmInFlight(false);
       setArmAfterTtsEnd(false);
@@ -3100,14 +3109,18 @@ import { WakeWord } from "./wake_word.js";
         }
       }
     } else if (frame.type === "input.start") {
+      _audioStreaming = true;
       await handleInputStartFrame(frame);
     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
       __resetAudioHeaderSent();
     } else if (frame.type === "input.stop") {
+      _audioStreaming = false;
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
       __asrReadySeen = false;
       __resetAudioHeaderSent();
+    } else if (frame.type === "assistant.await_user") {
+      _audioStreaming = false;
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
       __asrReadySeen = true;
@@ -3412,6 +3425,7 @@ import { WakeWord } from "./wake_word.js";
       socket = null;
       expectInfoFrame = true;
       clearInfoWatchdog();
+      _audioStreaming = false;
       stopInputCapture();
       try {
         if (window.ws === ws) {
@@ -3576,6 +3590,7 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function close(reason = DEFAULT_CLOSE_REASON) {
+    _audioStreaming = false;
     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
     stopRecorder(reason || "client_shutdown");
     setAsrArmInFlight(false);
@@ -3651,6 +3666,11 @@ import { WakeWord } from "./wake_word.js";
       client._queue = [];
     }
     let data = payload;
+
+    if (!binary && (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload))) {
+      console.debug("WSClient.send: binary payload ignored by JSON helper");
+      return;
+    }
 
     if (!binary) {
       if (!validatePayloadForSend(data)) {

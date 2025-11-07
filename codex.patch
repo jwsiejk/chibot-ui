@@ -1,14 +1,91 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index d03ec2196271b9f1f5cfa3d42b92892bfb740553..6c142e37e2238b6154fb5ea8fe23e5891effd156 100644
+index 6c142e37e2238b6154fb5ea8fe23e5891effd156..9f5b77f8483d6b8ddcf53d4b1240382755b44e34 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -853,61 +853,61 @@ import { WakeWord } from "./wake_word.js";
+@@ -36,50 +36,52 @@ import { WakeWord } from "./wake_word.js";
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+   const DEFAULT_ASR_VENDOR = 'speechmatics';
+ 
+   let __micAttempts = 0;
+   let __micChunks = 0;
+   let __micBytes = 0;
+   let __micArmedAt = 0;     // ms since epoch
+   let __micPermissionGranted = false;
+   let __micRecordingStartAt = null;
+   let __micFirstChunkBreadcrumbSent = false;
+   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
+   let __pendingAsrReadyStart = null;
+   let __autoVadPatchedForPendingStart = false;
+ 
+   // Per-turn readiness/start tokens to prevent re-arm loops
+   let __asrReadySeen = false;
+ 
++  let _audioStreaming = false;
++
+   if (typeof window !== "undefined") {
+     try {
+       Object.defineProperty(window, "__micAttempts", {
+         configurable: true,
+         get() { return __micAttempts; },
+         set(value) {
+           if (Number.isFinite(value)) {
+             __micAttempts = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__micChunks", {
+         configurable: true,
+         get() { return __micChunks; },
+         set(value) {
+           if (Number.isFinite(value)) {
+             __micChunks = value;
+           }
+         },
+       });
+       Object.defineProperty(window, "__micBytes", {
+         configurable: true,
+         get() { return __micBytes; },
+         set(value) {
+           if (Number.isFinite(value)) {
+@@ -834,84 +836,90 @@ import { WakeWord } from "./wake_word.js";
+       return;
+     }
+     const metadata = meta && typeof meta === "object" ? { ...meta } : {};
+     pcmBatchQueue.push({ frame, meta: metadata });
+     pcmBatchSampleCount += frame.length;
+     schedulePcmFlushTimer();
+     const accumulatedMs = pcmBatchSampleCount / PCM_SAMPLES_PER_MS;
+     if (accumulatedMs >= PCM_TARGET_BATCH_MS) {
+       flushPcmBatch();
+     }
+   }
+ 
+   function flushPcmBatch() {
+     if (!pcmBatchQueue.length || pcmBatchSampleCount <= 0) {
+       resetPcmBatchState();
+       return;
+     }
+     const frames = pcmBatchQueue;
+     const totalSamples = pcmBatchSampleCount;
      pcmBatchQueue = [];
      pcmBatchSampleCount = 0;
      clearPcmFlushTimer();
      if (!totalSamples) {
        return;
      }
++    if (!_audioStreaming) {
++      resetPcmBatchState();
++      return;
++    }
++
      const out = new Int16Array(totalSamples);
      let offset = 0;
      let firstSeq = 0;
@@ -28,28 +105,22 @@ index d03ec2196271b9f1f5cfa3d42b92892bfb740553..6c142e37e2238b6154fb5ea8fe23e589
      }
      const bytes = out.byteLength;
      logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
-+    const ws = socket || (WSClient && WSClient._ws) || null;
-+    if (!ws || ws.readyState !== WebSocket.OPEN) {
-+      console.warn("pcm.send.skipped", { readyState: ws ? ws.readyState : undefined });
-+      return;
-+    }
+     const ws = socket || (WSClient && WSClient._ws) || null;
+     if (!ws || ws.readyState !== WebSocket.OPEN) {
+       console.warn("pcm.send.skipped", { readyState: ws ? ws.readyState : undefined });
+       return;
+     }
      try {
--      const result = sendBinary(out.buffer, { lane: "mic" });
-+      ws.send(out.buffer);
+       ws.send(out.buffer);
        __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
        __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
--      if (result && typeof result.catch === "function") {
--        result.catch((err) => {
--          console.warn("Binary send (mic) failed", err);
--        });
--      }
      } catch (err) {
--      console.error("WSClient sendBinary mic failed", err);
-+      console.warn("pcm.send.error", err);
+       console.warn("pcm.send.error", err);
      }
    }
  
    function stopRecorder(reason) {
++    _audioStreaming = false;
      clearAudioKeepaliveTimer();
      const recorder = getRecorder();
      if (!recorder) {
@@ -71,3 +142,259 @@ index d03ec2196271b9f1f5cfa3d42b92892bfb740553..6c142e37e2238b6154fb5ea8fe23e589
            console.warn("VAD reset failed", err);
          } catch {}
        }
+     }
+     setListeningState(false);
+   }
+ 
+@@ -3050,86 +3058,91 @@ import { WakeWord } from "./wake_word.js";
+         hub = AppState?.hub;
+         if (hub && typeof hub.setPolicy === "function") {
+           hub.setPolicy(policy);
+         }
+       } catch (err) {
+         console.warn("Hub setPolicy during start_listening failed", err);
+       }
+ 
+       if (hub && typeof hub.prearmListening === "function") {
+         try {
+           hub.prearmListening(policy);
+         } catch (err) {
+           console.warn("Hub prearmListening failed", err);
+         }
+         return;
+       }
+ 
+       if (hub && typeof hub.startListening === "function") {
+         // Defer actual streaming until asr.ready fires.
+         return;
+       }
+ 
+       console.warn('Legacy input capture deferred until asr.ready', frame);
+       return;
+     } else if (frame.type === "stop_listening") {
++      _audioStreaming = false;
+       stopRecorder("server_requested");
+       setAsrArmInFlight(false);
+       setArmAfterTtsEnd(false);
+       try {
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+         } else {
+           stopInputCapture({ reason: "server_requested" });
+         }
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
+       clearPendingAsrReadyStart("stop_listening");
+       __asrReadySeen = false;
+       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+         try {
+           const reason =
+             (typeof frame?.reason === "string" && frame.reason) ||
+             "server_requested";
+           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
+         } catch (err) {
+           console.warn("stop_listening event dispatch failed", err);
+         }
+       }
+     } else if (frame.type === "input.start") {
++      _audioStreaming = true;
+       await handleInputStartFrame(frame);
+     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
+       __resetAudioHeaderSent();
+     } else if (frame.type === "input.stop") {
++      _audioStreaming = false;
+       stopInputCapture({ reason: "input.stop" });
+       clearPendingAsrReadyStart("input.stop");
+       __asrReadySeen = false;
+       __resetAudioHeaderSent();
++    } else if (frame.type === "assistant.await_user") {
++      _audioStreaming = false;
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
+       __asrReadySeen = true;
+       setAsrArmInFlight(false);
+       setArmAfterTtsEnd(false);
+       setWsConnected(true);
+       setWsPhase("ready");
+       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
+       __resetAudioHeaderSent();
+       sendAudioHeader(frame);
+       try {
+         await startRecorderStreaming(frame?.policy || {});
+       } catch (err) {
+         console.error("Recorder start on asr.ready failed", err);
+         logStage("client.mic", {
+           outcome: MIC_OUTCOME.ERROR_GUM,
+           message: err && err.message ? err.message : String(err || ""),
+         });
+         setListeningState(false);
+       }
+     } else if (frame.type === "asr.partial") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.final") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.unavailable") {
+@@ -3390,50 +3403,51 @@ import { WakeWord } from "./wake_word.js";
+     ws.removeEventListener("message", handlers.message);
+     ws.removeEventListener("error", handlers.error);
+     ws.removeEventListener("close", handlers.close);
+     delete ws.__handlers;
+     delete ws.__intentionalClose;
+   }
+ 
+   function cleanupSocket(ws, reason = DEFAULT_CLOSE_REASON) {
+     if (!ws) return;
+     setWsPhase("closing");
+     setWsConnected(false);
+     detachSocket(ws);
+     ws.__intentionalClose = true;
+     recordClientBannerEvent("ws.cleanup", { reason: truncateBannerString(reason || "", 80) });
+     try {
+       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+         ws.close(1000, reason);
+       }
+     } catch (err) {
+       console.warn("WSClient cleanup close error", err);
+     }
+     if (socket === ws) {
+       socket = null;
+       expectInfoFrame = true;
+       clearInfoWatchdog();
++      _audioStreaming = false;
+       stopInputCapture();
+       try {
+         if (window.ws === ws) {
+           window.ws = null;
+         }
+       } catch {}
+     }
+     const client = WSClient;
+     if (client && typeof client === "object") {
+       client._ws = null;
+       client._connected = false;
+     }
+   }
+ 
+   // OPEN: Use the EXACT URL provided (must include ?access_token=... unless resuming)
+   function open(options = {}, protocolsOverride) {
+     let resumeTokenValue = null;
+     let skipRateLimitCancel = false;
+     let urlOverride = null;
+     let protocols = protocolsOverride;
+ 
+     if (typeof options === "string") {
+       urlOverride = options;
+     } else if (options && typeof options === "object") {
+       const { resumeToken = null, skipRateLimitCancel: skip = false } = options;
+@@ -3554,50 +3568,51 @@ import { WakeWord } from "./wake_word.js";
+       logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
+       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
+       recordClientBannerEvent("ws.socket.close", {
+         code: typeof e.code === "number" ? e.code : undefined,
+         reason: truncateBannerString(e.reason || "", 160),
+         was_clean: Boolean(e.wasClean),
+         ready_state: ws.readyState,
+       });
+     };
+ 
+     socket = ws;
+     updateState({
+       connectionState: resumeTokenValue ? "resuming" : "connecting",
+       websocket: ws,
+       latencyMs: null,
+       lastPingAt: null,
+       resumeError: null,
+       infoFrame: null,
+       serverBanner: null
+     });
+     attachSocket(ws);
+     return ws;
+   }
+ 
+   function close(reason = DEFAULT_CLOSE_REASON) {
++    _audioStreaming = false;
+     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
+     stopRecorder(reason || "client_shutdown");
+     setAsrArmInFlight(false);
+     setArmAfterTtsEnd(false);
+     setAppStateValue("ttsActive", false);
+     setWsPhase("closing");
+     setWsConnected(false);
+     const emitResumeInvalid = () => {
+       if (reason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+         try {
+           window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason } }));
+         } catch {}
+       }
+     };
+     if (!socket) {
+       setWsPhase("disconnected");
+       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+       emitResumeInvalid();
+       return;
+     }
+     const ws = socket;
+     cleanupSocket(ws, reason);
+     clearHeartbeat();
+     clearRateLimitRetryTimer();
+     rateLimitRetryCount = 0;
+@@ -3630,50 +3645,55 @@ import { WakeWord } from "./wake_word.js";
+     const { type } = payload;
+     if (typeof type === "string" && type.trim().length > 0) {
+       return true;
+     }
+     const keys = Object.keys(payload || {});
+     console.warn("WSClient send skipped object payload without type", { keys, payload });
+     try {
+       recordClientBannerEvent("ws.send.invalid_payload", {
+         reason: "missing_type",
+         keys: keys.slice(0, 6),
+       });
+     } catch {}
+     try {
+       logStage("client.ws", { outcome: "send_skipped_missing_type", keys: keys.slice(0, 6) });
+     } catch {}
+     return false;
+   }
+ 
+   function send(payload, { binary = false } = {}) {
+     const client = (this && typeof this === "object") ? this : WSClient;
+     if (!Array.isArray(client._queue)) {
+       client._queue = [];
+     }
+     let data = payload;
+ 
++    if (!binary && (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload))) {
++      console.debug("WSClient.send: binary payload ignored by JSON helper");
++      return;
++    }
++
+     if (!binary) {
+       if (!validatePayloadForSend(data)) {
+         return;
+       }
+       if (!data || typeof data !== "object") {
+         console.warn("WSClient.send blocked: missing or invalid type", payload);
+         return;
+       }
+       if (typeof data.type !== "string") {
+         console.warn("WSClient.send blocked: missing or invalid type", payload);
+         return;
+       }
+       if (data.type === "audio.header") {
+         if (data.format !== "pcm16" ||
+             typeof data.sample_rate !== "number" ||
+             typeof data.channels !== "number") {
+           console.warn("WSClient.send blocked: invalid audio.header schema", payload);
+           return;
+         }
+         data = {
+           type: "audio.header",
+           format: "pcm16",
+           sample_rate: Number(data.sample_rate),
+           channels: Number(data.channels)
+         };
