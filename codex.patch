@@ -1,68 +1,59 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 71da3f48e529193d2e93b24d2189db967dd76c2a..ad3b7a3526ece0492f9dabc5a42efc8c45a08b5a 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -2924,50 +2924,63 @@
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 1aacbdae8d09ac819ca8defa49490e69704cebc8..b29283b16feacd3800595428a7705ab396ebb55b 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -3237,51 +3237,54 @@ import { WakeWord } from "./wake_word.js";
+       if (_audioStreaming) {
+         const reason = typeof frame?.reason === "string" && frame.reason
+           ? frame.reason
+           : frame?.type || "input.stop";
+         hubLog("client.stream.off", { reason });
        }
-     }
- 
-     function requestAsrPrearm(trigger) {
-       if (asrPrearmIssued) {
-         return;
+       _audioStreaming = false;
+       stopInputCapture({ reason: "input.stop" });
+       clearPendingAsrReadyStart("input.stop");
+       __asrReadySeen = false;
+       __resetAudioHeaderSent();
+     } else if (frame.type === "assistant.await_user") {
+       if (_audioStreaming) {
+         const reason = typeof frame?.reason === "string" && frame.reason
+           ? frame.reason
+           : frame?.type || "assistant.await_user";
+         hubLog("client.stream.off", { reason });
        }
-       asrPrearmIssued = true;
-       const payload = { type: 'asr.rearm.request' };
-       const keepWarm = getKeepWarmMs();
+       _audioStreaming = false;
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
+       __asrReadySeen = true;
+       setAsrArmInFlight(false);
+       setArmAfterTtsEnd(false);
+       setWsConnected(true);
++      AppState.asrReady = true;
+       setWsPhase("ready");
++      emitConsoleBusEvent("client.asr.ready", { asrReady: true });
++      logStage("diag", { label: "asr.ready" });
+       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
+       __resetAudioHeaderSent();
+       sendAudioHeader(frame);
        try {
-         const client = window.WSClient;
-         if (client && typeof client.send === 'function') {
-           client.send(payload);
-         } else {
-           const ws = window.WS;
-           if (ws && typeof ws.send === 'function') {
-             ws.send(payload);
-           }
-         }
+         await startRecorderStreaming(frame?.policy || {});
        } catch (err) {
-         console.warn('Failed to send asr.rearm.request', err);
+         console.error("Recorder start on asr.ready failed", err);
+         logStage("client.mic", {
+           outcome: MIC_OUTCOME.ERROR_GUM,
+           message: err && err.message ? err.message : String(err || ""),
+         });
+         setListeningState(false);
        }
-       const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
-       logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
-+      const arm =
-+        typeof requestAsrArm === 'function'
-+          ? requestAsrArm
-+          : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
-+            ? window.WSClient.requestAsrArm
-+            : null;
-+      if (arm) {
-+        try {
-+          arm('policy');
-+        } catch (err) {
-+          console.warn('requestAsrArm failed after asr_prearm_requested', err);
-+        }
-+      }
-     }
- 
- window.addEventListener('tts.start', (event) => {
-   const detail = event && event.detail;
-   if (detail) {
-     updateVoiceState(extractVoiceLocale(detail));
-   }
-   runtimeState.audioPlaybackIdle = false;
-   cancelAsrPartialWatchdog();
-   asrPrearmIssued = false;
-   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
-     try {
-       window.AudioRecorder.handleTtsStart();
-     } catch (err) {
-       console.warn('AudioRecorder handleTtsStart failed', err);
-     }
-   }
-   patchPolicyVad({ auto_vad_active: false });
-   vadListeningLogged = false;
-   updateStatusBadge();
- });
- 
- window.addEventListener('policy.snapshot', (event) => {
-   const frame = event && event.detail;
-   try {
+     } else if (frame.type === "asr.partial") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.final") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details
+         : (frame && typeof frame.detail === "string" ? frame.detail : "");
+       console.warn("asr.unavailable", reason, details);
+       AppState.asrReady = false;
+       AppState.asrVendor = null;
