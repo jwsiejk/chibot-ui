@@ -5027,6 +5027,10 @@ class ChatV2Adapter:
             mark(ctx.session, "closing")
         if client is not None:
             try:
+                client.turn_id = getattr(ctx.session, "turn_id", None)
+            except AttributeError:
+                client.turn_id = None
+            try:
                 await client.send_end_of_stream()
             except Exception:
                 _log.warning("evt=asr_send_eos_failed sid=%s", ctx.sid, exc_info=True)

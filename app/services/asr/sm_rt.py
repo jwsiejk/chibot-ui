@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import time
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -27,6 +27,7 @@ from app.voice_v2 import (
     EVT_ASR_OPEN,
     EVT_ASR_PARTIAL,
     EVT_ASR_READY,
+    EVT_CLIENT_LOG,
 )
 
 __all__ = [
@@ -91,6 +92,8 @@ class SMRealtimeClient:
         if not sid:
             raise ValueError("sid must be provided")
         self._sid = sid
+        self.session_id = sid
+        self.turn_id: Optional[str] = None
         self._bus = telemetry_bus
         self._state = "idle"
         self._state_lock = asyncio.Lock()
@@ -112,6 +115,8 @@ class SMRealtimeClient:
         self._closed_event = asyncio.Event()
         self._close_reason: str | None = None
         self._sent_end_of_stream = False
+        self._seq_counter = 0
+        self._last_seq_no: Optional[int] = None
         self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
         self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
         self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
@@ -158,6 +163,8 @@ class SMRealtimeClient:
         self._close_reason = None
         self._sent_end_of_stream = False
         self._pcm_queue = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
+        self._seq_counter = 0
+        self._last_seq_no = None
 
         url = endpoint_url.strip()
         if not url:
@@ -260,6 +267,12 @@ class SMRealtimeClient:
             return
 
         self._sent_end_of_stream = True
+        detail = {
+            "session_id": self.session_id,
+            "turn_id": self.turn_id,
+            "last_seq_no": self._last_seq_no,
+        }
+        self._emit_hub_log("asr.eos.sent", detail)
         payload = {"message": "EndOfStream"}
         await self._send_json(payload)
         await self._wait_for_close_ack()
@@ -353,6 +366,8 @@ class SMRealtimeClient:
                 try:
                     await ws.send(data)
                     self._last_activity = time.monotonic()
+                    self._last_seq_no = self._seq_counter
+                    self._seq_counter += 1
                 except ConnectionClosed:
                     self._pcm_queue.task_done()
                     break
@@ -455,7 +470,7 @@ class SMRealtimeClient:
             self._handle_final(message)
             return
         if message_type in self._CLOSE_ACK_MESSAGES:
-            self._handle_close_ack(message)
+            self._handle_close_ack(message, message_type)
             return
         if message_type.lower() in {"warning", "info"}:
             self._emit_notice({"kind": message_type.lower(), "payload": message})
@@ -505,7 +520,16 @@ class SMRealtimeClient:
         self._publish_event(SM_FINAL, payload)
         self._call_callback(self._on_final, text, latency_ms)
 
-    def _handle_close_ack(self, message: Dict[str, Any]) -> None:
+    def _handle_close_ack(self, message: Dict[str, Any], message_type: str) -> None:
+        detail: Dict[str, Any] = {
+            "session_id": self.session_id,
+            "turn_id": self.turn_id,
+            "vendor_status": message_type,
+        }
+        ack_seq = message.get("last_seq_no") or message.get("seq_no")
+        if isinstance(ack_seq, (int, float)):
+            detail["vendor_last_seq_no"] = int(ack_seq)
+        self._emit_hub_log("asr.eos.ack", detail)
         if self._close_ack_event.is_set():
             return
         meta = self._extract_meta(message)
@@ -514,6 +538,23 @@ class SMRealtimeClient:
             {"vendor": self.VENDOR, "meta": meta},
         )
         self._close_ack_event.set()
+
+    def _emit_hub_log(self, label: str, detail: Mapping[str, Any]) -> None:
+        payload = dict(detail)
+        try:
+            sanitized = telemetry_bus.redact_payload(payload)
+        except Exception:
+            sanitized = payload
+        self._publish_event(
+            EVT_CLIENT_LOG,
+            {
+                "who": "server",
+                "meta": {
+                    "label": label,
+                    "detail": sanitized,
+                },
+            },
+        )
 
     async def _wait_for_close_ack(self) -> None:
         try:
