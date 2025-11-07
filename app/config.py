@@ -44,7 +44,9 @@ def _resolve_speechmatics_realtime_url() -> str:
 
     default_url = "wss://us1.rt.speechmatics.com/v2"
     raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
-    candidate = (raw_value or "").strip()
+    expanded_value = os.path.expandvars(raw_value or "")
+    expanded_value = os.path.expanduser(expanded_value)
+    candidate = expanded_value.strip()
     if not candidate:
         candidate = default_url
     if not candidate.startswith("wss://"):
