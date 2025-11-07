@@ -2946,6 +2946,19 @@
       }
       const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
       logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
+      const arm =
+        typeof requestAsrArm === 'function'
+          ? requestAsrArm
+          : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
+            ? window.WSClient.requestAsrArm
+            : null;
+      if (arm) {
+        try {
+          arm('policy');
+        } catch (err) {
+          console.warn('requestAsrArm failed after asr_prearm_requested', err);
+        }
+      }
     }
 
 window.addEventListener('tts.start', (event) => {

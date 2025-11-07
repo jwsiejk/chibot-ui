@@ -1,368 +1,68 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index e26ed876fd0914fefcdf6849133f5c2af8a4c7ce..1aacbdae8d09ac819ca8defa49490e69704cebc8 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1,49 +1,50 @@
- // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
- import { initVAD } from "./audio/vad_client.js";
- import { WakeWord } from "./wake_word.js";
- (() => {
-   const HEARTBEAT_INTERVAL_MS = 20000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
-   const CLIENT_VAD_POLICY = Object.freeze({
-     enable: true,
-     sensitivity: 0.5,
-     min_speech_ms: 200,
-     min_silence_ms: 400,
-     hold_ms: 250,
-     echo_suppression_db: 10,
-     tts_threshold_boost_db: 12,
-     debounce_ms: 40,
-     stream_gate: "none",
-     max_gate_silence_ms: 3000,
-   });
-   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
-+  const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
- 
-   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
- 
-   // ---- Golden-path turn trace & mic outcomes (additive) ----
-   // ---- Telemetry (additive) ----
-   const MIC_OUTCOME = {
-     PERM_GRANTED: 'perm_granted',
-     ARMED: 'armed',
-     STREAMING: 'streaming',
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
-   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-   const DEFAULT_ASR_VENDOR = 'speechmatics';
- 
-   let __micAttempts = 0;
-   let __micChunks = 0;
-   let __micBytes = 0;
-@@ -333,50 +334,51 @@ import { WakeWord } from "./wake_word.js";
-       return false;
-     }
-   }
- 
-   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
-   let autostartAttempts = 0;
-   let autostartTimer = null;
- 
-   const WSClient = window.WSClient = window.WSClient || {};
-   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
-     window.ws = null;
-   }
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-   const getAudioPlayer = () => window.AudioPlayer;
- 
-   const VAD_APPSTATE_KEYS = [
-     "vadActive",
-     "vadSpeech",
-     "vadConfidence",
-     "vadEnergyDb",
-     "vadNoiseDb",
-   ];
-   let vadController = null;
-+  let vadSilenceTimerId = null;
-   let senderPaused = false;
-   const PCM_TARGET_BATCH_MS = 60;
-   const PCM_FLUSH_TIMER_MS = 50;
-   const PCM_SAMPLE_RATE = 16000;
-   const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
-   let pcmBatchQueue = [];
-   let pcmBatchSampleCount = 0;
-   let pcmFlushTimerId = null;
- 
-   function hubLog(label, detail) {
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-       try {
-         hub.log(label, detail);
-         return true;
-       } catch (err) {
-         console.warn("AppState.hub.log failed", err);
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 71da3f48e529193d2e93b24d2189db967dd76c2a..ad3b7a3526ece0492f9dabc5a42efc8c45a08b5a 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -2924,50 +2924,63 @@
        }
      }
-     if (typeof window !== "undefined") {
+ 
+     function requestAsrPrearm(trigger) {
+       if (asrPrearmIssued) {
+         return;
+       }
+       asrPrearmIssued = true;
+       const payload = { type: 'asr.rearm.request' };
+       const keepWarm = getKeepWarmMs();
        try {
-         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
-         return true;
-       } catch (err) {
-@@ -398,54 +400,156 @@ import { WakeWord } from "./wake_word.js";
-           return snapshot.ttsActive;
+         const client = window.WSClient;
+         if (client && typeof client.send === 'function') {
+           client.send(payload);
+         } else {
+           const ws = window.WS;
+           if (ws && typeof ws.send === 'function') {
+             ws.send(payload);
+           }
          }
+       } catch (err) {
+         console.warn('Failed to send asr.rearm.request', err);
        }
-     } catch {}
-     return Boolean(AppState?.ttsActive);
-   }
- 
-   function setVadAppState(patch) {
-     if (!patch || typeof patch !== "object") {
-       return;
-     }
-     const sanitized = {};
-     for (const key of VAD_APPSTATE_KEYS) {
-       if (Object.prototype.hasOwnProperty.call(patch, key)) {
-         sanitized[key] = patch[key];
-         AppState[key] = patch[key];
-       }
-     }
-     const keys = Object.keys(sanitized);
-     if (!keys.length) {
-       return;
-     }
-     updateState(sanitized);
-   }
- 
-+  function resolveConsoleBusFunction() {
-+    try {
-+      if (typeof globalThis !== "undefined" && typeof globalThis.consoleBus === "function") {
-+        return globalThis.consoleBus;
-+      }
-+    } catch {}
-+    if (typeof window !== "undefined" && typeof window.consoleBus === "function") {
-+      return window.consoleBus;
-+    }
-+    return null;
-+  }
-+
-+  function emitConsoleBusEvent(event, payload, sampleRate = 1) {
-+    if (typeof event !== "string" || !event) {
-+      return;
-+    }
-+    const rate = Number.isFinite(sampleRate) && sampleRate > 1 ? Math.floor(sampleRate) : 1;
-+    if (rate > 1) {
-+      const bucket = Math.floor(Math.random() * rate);
-+      if (bucket !== 0) {
-+        return;
-+      }
-+    }
-+    const bus = resolveConsoleBusFunction();
-+    if (!bus) {
-+      return;
-+    }
-+    try {
-+      if (payload === undefined) {
-+        bus(event);
-+      } else {
-+        bus(event, payload);
-+      }
-+    } catch (err) {
-+      try {
-+        console.warn("consoleBus emit failed", err);
-+      } catch {}
-+    }
-+  }
-+
-+  function getClientVadPolicyConfig() {
-+    const policyRoot = AppState && typeof AppState.policy === "object" ? AppState.policy : null;
-+    if (policyRoot && typeof policyRoot === "object") {
-+      const direct = policyRoot.vad && typeof policyRoot.vad === "object" ? policyRoot.vad : null;
-+      if (direct && typeof direct.client === "object") {
-+        return direct.client;
-+      }
-+      const nestedRoot = policyRoot.policy && typeof policyRoot.policy === "object" ? policyRoot.policy : null;
-+      if (nestedRoot) {
-+        const nested = nestedRoot.vad && typeof nestedRoot.vad === "object" ? nestedRoot.vad : null;
-+        if (nested && typeof nested.client === "object") {
-+          return nested.client;
+       const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+       logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
++      const arm =
++        typeof requestAsrArm === 'function'
++          ? requestAsrArm
++          : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
++            ? window.WSClient.requestAsrArm
++            : null;
++      if (arm) {
++        try {
++          arm('policy');
++        } catch (err) {
++          console.warn('requestAsrArm failed after asr_prearm_requested', err);
 +        }
 +      }
-+    }
-+    return CLIENT_VAD_POLICY;
-+  }
-+
-+  function getVadSilenceTimeoutMs() {
-+    const config = getClientVadPolicyConfig();
-+    const candidate = config && Object.prototype.hasOwnProperty.call(config, "max_gate_silence_ms")
-+      ? Number(config.max_gate_silence_ms)
-+      : Number(config && config.max_silence_ms);
-+    if (Number.isFinite(candidate) && candidate > 0) {
-+      return Math.round(candidate);
-+    }
-+    const fallback = Number(CLIENT_VAD_POLICY.max_gate_silence_ms);
-+    if (Number.isFinite(fallback) && fallback > 0) {
-+      return Math.round(fallback);
-+    }
-+    return null;
-+  }
-+
-+  function clearVadSilenceTimer() {
-+    if (vadSilenceTimerId) {
-+      clearTimeout(vadSilenceTimerId);
-+      vadSilenceTimerId = null;
-+    }
-+  }
-+
-+  function scheduleVadSilenceTimer() {
-+    const timeoutMs = getVadSilenceTimeoutMs();
-+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-+      return;
-+    }
-+    clearVadSilenceTimer();
-+    vadSilenceTimerId = setTimeout(() => {
-+      vadSilenceTimerId = null;
-+      emitConsoleBusEvent("client.vad.silence_timeout", undefined, VAD_SILENCE_TIMEOUT_SAMPLE_RATE);
-+    }, timeoutMs);
-+  }
-+
-   function publishVad(event, payload) {
-     if (typeof event !== "string" || !event) {
-       return;
      }
-+    if (event === "client.vad.speech_start") {
-+      clearVadSilenceTimer();
-+      emitConsoleBusEvent("client.vad.start_speech");
-+    } else if (event === "client.vad.speech_end") {
-+      const durationValue = Number(payload && payload.duration_ms);
-+      const durationMs = Number.isFinite(durationValue) ? Math.max(0, Math.round(durationValue)) : null;
-+      const detail = durationMs !== null ? { duration_ms: durationMs } : undefined;
-+      emitConsoleBusEvent("client.vad.end_speech", detail);
-+      scheduleVadSilenceTimer();
-+    }
-     hubLog(event, payload);
-   }
  
-   function handleVadGateChange(action) {
-     if (action === "pause") {
-       senderPaused = true;
-       return;
-     }
-     if (action === "resume") {
-       senderPaused = false;
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
+   runtimeState.audioPlaybackIdle = false;
+   cancelAsrPartialWatchdog();
+   asrPrearmIssued = false;
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
+       window.AudioRecorder.handleTtsStart();
+     } catch (err) {
+       console.warn('AudioRecorder handleTtsStart failed', err);
      }
    }
+   patchPolicyVad({ auto_vad_active: false });
+   vadListeningLogged = false;
+   updateStatusBadge();
+ });
  
+ window.addEventListener('policy.snapshot', (event) => {
+   const frame = event && event.detail;
    try {
-     vadController = initVAD({
-       getPolicy: () => getVadPolicySnapshot(),
-       getTtsActive: () => getTtsActiveSnapshot(),
-       onGateChange: handleVadGateChange,
-       setAppState: (patch) => setVadAppState(patch),
-       publish: (event, payload) => publishVad(event, payload),
-     });
-   } catch (err) {
-     try {
-       console.warn("VAD initialization failed", err);
-     } catch {}
-@@ -881,50 +985,51 @@ import { WakeWord } from "./wake_word.js";
-       return;
-     }
-     const bytes = out.byteLength;
-     logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
-     const ws = socket || (WSClient && WSClient._ws) || null;
-     if (!ws || ws.readyState !== WebSocket.OPEN) {
-       console.warn("pcm.send.skipped", { readyState: ws ? ws.readyState : undefined });
-       return;
-     }
-     try {
-       ws.send(out.buffer);
-       if ((Math.random() * 50 | 0) === 0) {
-         const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
-         hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
-       }
-       __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-       __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-     } catch (err) {
-       console.warn("pcm.send.error", err);
-     }
-   }
- 
-   function stopRecorder(reason) {
-     _audioStreaming = false;
-     clearAudioKeepaliveTimer();
-+    clearVadSilenceTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       setListeningState(false);
-       return;
-     }
-     try {
-       recorder.stopListening({ reason: normalizeReason(reason) });
-     } catch (err) {
-       console.warn("Recorder stopListening failed", err);
-     }
-     senderPaused = false;
-     flushPcmBatch();
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
-     }
-     setListeningState(false);
-   }
- 
-   function handleRecorderChunk(event) {
-@@ -960,50 +1065,51 @@ import { WakeWord } from "./wake_word.js";
-       if (typeof AppState.getState === "function") {
-         const snapshot = AppState.getState();
-         if (snapshot && typeof snapshot.asrReady === "boolean") {
-           asrReady = snapshot.asrReady;
-         }
-       }
-     } catch {}
-     if (!asrReady) {
-       asrReady = Boolean(AppState?.asrReady);
-     }
-     if (senderPaused || !asrReady) {
-       return;
-     }
-     if (seq === 0) {
-       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-     }
-     const frame = new Int16Array(buffer);
-     enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
-   }
- 
-   async function startRecorderStreaming(policy) {
-     if (AppState.listening) {
-       return;
-     }
-     resetPcmBatchState();
-+    clearVadSilenceTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       console.warn("AudioRecorder unavailable; cannot start streaming");
-       return;
-     }
-     // The server owns the input.start lifecycle; never emit it from the client.
-     try {
-       await recorder.start({ onChunk: handleRecorderChunk, policy });
-     } catch (err) {
-       if (err && err.name === "NotAllowedError") {
-         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
-       }
-       throw err;
-     }
-     resetRecorderTelemetry();
-     senderPaused = false;
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
-     }
