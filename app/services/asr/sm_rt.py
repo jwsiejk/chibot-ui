@@ -188,24 +188,18 @@ class SMRealtimeClient:
             auth_mode = "jwt"
         else:
             ws_url = url
-            try:
-                from app.config import SPEECHMATICS_API_KEY
-            except Exception:  # pragma: no cover - defensive import
-                SPEECHMATICS_API_KEY = None  # type: ignore[assignment]
+            from app.config import SPEECHMATICS_API_KEY
+
             if not SPEECHMATICS_API_KEY:
-                raise RuntimeError(
-                    "Speechmatics auth missing: neither temp key nor API key available"
-                )
+                raise RuntimeError("Speechmatics API key missing for header auth")
             headers["Authorization"] = f"Bearer {SPEECHMATICS_API_KEY}"
             auth_mode = "api_key_header"
 
         _log.info("evt=sm_ws_connect url=%s auth=%s", ws_url, auth_mode)
         self._url = ws_url
 
-        async def _connect(url: str, hdrs: dict[str, str]) -> WebSocketClientProtocol:
-            """Connect using whichever header kwarg this websockets version supports."""
-
-            # Try argument names used across websockets releases.
+        async def _connect(url: str, hdrs: dict[str, str] | None):
+            # Compatibility across websockets versions (arg name differences)
             try:
                 return await websockets.connect(
                     url,
@@ -249,7 +243,7 @@ class SMRealtimeClient:
         except ConnectionClosedError as exc:
             if getattr(exc, "code", None) == 4001:
                 _log.error(
-                    "evt=sm_auth_failed detail=not_authorised hint='Check region entitlement or auth mode (jwt/header).'"
+                    "evt=sm_auth_failed detail=not_authorised hint='Check region entitlement or header auth key'"
                 )
             raise
 
@@ -818,7 +812,7 @@ class SMRealtimeClient:
         ws = self._ws
         if ws is None:
             raise RuntimeError("websocket not connected")
-        data = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        data = json.dumps(payload, separators=(",", ":"))
         await ws.send(data)
 
     def _now_ms(self) -> int:
