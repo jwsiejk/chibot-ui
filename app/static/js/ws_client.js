@@ -889,6 +889,10 @@ import { WakeWord } from "./wake_word.js";
     }
     try {
       ws.send(out.buffer);
+      if ((Math.random() * 50 | 0) === 0) {
+        const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
+        hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
+      }
       __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
       __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
     } catch (err) {
@@ -3080,6 +3084,12 @@ import { WakeWord } from "./wake_word.js";
       console.warn('Legacy input capture deferred until asr.ready', frame);
       return;
     } else if (frame.type === "stop_listening") {
+      if (_audioStreaming) {
+        const reason = typeof frame?.reason === "string" && frame.reason
+          ? frame.reason
+          : frame?.type || "stop_listening";
+        hubLog("client.stream.off", { reason });
+      }
       _audioStreaming = false;
       stopRecorder("server_requested");
       setAsrArmInFlight(false);
@@ -3110,16 +3120,32 @@ import { WakeWord } from "./wake_word.js";
       }
     } else if (frame.type === "input.start") {
       _audioStreaming = true;
+      const reason = typeof frame?.reason === "string" && frame.reason
+        ? frame.reason
+        : frame?.type || "input.start";
+      hubLog("client.stream.on", { reason });
       await handleInputStartFrame(frame);
     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
       __resetAudioHeaderSent();
     } else if (frame.type === "input.stop") {
+      if (_audioStreaming) {
+        const reason = typeof frame?.reason === "string" && frame.reason
+          ? frame.reason
+          : frame?.type || "input.stop";
+        hubLog("client.stream.off", { reason });
+      }
       _audioStreaming = false;
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
       __asrReadySeen = false;
       __resetAudioHeaderSent();
     } else if (frame.type === "assistant.await_user") {
+      if (_audioStreaming) {
+        const reason = typeof frame?.reason === "string" && frame.reason
+          ? frame.reason
+          : frame?.type || "assistant.await_user";
+        hubLog("client.stream.off", { reason });
+      }
       _audioStreaming = false;
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
@@ -3352,6 +3378,14 @@ import { WakeWord } from "./wake_word.js";
         const detailReason = event && typeof event?.reason === "string" && event.reason
           ? event.reason
           : (expected ? "intentional_close" : "ws_close");
+        if (_audioStreaming) {
+          const offReason = detailReason || (expected ? "intentional_close" : "ws_close");
+          hubLog("client.stream.off", {
+            reason: offReason,
+            code: typeof event?.code === "number" ? event.code : undefined,
+          });
+          _audioStreaming = false;
+        }
         recordLastError(event && typeof event?.code === "number" ? event.code : null, detailReason);
         setWsConnected(false);
         setWsPhase("disconnected");
@@ -3425,6 +3459,10 @@ import { WakeWord } from "./wake_word.js";
       socket = null;
       expectInfoFrame = true;
       clearInfoWatchdog();
+      if (_audioStreaming) {
+        const offReason = typeof reason === "string" && reason ? reason : "ws.cleanup";
+        hubLog("client.stream.off", { reason: offReason });
+      }
       _audioStreaming = false;
       stopInputCapture();
       try {
@@ -3590,6 +3628,10 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function close(reason = DEFAULT_CLOSE_REASON) {
+    if (_audioStreaming) {
+      const offReason = typeof reason === "string" && reason ? reason : "client_shutdown";
+      hubLog("client.stream.off", { reason: offReason });
+    }
     _audioStreaming = false;
     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
     stopRecorder(reason || "client_shutdown");
