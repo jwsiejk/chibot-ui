@@ -36,6 +36,9 @@ DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
 ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
 ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
 SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
+# Force server → Speechmatics RT to use header auth only (no ?jwt=)
+# Set SPEECHMATICS_FORCE_HEADER_AUTH=1 in env to enable.
+SPEECHMATICS_FORCE_HEADER_AUTH = os.getenv("SPEECHMATICS_FORCE_HEADER_AUTH", "0") == "1"
 def _resolve_speechmatics_realtime_url() -> str:
     """Return the configured Speechmatics realtime endpoint URL.
 

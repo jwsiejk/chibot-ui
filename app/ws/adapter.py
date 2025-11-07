@@ -4960,23 +4960,13 @@ class ChatV2Adapter:
                     if isinstance(partials_flag, bool):
                         enable_partials = partials_flag
 
-        audio_format = {
-            "type": "raw",
-            "encoding": "pcm_s16le",
-            "sample_rate": 16000,
-            "channels": 1,
-        }
-        transcription_config: Dict[str, Any] = {
-            "language": language,
-            "enable_partials": enable_partials,
-        }
-        ctx.active_asr_config = dict(transcription_config)
-        params: Dict[str, Any] = {
+        ctx.active_asr_config = {"language": language, "enable_partials": enable_partials}
+        # Minimal, spec-exact StartRecognition envelope
+        return {
             "message": "StartRecognition",
-            "audio_format": audio_format,
-            "transcription_config": transcription_config,
+            "audio_format": {"type": "raw", "encoding": "pcm_s16le", "sample_rate": 16000},
+            "transcription_config": {"language": language},
         }
-        return params
 
     def _create_sm_client(self, ctx: AdapterContext) -> SMRealtimeClient:
         loop = asyncio.get_running_loop()
@@ -5051,7 +5041,11 @@ class ChatV2Adapter:
             return
         try:
             params = self._policy_to_sm_params(ctx)
-            token = self._mint_speechmatics_jwt(ctx)  # returns None if mint fails; header fallback handles auth
+            # Force header-only auth when configured; otherwise allow JWT minting (optional)
+            from app import config as _cfg
+
+            token = None if _cfg.SPEECHMATICS_FORCE_HEADER_AUTH else self._mint_speechmatics_jwt(ctx)
+            _log.info("evt=sm_auth_mode sid=%s mode=%s", ctx.sid, "api_key_header" if token is None else "jwt")
             endpoint_url = self._speechmatics_rt_url()
             _log.info("evt=asr_open_begin sid=%s endpoint=%s", ctx.sid, endpoint_url)
             await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
