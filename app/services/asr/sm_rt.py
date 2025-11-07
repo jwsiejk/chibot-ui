@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Literal
 
 import websockets
 from websockets.client import WebSocketClientProtocol
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.events import (
@@ -144,14 +144,12 @@ class SMRealtimeClient:
     # Lifecycle management
     # ------------------------------------------------------------------
     async def open(
-        self, *, endpoint_url: str, jwt_token: str, params: Dict[str, Any]
+        self, *, endpoint_url: str, jwt_token: str | None, params: Dict[str, Any]
     ) -> None:
         """Open the Speechmatics websocket and wait for RecognitionStarted."""
 
         if not isinstance(params, dict):
             raise TypeError("params must be a dict")
-        if not jwt_token:
-            raise ValueError("jwt_token must be provided")
         if not endpoint_url:
             raise ValueError("endpoint_url must be provided")
 
@@ -184,16 +182,33 @@ class SMRealtimeClient:
             },
         )
 
-        sep = "&" if ("?" in url) else "?"
-        ws_url = f"{url}{sep}jwt={jwt_token}"
+        headers: dict[str, str] = {}
+        if jwt_token:
+            ws_url = f"{url}?jwt={jwt_token}"
+            auth_mode = "jwt"
+        else:
+            ws_url = url
+            try:
+                from app.config import SPEECHMATICS_API_KEY
+            except Exception:  # pragma: no cover - defensive import
+                SPEECHMATICS_API_KEY = None  # type: ignore[assignment]
+            if not SPEECHMATICS_API_KEY:
+                raise RuntimeError(
+                    "Speechmatics auth missing: neither temp key nor API key available"
+                )
+            headers["Authorization"] = f"Bearer {SPEECHMATICS_API_KEY}"
+            auth_mode = "api_key_header"
+
+        _log.info("evt=sm_ws_connect url=%s auth=%s", ws_url, auth_mode)
         self._url = ws_url
 
         try:
             ws = await websockets.connect(
                 ws_url,
-                ping_interval=None,
-                ping_timeout=None,
+                extra_headers=headers or None,
                 max_size=None,
+                ping_interval=20,
+                ping_timeout=20,
             )
         except Exception:
             async with self._state_lock:
@@ -204,7 +219,14 @@ class SMRealtimeClient:
         self._connected_at = time.monotonic()
         self._last_activity = self._connected_at
 
-        await self._send_json(params)
+        try:
+            await self._send_json(params)
+        except ConnectionClosedError as exc:
+            if getattr(exc, "code", None) == 4001:
+                _log.error(
+                    "evt=sm_auth_failed detail=not_authorised hint='Check region entitlement or auth mode (jwt/header).'"
+                )
+            raise
 
         self._publish_event(
             EVT_ASR_OPEN,
