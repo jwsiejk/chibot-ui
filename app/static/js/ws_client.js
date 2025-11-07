@@ -569,6 +569,8 @@ import { WakeWord } from "./wake_word.js";
     sample_rate: 16000,
     channels: 1,
   });
+  let __audioHeaderSent = false;
+  let __lastErrorSig = null, __lastErrorAt = 0;
   const AUDIO_KEEPALIVE_MS = 20000;
   const POST_TTS_ARM_DELAY_MS = 300;
 
@@ -770,12 +772,19 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function sendAudioHeader() {
+    if (__audioHeaderSent) {
+      try { console.warn("audio.header already sent; skipping"); } catch {}
+      return;
+    }
     try {
-      WSClient.send({ ...AUDIO_HEADER_FRAME });
+      // Include codec to match server’s expected profile (adapter normalizes pcm→pcm16 + pcm_s16le)
+      WSClient.send({ ...AUDIO_HEADER_FRAME, codec: "pcm_s16le" });
+      __audioHeaderSent = true;
       logStage("client.audio_header_send", {
         format: AUDIO_HEADER_FRAME.format,
         sample_rate: AUDIO_HEADER_FRAME.sample_rate,
         channels: AUDIO_HEADER_FRAME.channels,
+        codec: "pcm_s16le",
       });
     } catch (err) {
       console.warn("Failed to send audio header", err);
@@ -2964,6 +2973,7 @@ import { WakeWord } from "./wake_word.js";
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
       __asrReadySeen = false;
+      __audioHeaderSent = false;
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
       __asrReadySeen = true;
@@ -2972,6 +2982,7 @@ import { WakeWord } from "./wake_word.js";
       setWsConnected(true);
       setWsPhase("ready");
       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
+      __audioHeaderSent = false;
       sendAudioHeader();
       try {
         await startRecorderStreaming(frame?.policy || {});
@@ -2997,6 +3008,7 @@ import { WakeWord } from "./wake_word.js";
       AppState.asrVendor = null;
       updateState({ asrReady: false, asrVendor: null });
       stopRecorder("asr_unavailable");
+      __audioHeaderSent = false;
       setAsrArmInFlight(false);
       setArmAfterTtsEnd(false);
       if (typeof AppState.emit === "function") {
