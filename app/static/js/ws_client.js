@@ -893,6 +893,7 @@ import { WakeWord } from "./wake_word.js";
       console.warn("AudioRecorder unavailable; cannot start streaming");
       return;
     }
+    // The server owns the input.start lifecycle; never emit it from the client.
     try {
       await recorder.start({ onChunk: handleRecorderChunk, policy });
     } catch (err) {
