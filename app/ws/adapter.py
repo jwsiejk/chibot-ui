@@ -1724,18 +1724,21 @@ class ChatV2Adapter:
                 existing_codec = existing_profile.get("codec")
                 existing_rate = existing_profile.get("sample_rate")
                 existing_channels = existing_profile.get("channels")
+                existing_format = existing_profile.get("format")
 
                 incoming_codec = profile.get("codec")
                 incoming_rate = profile.get("sample_rate")
                 incoming_channels = profile.get("channels")
+                incoming_format = profile.get("format")
 
                 if (
-                    incoming_codec == existing_codec
+                    incoming_format == existing_format
+                    and incoming_codec == existing_codec
                     and incoming_rate == existing_rate
                     and incoming_channels == existing_channels
                 ):
                     _log.info(
-                        "evt=audio_header_dup_ignored sid=%s codec=%s rate_hz=%s ch=%s",
+                        "evt=audio_header_duplicate sid=%s codec=%s rate_hz=%s ch=%s",
                         ctx.sid,
                         incoming_codec,
                         incoming_rate,
@@ -1750,7 +1753,7 @@ class ChatV2Adapter:
                     send,
                     ctx.sid,
                     "schema_invalid",
-                    "duplicate or conflicting audio.header",
+                    "conflicting audio.header",
                 )
                 return self._HandleResult(True)
             normalized_header = dict(frame)

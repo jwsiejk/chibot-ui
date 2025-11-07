@@ -2754,7 +2754,6 @@ import { WakeWord } from "./wake_word.js";
       try { stopInputCapture({ reason: code }); } catch {}
       try { clearAudioKeepaliveTimer(); } catch {}
       try { setAsrArmInFlight(false); } catch {}
-      try { setArmAfterTtsEnd(false); } catch {}
       __resetAudioHeaderSent();
     }
     const errorMeta = {};
@@ -3020,6 +3019,8 @@ import { WakeWord } from "./wake_word.js";
       }
     } else if (frame.type === "input.start") {
       await handleInputStartFrame(frame);
+    } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
+      __resetAudioHeaderSent();
     } else if (frame.type === "input.stop") {
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
@@ -3500,9 +3501,17 @@ import { WakeWord } from "./wake_word.js";
     setAppStateValue("ttsActive", false);
     setWsPhase("closing");
     setWsConnected(false);
+    const emitResumeInvalid = () => {
+      if (reason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        try {
+          window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason } }));
+        } catch {}
+      }
+    };
     if (!socket) {
       setWsPhase("disconnected");
       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
+      emitResumeInvalid();
       return;
     }
     const ws = socket;
@@ -3518,6 +3527,7 @@ import { WakeWord } from "./wake_word.js";
       }
     }
     autoResumeAttemptToken = null;
+    emitResumeInvalid();
     updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
   }
 
@@ -3558,8 +3568,34 @@ import { WakeWord } from "./wake_word.js";
     if (!Array.isArray(client._queue)) {
       client._queue = [];
     }
-    if (!binary && !validatePayloadForSend(payload)) {
-      return;
+    let data = payload;
+
+    if (!binary) {
+      if (!validatePayloadForSend(data)) {
+        return;
+      }
+      if (!data || typeof data !== "object") {
+        console.warn("WSClient.send blocked: missing or invalid type", payload);
+        return;
+      }
+      if (typeof data.type !== "string") {
+        console.warn("WSClient.send blocked: missing or invalid type", payload);
+        return;
+      }
+      if (data.type === "audio.header") {
+        if (data.format !== "pcm16" ||
+            typeof data.sample_rate !== "number" ||
+            typeof data.channels !== "number") {
+          console.warn("WSClient.send blocked: invalid audio.header schema", payload);
+          return;
+        }
+        data = {
+          type: "audio.header",
+          format: "pcm16",
+          sample_rate: Number(data.sample_rate),
+          channels: Number(data.channels)
+        };
+      }
     }
     let stateSocket = null;
     if (typeof AppState !== "undefined" && AppState) {
@@ -3580,7 +3616,7 @@ import { WakeWord } from "./wake_word.js";
       }
     } catch {}
     if (!live || live.readyState !== WebSocket.OPEN) {
-      client._queue.push({ data: payload, isBinary: !!binary });
+      client._queue.push({ data, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");
       return;
     }
@@ -3609,10 +3645,7 @@ import { WakeWord } from "./wake_word.js";
         return;
       }
     }
-    if (!binary && !validatePayloadForSend(payload)) {
-      return;
-    }
-    const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+    const text = typeof data === "string" ? data : JSON.stringify(data);
     try {
       live.send(text);
     } catch (err) {
@@ -3663,6 +3696,14 @@ import { WakeWord } from "./wake_word.js";
   WSClient._ws = WSClient._ws || null;
   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("ws.close", () => {
+      __resetAudioHeaderSent();
+    });
+    window.addEventListener("ws.resume_invalid", () => {
+      __resetAudioHeaderSent();
+    });
+  }
   if (typeof WSClient._linkedProofLogged !== "boolean") {
     WSClient._linkedProofLogged = false;
   }
