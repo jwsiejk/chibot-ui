@@ -107,7 +107,7 @@ class SMRealtimeClient:
         self._pcm_sentinel: object = object()
         self._receiver_task: asyncio.Task[None] | None = None
         self._sender_task: asyncio.Task[None] | None = None
-        self._keepalive_task: asyncio.Task[None] | None = None
+        self._ws_ping_task: asyncio.Task[None] | None = None
         self._closing = False
         self._closed_event = asyncio.Event()
         self._close_reason: str | None = None
@@ -216,7 +216,7 @@ class SMRealtimeClient:
 
         self._receiver_task = asyncio.create_task(self._receive_loop())
         self._sender_task = asyncio.create_task(self._pcm_sender_loop())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        self._ws_ping_task = asyncio.create_task(self._ws_ping_loop())
 
         for message in extra_messages:
             self._process_message(message)
@@ -276,7 +276,7 @@ class SMRealtimeClient:
         self._closing = True
         await self._stop_sender()
         await self._stop_receiver()
-        await self._stop_keepalive()
+        await self._stop_ws_ping()
 
         ws = self._ws
         if ws is not None:
@@ -365,7 +365,7 @@ class SMRealtimeClient:
         except asyncio.CancelledError:  # pragma: no cover - cooperative cancel
             raise
 
-    async def _keepalive_loop(self) -> None:
+    async def _ws_ping_loop(self) -> None:
         try:
             while not self._stop_event.is_set():
                 await asyncio.sleep(self._keepalive_interval_s)
@@ -380,19 +380,36 @@ class SMRealtimeClient:
                 if ws is None:
                     continue
                 try:
-                    await ws.ping()
-                    self._last_activity = time.monotonic()
+                    pong_waiter = await ws.ping()
                 except ConnectionClosed:
                     break
                 except Exception:  # pragma: no cover - defensive
-                    _log.exception("speechmatics ping failed")
+                    _log.warning("speechmatics ws ping send failed", exc_info=True)
                     break
+                try:
+                    timeout_s = max(1.0, self._keepalive_interval_s / 2)
+                    latency_s = await asyncio.wait_for(pong_waiter, timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    _log.warning(
+                        "speechmatics ws ping timeout",
+                        extra={"timeout_s": timeout_s},
+                    )
+                    continue
+                except ConnectionClosed:
+                    break
+                except Exception:  # pragma: no cover - defensive
+                    _log.warning("speechmatics ws ping wait failed", exc_info=True)
+                    continue
                 else:
+                    self._last_activity = time.monotonic()
                     self._publish_event(
                         ASR_KEEPALIVE_PING,
                         {
                             "vendor": self.VENDOR,
-                            "meta": {"idle_ms": int(self._keepalive_interval_s * 1000)},
+                            "meta": {
+                                "idle_ms": int(self._keepalive_interval_s * 1000),
+                                "latency_ms": int(latency_s * 1000),
+                            },
                         },
                     )
         except asyncio.CancelledError:  # pragma: no cover
@@ -534,8 +551,8 @@ class SMRealtimeClient:
             with contextlib.suppress(Exception):
                 await receiver
 
-    async def _stop_keepalive(self) -> None:
-        task = self._keepalive_task
+    async def _stop_ws_ping(self) -> None:
+        task = self._ws_ping_task
         if task is not None:
             task.cancel()
             with contextlib.suppress(Exception):

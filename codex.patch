@@ -1,91 +1,319 @@
-diff --git a/app/services/asr/policies.py b/app/services/asr/policies.py
-index 0650b679ca3770935e4739b9de80e952b833c033..b9459964c58ca321e6f7b59bd04701f441ac81ba 100644
---- a/app/services/asr/policies.py
-+++ b/app/services/asr/policies.py
-@@ -59,59 +59,78 @@ def _coerce_float(value: Any) -> float | None:
-     return coerced
+diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
+index 839a3784251789f4830576f05524113d6b24da06..db32a2488ad9628114a3c0f7c123a1fe64d6238d 100644
+--- a/app/services/asr/sm_rt.py
++++ b/app/services/asr/sm_rt.py
+@@ -85,51 +85,51 @@ class SMRealtimeClient:
+         on_notice: Optional[Callable[[Dict[str, Any]], None]] = None,
+         on_closed: Optional[Callable[[str], None]] = None,
+         ready_timeout_s: Optional[float] = None,
+         close_ack_timeout_s: Optional[float] = None,
+         keepalive_interval_s: Optional[float] = None,
+     ) -> None:
+         if not sid:
+             raise ValueError("sid must be provided")
+         self._sid = sid
+         self._bus = telemetry_bus
+         self._state = "idle"
+         self._state_lock = asyncio.Lock()
+         self._ws: WebSocketClientProtocol | None = None
+         self._endpoint_url: str | None = None
+         self._url: str | None = None
+         self._connected_at = 0.0
+         self._last_activity = time.monotonic()
+         self._partial_seq = 0
+         self._ready_event = asyncio.Event()
+         self._close_ack_event = asyncio.Event()
+         self._stop_event = asyncio.Event()
+         self._pcm_queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
+         self._pcm_sentinel: object = object()
+         self._receiver_task: asyncio.Task[None] | None = None
+         self._sender_task: asyncio.Task[None] | None = None
+-        self._keepalive_task: asyncio.Task[None] | None = None
++        self._ws_ping_task: asyncio.Task[None] | None = None
+         self._closing = False
+         self._closed_event = asyncio.Event()
+         self._close_reason: str | None = None
+         self._sent_end_of_stream = False
+         self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
+         self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
+         self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
  
+         self._on_ready = on_ready or (lambda info: None)
+         self._on_partial = on_partial or (lambda text, latency: None)
+         self._on_final = on_final or (lambda text, latency: None)
+         self._on_notice = on_notice or (lambda meta: None)
+         self._on_closed = on_closed or (lambda reason: None)
  
- def _normalize_language(*candidates: Any) -> str | None:
-     for candidate in candidates:
-         if isinstance(candidate, str):
-             normalized = candidate.strip()
-             if normalized:
-                 return normalized
-     return None
+     # ------------------------------------------------------------------
+     # Public properties
+     # ------------------------------------------------------------------
+     @property
+     def state(self) -> str:
+         """Return the current connection state."""
  
+         return self._state
  
- def _normalize_punctuation(value: Any) -> Dict[str, Any]:
-     result: Dict[str, Any] = {}
-     bool_candidate = _coerce_bool(value)
-     if bool_candidate is not None:
-         result["enable_punctuation"] = bool_candidate
-         return result
+     # ------------------------------------------------------------------
+     # Lifecycle management
+@@ -194,51 +194,51 @@ class SMRealtimeClient:
+         self._last_activity = self._connected_at
  
-     mapping = _as_mapping(value)
-     enabled = _coerce_bool(mapping.get("enabled"))
-     if enabled is not None:
-         result["enable_punctuation"] = enabled
+         await self._send_json(params)
  
-     overrides_value = mapping.get("overrides")
--    overrides: list[str] = []
-+    permitted_marks: list[str] = []
-+    sensitivity: float | None = None
-     if overrides_value is not None:
--        for item in _as_sequence(overrides_value):
--            if isinstance(item, str):
--                normalized = item.strip()
--                if normalized:
--                    overrides.append(normalized)
--    if overrides:
--        result["punctuation_overrides"] = overrides
-+        overrides_mapping = _as_mapping(overrides_value)
-+        if overrides_mapping:
-+            permitted_value = overrides_mapping.get("permitted_marks")
-+            for item in _as_sequence(permitted_value):
-+                if isinstance(item, str):
-+                    normalized = item.strip()
-+                    if normalized:
-+                        permitted_marks.append(normalized)
-+            sensitivity_value = overrides_mapping.get("sensitivity")
-+            if isinstance(sensitivity_value, (int, float)):
-+                clamped = max(0.0, min(1.0, float(sensitivity_value)))
-+                sensitivity = clamped
-+        else:
-+            for item in _as_sequence(overrides_value):
-+                if isinstance(item, str):
-+                    normalized = item.strip()
-+                    if normalized:
-+                        permitted_marks.append(normalized)
-+    if permitted_marks or (sensitivity is not None):
-+        overrides_config: Dict[str, Any] = {}
-+        if permitted_marks:
-+            overrides_config["permitted_marks"] = permitted_marks
-+        if sensitivity is not None:
-+            overrides_config["sensitivity"] = sensitivity
-+        result["punctuation_overrides"] = overrides_config
+         self._publish_event(
+             EVT_ASR_OPEN,
+             {
+                 "vendor": self.VENDOR,
+                 "meta": {"url": ws_url},
+             },
+         )
  
-     return result
+         extra_messages: list[dict] = []
+         try:
+             extra_messages = await self._await_ready(ws)
+         except Exception:
+             with contextlib.suppress(Exception):
+                 await ws.close()
+             await self._finalize_close(reason="ready_failed", publish_close=True)
+             raise
  
+         self._ready_event.set()
  
- def _normalize_diarization(value: Any) -> Dict[str, Any]:
-     result: Dict[str, Any] = {}
-     bool_candidate = _coerce_bool(value)
-     if bool_candidate is not None:
-         result["diarization"] = bool_candidate
-         return result
+         self._receiver_task = asyncio.create_task(self._receive_loop())
+         self._sender_task = asyncio.create_task(self._pcm_sender_loop())
+-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
++        self._ws_ping_task = asyncio.create_task(self._ws_ping_loop())
  
-     mapping = _as_mapping(value)
-     enabled = _coerce_bool(mapping.get("enabled"))
-     if enabled is not None:
-         result["diarization"] = enabled
+         for message in extra_messages:
+             self._process_message(message)
  
-     return result
+     async def send_pcm(self, chunk: bytes) -> None:
+         """Queue PCM16 audio bytes for transmission."""
  
+         if not isinstance(chunk, (bytes, bytearray, memoryview)):
+             raise TypeError("chunk must be bytes-like")
+         data = bytes(chunk)
+         if not data:
+             return
+         if len(data) % 2 != 0:
+             raise ValueError("pcm chunk must contain complete 16-bit samples")
  
- def _normalize_max_final_latency(value: Any) -> float | None:
-     latency_ms = _coerce_int(value)
-     if latency_ms is None:
-         return None
-     clamped = _clamp_final_latency(latency_ms, _log)
-     return round(clamped / 1000.0, 3)
+         if self._state != "open":
+             self._emit_notice({"kind": "pcm_ignored_state", "state": self._state})
+             return
+ 
+         queue = self._pcm_queue
+         if queue.full():
+             try:
+                 dropped = queue.get_nowait()
+             except asyncio.QueueEmpty:  # pragma: no cover - defensive
+                 dropped = None
+@@ -254,51 +254,51 @@ class SMRealtimeClient:
+         """Send the vendor end-of-stream marker and await acknowledgement."""
+ 
+         if self._state != "open":
+             return
+         if self._sent_end_of_stream:
+             await self._wait_for_close_ack()
+             return
+ 
+         self._sent_end_of_stream = True
+         payload = {"message": "EndOfStream"}
+         await self._send_json(payload)
+         await self._wait_for_close_ack()
+ 
+     async def close(self) -> None:
+         """Gracefully close the websocket connection."""
+ 
+         if self._state in {"idle", "closed"}:
+             return
+         if self._closing:
+             await self._closed_event.wait()
+             return
+ 
+         self._closing = True
+         await self._stop_sender()
+         await self._stop_receiver()
+-        await self._stop_keepalive()
++        await self._stop_ws_ping()
+ 
+         ws = self._ws
+         if ws is not None:
+             try:
+                 await ws.close(code=1000)
+             except Exception:  # pragma: no cover - defensive
+                 pass
+ 
+         await self._finalize_close(reason=self._close_reason or "client_close")
+ 
+     # ------------------------------------------------------------------
+     # Internal helpers
+     # ------------------------------------------------------------------
+     async def _await_ready(self, ws: WebSocketClientProtocol) -> list[dict]:
+         """Wait for the RecognitionStarted message."""
+ 
+         deadline = self._ready_timeout_s
+         extra: list[dict] = []
+         start = time.monotonic()
+         while True:
+             remaining = deadline - (time.monotonic() - start)
+             if remaining <= 0:
+                 raise TimeoutError("speechmatics ready timeout")
+             raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+             self._last_activity = time.monotonic()
+@@ -343,78 +343,95 @@ class SMRealtimeClient:
+                     self._pcm_queue.task_done()
+                     break
+                 if not isinstance(item, (bytes, bytearray)):
+                     self._pcm_queue.task_done()
+                     continue
+                 data = bytes(item)
+                 ws = self._ws
+                 if ws is None:
+                     self._pcm_queue.task_done()
+                     break
+                 try:
+                     await ws.send(data)
+                     self._last_activity = time.monotonic()
+                 except ConnectionClosed:
+                     self._pcm_queue.task_done()
+                     break
+                 except Exception:  # pragma: no cover - defensive
+                     _log.exception("speechmatics pcm send failed")
+                     self._pcm_queue.task_done()
+                     break
+                 else:
+                     self._pcm_queue.task_done()
+         except asyncio.CancelledError:  # pragma: no cover - cooperative cancel
+             raise
+ 
+-    async def _keepalive_loop(self) -> None:
++    async def _ws_ping_loop(self) -> None:
+         try:
+             while not self._stop_event.is_set():
+                 await asyncio.sleep(self._keepalive_interval_s)
+                 if self._stop_event.is_set():
+                     break
+                 if self._state != "open":
+                     continue
+                 now = time.monotonic()
+                 if now - self._last_activity < self._keepalive_interval_s:
+                     continue
+                 ws = self._ws
+                 if ws is None:
+                     continue
+                 try:
+-                    await ws.ping()
+-                    self._last_activity = time.monotonic()
++                    pong_waiter = await ws.ping()
+                 except ConnectionClosed:
+                     break
+                 except Exception:  # pragma: no cover - defensive
+-                    _log.exception("speechmatics ping failed")
++                    _log.warning("speechmatics ws ping send failed", exc_info=True)
++                    break
++                try:
++                    timeout_s = max(1.0, self._keepalive_interval_s / 2)
++                    latency_s = await asyncio.wait_for(pong_waiter, timeout=timeout_s)
++                except asyncio.TimeoutError:
++                    _log.warning(
++                        "speechmatics ws ping timeout",
++                        extra={"timeout_s": timeout_s},
++                    )
++                    continue
++                except ConnectionClosed:
+                     break
++                except Exception:  # pragma: no cover - defensive
++                    _log.warning("speechmatics ws ping wait failed", exc_info=True)
++                    continue
+                 else:
++                    self._last_activity = time.monotonic()
+                     self._publish_event(
+                         ASR_KEEPALIVE_PING,
+                         {
+                             "vendor": self.VENDOR,
+-                            "meta": {"idle_ms": int(self._keepalive_interval_s * 1000)},
++                            "meta": {
++                                "idle_ms": int(self._keepalive_interval_s * 1000),
++                                "latency_ms": int(latency_s * 1000),
++                            },
+                         },
+                     )
+         except asyncio.CancelledError:  # pragma: no cover
+             raise
+ 
+     def _decode_message(self, raw: Any) -> Any:
+         if isinstance(raw, bytes):
+             return raw
+         if isinstance(raw, str):
+             try:
+                 return json.loads(raw)
+             except json.JSONDecodeError as exc:
+                 self._emit_notice(
+                     {"kind": "json_decode_error", "error": str(exc), "raw": raw[:80]}
+                 )
+                 return {}
+         return raw
+ 
+     def _process_message(self, message: Any) -> None:
+         if isinstance(message, dict):
+             self._handle_dict_message(message)
+         elif message:
+             self._emit_notice(
+                 {
+                     "kind": "unexpected_binary",
+@@ -512,52 +529,52 @@ class SMRealtimeClient:
+             with contextlib.suppress(asyncio.QueueEmpty):
+                 while True:
+                     item = self._pcm_queue.get_nowait()
+                     self._pcm_queue.task_done()
+         try:
+             self._pcm_queue.put_nowait(self._pcm_sentinel)
+         except asyncio.QueueFull:
+             with contextlib.suppress(asyncio.QueueEmpty):
+                 _ = self._pcm_queue.get_nowait()
+                 self._pcm_queue.task_done()
+             with contextlib.suppress(asyncio.QueueFull):
+                 self._pcm_queue.put_nowait(self._pcm_sentinel)
+         sender = self._sender_task
+         if sender is not None:
+             sender.cancel()
+             with contextlib.suppress(Exception):
+                 await sender
+ 
+     async def _stop_receiver(self) -> None:
+         receiver = self._receiver_task
+         if receiver is not None:
+             receiver.cancel()
+             with contextlib.suppress(Exception):
+                 await receiver
+ 
+-    async def _stop_keepalive(self) -> None:
+-        task = self._keepalive_task
++    async def _stop_ws_ping(self) -> None:
++        task = self._ws_ping_task
+         if task is not None:
+             task.cancel()
+             with contextlib.suppress(Exception):
+                 await task
+ 
+     async def _finalize_close(self, *, reason: str, publish_close: bool = True) -> None:
+         self._stop_event.set()
+         self._ready_event.set()
+         self._close_ack_event.set()
+         async with self._state_lock:
+             if self._state == "closed":
+                 self._closed_event.set()
+                 return
+             self._state = "closed"
+         self._close_reason = reason
+         if publish_close:
+             self._publish_event(
+                 EVT_ASR_CLOSED,
+                 {
+                     "vendor": self.VENDOR,
+                     "meta": {"reason": reason},
+                 },
+             )
+         self._call_callback(self._on_closed, reason)
+         self._closed_event.set()
