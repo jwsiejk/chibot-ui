@@ -1,6 +1,7 @@
 """Utilities for mapping app policy to Speechmatics parameters."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 __all__ = ["to_sm_params"]
@@ -13,8 +14,11 @@ _SM_AUDIO_FORMAT = {
     "channels": 1,
 }
 
-_SM_MIN_FINAL_LATENCY_MS = 400
-_SM_MAX_FINAL_LATENCY_MS = 2000
+_SM_MIN_FINAL_LATENCY_MS = 700
+_SM_MAX_FINAL_LATENCY_MS = 4000
+
+
+_log = logging.getLogger(__name__)
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -109,8 +113,22 @@ def _normalize_max_final_latency(value: Any) -> float | None:
     latency_ms = _coerce_int(value)
     if latency_ms is None:
         return None
-    clamped = max(_SM_MIN_FINAL_LATENCY_MS, min(_SM_MAX_FINAL_LATENCY_MS, latency_ms))
+    clamped = _clamp_final_latency(latency_ms, _log)
     return round(clamped / 1000.0, 3)
+
+
+def _clamp_final_latency(ms: int, log) -> int:
+    lo, hi = _SM_MIN_FINAL_LATENCY_MS, _SM_MAX_FINAL_LATENCY_MS
+    clamped = max(lo, min(ms, hi))
+    if clamped != ms:
+        log.info(
+            "sm.max_delay.clamped",
+            wanted_ms=ms,
+            clamped_ms=clamped,
+            lo_ms=lo,
+            hi_ms=hi,
+        )
+    return clamped
 
 
 def _normalize_custom_vocab(value: Any) -> list[Dict[str, Any]]:
