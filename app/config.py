@@ -36,9 +36,25 @@ DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
 ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
 ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
 SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
-SPEECHMATICS_REALTIME_URL = os.getenv(
-    "SPEECHMATICS_REALTIME_URL", "wss://mp.speechmatics.com/v2"
-)
+def _resolve_speechmatics_realtime_url() -> str:
+    """Canonical Speechmatics Realtime URL (full URL, not just a region token).
+
+    Example: ``wss://us2.rt.speechmatics.com/v2``.
+    """
+
+    default_url = "wss://us2.rt.speechmatics.com/v2"
+    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
+    candidate = (raw_value or "").strip()
+    if not candidate:
+        candidate = default_url
+    if not candidate.startswith("wss://"):
+        raise ValueError(
+            f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
+        )
+    return candidate
+
+
+SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()
 ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
 )

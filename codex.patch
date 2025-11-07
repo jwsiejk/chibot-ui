@@ -1,437 +1,77 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 86c77092b3c23b0b7b4dc2974c88a9b249a47033..c5d1d7934269aff068b57259059021e53cd423ac 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -2732,51 +2732,50 @@ import { WakeWord } from "./wake_word.js";
-         try {
-           view.handleChatMessage(message);
-         } catch (err) {
-           console.warn("TranscriptView chat history handler error", err);
-           break;
-         }
-       }
-     }
-   }
+diff --git a/app/config.py b/app/config.py
+index 345519384145df7fcf4b19361430244ab56f7b11..d7b55fa0b91ed511951ee9fd478c28b973bb1f60 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -14,53 +14,69 @@ except ImportError:  # pragma: no cover - optional dependency
+     load_dotenv = None
+ else:  # pragma: no branch
+     load_dotenv(dotenv_path=".env", override=False)
  
-   function handleErrorFrame(frame) {
-     const code = typeof frame?.code === "string" ? frame.code : "unknown";
-     const sig = `${code}|${frame?.detail || frame?.message || ""}`;
-     const now = Date.now();
-     if (__lastErrorSig === sig && (now - __lastErrorAt) < 1500) {
-       // Avoid console spam for the same error flooding in
-     } else {
-       console.error("WS error frame", frame);
-       __lastErrorSig = sig;
-       __lastErrorAt = now;
-     }
-     if (code === "schema_invalid" || code === "unknown_type" || code === "bad_utf8") {
-       try { stopInputCapture({ reason: code }); } catch {}
-       try { clearAudioKeepaliveTimer(); } catch {}
-       try { setAsrArmInFlight(false); } catch {}
--      try { setArmAfterTtsEnd(false); } catch {}
-       __resetAudioHeaderSent();
-     }
-     const errorMeta = {};
-     if (frame && typeof frame.code === "string") {
-       errorMeta.code = truncateBannerString(frame.code, 64);
-     }
-     if (frame && typeof frame.detail === "string" && frame.detail) {
-       errorMeta.detail = truncateBannerString(frame.detail, 160);
-     } else if (frame && typeof frame.message === "string" && frame.message) {
-       errorMeta.detail = truncateBannerString(frame.message, 160);
-     }
-     if (Object.keys(errorMeta).length) {
-       recordClientBannerEvent("ws.error.frame", errorMeta);
-     } else {
-       recordClientBannerEvent("ws.error.frame", null);
-     }
-     const isResumeInvalid = frame && frame.code === "resume_invalid";
-     if (isResumeInvalid) {
-       clearResumeState();
-       updateState({ resumeError: "invalid" });
-     }
-     if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
-       try {
-         window.WSErrorUI.handleFrame(frame, {
-           scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
-@@ -2998,50 +2997,52 @@ import { WakeWord } from "./wake_word.js";
-         const hub = AppState?.hub;
-         if (hub && typeof hub.stopListening === "function") {
-           hub.stopListening("server_requested");
-         } else {
-           stopInputCapture({ reason: "server_requested" });
-         }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-       clearPendingAsrReadyStart("stop_listening");
-       __asrReadySeen = false;
-       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-         try {
-           const reason =
-             (typeof frame?.reason === "string" && frame.reason) ||
-             "server_requested";
-           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
-         } catch (err) {
-           console.warn("stop_listening event dispatch failed", err);
-         }
-       }
-     } else if (frame.type === "input.start") {
-       await handleInputStartFrame(frame);
-+    } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
-+      __resetAudioHeaderSent();
-     } else if (frame.type === "input.stop") {
-       stopInputCapture({ reason: "input.stop" });
-       clearPendingAsrReadyStart("input.stop");
-       __asrReadySeen = false;
-       __resetAudioHeaderSent();
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-       __asrReadySeen = true;
-       setAsrArmInFlight(false);
-       setArmAfterTtsEnd(false);
-       setWsConnected(true);
-       setWsPhase("ready");
-       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-       __resetAudioHeaderSent();
-       sendAudioHeader(frame);
-       try {
-         await startRecorderStreaming(frame?.policy || {});
-       } catch (err) {
-         console.error("Recorder start on asr.ready failed", err);
-         logStage("client.mic", {
-           outcome: MIC_OUTCOME.ERROR_GUM,
-           message: err && err.message ? err.message : String(err || ""),
-         });
-         setListeningState(false);
-       }
-@@ -3478,192 +3479,232 @@ import { WakeWord } from "./wake_word.js";
-       });
-     };
  
-     socket = ws;
-     updateState({
-       connectionState: resumeTokenValue ? "resuming" : "connecting",
-       websocket: ws,
-       latencyMs: null,
-       lastPingAt: null,
-       resumeError: null,
-       infoFrame: null,
-       serverBanner: null
-     });
-     attachSocket(ws);
-     return ws;
-   }
+ def env_bool(name: str, default: bool = False) -> bool:
+     """Return an environment variable parsed as a boolean."""
  
-   function close(reason = DEFAULT_CLOSE_REASON) {
-     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
-     stopRecorder(reason || "client_shutdown");
-     setAsrArmInFlight(false);
-     setArmAfterTtsEnd(false);
-     setAppStateValue("ttsActive", false);
-     setWsPhase("closing");
-     setWsConnected(false);
-+    const emitResumeInvalid = () => {
-+      if (reason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-+        try {
-+          window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason } }));
-+        } catch {}
-+      }
-+    };
-     if (!socket) {
-       setWsPhase("disconnected");
-       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-+      emitResumeInvalid();
-       return;
-     }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-       try {
-         window.WSErrorUI.cancelRateLimitCountdown(reason);
-       } catch (err) {
-         console.warn("Failed to cancel countdown on close", err);
-       }
-     }
-     autoResumeAttemptToken = null;
-+    emitResumeInvalid();
-     updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
-   }
+     value = os.getenv(name)
+     if value is None:
+         return bool(default)
+     value = value.strip().lower()
+     if value in {"1", "true", "t", "yes", "y", "on"}:
+         return True
+     if value in {"0", "false", "f", "no", "n", "off"}:
+         return False
+     return bool(default)
  
-   function isTypedObjectPayload(payload) {
-     if (!payload || typeof payload !== "object") {
-       return false;
-     }
-     if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
-       return false;
-     }
-     return Object.prototype.toString.call(payload) === "[object Object]";
-   }
  
-   function validatePayloadForSend(payload) {
-     if (!isTypedObjectPayload(payload)) {
-       return true;
-     }
-     const { type } = payload;
-     if (typeof type === "string" && type.trim().length > 0) {
-       return true;
-     }
-     const keys = Object.keys(payload || {});
-     console.warn("WSClient send skipped object payload without type", { keys, payload });
-     try {
-       recordClientBannerEvent("ws.send.invalid_payload", {
-         reason: "missing_type",
-         keys: keys.slice(0, 6),
-       });
-     } catch {}
-     try {
-       logStage("client.ws", { outcome: "send_skipped_missing_type", keys: keys.slice(0, 6) });
-     } catch {}
-     return false;
-   }
- 
-   function send(payload, { binary = false } = {}) {
-     const client = (this && typeof this === "object") ? this : WSClient;
-     if (!Array.isArray(client._queue)) {
-       client._queue = [];
-     }
--    if (!binary && !validatePayloadForSend(payload)) {
--      return;
-+    let data = payload;
+ # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+ # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
+ DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
+ ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
+ ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
+ SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
+-SPEECHMATICS_REALTIME_URL = os.getenv(
+-    "SPEECHMATICS_REALTIME_URL", "wss://mp.speechmatics.com/v2"
+-)
++def _resolve_speechmatics_realtime_url() -> str:
++    """Canonical Speechmatics Realtime URL (full URL, not just a region token).
 +
-+    if (!binary) {
-+      if (!validatePayloadForSend(data)) {
-+        return;
-+      }
-+      if (!data || typeof data !== "object") {
-+        console.warn("WSClient.send blocked: missing or invalid type", payload);
-+        return;
-+      }
-+      if (typeof data.type !== "string") {
-+        console.warn("WSClient.send blocked: missing or invalid type", payload);
-+        return;
-+      }
-+      if (data.type === "audio.header") {
-+        if (data.format !== "pcm16" ||
-+            typeof data.sample_rate !== "number" ||
-+            typeof data.channels !== "number") {
-+          console.warn("WSClient.send blocked: invalid audio.header schema", payload);
-+          return;
-+        }
-+        data = {
-+          type: "audio.header",
-+          format: "pcm16",
-+          sample_rate: Number(data.sample_rate),
-+          channels: Number(data.channels)
-+        };
-+      }
-     }
-     let stateSocket = null;
-     if (typeof AppState !== "undefined" && AppState) {
-       stateSocket = AppState.websocket || null;
-       if (!stateSocket && typeof AppState.getState === "function") {
-         try {
-           const snapshot = AppState.getState();
-           stateSocket = snapshot && snapshot.websocket ? snapshot.websocket : null;
-         } catch {}
-       }
-     }
-     const live = client._ws || stateSocket;
-     try {
-       const phase = AppState?.wsPhase || AppState?.connectionState;
-       if (!binary && (phase !== "connected" && phase !== "ready" && phase !== "resuming")) {
-         console.warn("WSClient.send skipped (phase not ready)", { phase });
-         return;
-       }
-     } catch {}
-     if (!live || live.readyState !== WebSocket.OPEN) {
--      client._queue.push({ data: payload, isBinary: !!binary });
-+      client._queue.push({ data, isBinary: !!binary });
-       console.warn("WSClient.send queued (socket not open)");
-       return;
-     }
-     client._ws = live;
-     client._connected = true;
-     try { live.binaryType = "arraybuffer"; } catch {}
-     if (binary) {
-       if (payload instanceof Blob) {
-         return payload.arrayBuffer().then((buf) => {
-           try {
-             live.send(buf);
-           } catch (err) {
-             console.error("WSClient binary send error", err);
-           }
-         });
-       }
-       if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
-         const buffer = payload instanceof ArrayBuffer
-           ? payload
-           : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
-         try {
-           live.send(buffer);
-         } catch (err) {
-           console.error("WSClient binary send error", err);
-         }
-         return;
-       }
-     }
--    if (!binary && !validatePayloadForSend(payload)) {
--      return;
--    }
--    const text = typeof payload === "string" ? payload : JSON.stringify(payload);
-+    const text = typeof data === "string" ? data : JSON.stringify(data);
-     try {
-       live.send(text);
-     } catch (err) {
-       console.error("WSClient send error", err);
-     }
-   }
++    Example: ``wss://us2.rt.speechmatics.com/v2``.
++    """
++
++    default_url = "wss://us2.rt.speechmatics.com/v2"
++    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
++    candidate = (raw_value or "").strip()
++    if not candidate:
++        candidate = default_url
++    if not candidate.startswith("wss://"):
++        raise ValueError(
++            f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
++        )
++    return candidate
++
++
++SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()
+ ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
+     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
+ )
+ ASR_IDLE_CLOSE_MS = 15000
+ ASR_TRACE = env_bool("ASR_TRACE", False)
  
-   function getBufferedAmount() {
-     if (!socket) return 0;
-     return socket.bufferedAmount || 0;
-   }
  
-   const debug = {
-     simulateIncomingFrame(frame) {
-       return handleMessageFrame(frame);
-     },
-     recordPing(ts) {
-       lastPingAt = ts;
-       updateState({ lastPingAt: ts });
-     },
-     setTransportFactory(factory) {
-       transportFactory = typeof factory === "function" ? factory : transportFactory;
-     },
-     resetTransportFactory() {
-       transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-     }
-   };
+ def get_env(name: str, default=None):
+     """Retrieve an environment variable with an optional default."""
  
-   WSClient.open = open;
-   WSClient.close = close;
-   WSClient.send = send;
-   WSClient.sendBinary = sendBinary;
-   WSClient.getBufferedAmount = getBufferedAmount;
-   WSClient.requestAsrArm = requestAsrArm;
-   WSClient.requestAsrClose = requestAsrClose;
-   Object.defineProperty(WSClient, "socket", {
-     configurable: true,
-     enumerable: true,
-     get() {
-       return socket;
-     }
-   });
-   WSClient.isConnected = function isConnected() {
-     return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
-   };
-   WSClient.__debug = debug;
-   window.WSClient = WSClient;
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-+    window.addEventListener("ws.close", () => {
-+      __resetAudioHeaderSent();
-+    });
-+    window.addEventListener("ws.resume_invalid", () => {
-+      __resetAudioHeaderSent();
-+    });
-+  }
-   if (typeof WSClient._linkedProofLogged !== "boolean") {
-     WSClient._linkedProofLogged = false;
-   }
- })();
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index fd4aab71aef07c2f50cf75be0e31e5343df06d07..23742e24772f66a14d4d8611aea33707a8ecbc32 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1702,77 +1702,80 @@ class ChatV2Adapter:
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be an integer",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 if seq_start < 0:
-                     meta["error"] = "schema_invalid"
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     await self._send_error(
-                         send,
-                         ctx.sid,
-                         "schema_invalid",
-                         "audio.header seq_start must be >= 0",
-                     )
-                     return self._HandleResult(False, 1003, "schema_invalid")
-                 profile["seq_start"] = seq_start
-             if ctx.audio_profile is not None:
-                 existing_profile = (
-                     ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else {}
-                 )
-                 existing_codec = existing_profile.get("codec")
-                 existing_rate = existing_profile.get("sample_rate")
-                 existing_channels = existing_profile.get("channels")
-+                existing_format = existing_profile.get("format")
+     value = os.getenv(name)
+     return value if value is not None else default
  
-                 incoming_codec = profile.get("codec")
-                 incoming_rate = profile.get("sample_rate")
-                 incoming_channels = profile.get("channels")
-+                incoming_format = profile.get("format")
  
-                 if (
--                    incoming_codec == existing_codec
-+                    incoming_format == existing_format
-+                    and incoming_codec == existing_codec
-                     and incoming_rate == existing_rate
-                     and incoming_channels == existing_channels
-                 ):
-                     _log.info(
--                        "evt=audio_header_dup_ignored sid=%s codec=%s rate_hz=%s ch=%s",
-+                        "evt=audio_header_duplicate sid=%s codec=%s rate_hz=%s ch=%s",
-                         ctx.sid,
-                         incoming_codec,
-                         incoming_rate,
-                         incoming_channels,
-                     )
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     return self._HandleResult(True)
+ _log = logging.getLogger(__name__)
  
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
--                    "duplicate or conflicting audio.header",
-+                    "conflicting audio.header",
-                 )
-                 return self._HandleResult(True)
-             normalized_header = dict(frame)
-             normalized_header.setdefault("format", expected["format"])
-             normalized_header.setdefault("sample_rate", expected["sample_rate"])
-             normalized_header.setdefault("channels", expected["channels"])
-             err = validate_audio_header_against_policy(
-                 normalized_header, ctx.policy_snapshot, ctx.asr_vendor
-             )
-             if err:
-                 meta["error"] = "policy_violation"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
-                 await self._send_json(send, ctx.sid, {"type": "error", "error": err})
-                 return self._HandleResult(False, 4400, "policy_violation")
-             ctx.audio_profile = profile
-             if getattr(ctx, "await_user_vad_check_pending", False):
-                 ctx.await_user_vad_check_pending = False
-                 snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-                 policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-                 vad_block = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
-                 auto_active = None
-                 if isinstance(vad_block, Mapping) and "auto_vad_active" in vad_block:
-                     auto_active = bool(vad_block.get("auto_vad_active"))
-                 if auto_active is not True:
+ _ADMIN_SETTINGS_LOCK = threading.RLock()
+ _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
+ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
+ _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
+ 
+ _ALLOWED_ASR_INPUTS = {"pcm_16k"}
+ _SUPPORTED_ASR_VENDORS = {"speechmatics"}
+ _AUDIO_PIPELINE_MODES = {"pcm16"}
+ _CAPTURE_TIMESLICE_MIN_MS = 20
