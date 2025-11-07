@@ -53,7 +53,8 @@ def _resolve_speechmatics_realtime_url() -> str:
     raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
     expanded_value = os.path.expandvars(raw_value or "")
     expanded_value = os.path.expanduser(expanded_value)
-    candidate = expanded_value.strip()
+    # Normalize common “invisible” characters that break DNS
+    candidate = expanded_value.strip().replace("\u200b", "").replace("\u00a0", "")
 
     if not candidate:
         return default_url
@@ -69,14 +70,26 @@ def _resolve_speechmatics_realtime_url() -> str:
     # Support legacy tokens such as "us1" or "us1.rt.speechmatics.com/v2".
     legacy = candidate.lstrip("/")
     host_part, _, path_part = legacy.partition("/")
-    host_part = host_part.strip()
+    host_part = host_part.strip().lower()
     if not host_part:
         raise ValueError(
             f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
         )
 
+    allowed_regions = {"us1", "eu1", "ap1"}
     if "." not in host_part:
+        # Region token only
+        if host_part not in allowed_regions:
+            raise ValueError(
+                f"SPEECHMATICS_REALTIME_URL region must be one of {sorted(allowed_regions)} (got {host_part!r})"
+            )
         host_part = f"{host_part}.rt.speechmatics.com"
+    else:
+        # If a host is provided, enforce Speechmatics RT domain
+        if not host_part.endswith(".rt.speechmatics.com"):
+            raise ValueError(
+                f"SPEECHMATICS_REALTIME_URL must point to *.rt.speechmatics.com (got {host_part!r})"
+            )
 
     path = f"/{path_part}" if path_part else "/v2"
     return f"wss://{host_part}{path}"

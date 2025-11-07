@@ -5017,12 +5017,17 @@ class ChatV2Adapter:
             params = self._policy_to_sm_params(ctx)
             token = self._mint_speechmatics_jwt(ctx)
             endpoint_url = self._speechmatics_rt_url()
+            _log.info("evt=asr_open_begin sid=%s endpoint=%s", ctx.sid, endpoint_url)
             await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
         except asyncio.CancelledError:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
             raise
         except Exception:
+            try:
+                _log.error("evt=asr_open_endpoint sid=%s endpoint=%s", ctx.sid, endpoint_url)
+            except Exception:
+                pass
             ctx.session.asr = None
             mark(ctx.session, "closed")
             ctx.asr_open_task = None

@@ -1,24 +1,8 @@
 diff --git a/app/config.py b/app/config.py
-index 9c555758eaf742f40bc73a29188632f5dccaeeb4..2eeb182cc6a32dc3f1d6a21dedc101859c59c2f2 100644
+index 2eeb182cc6a32dc3f1d6a21dedc101859c59c2f2..df85ecf2a0099442af882553f2039e655837d789 100644
 --- a/app/config.py
 +++ b/app/config.py
-@@ -15,67 +15,93 @@ except ImportError:  # pragma: no cover - optional dependency
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
- 
- 
- def env_bool(name: str, default: bool = False) -> bool:
-     """Return an environment variable parsed as a boolean."""
- 
-     value = os.getenv(name)
-     if value is None:
-         return bool(default)
-     value = value.strip().lower()
-     if value in {"1", "true", "t", "yes", "y", "on"}:
-         return True
-     if value in {"0", "false", "f", "no", "n", "off"}:
-         return False
-     return bool(default)
+@@ -31,74 +31,87 @@ def env_bool(name: str, default: bool = False) -> bool:
  
  
  # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
@@ -28,56 +12,64 @@ index 9c555758eaf742f40bc73a29188632f5dccaeeb4..2eeb182cc6a32dc3f1d6a21dedc10185
  ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
  SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
  def _resolve_speechmatics_realtime_url() -> str:
--    """Canonical Speechmatics Realtime URL (full URL, not just a region token).
-+    """Return the configured Speechmatics realtime endpoint URL.
+     """Return the configured Speechmatics realtime endpoint URL.
  
--    Example: ``wss://us1.rt.speechmatics.com/v2``.
-+    Historically the deployment accepted short region tokens (``us1``) or a bare
-+    hostname (``us1.rt.speechmatics.com``).  The Speechmatics client, however,
-+    requires a fully qualified ``wss://`` URL.  Render environments that still
-+    provide the short form were failing DNS lookups which manifested as
-+    ``socket.gaierror: [Errno -2]`` during the websocket connection attempt.
-+
-+    To remain backwards compatible we normalise older inputs into the canonical
-+    URL shape while still validating explicit URLs for correctness.
+     Historically the deployment accepted short region tokens (``us1``) or a bare
+     hostname (``us1.rt.speechmatics.com``).  The Speechmatics client, however,
+     requires a fully qualified ``wss://`` URL.  Render environments that still
+     provide the short form were failing DNS lookups which manifested as
+     ``socket.gaierror: [Errno -2]`` during the websocket connection attempt.
+ 
+     To remain backwards compatible we normalise older inputs into the canonical
+     URL shape while still validating explicit URLs for correctness.
      """
  
      default_url = "wss://us1.rt.speechmatics.com/v2"
--    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
-+    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
+     raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
      expanded_value = os.path.expandvars(raw_value or "")
      expanded_value = os.path.expanduser(expanded_value)
-     candidate = expanded_value.strip()
-+
+-    candidate = expanded_value.strip()
++    # Normalize common “invisible” characters that break DNS
++    candidate = expanded_value.strip().replace("\u200b", "").replace("\u00a0", "")
+ 
      if not candidate:
--        candidate = default_url
--    if not candidate.startswith("wss://"):
-+        return default_url
-+
-+    lowered = candidate.lower()
-+    if "://" in candidate:
-+        if not lowered.startswith("wss://"):
-+            raise ValueError(
-+                f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
-+            )
-+        return candidate
-+
-+    # Support legacy tokens such as "us1" or "us1.rt.speechmatics.com/v2".
-+    legacy = candidate.lstrip("/")
-+    host_part, _, path_part = legacy.partition("/")
-+    host_part = host_part.strip()
-+    if not host_part:
+         return default_url
+ 
+     lowered = candidate.lower()
+     if "://" in candidate:
+         if not lowered.startswith("wss://"):
+             raise ValueError(
+                 f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
+             )
+         return candidate
+ 
+     # Support legacy tokens such as "us1" or "us1.rt.speechmatics.com/v2".
+     legacy = candidate.lstrip("/")
+     host_part, _, path_part = legacy.partition("/")
+-    host_part = host_part.strip()
++    host_part = host_part.strip().lower()
+     if not host_part:
          raise ValueError(
--            f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
-+            f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
+             f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
          )
--    return candidate
-+
-+    if "." not in host_part:
-+        host_part = f"{host_part}.rt.speechmatics.com"
-+
-+    path = f"/{path_part}" if path_part else "/v2"
-+    return f"wss://{host_part}{path}"
+ 
++    allowed_regions = {"us1", "eu1", "ap1"}
+     if "." not in host_part:
++        # Region token only
++        if host_part not in allowed_regions:
++            raise ValueError(
++                f"SPEECHMATICS_REALTIME_URL region must be one of {sorted(allowed_regions)} (got {host_part!r})"
++            )
+         host_part = f"{host_part}.rt.speechmatics.com"
++    else:
++        # If a host is provided, enforce Speechmatics RT domain
++        if not host_part.endswith(".rt.speechmatics.com"):
++            raise ValueError(
++                f"SPEECHMATICS_REALTIME_URL must point to *.rt.speechmatics.com (got {host_part!r})"
++            )
+ 
+     path = f"/{path_part}" if path_part else "/v2"
+     return f"wss://{host_part}{path}"
  
  
  SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()
@@ -100,56 +92,69 @@ index 9c555758eaf742f40bc73a29188632f5dccaeeb4..2eeb182cc6a32dc3f1d6a21dedc10185
  _ADMIN_SETTINGS_LOCK = threading.RLock()
  _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
  _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
- _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 9372e0f227a8cf4c14c0eb700fce76e511832ea6..dfaae2c25c0c8c30c844201dbf036cf1f211d9d6 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -4995,56 +4995,61 @@ class ChatV2Adapter:
+         ctx.session.first_chunk_sent = False
+         ctx.session.queued_arm = False
+         ctx.session.closed_at_ms = None
+         ctx.session.asr = self._create_sm_client(ctx)
+         try:
+             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
+         except RuntimeError:
+             loop = asyncio.get_running_loop()
+             ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
  
- _ALLOWED_ASR_INPUTS = {"pcm_16k"}
-diff --git a/tests/test_config_speechmatics_url.py b/tests/test_config_speechmatics_url.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..515dbe434213f5f8ccdd11ca33725495a77beb3e
---- /dev/null
-+++ b/tests/test_config_speechmatics_url.py
-@@ -0,0 +1,44 @@
-+import importlib
-+
-+import pytest
-+
-+
-+def _reload_config(monkeypatch, value):
-+    if value is None:
-+        monkeypatch.delenv("SPEECHMATICS_REALTIME_URL", raising=False)
-+    else:
-+        monkeypatch.setenv("SPEECHMATICS_REALTIME_URL", value)
-+
-+    module = importlib.import_module("app.config")
-+    importlib.reload(module)
-+    return module
-+
-+
-+def test_default_url_when_missing(monkeypatch):
-+    module = _reload_config(monkeypatch, None)
-+    assert module.SPEECHMATICS_REALTIME_URL == "wss://us1.rt.speechmatics.com/v2"
-+
-+
-+@pytest.mark.parametrize(
-+    "value, expected",
-+    [
-+        ("wss://eu2.rt.speechmatics.com/v2", "wss://eu2.rt.speechmatics.com/v2"),
-+        ("us1", "wss://us1.rt.speechmatics.com/v2"),
-+        (
-+            "eu2.rt.speechmatics.com/v2",
-+            "wss://eu2.rt.speechmatics.com/v2",
-+        ),
-+        (
-+            "us1.rt.speechmatics.com/custom",
-+            "wss://us1.rt.speechmatics.com/custom",
-+        ),
-+    ],
-+)
-+def test_legacy_inputs_are_normalised(monkeypatch, value, expected):
-+    module = _reload_config(monkeypatch, value)
-+    assert module.SPEECHMATICS_REALTIME_URL == expected
-+
-+
-+def test_rejects_non_wss_urls(monkeypatch):
-+    with pytest.raises(ValueError):
-+        _reload_config(monkeypatch, "http://us1.rt.speechmatics.com/v2")
+     async def _open_asr(self, ctx: AdapterContext) -> None:
+         send = ctx.ws_send
+         if send is None:
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             return
+         client = ctx.session.asr
+         if client is None:
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             return
+         try:
+             params = self._policy_to_sm_params(ctx)
+             token = self._mint_speechmatics_jwt(ctx)
+             endpoint_url = self._speechmatics_rt_url()
++            _log.info("evt=asr_open_begin sid=%s endpoint=%s", ctx.sid, endpoint_url)
+             await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
+         except asyncio.CancelledError:
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             raise
+         except Exception:
++            try:
++                _log.error("evt=asr_open_endpoint sid=%s endpoint=%s", ctx.sid, endpoint_url)
++            except Exception:
++                pass
+             ctx.session.asr = None
+             mark(ctx.session, "closed")
+             ctx.asr_open_task = None
+             _log.exception("evt=asr_open_failed sid=%s", ctx.sid)
+             try:
+                 await self._send_json(
+                     send,
+                     ctx.sid,
+                     {"type": "asr.error", "code": "open_failed"},
+                 )
+             except Exception:
+                 _log.exception("evt=asr_open_error_send sid=%s", ctx.sid)
+             await self._publish(
+                 ASR_SINGLE_STREAM_INVARIANT,
+                 ctx.sid,
+                 {"state": "closed", "ok": False, "reason": "open_failed"},
+             )
+             return
+         ctx.asr_open_task = None
+         ctx.session.queued_arm = False
+ 
+     async def _close_asr(
+         self,
+         ctx: AdapterContext,
+         *,
