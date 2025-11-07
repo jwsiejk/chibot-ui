@@ -39,10 +39,10 @@ SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
 def _resolve_speechmatics_realtime_url() -> str:
     """Canonical Speechmatics Realtime URL (full URL, not just a region token).
 
-    Example: ``wss://us2.rt.speechmatics.com/v2``.
+    Example: ``wss://us1.rt.speechmatics.com/v2``.
     """
 
-    default_url = "wss://us2.rt.speechmatics.com/v2"
+    default_url = "wss://us1.rt.speechmatics.com/v2"
     raw_value = os.getenv("SPEECHMATICS_REALTIME_URL", default_url)
     candidate = (raw_value or "").strip()
     if not candidate:
