@@ -5,7 +5,7 @@ HANDSHAKE ORDER (MUST)
 - Only after RecognitionStarted should the server emit **asr.ready** to the client.
 
 ENDPOINT SELECTION (MUST)
-- Endpoint selection uses a full URL via `SPEECHMATICS_REALTIME_URL` (default `wss://us1.rt.speechmatics.com/v2`).
+- Endpoint selection uses a full URL via `SPEECHMATICS_REALTIME_URL` (default `wss://wus.rt.speechmatics.com/v2`).
 
 AUDIO FORMAT (MUST MATCH BYTES)
 - `audio_format: { type: "raw", encoding: "pcm_s16le", sample_rate: 16000 }`
