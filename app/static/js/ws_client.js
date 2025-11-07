@@ -315,7 +315,7 @@ import { WakeWord } from "./wake_word.js";
     const policy = clonePolicySnapshot(pending.policy);
     try {
       if (!AppState.listening) {
-        sendAudioHeader();
+        sendAudioHeader(policy);
       }
       await startRecorderStreaming(policy);
       logMic({ outcome: MIC_OUTCOME.STREAMING, reason });
@@ -569,7 +569,61 @@ import { WakeWord } from "./wake_word.js";
     sample_rate: 16000,
     channels: 1,
   });
+  // --- Begin: header idempotency + strict schema ---
   let __audioHeaderSent = false;
+  function __resetAudioHeaderSent() { __audioHeaderSent = false; }
+  function __buildStrictAudioHeader(frameOrPolicy) {
+    const base = AUDIO_HEADER_FRAME;
+    const source = (frameOrPolicy?.policy || frameOrPolicy) || {};
+    const audioPolicy = source.audio || {};
+    const mediaAudioPolicy = (source.media && source.media.audio) || {};
+    const formatCandidate = audioPolicy.format ?? mediaAudioPolicy.format ?? base.format;
+    const rateCandidate =
+      audioPolicy.sample_rate ??
+      audioPolicy.rate ??
+      mediaAudioPolicy.sample_rate ??
+      mediaAudioPolicy.rate ??
+      base.sample_rate;
+    const channelsCandidate =
+      audioPolicy.channels ??
+      mediaAudioPolicy.channels ??
+      base.channels;
+
+    const normalizedRate = Number(rateCandidate);
+    const normalizedChannels = Number(channelsCandidate);
+
+    if (formatCandidate && formatCandidate !== "pcm16") {
+      try {
+        console.warn(
+          "audio.header format policy overridden",
+          formatCandidate,
+          "→ pcm16"
+        );
+      } catch {}
+    }
+
+    return {
+      type: base.type,
+      format: "pcm16",
+      sample_rate: Number.isFinite(normalizedRate) ? normalizedRate : base.sample_rate,
+      channels: Number.isFinite(normalizedChannels) ? normalizedChannels : base.channels,
+    };
+  }
+  function __sendAudioHeaderOnce(frameOrPolicy) {
+    if (__audioHeaderSent) { return; }
+    try {
+      const header = __buildStrictAudioHeader(frameOrPolicy);
+      WSClient.send(header);
+      logStage("client.audio_header_send", header);
+      __audioHeaderSent = true;
+    } catch (err) {
+      console.warn("Failed to send audio header", err);
+    }
+  }
+  function sendAudioHeader(frameOrPolicy) {
+    __sendAudioHeaderOnce(frameOrPolicy);
+  }
+  // --- End: header idempotency + strict schema ---
   let __lastErrorSig = null, __lastErrorAt = 0;
   const AUDIO_KEEPALIVE_MS = 20000;
   const POST_TTS_ARM_DELAY_MS = 300;
@@ -769,26 +823,6 @@ import { WakeWord } from "./wake_word.js";
       }
     }
     setListeningState(false);
-  }
-
-  function sendAudioHeader() {
-    if (__audioHeaderSent) {
-      try { console.warn("audio.header already sent; skipping"); } catch {}
-      return;
-    }
-    try {
-      // Include codec to match server’s expected profile (adapter normalizes pcm→pcm16 + pcm_s16le)
-      WSClient.send({ ...AUDIO_HEADER_FRAME, codec: "pcm_s16le" });
-      __audioHeaderSent = true;
-      logStage("client.audio_header_send", {
-        format: AUDIO_HEADER_FRAME.format,
-        sample_rate: AUDIO_HEADER_FRAME.sample_rate,
-        channels: AUDIO_HEADER_FRAME.channels,
-        codec: "pcm_s16le",
-      });
-    } catch (err) {
-      console.warn("Failed to send audio header", err);
-    }
   }
 
   function handleRecorderChunk(event) {
@@ -2720,7 +2754,7 @@ import { WakeWord } from "./wake_word.js";
       try { clearAudioKeepaliveTimer(); } catch {}
       try { setAsrArmInFlight(false); } catch {}
       try { setArmAfterTtsEnd(false); } catch {}
-      __audioHeaderSent = false;
+      __resetAudioHeaderSent();
     }
     const errorMeta = {};
     if (frame && typeof frame.code === "string") {
@@ -2989,7 +3023,7 @@ import { WakeWord } from "./wake_word.js";
       stopInputCapture({ reason: "input.stop" });
       clearPendingAsrReadyStart("input.stop");
       __asrReadySeen = false;
-      __audioHeaderSent = false;
+      __resetAudioHeaderSent();
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
       __asrReadySeen = true;
@@ -2998,8 +3032,8 @@ import { WakeWord } from "./wake_word.js";
       setWsConnected(true);
       setWsPhase("ready");
       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-      __audioHeaderSent = false;
-      sendAudioHeader();
+      __resetAudioHeaderSent();
+      sendAudioHeader(frame);
       try {
         await startRecorderStreaming(frame?.policy || {});
       } catch (err) {
@@ -3024,7 +3058,7 @@ import { WakeWord } from "./wake_word.js";
       AppState.asrVendor = null;
       updateState({ asrReady: false, asrVendor: null });
       stopRecorder("asr_unavailable");
-      __audioHeaderSent = false;
+      __resetAudioHeaderSent();
       setAsrArmInFlight(false);
       setArmAfterTtsEnd(false);
       if (typeof AppState.emit === "function") {
