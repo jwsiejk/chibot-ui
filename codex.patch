@@ -1,304 +1,166 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 70b3dba7a290136f15c306a5beda90af5269131d..fd4aab71aef07c2f50cf75be0e31e5343df06d07 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1639,51 +1639,64 @@ class ChatV2Adapter:
-                     )
-                     return self._HandleResult(True)
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 594817060978c2c59449a704bfc963b40294fec3..8cb3f9c2c411f7d9817f5d8e413761369ea995ec 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -2719,50 +2719,54 @@ import { WakeWord } from "./wake_word.js";
+     if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+       try {
+         window.WSErrorUI.handleFrame(frame, {
+           scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
+         });
+       } catch (err) {
+         console.warn("Error handler threw", err);
+       }
+     }
+     try {
+       const reason = typeof frame?.detail === "string" && frame.detail
+         ? frame.detail
+         : (typeof frame?.message === "string" ? frame.message : null);
+       logStage('client.ws', {
+         outcome: 'auth_fail',
+         code: typeof frame?.code === 'string' ? frame.code : null,
+         reason: reason || null,
+       });
+     } catch {}
+     if (isResumeInvalid) {
+       close("resume_invalid");
+     }
+   }
  
-         if frame_type == "asr.close":
-             if ctx.session.asr_state in {"opening", "open"}:
-                 await self._publish(
-                     EVT_ASR_CLOSE,
-                     ctx.sid,
-                     {"state": ctx.session.asr_state},
-                 )
-                 await self._close_asr(ctx, reason="client_request")
-             else:
-                 await self._publish(
-                     ASR_CLOSE_DEDUP,
-                     ctx.sid,
-                     {"state": ctx.session.asr_state},
-                 )
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             return self._HandleResult(True)
+   async function handleMessageFrame(frame) {
++    if (!frame || typeof frame.type !== "string") {
++      console.warn("Ignoring WS frame without type", frame);
++      return;
++    }
+     if (frame.type === "keepalive") {
+       return;
+     }
  
-         if frame_type == "audio.header":
-             expected = {"format": "pcm16", "sample_rate": 16000, "channels": 1}
-             fmt = frame.get("format")
-             sample_rate = frame.get("sample_rate")
-             channels = frame.get("channels")
--            if fmt != expected["format"] or sample_rate != expected["sample_rate"] or channels != expected["channels"]:
-+            normalized_fmt = fmt or expected["format"]
-+            if normalized_fmt == "pcm":
-+                normalized_fmt = expected["format"]
-+            normalized_sr = (
-+                sample_rate if sample_rate is not None else expected["sample_rate"]
-+            )
-+            normalized_ch = (
-+                channels if channels is not None else expected["channels"]
-+            )
-+            if (
-+                normalized_fmt != expected["format"]
-+                or normalized_sr != expected["sample_rate"]
-+                or normalized_ch != expected["channels"]
-+            ):
-                 meta["error"] = "bad_header"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_json(
-                     send,
-                     ctx.sid,
-                     {
-                         "type": "asr.error",
-                         "code": "bad_header",
-                         "expected": expected,
-                     },
-                 )
-                 return self._HandleResult(True)
-             profile = {
-                 "format": "pcm16",
-                 "codec": frame.get("codec") or "pcm_s16le",
-                 "sample_rate": expected["sample_rate"],
-                 "channels": expected["channels"],
-                 "container": "raw",
-             }
-             seq_start = frame.get("seq_start")
-             if seq_start is not None:
-                 if not isinstance(seq_start, int):
-                     meta["error"] = "schema_invalid"
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     await self._send_error(
-@@ -1718,52 +1731,56 @@ class ChatV2Adapter:
+     if (frame.type === "server.ping") {
+       const response = { type: "client.pong", ts: Date.now() };
+       if (typeof frame.ts === "number") {
+         response.echo = frame.ts;
+       }
+       sendJson(response);
+       return;
+     }
  
-                 if (
-                     incoming_codec == existing_codec
-                     and incoming_rate == existing_rate
-                     and incoming_channels == existing_channels
-                 ):
-                     _log.info(
-                         "evt=audio_header_dup_ignored sid=%s codec=%s rate_hz=%s ch=%s",
-                         ctx.sid,
-                         incoming_codec,
-                         incoming_rate,
-                         incoming_channels,
-                     )
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     return self._HandleResult(True)
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
  
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "duplicate or conflicting audio.header",
-                 )
-                 return self._HandleResult(True)
-+            normalized_header = dict(frame)
-+            normalized_header.setdefault("format", expected["format"])
-+            normalized_header.setdefault("sample_rate", expected["sample_rate"])
-+            normalized_header.setdefault("channels", expected["channels"])
-             err = validate_audio_header_against_policy(
--                frame, ctx.policy_snapshot, ctx.asr_vendor
-+                normalized_header, ctx.policy_snapshot, ctx.asr_vendor
-             )
-             if err:
-                 meta["error"] = "policy_violation"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
-                 await self._send_json(send, ctx.sid, {"type": "error", "error": err})
-                 return self._HandleResult(False, 4400, "policy_violation")
-             ctx.audio_profile = profile
-             if getattr(ctx, "await_user_vad_check_pending", False):
-                 ctx.await_user_vad_check_pending = False
-                 snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-                 policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-                 vad_block = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
-                 auto_active = None
-                 if isinstance(vad_block, Mapping) and "auto_vad_active" in vad_block:
-                     auto_active = bool(vad_block.get("auto_vad_active"))
-                 if auto_active is not True:
-                     _log.warning("evt=warn_vad_inactive sid=%s expected=true", ctx.sid)
-             if seq_start is not None:
-                 ctx.audio_seq = max(0, seq_start)
-                 ctx.audio_expected_seq = ctx.audio_seq
-                 ctx.audio_highest_seq = ctx.audio_seq - 1
-                 ctx.audio_buffer.clear()
-             audio_meta = {
-                 key: value
-diff --git a/app/ws/validator.py b/app/ws/validator.py
-index f53367e226d1474b651e299d4bff89ea6532b2f0..693bdb40c514c8810133ed6d9185a499315affe6 100644
---- a/app/ws/validator.py
-+++ b/app/ws/validator.py
-@@ -41,81 +41,81 @@ def _is_int(value: object) -> bool:
- 
- def validate_frame(frame: dict) -> Tuple[bool, str | None]:
-     """Validate a decoded JSON frame.
- 
-     Parameters
-     ----------
-     frame:
-         JSON object parsed from the WebSocket text frame.
- 
-     Returns
-     -------
-     (ok, hint):
-         ok is ``True`` when the frame passes validation. hint contains a
-         human-readable detail when validation fails.
-     """
- 
-     if not isinstance(frame, dict):
-         return False, "Frame must be a JSON object"
- 
-     frame_type = frame.get("type")
-     if not isinstance(frame_type, str):
-         return False, "Frame requires a string 'type' field"
- 
-     if frame_type == "audio.header":
-         fmt = frame.get("format")
--        if fmt not in _ALLOWED_AUDIO_FORMATS:
-+        if fmt is not None and fmt not in _ALLOWED_AUDIO_FORMATS:
-             return False, "audio.header requires format 'pcm16'"
- 
-         sample_rate = frame.get("sample_rate")
-         if sample_rate is not None and not _is_int(sample_rate):
-             return False, "audio.header requires integer sample_rate"
- 
-         channels = frame.get("channels")
-         if channels is not None and not _is_int(channels):
-             return False, "audio.header requires integer channels"
- 
--        if fmt in {"pcm", "pcm16"}:
-+        normalized_fmt = fmt or "pcm16"
-+        if normalized_fmt in {"pcm", "pcm16"}:
-             expected_sr = 16000
-             expected_channels = 1
--            got_sr = sample_rate
--            got_channels = channels
--            if got_sr is None or got_channels is None:
-+
-+            if sample_rate is not None and sample_rate != expected_sr:
-                 _logger.warning(
-                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
--                    got_sr,
--                    got_channels,
-+                    sample_rate,
-+                    channels,
-                 )
-                 return (
-                     False,
-                     "audio.header pcm16 requires sample_rate=16000 and channels=1",
-                 )
--            if got_sr != expected_sr or got_channels != expected_channels:
-+            if channels is not None and channels != expected_channels:
-                 _logger.warning(
-                     "audio.header_rejected reason=pcm_params_mismatch got_sr=%s got_ch=%s",
--                    got_sr,
--                    got_channels,
-+                    sample_rate,
-+                    channels,
-                 )
-                 return (
-                     False,
-                     "audio.header pcm16 requires sample_rate=16000 and channels=1",
-                 )
- 
-     return True, None
- 
- 
- def validate_audio_header_against_policy(
-     header: Dict[str, Any],
-     policy: Policy | Mapping[str, Any] | None,
-     vendor: Optional[str] = None,
- ) -> Optional[str]:
-     fmt = header.get("format")
-     rate = header.get("sample_rate")
-     channels = header.get("channels")
- 
-     if vendor == "speechmatics":
-         normalized_fmt = fmt
-         if normalized_fmt == "pcm":
-             normalized_fmt = "pcm16"
-         if normalized_fmt != "pcm16" or rate != 16000 or channels != 1:
-             _logger.warning(
-                 "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
-diff --git a/tests/test_ws_binary_guard.py b/tests/test_ws_binary_guard.py
-index 9ee026973c20d31910d684ee3da65721b8a5644d..de8cc1977c7ef15a4d734e2414120028c4a1d68e 100644
---- a/tests/test_ws_binary_guard.py
-+++ b/tests/test_ws_binary_guard.py
-@@ -147,50 +147,75 @@ class TestWebSocketBinaryGuard(unittest.TestCase):
-                 "sample_rate": 16000,
-                 "channels": 1,
-             }
-             payload = b"\x03" * 2
-             events = [
-                 {"type": "websocket.connect"},
-                 {"type": "websocket.receive", "text": json.dumps(header)},
-                 {"type": "websocket.receive", "bytes": payload},
-                 {"type": "websocket.disconnect", "code": 1000},
-             ]
- 
-             sent = self._drive(adapter, events)
-         finally:
-             bus.unsubscribe(token)
- 
-         self.assertEqual(len(engine.audio_calls), 1)
-         self.assertEqual(engine.audio_calls[0][2], 0)
- 
-         errors = self._extract_error_frames(sent)
-         self.assertFalse(errors)
- 
-         self.assertEqual(len(received_events), 1)
-         self.assertEqual(received_events[0]["meta"]["byte_count"], len(payload))
-         self.assertEqual(received_events[0]["meta"]["ws"]["size"], len(payload))
- 
-+    def test_audio_header_missing_fields_defaults_to_expected(self) -> None:
-+        adapter = ChatV2Adapter()
-+        engine = RecordingEngine(adapter)
-+        adapter.engine = engine
-+
-+        header = {
-+            "type": "audio.header",
-+            "seq_start": 5,
-+        }
-+        payload = b"\x04" * 6
-+        events = [
-+            {"type": "websocket.connect"},
-+            {"type": "websocket.receive", "text": json.dumps(header)},
-+            {"type": "websocket.receive", "bytes": payload},
-+            {"type": "websocket.disconnect", "code": 1000},
-+        ]
-+
-+        sent = self._drive(adapter, events)
-+
-+        self.assertEqual(len(engine.audio_calls), 1)
-+        self.assertEqual(engine.audio_calls[0][2], 5)
-+
-+        errors = self._extract_error_frames(sent)
-+        self.assertFalse(errors)
-+
-     def test_duplicate_audio_header_is_ignored(self) -> None:
-         adapter = ChatV2Adapter()
-         engine = RecordingEngine(adapter)
-         adapter.engine = engine
- 
-         header = {
-             "type": "audio.header",
-             "format": "pcm",
-             "sample_rate": 16000,
-             "channels": 1,
+     if (frame.type === "config.updated" || frame.type === "config_updated") {
+       const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
+       const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
+       const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
+       if (incomingType !== 'config.updated') {
+         dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
+       }
+@@ -3019,65 +3023,103 @@ import { WakeWord } from "./wake_word.js";
+           "Voice temporarily unavailable. You can continue via chat.",
+           { level: "warning", ttlMs: 10000 }
+         );
+       } catch (err) {
+         console.warn("Failed to show voice unavailable banner", err);
+       }
+     } else if (frame.type === "chat.message" || frame.type === "message") {
+       if (!transcriptFrameAllowed(frame)) {
+         // Keep frame flowing to other listeners without rendering in transcript.
+       } else {
+         const view = window.TranscriptView;
+         if (view && typeof view.handleChatMessage === "function") {
+           try {
+             view.handleChatMessage(frame);
+           } catch (err) {
+             console.warn("TranscriptView chat handler error", err);
+           }
          }
-         payload = b"\x01" * 2
-         events = [
-             {"type": "websocket.connect"},
-             {"type": "websocket.receive", "text": json.dumps(header)},
-             {"type": "websocket.receive", "text": json.dumps(header)},
-             {"type": "websocket.receive", "bytes": payload},
-             {"type": "websocket.disconnect", "code": 1000},
-         ]
+       }
+     } else if (frame.type === "chat.history") {
+       handleChatHistoryFrame(frame);
+     }
+     dispatchFrame(frame);
+   }
  
-         with self.assertLogs("app.ws.adapter", level="INFO") as captured:
-             sent = self._drive(adapter, events)
- 
-         errors = self._extract_error_frames(sent)
-         self.assertFalse(errors)
++  function normalizeIncomingFrame(frame) {
++    if (!frame || typeof frame !== "object") {
++      return null;
++    }
++    if (typeof frame.type === "string" && frame.type) {
++      return frame;
++    }
++    let inferredType = null;
++    if (typeof frame.kind === "string" && frame.kind) {
++      inferredType = frame.kind;
++    } else if (typeof frame.event === "string" && frame.event) {
++      inferredType = frame.event;
++    } else if (
++      typeof frame.code === "string" ||
++      typeof frame.detail === "string" ||
++      typeof frame.message === "string"
++    ) {
++      inferredType = "error";
++    }
++    if (!inferredType) {
++      return null;
++    }
++    return { ...frame, type: inferredType };
++  }
++
+   async function parseFrame(event) {
+     const { data } = event;
+     if (typeof data === "string") {
+       try {
+         const frame = JSON.parse(data);
+         if (frame && typeof frame.message === "string") {
+           if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+             return;
+           }
+         }
+-        if (frame && frame.type === "server.ping") {
+-          send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
++        const normalizedFrame = normalizeIncomingFrame(frame);
++        if (!normalizedFrame) {
++          console.warn("Dropping WS frame without recognizable type", frame);
++          handleErrorFrame({
++            type: "error",
++            code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
++            detail:
++              typeof frame?.detail === "string"
++                ? frame.detail
++                : "Frame missing type field",
++          });
++          return;
++        }
++        if (normalizedFrame.type === "server.ping") {
++          send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+           return;
+         }
+-        await handleMessageFrame(frame);
++        await handleMessageFrame(normalizedFrame);
+       } catch (err) {
+         console.error("Failed to parse WS frame", err, data);
+       }
+       return;
+     }
+     if (data instanceof Blob) {
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(data);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+       return;
+     }
+     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+       const chunk = data instanceof ArrayBuffer
+         ? data
+         : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+         audioPlayer.enqueueChunk(chunk);
+       }
+       window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+       return;
+     }
+     console.warn("Unknown WS frame type", data);

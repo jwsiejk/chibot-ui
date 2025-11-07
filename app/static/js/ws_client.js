@@ -2741,6 +2741,10 @@ import { WakeWord } from "./wake_word.js";
   }
 
   async function handleMessageFrame(frame) {
+    if (!frame || typeof frame.type !== "string") {
+      console.warn("Ignoring WS frame without type", frame);
+      return;
+    }
     if (frame.type === "keepalive") {
       return;
     }
@@ -3041,6 +3045,31 @@ import { WakeWord } from "./wake_word.js";
     dispatchFrame(frame);
   }
 
+  function normalizeIncomingFrame(frame) {
+    if (!frame || typeof frame !== "object") {
+      return null;
+    }
+    if (typeof frame.type === "string" && frame.type) {
+      return frame;
+    }
+    let inferredType = null;
+    if (typeof frame.kind === "string" && frame.kind) {
+      inferredType = frame.kind;
+    } else if (typeof frame.event === "string" && frame.event) {
+      inferredType = frame.event;
+    } else if (
+      typeof frame.code === "string" ||
+      typeof frame.detail === "string" ||
+      typeof frame.message === "string"
+    ) {
+      inferredType = "error";
+    }
+    if (!inferredType) {
+      return null;
+    }
+    return { ...frame, type: inferredType };
+  }
+
   async function parseFrame(event) {
     const { data } = event;
     if (typeof data === "string") {
@@ -3051,11 +3080,24 @@ import { WakeWord } from "./wake_word.js";
             return;
           }
         }
-        if (frame && frame.type === "server.ping") {
-          send({ type: "client.pong", ts: Date.now(), echo: frame.ts });
+        const normalizedFrame = normalizeIncomingFrame(frame);
+        if (!normalizedFrame) {
+          console.warn("Dropping WS frame without recognizable type", frame);
+          handleErrorFrame({
+            type: "error",
+            code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
+            detail:
+              typeof frame?.detail === "string"
+                ? frame.detail
+                : "Frame missing type field",
+          });
           return;
         }
-        await handleMessageFrame(frame);
+        if (normalizedFrame.type === "server.ping") {
+          send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+          return;
+        }
+        await handleMessageFrame(normalizedFrame);
       } catch (err) {
         console.error("Failed to parse WS frame", err, data);
       }
