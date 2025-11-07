@@ -1034,10 +1034,10 @@ import { WakeWord } from "./wake_word.js";
       return;
     }
     try {
-      WSClient.send({ type: "asr.open" });
       setAsrArmInFlight(true);
-      setWsPhase("arming");
       logStage("client.asr_rearm_request", { reason: label });
+      WSClient.send({ type: "asr.open" });
+      setWsPhase("arming");
     } catch (err) {
       setAsrArmInFlight(false);
       setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
