@@ -1779,7 +1779,16 @@ class ChatV2Adapter:
                 meta["error"] = "policy_violation"
                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
-                await self._send_json(send, ctx.sid, {"type": "error", "error": err})
+                await self._send_error(send, ctx.sid, "policy_violation", err)
+                turn_id = getattr(ctx.session, "turn_id", None)
+                log_detail = {
+                    "session_id": ctx.sid,
+                    "code": "policy_violation",
+                    "detail": err,
+                }
+                if isinstance(turn_id, str) and turn_id:
+                    log_detail["turn_id"] = turn_id
+                self._emit_hub_log(ctx, "policy.violation", log_detail)
                 return self._HandleResult(False, 4400, "policy_violation")
             ctx.audio_profile = profile
             self._arm_no_audio_watchdog(ctx)
