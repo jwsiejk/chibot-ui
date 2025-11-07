@@ -202,14 +202,38 @@ class SMRealtimeClient:
         _log.info("evt=sm_ws_connect url=%s auth=%s", ws_url, auth_mode)
         self._url = ws_url
 
+        async def _connect(url: str, hdrs: dict[str, str]) -> WebSocketClientProtocol:
+            """Connect using whichever header kwarg this websockets version supports."""
+
+            # Try argument names used across websockets releases.
+            try:
+                return await websockets.connect(
+                    url,
+                    extra_headers=hdrs or None,
+                    max_size=None,
+                    ping_interval=20,
+                    ping_timeout=20,
+                )
+            except TypeError:
+                try:
+                    return await websockets.connect(
+                        url,
+                        additional_headers=hdrs or None,
+                        max_size=None,
+                        ping_interval=20,
+                        ping_timeout=20,
+                    )
+                except TypeError:
+                    return await websockets.connect(
+                        url,
+                        headers=hdrs or None,
+                        max_size=None,
+                        ping_interval=20,
+                        ping_timeout=20,
+                    )
+
         try:
-            ws = await websockets.connect(
-                ws_url,
-                extra_headers=headers or None,
-                max_size=None,
-                ping_interval=20,
-                ping_timeout=20,
-            )
+            ws = await _connect(ws_url, headers)
         except Exception:
             async with self._state_lock:
                 self._state = "closed"
