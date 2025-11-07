@@ -2705,7 +2705,23 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function handleErrorFrame(frame) {
-    console.error("WS error frame", frame);
+    const code = typeof frame?.code === "string" ? frame.code : "unknown";
+    const sig = `${code}|${frame?.detail || frame?.message || ""}`;
+    const now = Date.now();
+    if (__lastErrorSig === sig && (now - __lastErrorAt) < 1500) {
+      // Avoid console spam for the same error flooding in
+    } else {
+      console.error("WS error frame", frame);
+      __lastErrorSig = sig;
+      __lastErrorAt = now;
+    }
+    if (code === "schema_invalid" || code === "unknown_type" || code === "bad_utf8") {
+      try { stopInputCapture({ reason: code }); } catch {}
+      try { clearAudioKeepaliveTimer(); } catch {}
+      try { setAsrArmInFlight(false); } catch {}
+      try { setArmAfterTtsEnd(false); } catch {}
+      __audioHeaderSent = false;
+    }
     const errorMeta = {};
     if (frame && typeof frame.code === "string") {
       errorMeta.code = truncateBannerString(frame.code, 64);

@@ -1,209 +1,73 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index a59ec1be834d8abb7d1f80eea22f515c4ab8001d..3a0d550beedf904cb94846fbf0b29f1a44232d46 100644
+index 3a0d550beedf904cb94846fbf0b29f1a44232d46..acd0a09c258e2ae5ec0f60baf6503148b19de14f 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -547,50 +547,52 @@ import { WakeWord } from "./wake_word.js";
-         __micRecordingStartAt = null;
-         __micFirstChunkBreadcrumbSent = false;
-       }
-       hubLog('client.mic', { ...base, ...detail });
+@@ -2683,51 +2683,67 @@ import { WakeWord } from "./wake_word.js";
+     try {
+       console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
      } catch {}
+     return allow;
    }
  
-   function logStage(label, detail = {}) {
-     try {
-       hubLog(label, { trace_id: __turnTraceId || null, ...detail });
-     } catch {}
-   }
- 
-   if (typeof window !== "undefined") {
-     try { window.__logMic = logMic; } catch {}
-     try { window.__logStage = logStage; } catch {}
-     try { window.__MIC_OUTCOME = MIC_OUTCOME; } catch {}
-   }
- 
-   const AUDIO_HEADER_FRAME = Object.freeze({
-     type: "audio.header",
-     format: "pcm16",
-     sample_rate: 16000,
-     channels: 1,
-   });
-+  let __audioHeaderSent = false;
-+  let __lastErrorSig = null, __lastErrorAt = 0;
-   const AUDIO_KEEPALIVE_MS = 20000;
-   const POST_TTS_ARM_DELAY_MS = 300;
- 
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
-   let autoResumeAttemptToken = null;
-   let toastRoot = null;
-   let lastTokenValue = null;
-   let lastTokenMintedAt = null;
- 
-   let recorderInstance = null;
-   let micKeepaliveTimerId = null;
-   let micLastChunkAt = 0;
-   let postTtsArmTimerId = null;
- 
-   function getRecorder() {
-     if (recorderInstance && typeof recorderInstance.startListening === "function") {
-       return recorderInstance;
-     }
-@@ -748,56 +750,63 @@ import { WakeWord } from "./wake_word.js";
-     clearAudioKeepaliveTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       setListeningState(false);
-       return;
-     }
-     try {
-       recorder.stopListening({ reason: normalizeReason(reason) });
-     } catch (err) {
-       console.warn("Recorder stopListening failed", err);
-     }
-     senderPaused = false;
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
-     }
-     setListeningState(false);
-   }
- 
-   function sendAudioHeader() {
-+    if (__audioHeaderSent) {
-+      try { console.warn("audio.header already sent; skipping"); } catch {}
-+      return;
-+    }
-     try {
--      WSClient.send({ ...AUDIO_HEADER_FRAME });
-+      // Include codec to match server’s expected profile (adapter normalizes pcm→pcm16 + pcm_s16le)
-+      WSClient.send({ ...AUDIO_HEADER_FRAME, codec: "pcm_s16le" });
-+      __audioHeaderSent = true;
-       logStage("client.audio_header_send", {
-         format: AUDIO_HEADER_FRAME.format,
-         sample_rate: AUDIO_HEADER_FRAME.sample_rate,
-         channels: AUDIO_HEADER_FRAME.channels,
-+        codec: "pcm_s16le",
-       });
-     } catch (err) {
-       console.warn("Failed to send audio header", err);
-     }
-   }
- 
-   function handleRecorderChunk(event) {
-     if (!event) {
-       return;
-     }
-     const buffer = event.buffer instanceof ArrayBuffer
-       ? event.buffer
-       : (ArrayBuffer.isView(event.buffer)
-         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-         : null);
-     if (!buffer) {
-       return;
-     }
-     const seq = Number(event.seq) || 0;
-     micLastChunkAt = Date.now();
-     scheduleAudioKeepalive();
-     recordRecorderChunk(micLastChunkAt);
-     const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
-       ? performance.now()
-       : Date.now();
-@@ -2942,83 +2951,86 @@ import { WakeWord } from "./wake_word.js";
-           stopInputCapture({ reason: "server_requested" });
+   function handleChatHistoryFrame(frame) {
+     const view = window.TranscriptView;
+     const messages = Array.isArray(frame.messages) ? frame.messages : [];
+     if (view && typeof view.handleChatMessage === "function" && messages.length) {
+       for (const message of messages) {
+         if (!transcriptFrameAllowed(message)) {
+           continue;
          }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-       clearPendingAsrReadyStart("stop_listening");
-       __asrReadySeen = false;
-       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
          try {
-           const reason =
-             (typeof frame?.reason === "string" && frame.reason) ||
-             "server_requested";
-           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
+           view.handleChatMessage(message);
          } catch (err) {
-           console.warn("stop_listening event dispatch failed", err);
+           console.warn("TranscriptView chat history handler error", err);
+           break;
          }
        }
-     } else if (frame.type === "input.start") {
-       await handleInputStartFrame(frame);
-     } else if (frame.type === "input.stop") {
-       stopInputCapture({ reason: "input.stop" });
-       clearPendingAsrReadyStart("input.stop");
-       __asrReadySeen = false;
+     }
+   }
+ 
+   function handleErrorFrame(frame) {
+-    console.error("WS error frame", frame);
++    const code = typeof frame?.code === "string" ? frame.code : "unknown";
++    const sig = `${code}|${frame?.detail || frame?.message || ""}`;
++    const now = Date.now();
++    if (__lastErrorSig === sig && (now - __lastErrorAt) < 1500) {
++      // Avoid console spam for the same error flooding in
++    } else {
++      console.error("WS error frame", frame);
++      __lastErrorSig = sig;
++      __lastErrorAt = now;
++    }
++    if (code === "schema_invalid" || code === "unknown_type" || code === "bad_utf8") {
++      try { stopInputCapture({ reason: code }); } catch {}
++      try { clearAudioKeepaliveTimer(); } catch {}
++      try { setAsrArmInFlight(false); } catch {}
++      try { setArmAfterTtsEnd(false); } catch {}
 +      __audioHeaderSent = false;
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-       __asrReadySeen = true;
-       setAsrArmInFlight(false);
-       setArmAfterTtsEnd(false);
-       setWsConnected(true);
-       setWsPhase("ready");
-       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-+      __audioHeaderSent = false;
-       sendAudioHeader();
++    }
+     const errorMeta = {};
+     if (frame && typeof frame.code === "string") {
+       errorMeta.code = truncateBannerString(frame.code, 64);
+     }
+     if (frame && typeof frame.detail === "string" && frame.detail) {
+       errorMeta.detail = truncateBannerString(frame.detail, 160);
+     } else if (frame && typeof frame.message === "string" && frame.message) {
+       errorMeta.detail = truncateBannerString(frame.message, 160);
+     }
+     if (Object.keys(errorMeta).length) {
+       recordClientBannerEvent("ws.error.frame", errorMeta);
+     } else {
+       recordClientBannerEvent("ws.error.frame", null);
+     }
+     const isResumeInvalid = frame && frame.code === "resume_invalid";
+     if (isResumeInvalid) {
+       clearResumeState();
+       updateState({ resumeError: "invalid" });
+     }
+     if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
        try {
-         await startRecorderStreaming(frame?.policy || {});
-       } catch (err) {
-         console.error("Recorder start on asr.ready failed", err);
-         logStage("client.mic", {
-           outcome: MIC_OUTCOME.ERROR_GUM,
-           message: err && err.message ? err.message : String(err || ""),
+         window.WSErrorUI.handleFrame(frame, {
+           scheduleRetry: (delayMs, callbacks) => scheduleRateLimitRetry(delayMs, callbacks)
          });
-         setListeningState(false);
-       }
-     } else if (frame.type === "asr.partial") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.final") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.unavailable") {
-       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-       const details = frame && typeof frame.details === "string"
-         ? frame.details
-         : (frame && typeof frame.detail === "string" ? frame.detail : "");
-       console.warn("asr.unavailable", reason, details);
-       AppState.asrReady = false;
-       AppState.asrVendor = null;
-       updateState({ asrReady: false, asrVendor: null });
-       stopRecorder("asr_unavailable");
-+      __audioHeaderSent = false;
-       setAsrArmInFlight(false);
-       setArmAfterTtsEnd(false);
-       if (typeof AppState.emit === "function") {
-         AppState.emit("asrReady", { ready: false, reason, vendor: null });
-       }
-       clearPendingAsrReadyStart("asr_unavailable");
-       __asrReadySeen = false;
-       try {
-         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
-         hud?.setState?.("Chat");
        } catch (err) {
-         console.warn("Failed to update HUD state after asr.unavailable", err);
-       }
-       try {
-         const view = window.TranscriptView;
-         view?.showSystemFromChip?.(
-           "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
-         );
-       } catch (err) {
-         console.warn("Failed to render Chip system message after asr.unavailable", err);
-       }
-       try {
-         window?.Banner?.show?.(
-           "Voice temporarily unavailable. You can continue via chat.",
-           { level: "warning", ttlMs: 10000 }
