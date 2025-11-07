@@ -384,6 +384,11 @@ class AdapterContext:
     ingress_packets: int = 0
     ingress_bytes: int = 0
     first_ingress_ms: Optional[int] = None
+    ing_frames: int = 0
+    ing_bytes: int = 0
+    ing_chunks: int = 0
+    ing_last_tick_t0_ms: Optional[int] = None
+    ing_tick_task: asyncio.TimerHandle | None = None
     no_audio_timer: asyncio.TimerHandle | None = None
     no_audio_watchdog_t0_ms: Optional[int] = None
     mic_armed_ms: Optional[int] = None
@@ -1340,6 +1345,7 @@ class ChatV2Adapter:
                 raise
             finally:
                 await self._stop_server_keepalive(ctx)
+                self._flush_ingress_tick(ctx)
                 t_close_ms = self._now_ms()
                 ctx.session.closed_at_ms = t_close_ms
                 await self._publish(
@@ -2256,6 +2262,18 @@ class ChatV2Adapter:
             ctx.diag_audio_seen = True
             self._cancel_diag_timer(ctx)
             bus.publish({"type": "EVT_DIAG_FIRST_AUDIO_FRAME", "sid": ctx.sid})
+
+        ctx.ing_chunks += 1
+        ctx.ing_bytes += byte_count
+        channels = 1
+        profile = ctx.audio_profile
+        if isinstance(profile, Mapping):
+            channel_value = profile.get("channels")
+            if isinstance(channel_value, int) and channel_value > 0:
+                channels = channel_value
+        bytes_per_frame = max(1, 2 * channels)
+        ctx.ing_frames += byte_count // bytes_per_frame
+        self._ensure_ingress_tick_timer(ctx)
 
         ctx.audio_chunks_recv += 1
         ctx.audio_bytes_recv += byte_count
@@ -4045,6 +4063,76 @@ class ChatV2Adapter:
         )
         self._emit_hub_watchdog_log(ctx, detail)
 
+    def _ensure_ingress_tick_timer(self, ctx: AdapterContext) -> None:
+        if ctx.ing_last_tick_t0_ms is None:
+            ctx.ing_last_tick_t0_ms = self._now_ms()
+        if ctx.ing_tick_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        try:
+            ctx.ing_tick_task = loop.call_later(2.0, self._on_ingress_tick_timer, ctx)
+        except Exception:
+            ctx.ing_tick_task = None
+            _log.exception("evt=audio_ingress_tick_schedule_failed sid=%s", ctx.sid)
+
+    def _cancel_ingress_tick_timer(self, ctx: AdapterContext) -> None:
+        handle = ctx.ing_tick_task
+        ctx.ing_tick_task = None
+        if handle is not None:
+            try:
+                handle.cancel()
+            except Exception:
+                pass
+
+    def _on_ingress_tick_timer(self, ctx: AdapterContext) -> None:
+        ctx.ing_tick_task = None
+        try:
+            self._emit_ingress_tick(ctx)
+        except Exception:
+            _log.exception("evt=audio_ingress_tick_emit_failed sid=%s", ctx.sid)
+        self._ensure_ingress_tick_timer(ctx)
+
+    def _emit_ingress_tick(self, ctx: AdapterContext) -> None:
+        now_ms = self._now_ms()
+        last_ms = ctx.ing_last_tick_t0_ms or now_ms
+        elapsed_ms = max(1, now_ms - last_ms)
+        frames = ctx.ing_frames
+        byte_count = ctx.ing_bytes
+        chunk_count = ctx.ing_chunks
+        avg_ms_per_chunk = int(elapsed_ms / max(1, chunk_count))
+        backpressure = ctx.backpressure_state == "on"
+        turn_id = getattr(ctx.session, "turn_id", None)
+        detail = {
+            "session_id": ctx.sid,
+            "turn_id": turn_id if isinstance(turn_id, str) and turn_id else None,
+            "frames": frames,
+            "bytes": byte_count,
+            "chunks": chunk_count,
+            "avg_ms_per_chunk": avg_ms_per_chunk,
+            "backpressure": backpressure,
+        }
+        try:
+            self._emit_hub_log(ctx, "audio.ingress.tick", detail)
+        finally:
+            ctx.ing_frames = 0
+            ctx.ing_bytes = 0
+            ctx.ing_chunks = 0
+            ctx.ing_last_tick_t0_ms = now_ms
+
+    def _flush_ingress_tick(self, ctx: AdapterContext) -> None:
+        self._cancel_ingress_tick_timer(ctx)
+        if ctx.ing_last_tick_t0_ms is None:
+            return
+        if ctx.ing_frames == 0 and ctx.ing_bytes == 0 and ctx.ing_chunks == 0:
+            return
+        try:
+            self._emit_ingress_tick(ctx)
+        except Exception:
+            _log.exception("evt=audio_ingress_tick_emit_failed sid=%s", ctx.sid)
+
     @staticmethod
     def _resolve_watchdog_phase(ctx: AdapterContext) -> Optional[str]:
         candidates: List[Optional[str]] = [
@@ -4063,6 +4151,17 @@ class ChatV2Adapter:
 
     def _emit_hub_watchdog_log(self, ctx: AdapterContext, detail: Mapping[str, Any]) -> None:
         try:
+            self._emit_hub_log(ctx, "asr.no_audio_after_header", detail)
+        except Exception:
+            _log.exception("evt=asr_no_audio_watchdog_emit_failed sid=%s", ctx.sid)
+
+    def _emit_hub_log(
+        self,
+        ctx: AdapterContext,
+        label: str,
+        detail: Mapping[str, Any],
+    ) -> None:
+        try:
             sanitized = bus.redact_payload(detail)
         except Exception:
             sanitized = detail
@@ -4072,14 +4171,11 @@ class ChatV2Adapter:
             "who": "server",
             "source": "ws.adapter",
             "meta": {
-                "label": "asr.no_audio_after_header",
+                "label": label,
                 "detail": sanitized,
             },
         }
-        try:
-            bus.publish(payload)
-        except Exception:
-            _log.exception("evt=asr_no_audio_watchdog_emit_failed sid=%s", ctx.sid)
+        bus.publish(payload)
 
     def _emit_client_mic_open(
         self,
