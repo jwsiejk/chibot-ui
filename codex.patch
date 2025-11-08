@@ -1,63 +1,65 @@
-diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
-index a3fcc15eed445f561847528dd022ede61a5999a8..5da3c303ba428b0471da64e6d7a637b4c8278cb0 100644
---- a/app/services/asr/sm_rt.py
-+++ b/app/services/asr/sm_rt.py
-@@ -536,56 +536,55 @@ class SMRealtimeClient:
-         self._publish_event(EVT_ASR_READY, {"vendor": self.VENDOR, "meta": meta})
-         self._call_callback(self._on_ready, meta)
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index a254d129df028477dbbbb69dcbd1e34aa0f166e9..7298d0a02957c48b5d79c58b522debaccab7a9f1 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -3288,56 +3288,55 @@ class ChatV2Adapter:
+             frame_type = "asr.partial"
+         elif event_type == EVT_ASR_FINAL:
+             frame_type = "asr.final"
+         else:
+             return None
  
-     def _handle_partial(self, message: Dict[str, Any]) -> None:
-         text = self._extract_text(message)
-         if not text:
-             return
-         latency_ms = self._extract_latency_ms(message)
-         self._maybe_emit_first_token_latency("partial")
-         self._partial_seq += 1
-         payload = {
-             "text": text,
-             "latency_ms": latency_ms,
-             "partial_seq": self._partial_seq,
-             "vendor": self.VENDOR,
-             "meta": self._extract_meta(message),
-         }
-         self._publish_event(EVT_ASR_PARTIAL, payload)
-         self._publish_event(SM_PARTIAL, payload)
-         self._call_callback(self._on_partial, text, latency_ms)
+         source = event.get("source")
+         if isinstance(source, str) and source == "speechmatics_client":
+             vendor = event.get("vendor")
+             if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
+                 return None
  
-     def _handle_final(self, message: Dict[str, Any]) -> None:
-         text = self._extract_text(message)  # may be "", None
-         latency_ms = self._extract_latency_ms(message)
-         self._maybe_emit_first_token_latency("final")
+         raw_meta = event.get("meta")
+         meta = raw_meta if isinstance(raw_meta, Mapping) else None
+         text = event.get("text")
+ 
+         no_speech = bool(meta and meta.get("no_speech"))
+ 
+         # Try fallback text from meta if needed
+         if not isinstance(text, str) or not text.strip():
+             if meta is not None:
+                 candidate_text = meta.get("text")
+                 if isinstance(candidate_text, str):
+                     text = candidate_text
+ 
+-        # If still empty and we know it was no-speech, explicitly stop input
+-        if (not isinstance(text, str) or not text.strip()) and no_speech:
+-            return {"type": "input.stop", "reason": "no_speech"}
 -
-         meta = self._extract_meta(message) or {}
-         if not (isinstance(text, str) and text.strip()):
--            # Explicitly tag this final as no-speech so downstream can end the turn cleanly.
-+            # Normalize silent finals into a first-class outcome.
-             meta = {**meta, "no_speech": True}
--            text = ""  # normalize
-+            text = ""
+-        # Otherwise, drop truly empty/noise finals
++        # Drop truly empty/noise finals, but honor explicit no-speech signals.
+         if not isinstance(text, str) or not text.strip():
++            # Vendor explicitly signaled silence: end input cleanly so the UI resets.
++            if no_speech:
++                return {"type": "input.stop", "reason": "no_speech"}
+             return None
  
-         payload = {
-             "text": text,
-             "latency_ms": latency_ms,
-             "vendor": self.VENDOR,
-             "meta": meta,
-         }
-         self._publish_event(EVT_ASR_FINAL, payload)
-         self._publish_event(SM_FINAL, payload)
-         self._call_callback(self._on_final, text, latency_ms)
+         frame: Dict[str, Any] = {"type": frame_type, "text": text}
  
-     def _handle_close_ack(self, message: Dict[str, Any], message_type: str) -> None:
-         detail: Dict[str, Any] = {
-             "session_id": self.session_id,
-             "turn_id": self.turn_id,
-             "vendor_status": message_type,
-         }
-         ack_seq = message.get("last_seq_no") or message.get("seq_no")
-         if isinstance(ack_seq, (int, float)):
-             detail["vendor_last_seq_no"] = int(ack_seq)
-         self._emit_hub_log("asr.eos.ack", detail)
-         if self._close_ack_event.is_set():
-             return
-         meta = self._extract_meta(message)
-         self._publish_event(
+         req_id = event.get("req_id")
+         if not isinstance(req_id, str) or not req_id.strip():
+             if meta is not None:
+                 meta_req = meta.get("req_id")
+                 if isinstance(meta_req, str) and meta_req.strip():
+                     req_id = meta_req
+                 else:
+                     req_id = None
+         else:
+             req_id = req_id.strip()
+         if isinstance(req_id, str) and req_id:
+             frame["req_id"] = req_id
+ 
+         confidence = event.get("confidence")
+         if not isinstance(confidence, (int, float)) and meta is not None:
+             meta_conf = meta.get("confidence")
+             if isinstance(meta_conf, (int, float)):
+                 confidence = float(meta_conf)
+         if isinstance(confidence, (int, float)):
+             frame["confidence"] = float(confidence)
+ 

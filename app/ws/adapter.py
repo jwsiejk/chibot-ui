@@ -3310,12 +3310,11 @@ class ChatV2Adapter:
                 if isinstance(candidate_text, str):
                     text = candidate_text
 
-        # If still empty and we know it was no-speech, explicitly stop input
-        if (not isinstance(text, str) or not text.strip()) and no_speech:
-            return {"type": "input.stop", "reason": "no_speech"}
-
-        # Otherwise, drop truly empty/noise finals
+        # Drop truly empty/noise finals, but honor explicit no-speech signals.
         if not isinstance(text, str) or not text.strip():
+            # Vendor explicitly signaled silence: end input cleanly so the UI resets.
+            if no_speech:
+                return {"type": "input.stop", "reason": "no_speech"}
             return None
 
         frame: Dict[str, Any] = {"type": frame_type, "text": text}
