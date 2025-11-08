@@ -2896,8 +2896,11 @@
     });
 
     const POST_TTS_RELEASE_MS = 150;
+    const ASR_PREARM_RETRY_DELAY_MS = 150;
+    const ASR_PREARM_ALLOWED_PHASES = ['connected', 'ready', 'resuming'];
 
     let asrRetry = { tries: 0, timer: null };
+    let asrPrearmRetryTimerId = null;
 
     function scheduleAsrRearm() {
       if (typeof window === 'undefined') {
@@ -2937,6 +2940,44 @@
       if (asrPrearmIssued) {
         return;
       }
+      if (asrPrearmRetryTimerId) {
+        clearTimeout(asrPrearmRetryTimerId);
+        asrPrearmRetryTimerId = null;
+      }
+
+      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+
+      const stateSnapshot = (() => {
+        try {
+          return typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
+        } catch (_) {
+          return AppState || null;
+        }
+      })();
+
+      const phase = typeof stateSnapshot?.wsPhase === 'string' ? stateSnapshot.wsPhase : null;
+      const connectionState =
+        typeof stateSnapshot?.connectionState === 'string' ? stateSnapshot.connectionState : null;
+      const isAllowedPhase = (value) =>
+        typeof value === 'string' && ASR_PREARM_ALLOWED_PHASES.includes(value);
+      const socketReady = isAllowedPhase(phase) || isAllowedPhase(connectionState);
+
+      if (!socketReady) {
+        const phaseLabel = phase || connectionState || 'unknown';
+        logClient(
+          `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabel}`
+        );
+        asrPrearmRetryTimerId = setTimeout(() => {
+          asrPrearmRetryTimerId = null;
+          try {
+            requestAsrPrearm(trigger);
+          } catch (err) {
+            console.warn('requestAsrPrearm retry failed', err);
+          }
+        }, ASR_PREARM_RETRY_DELAY_MS);
+        return;
+      }
+
       asrPrearmIssued = true;
       const payload = { type: 'asr.rearm.request' };
       const keepWarm = getKeepWarmMs();
@@ -2953,8 +2994,9 @@
       } catch (err) {
         console.warn('Failed to send asr.rearm.request', err);
       }
-      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
-      logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
+      logClient(
+        `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
+      );
       const arm =
         typeof requestAsrArm === 'function'
           ? requestAsrArm
