@@ -1,177 +1,70 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 1ec7fb084c79a8cb1f85b670a65fe89cee4bc706..3078c2ecfda7f52f97213ef21fb50aecc4fc357d 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -2914,108 +2914,149 @@
-       const delay = Math.min(30000, 1000 * Math.pow(2, exponent));
-       if (asrRetry && typeof asrRetry === 'object') {
-         asrRetry.tries = tries + 1;
-       }
-       const timer = setTimeout(() => {
-         try {
-           const payload = { type: 'asr.rearm.request' };
-           const client = window.WSClient;
-           if (client && typeof client.send === 'function') {
-             client.send(payload);
-             return;
-           }
-           const ws = window.WS;
-           if (ws && typeof ws.send === 'function') {
-             ws.send(payload);
-           }
-         } catch (err) {
-           console.warn('Failed to send asr.rearm.request', err);
-         }
-       }, delay);
-       if (asrRetry && typeof asrRetry === 'object') {
-         asrRetry.timer = timer;
-       }
-     }
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index efb9e7dec3a4bb2d6d39fe2f49fd225c0dce257e..33c350da8e8102c6bec947829387ec9cbbf3c061 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -372,50 +372,65 @@ class EngineV2:
+             session = self._ensure_session(sid)
+             previous_state = session.state
  
--    function requestAsrPrearm(trigger) {
--      if (asrPrearmIssued) {
--        return;
--      }
--      if (asrPrearmRetryTimerId) {
--        clearTimeout(asrPrearmRetryTimerId);
--        asrPrearmRetryTimerId = null;
--      }
--
--      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
--
-+    function readSocketPhaseSnapshot() {
-       const stateSnapshot = (() => {
-         try {
-           return typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
-         } catch (_) {
-           return AppState || null;
-         }
-       })();
+         if previous_state != READY:
+             _log.warning(
+                 "evt=text_input_ignored state=%s", previous_state, extra={"sid": sid}
+             )
+             return
  
-       const phase = typeof stateSnapshot?.wsPhase === 'string' ? stateSnapshot.wsPhase : null;
-       const connectionState =
-         typeof stateSnapshot?.connectionState === 'string' ? stateSnapshot.connectionState : null;
-       const isAllowedPhase = (value) =>
-         typeof value === 'string' && ASR_PREARM_ALLOWED_PHASES.includes(value);
-       const socketReady = isAllowedPhase(phase) || isAllowedPhase(connectionState);
-+      const phaseLabel = phase || connectionState || 'unknown';
+         listen_reason = "text_barge" if (was_responding and barge_enabled) else "text_input"
+         self._set_state(sid, LISTENING, reason=listen_reason)
+         session = self._ensure_session(sid)
+         if session.state != LISTENING:
+             return
  
--      if (!socketReady) {
--        const phaseLabel = phase || connectionState || 'unknown';
-+      return { phase, connectionState, socketReady, phaseLabel };
-+    }
-+
-+    function scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel, options) {
-+      const phaseLabelValue = phaseLabel || 'unknown';
-+      const { logRetry } = options || {};
-+      if (logRetry) {
-         logClient(
--          `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabel}`
-+          `evt=asr_prearm_retry source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
-         );
--        asrPrearmRetryTimerId = setTimeout(() => {
--          asrPrearmRetryTimerId = null;
--          try {
--            requestAsrPrearm(trigger);
--          } catch (err) {
--            console.warn('requestAsrPrearm retry failed', err);
--          }
--        }, ASR_PREARM_RETRY_DELAY_MS);
-+      }
-+      logClient(
-+        `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
-+      );
-+      asrPrearmIssued = false;
-+      asrPrearmRetryTimerId = setTimeout(() => {
-+        asrPrearmRetryTimerId = null;
-+        try {
-+          requestAsrPrearm(trigger);
-+        } catch (err) {
-+          console.warn('requestAsrPrearm retry failed', err);
-+        }
-+      }, ASR_PREARM_RETRY_DELAY_MS);
-+    }
-+
-+    function requestAsrPrearm(trigger) {
-+      if (asrPrearmIssued) {
-+        return;
-+      }
-+      if (asrPrearmRetryTimerId) {
-+        clearTimeout(asrPrearmRetryTimerId);
-+        asrPrearmRetryTimerId = null;
-+      }
-+
-+      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
-+
-+      const { socketReady, phaseLabel } = readSocketPhaseSnapshot();
-+
-+      if (!socketReady) {
-+        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel);
-         return;
-       }
+         self._commit_turn_start(sid, "text_input")
+         session = self._ensure_session(sid)
  
-       asrPrearmIssued = true;
-       const payload = { type: 'asr.rearm.request' };
-       const keepWarm = getKeepWarmMs();
-+      const liveSnapshot = readSocketPhaseSnapshot();
-+      if (!liveSnapshot.socketReady) {
-+        scheduleAsrPrearmRetry(trigger, triggerLabel, liveSnapshot.phaseLabel, { logRetry: true });
-+        return;
-+      }
-+
-+      let sendAttempted = false;
-+      let sendSucceeded = false;
-+      let sendError = null;
-       try {
-         const client = window.WSClient;
-         if (client && typeof client.send === 'function') {
-+          sendAttempted = true;
-           client.send(payload);
-+          sendSucceeded = true;
-         } else {
-           const ws = window.WS;
-           if (ws && typeof ws.send === 'function') {
-+            sendAttempted = true;
-             ws.send(payload);
-+            sendSucceeded = true;
-           }
-         }
-       } catch (err) {
--        console.warn('Failed to send asr.rearm.request', err);
-+        sendError = err;
-       }
-+
-+      if (!sendSucceeded) {
-+        const phaseForRetry = liveSnapshot.phaseLabel;
-+        const error =
-+          sendError || (sendAttempted ? new Error('Unknown send failure') : new Error('No websocket client available'));
-+        console.warn('Failed to send asr.rearm.request', error);
-+        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseForRetry, { logRetry: true });
-+        return;
-+      }
-+
-       logClient(
-         `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
-       );
-       const arm =
-         typeof requestAsrArm === 'function'
-           ? requestAsrArm
-           : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
-             ? window.WSClient.requestAsrArm
-             : null;
-       if (arm) {
-         try {
-           arm('policy');
-         } catch (err) {
-           console.warn('requestAsrArm failed after asr_prearm_requested', err);
-         }
-       }
-     }
+         session = self._ensure_session(sid)
+         turn_id = session.turn_id or str(uuid.uuid4())
+         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
+         session.turn_id = turn_id
+         session.req_id = req_id
  
- window.addEventListener('tts.start', (event) => {
-   const detail = event && event.detail;
-   if (detail) {
-     updateVoiceState(extractVoiceLocale(detail));
-   }
-   runtimeState.audioPlaybackIdle = false;
-   cancelAsrPartialWatchdog();
+         self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
++
++        # --- OMNI-CHANNEL FIX START: Trigger NLU/LLM pipeline for text input ---
++        nlu_result = self._nlu.extract(req_id, text)
++        nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
++
++        nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
++        self._publish(nlu_event)
++
++        session.nlu_emitted = True
++        session.nlu_req_id = req_id
++
++        self._emit_dialog_plan(sid, session, req_id, turn_id, text)
++        self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
++        # --- OMNI-CHANNEL FIX END ---
++
+         self._set_state(sid, THINKING, reason="text_input")
+ 
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
+         """Capture an incoming audio chunk."""
+         session = self._ensure_session(sid)
+         if session.tts_mask_phase != "off":
+             self._publish_tts_mask(sid, "off")
+         if session.state == READY:
+             self._set_state(sid, LISTENING, reason="audio_rx")
+             session = self._ensure_session(sid)
+         elif session.state == RESPONDING:
+             self._set_state(sid, LISTENING, reason="audio_rx")
+             session = self._ensure_session(sid)
+         if session.state != LISTENING:
+             _log.warning(
+                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
+             )
+         else:
+             self._commit_turn_start(sid, "audio_rx")
+ 
+         if not isinstance(chunk, (bytes, bytearray)):
+             _log.warning(
+                 "evt=audio_invalid_chunk type=%s", type(chunk).__name__, extra={"sid": sid}
+             )
+             return
