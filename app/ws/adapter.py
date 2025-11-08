@@ -4392,6 +4392,14 @@ class ChatV2Adapter:
         if not ctx.await_user_expected or ctx.await_user_pending:
             return False
 
+        # --- START PATCH: CRITICAL CONCURRENCY INVARIANT ---
+        # If ASR stream is open, the mic is already armed and actively listening.
+        # Do NOT re-arm or close based on the conversational turn state.
+        if ctx.session.asr_state == "open":
+            _log.info("evt=listen_handoff_skip reason=asr_stream_open sid=%s", ctx.sid)
+            return False
+        # --- END PATCH ---
+
         key = self._turn_key(ctx, req_id)
         self._set_pending_for_key(ctx, key)
         self._clear_after_mask_for_key(ctx, key)
