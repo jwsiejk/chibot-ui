@@ -1716,6 +1716,7 @@
         return;
       }
       if (!runtimeState.asrReady) {
+        requestAsrPrearm(trigger);
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
           blockedBy: 'asr_ready',
           audioIdle: runtimeState.audioPlaybackIdle,
