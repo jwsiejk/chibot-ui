@@ -558,12 +558,11 @@ class SMRealtimeClient:
         text = self._extract_text(message)  # may be "", None
         latency_ms = self._extract_latency_ms(message)
         self._maybe_emit_first_token_latency("final")
-
         meta = self._extract_meta(message) or {}
         if not (isinstance(text, str) and text.strip()):
-            # Explicitly tag this final as no-speech so downstream can end the turn cleanly.
+            # Normalize silent finals into a first-class outcome.
             meta = {**meta, "no_speech": True}
-            text = ""  # normalize
+            text = ""
 
         payload = {
             "text": text,

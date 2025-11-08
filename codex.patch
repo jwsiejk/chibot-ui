@@ -1,11 +1,8 @@
 diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
-index 882d4f1952ca668cb1061d6e77589dd6cec41f83..a3fcc15eed445f561847528dd022ede61a5999a8 100644
+index a3fcc15eed445f561847528dd022ede61a5999a8..5da3c303ba428b0471da64e6d7a637b4c8278cb0 100644
 --- a/app/services/asr/sm_rt.py
 +++ b/app/services/asr/sm_rt.py
-@@ -533,60 +533,65 @@ class SMRealtimeClient:
-         self._first_partial_logged = False
-         self._first_final_logged = False
-         meta = self._extract_meta(message)
+@@ -536,56 +536,55 @@ class SMRealtimeClient:
          self._publish_event(EVT_ASR_READY, {"vendor": self.VENDOR, "meta": meta})
          self._call_callback(self._on_ready, meta)
  
@@ -28,25 +25,23 @@ index 882d4f1952ca668cb1061d6e77589dd6cec41f83..a3fcc15eed445f561847528dd022ede6
          self._call_callback(self._on_partial, text, latency_ms)
  
      def _handle_final(self, message: Dict[str, Any]) -> None:
--        text = self._extract_text(message)
--        if not text:
--            return
-+        text = self._extract_text(message)  # may be "", None
+         text = self._extract_text(message)  # may be "", None
          latency_ms = self._extract_latency_ms(message)
          self._maybe_emit_first_token_latency("final")
-+
-+        meta = self._extract_meta(message) or {}
-+        if not (isinstance(text, str) and text.strip()):
-+            # Explicitly tag this final as no-speech so downstream can end the turn cleanly.
-+            meta = {**meta, "no_speech": True}
-+            text = ""  # normalize
-+
+-
+         meta = self._extract_meta(message) or {}
+         if not (isinstance(text, str) and text.strip()):
+-            # Explicitly tag this final as no-speech so downstream can end the turn cleanly.
++            # Normalize silent finals into a first-class outcome.
+             meta = {**meta, "no_speech": True}
+-            text = ""  # normalize
++            text = ""
+ 
          payload = {
              "text": text,
              "latency_ms": latency_ms,
              "vendor": self.VENDOR,
--            "meta": self._extract_meta(message),
-+            "meta": meta,
+             "meta": meta,
          }
          self._publish_event(EVT_ASR_FINAL, payload)
          self._publish_event(SM_FINAL, payload)
@@ -66,138 +61,3 @@ index 882d4f1952ca668cb1061d6e77589dd6cec41f83..a3fcc15eed445f561847528dd022ede6
              return
          meta = self._extract_meta(message)
          self._publish_event(
-             ASR_VENDOR_CLOSE_ACK,
-             {"vendor": self.VENDOR, "meta": meta},
-         )
-         self._close_ack_event.set()
- 
-     def _maybe_emit_first_token_latency(
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 717e12ec86b37388c720213dff37dadbbbaf6c77..056f881bfd017e6841435d3fb425498516742f40 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -3211,50 +3211,54 @@ import { WakeWord } from "./wake_word.js";
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-       clearPendingAsrReadyStart("stop_listening");
-       __asrReadySeen = false;
-       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-         try {
-           const reason =
-             (typeof frame?.reason === "string" && frame.reason) ||
-             "server_requested";
-           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
-         } catch (err) {
-           console.warn("stop_listening event dispatch failed", err);
-         }
-       }
-     } else if (frame.type === "input.start") {
-       _audioStreaming = true;
-       setListeningState(true);
-       emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
-       const reason = typeof frame?.reason === "string" && frame.reason
-         ? frame.reason
-         : frame?.type || "input.start";
-       hubLog("client.stream.on", { reason });
-       await handleInputStartFrame(frame);
-     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
-       __resetAudioHeaderSent();
-+      if (frame.type === "asr.closed") {
-+        setListeningState(false);
-+        emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
-+      }
-     } else if (frame.type === "input.stop") {
-       if (_audioStreaming) {
-         const reason = typeof frame?.reason === "string" && frame.reason
-           ? frame.reason
-           : frame?.type || "input.stop";
-         hubLog("client.stream.off", { reason });
-       }
-       _audioStreaming = false;
-       setListeningState(false);
-       emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
-       stopInputCapture({ reason: "input.stop" });
-       clearPendingAsrReadyStart("input.stop");
-       __asrReadySeen = false;
-       __resetAudioHeaderSent();
-     } else if (frame.type === "assistant.await_user") {
-       if (_audioStreaming) {
-         const reason = typeof frame?.reason === "string" && frame.reason
-           ? frame.reason
-           : frame?.type || "assistant.await_user";
-         hubLog("client.stream.off", { reason });
-       }
-       _audioStreaming = false;
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-       __asrReadySeen = true;
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 95fc94f7795a9e7041218a0e75eff3b6a372c0cc..a254d129df028477dbbbb69dcbd1e34aa0f166e9 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -3278,55 +3278,65 @@ class ChatV2Adapter:
-         return prepared
- 
-     def _coerce_asr_frame(
-         self, ctx: AdapterContext, event: Mapping[str, Any]
-     ) -> Optional[Dict[str, Any]]:
-         if not isinstance(event, Mapping):
-             return None
- 
-         event_type = event.get("type")
-         if event_type == EVT_ASR_PARTIAL:
-             frame_type = "asr.partial"
-         elif event_type == EVT_ASR_FINAL:
-             frame_type = "asr.final"
-         else:
-             return None
- 
-         source = event.get("source")
-         if isinstance(source, str) and source == "speechmatics_client":
-             vendor = event.get("vendor")
-             if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
-                 return None
- 
-         raw_meta = event.get("meta")
-         meta = raw_meta if isinstance(raw_meta, Mapping) else None
-         text = event.get("text")
-+
-+        no_speech = bool(meta and meta.get("no_speech"))
-+
-+        # Try fallback text from meta if needed
-         if not isinstance(text, str) or not text.strip():
-             if meta is not None:
-                 candidate_text = meta.get("text")
-                 if isinstance(candidate_text, str):
-                     text = candidate_text
-+
-+        # If still empty and we know it was no-speech, explicitly stop input
-+        if (not isinstance(text, str) or not text.strip()) and no_speech:
-+            return {"type": "input.stop", "reason": "no_speech"}
-+
-+        # Otherwise, drop truly empty/noise finals
-         if not isinstance(text, str) or not text.strip():
-             return None
- 
-         frame: Dict[str, Any] = {"type": frame_type, "text": text}
- 
-         req_id = event.get("req_id")
-         if not isinstance(req_id, str) or not req_id.strip():
-             if meta is not None:
-                 meta_req = meta.get("req_id")
-                 if isinstance(meta_req, str) and meta_req.strip():
-                     req_id = meta_req
-                 else:
-                     req_id = None
-         else:
-             req_id = req_id.strip()
-         if isinstance(req_id, str) and req_id:
-             frame["req_id"] = req_id
- 
-         confidence = event.get("confidence")
-         if not isinstance(confidence, (int, float)) and meta is not None:
-             meta_conf = meta.get("confidence")
-             if isinstance(meta_conf, (int, float)):
-                 confidence = float(meta_conf)
-         if isinstance(confidence, (int, float)):
-             frame["confidence"] = float(confidence)
