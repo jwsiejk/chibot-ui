@@ -1,46 +1,48 @@
-BUILD_ID 0b13b0c
-app.js?v=0b13b0c:10 AskChip build: 0b13b0c
-ws_client.js?v=0b13b0c:3874 WSClient.send skipped (phase not ready) Object
-send @ ws_client.js?v=0b13b0c:3874Understand this warning
-app.js?v=0b13b0c:661 client.vad.state
-app.js?v=0b13b0c:661 client.appstate.delta
-app.js?v=0b13b0c:2508 evt=ws_open_attempt Object
-ws_client.js?v=0b13b0c:3669 evt=ws_client_open_params Object
-ws_client.js?v=0b13b0c:3673 WS opening Object
-app.js?v=0b13b0c:933 fsm.transition prev=Disconnected next=Connecting
-app.js?v=0b13b0c:661 client.appstate.delta
-ws_client.js?v=0b13b0c:3691 WebSocket open Object
-app.js?v=0b13b0c:661 client.ws
-ws_client.js?v=0b13b0c:3874 WSClient.send skipped (phase not ready) Object
-send @ ws_client.js?v=0b13b0c:3874Understand this warning
-ws_client.js?v=0b13b0c:3874 WSClient.send skipped (phase not ready) Object
-send @ ws_client.js?v=0b13b0c:3874Understand this warning
-app.js?v=0b13b0c:661 client.appstate.heartbeat
-app.js?v=0b13b0c:661 client.ws
-ws_client.js?v=0b13b0c:3476 evt=ws_linked AppState true WSClient true
-app.js?v=0b13b0c:661 client.ws
-app.js?v=0b13b0c:933 fsm.transition prev=Connecting next=Greeting
-ws_client.js?v=0b13b0c:2593 WS server banner Object
-app.js?v=0b13b0c:661 client.appstate.delta
-2app.js?v=0b13b0c:661 client.ws
-app.js?v=0b13b0c:661 client.audio.worklet_load_ok
-ws_client.js?v=0b13b0c:2917 evt=ui_transcript_filter allow=true type=chat.message role=assistant
-app.js?v=0b13b0c:1309 evt=mic_perm_granted
-app.js?v=0b13b0c:661 client.ws
-app.js?v=0b13b0c:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=turn_ready reason=tts_end
-app.js?v=0b13b0c:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=Ready micPerm=true recording=false}
-app.js?v=0b13b0c:661 client.appstate.heartbeat
-app.js?v=0b13b0c:661 client.vad.state
-ws_client.js?v=0b13b0c:3874 WSClient.send skipped (phase not ready) Object
-send @ ws_client.js?v=0b13b0c:3874Understand this warning
-app.js?v=0b13b0c:661 client.ws
-app.js?v=0b13b0c:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=0b13b0c:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=0b13b0c:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=0b13b0c:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=0b13b0c:933 fsm.transition prev=Greeting next=Disconnected
-app.js?v=0b13b0c:661 client.appstate.delta
-ws_client.js?v=0b13b0c:3712 WebSocket closed Object
-ws.onclose @ ws_client.js?v=0b13b0c:3712Understand this error
-app.js?v=0b13b0c:661 client.ws
-app.js?v=0b13b0c:661 client.appstate.delta
+BUILD_ID dceee7b
+app.js?v=dceee7b:10 AskChip build: dceee7b
+ws_client.js?v=dceee7b:3874 WSClient.send skipped (phase not ready) Object
+send @ ws_client.js?v=dceee7b:3874Understand this warning
+app.js?v=dceee7b:661 client.vad.state
+app.js?v=dceee7b:661 client.appstate.delta
+app.js?v=dceee7b:2516 evt=ws_open_attempt Object
+ws_client.js?v=dceee7b:3669 evt=ws_client_open_params Object
+ws_client.js?v=dceee7b:3673 WS opening Object
+app.js?v=dceee7b:933 fsm.transition prev=Disconnected next=Connecting
+app.js?v=dceee7b:661 client.appstate.delta
+ws_client.js?v=dceee7b:3691 WebSocket open Object
+app.js?v=dceee7b:661 client.ws
+ws_client.js?v=dceee7b:3874 WSClient.send skipped (phase not ready) Object
+send @ ws_client.js?v=dceee7b:3874Understand this warning
+ws_client.js?v=dceee7b:3874 WSClient.send skipped (phase not ready) Object
+send @ ws_client.js?v=dceee7b:3874Understand this warning
+app.js?v=dceee7b:661 client.appstate.heartbeat
+app.js?v=dceee7b:661 client.ws
+ws_client.js?v=dceee7b:3476 evt=ws_linked AppState true WSClient true
+app.js?v=dceee7b:661 client.ws
+app.js?v=dceee7b:933 fsm.transition prev=Connecting next=Greeting
+app.js?v=dceee7b:661 client.appstate.delta
+ws_client.js?v=dceee7b:2593 WS server banner Object
+app.js?v=dceee7b:661 client.ws
+app.js?v=dceee7b:661 client.appstate.heartbeat
+app.js?v=dceee7b:661 client.ws
+app.js?v=dceee7b:661 client.audio.worklet_load_ok
+app.js?v=dceee7b:1309 evt=mic_perm_granted
+ws_client.js?v=dceee7b:2917 evt=ui_transcript_filter allow=true type=chat.message role=assistant
+app.js?v=dceee7b:661 client.ws
+app.js?v=dceee7b:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=turn_ready reason=tts_end
+app.js?v=dceee7b:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=Ready micPerm=true recording=false}
+app.js?v=dceee7b:661 client.ws
+app.js?v=dceee7b:661 client.vad.state
+ws_client.js?v=dceee7b:3874 WSClient.send skipped (phase not ready) Object
+send @ ws_client.js?v=dceee7b:3874Understand this warning
+app.js?v=dceee7b:661 client.ws
+app.js?v=dceee7b:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=dceee7b:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=dceee7b:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=dceee7b:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=dceee7b:933 fsm.transition prev=Greeting next=Disconnected
+app.js?v=dceee7b:661 client.appstate.delta
+ws_client.js?v=dceee7b:3712 WebSocket closed Object
+ws.onclose @ ws_client.js?v=dceee7b:3712Understand this error
+app.js?v=dceee7b:661 client.ws
+app.js?v=dceee7b:661 client.appstate.delta
