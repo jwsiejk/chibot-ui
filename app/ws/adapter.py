@@ -3318,8 +3318,10 @@ class ChatV2Adapter:
             # Vendor explicitly signaled silence: end input cleanly so the UI resets.
             if no_speech:
                 return {"type": "input.stop", "reason": "no_speech"}
-            if is_final:
+            # --- CRITICAL FIX: Treat any empty FINAL as a clean stop ---
+            if frame_type == "asr.final":
                 return {"type": "input.stop", "reason": "empty_transcript"}
+            # --- END CRITICAL FIX ---
             return None
 
         frame: Dict[str, Any] = {"type": frame_type, "text": text}
@@ -4391,6 +4393,14 @@ class ChatV2Adapter:
     def _initiate_listen_handoff(self, ctx: AdapterContext, req_id: str) -> bool:
         if not ctx.await_user_expected or ctx.await_user_pending:
             return False
+
+        # --- START PATCH: CRITICAL CONCURRENCY INVARIANT ---
+        # If ASR stream is open, the mic is already armed and actively listening.
+        # Do NOT re-arm or close based on the conversational turn state.
+        if ctx.session.asr_state == "open":
+            _log.info("evt=listen_handoff_skip reason=asr_stream_open sid=%s", ctx.sid)
+            return False
+        # --- END PATCH ---
 
         key = self._turn_key(ctx, req_id)
         self._set_pending_for_key(ctx, key)
