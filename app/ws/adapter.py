@@ -1841,7 +1841,9 @@ class ChatV2Adapter:
                 ctx.sid,
                 keep_warm_ms,
             )
+            # --- START FIX: Explicitly send HUD state to fix the UI badge ---
             self._emit_hud_state(ctx, "Listening")
+            # --- END FIX ---
             try:
                 await self._send_asr_ready_bundle(send, ctx)
             except Exception:  # pragma: no cover - defensive logging
@@ -4583,7 +4585,10 @@ class ChatV2Adapter:
             )
             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
             await self._invoke_engine("start_greet", ctx.sid)
+            # --- START FIX: Prevent aggressive client re-arm after initial greet ---
             ctx.await_user_expected = False
+            ctx.await_user_req_id = None
+            # --- END FIX ---
         except Exception:  # pragma: no cover - defensive logging
             _log.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
 
