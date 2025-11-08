@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import unittest
 import uuid
 from typing import Any, Callable, Dict, List
+from unittest.mock import patch
+
+os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from app.telemetry import bus
 from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV, EVT_WS_JSON_SEND
@@ -158,6 +162,32 @@ class TestWebSocketJsonContract(unittest.TestCase):
             any(event.get("meta", {}).get("frame_type") == "asr.rearm.request" for event in received),
             "Expected EVT_WS_JSON_RECV event for asr.rearm.request frame",
         )
+
+    def test_banner_and_info_frame_include_current_build_id(self) -> None:
+        adapter = ChatV2Adapter()
+        events = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.disconnect", "code": 1000},
+        ]
+
+        expected_build_id = "build-test-123"
+
+        with patch("app.ws.adapter.current_build_id", return_value=expected_build_id):
+            sent = self._drive(adapter, events)
+
+        payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
+        ]
+
+        banner = next((p for p in payloads if p.get("type") == "server.banner"), None)
+        self.assertIsNotNone(banner, "Expected server.banner frame to be sent")
+        self.assertEqual(banner["build_id"], expected_build_id)
+
+        info = next((p for p in payloads if p.get("type") == "info"), None)
+        self.assertIsNotNone(info, "Expected info frame to be sent")
+        self.assertEqual(info["build_id"], expected_build_id)
 
     def test_client_autostart_frame_is_allowed(self) -> None:
         adapter = ChatV2Adapter()

@@ -22,6 +22,7 @@ import urllib.request
 from urllib.parse import parse_qs
 
 from app import config
+from app.config_build import current_build_id
 from app.logging_setup import current_sid
 from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
@@ -1151,7 +1152,7 @@ class ChatV2Adapter:
                 eng_mod = sys.modules.get(self.engine.__class__.__module__)
                 engine_file = getattr(eng_mod, "__file__", None)
 
-            build_id = os.getenv("BUILD_ID", "") or os.getenv("SOURCE_VERSION", "") or "unknown"
+            build_id = current_build_id()
             host = socket.gethostname()
             pid = os.getpid()
             cwd = os.getcwd()
@@ -1206,7 +1207,7 @@ class ChatV2Adapter:
             "protocol": CHAT_V2_SUBPROTOCOL,
             "sid": sid,
             "ts_ms": now_ms,
-            "build_id": os.getenv("BUILD_ID") or os.getenv("RENDER_GIT_COMMIT") or "",
+            "build_id": current_build_id(),
         }
         info_frame["meta"] = {"sid": sid}
         policy_snapshot = self._policy_snapshot()
