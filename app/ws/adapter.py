@@ -3318,8 +3318,10 @@ class ChatV2Adapter:
             # Vendor explicitly signaled silence: end input cleanly so the UI resets.
             if no_speech:
                 return {"type": "input.stop", "reason": "no_speech"}
-            if is_final:
+            # --- CRITICAL FIX: Treat any empty FINAL as a clean stop ---
+            if frame_type == "asr.final":
                 return {"type": "input.stop", "reason": "empty_transcript"}
+            # --- END CRITICAL FIX ---
             return None
 
         frame: Dict[str, Any] = {"type": frame_type, "text": text}
