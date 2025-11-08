@@ -1,8 +1,8 @@
 diff --git a/app/config.py b/app/config.py
-index 0b66ef43f01795c5abf5e5611045b74010e1fca1..a329854c59557d72ba8fecec6dac5beb4fabd72e 100644
+index a329854c59557d72ba8fecec6dac5beb4fabd72e..7d69662748b476aa11c7f69dbf1dcc684140e62a 100644
 --- a/app/config.py
 +++ b/app/config.py
-@@ -131,55 +131,55 @@ _DEFAULT_POLICY_MEDIA = {
+@@ -131,54 +131,56 @@ _DEFAULT_POLICY_MEDIA = {
      "asr_channels": 1,
      "fallbacks_allowed": False,
  }
@@ -28,13 +28,13 @@ index 0b66ef43f01795c5abf5e5611045b74010e1fca1..a329854c59557d72ba8fecec6dac5beb
      "keep_stream_warm_ms": 30000,
      "vendor": {"primary": "speechmatics", "secondary": None},
      "commit_on_vad_silence": True,
--    "commit_silence_ms": 900,
-+    "commit_silence_ms": 1400,
++    # Make VAD slightly more patient so we do not clip trailing speech.
+     "commit_silence_ms": 1400,
      "max_utterance_ms": 8000,
      "dup_final_suppress_ms": 150,
      "dedupe_normalize": True,
--    "utterance_end_ms": 1200,
-+    "utterance_end_ms": 2100,
++    # Give the utterance end detector a wider buffer to avoid premature stops.
+     "utterance_end_ms": 2100,
      "min_segment_ms": 800,
      "final_guard_ms": 250,
      "allow_word_finals": False,
@@ -59,196 +59,70 @@ index 0b66ef43f01795c5abf5e5611045b74010e1fca1..a329854c59557d72ba8fecec6dac5beb
      "media": dict(POLICY_MEDIA),
      "capture": dict(POLICY_CAPTURE),
      "policy": {
-         "recorder": dict(POLICY_RECORDER),
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 7298d0a02957c48b5d79c58b522debaccab7a9f1..e283f73eee9b3ea3449f3006f8147e3c80f27cb5 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1819,50 +1819,51 @@ class ChatV2Adapter:
-                     ("channels", profile.get("channels")),
-                     ("seq_start", profile.get("seq_start")),
-                 )
-                 if value is not None
-             }
-             await self._publish(
-                 WS_AUDIO_HEADER_ACCEPT,
-                 ctx.sid,
-                 audio_meta,
-             )
-             self._emit_session_step(
-                 ctx.sid,
-                 "audio.header.accepted",
-                 summary="Accepted audio header",
-                 meta=audio_meta,
-                 source="ws.audio",
-             )
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index f27e5be51892e8606e5d0bc41df46bc9253b31eb..850a4dde930b60e0973992958667d5468673dbd0 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1625,52 +1625,60 @@
+         trigger: triggerLabel,
+         reason: reasonLabel,
+         gates: {
+           asrReady: gates.asrReady,
+           turnState: gates.turnState,
+           micPerm: gates.micPerm,
+           recording: gates.recording,
+         },
+       };
+       if (extra && typeof extra === 'object') {
+         const keys = Object.keys(extra);
+         if (keys.length) {
+           detail.extra = {};
+           for (let i = 0; i < keys.length && i < 8; i += 1) {
+             const key = keys[i];
+             if (!key) continue;
+             detail.extra[key.slice(0, 32)] = extra[key];
+           }
+         }
+       }
+       logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
+     }
  
-         if frame_type == "asr.rearm.request":
-             keep_warm_ms = self._policy_keep_warm_ms(ctx)
-             _log.info(
-                 "evt=asr_prearm_requested sid=%s source=client keep_stream_warm_ms=%s",
-                 ctx.sid,
-                 keep_warm_ms,
-             )
-+            self._emit_hud_state(ctx, "Listening")
-             try:
-                 await self._send_asr_ready_bundle(send, ctx)
-             except Exception:  # pragma: no cover - defensive logging
-                 _log.exception("evt=ws_asr_ready_bundle_failed sid=%s", ctx.sid)
+     function maybeAutoStartCapture(trigger, reason) {
+       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
+-      const wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
+-      const wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
++      let wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
++      let wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
++
++      const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
++
++      if (bypassTriggers.has(trigger)) {
++        wantsAsrReady = true;
++        wantsTurnReady = true;
++      }
++
+       if (!(wantsAsrReady || wantsTurnReady)) {
+         const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+         const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+         const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+           ? runtimeState.turnState.slice(0, 32)
+           : null;
+         const gates = {
+           asrReady: Boolean(runtimeState.asrReady),
+           turnState: rawTurnState,
+           micPerm: Boolean(runtimeState.micPermissionGranted),
+           recording: Boolean(runtimeState.isRecording),
+         };
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
+         return;
+       }
  
-         if frame_type == "client.ready":
-             mic_info = frame.get("mic")
-             if isinstance(mic_info, dict):
-                 state = mic_info.get("state")
-                 if isinstance(state, str) and state.lower() == "open":
-                     vendor = mic_info.get("vendor")
-                     opened_ts = mic_info.get("ts")
-                     ts_value = opened_ts if isinstance(opened_ts, int) else None
-                     self._emit_client_mic_open(
-                         ctx,
-                         vendor=vendor if isinstance(vendor, str) else None,
-                         opened_ts=ts_value,
-                     )
-                     ctx.mic_nudge_sent = False
-                 ready_meta = {
-                     key: value
-                     for key, value in (
-                         ("state", state if isinstance(state, str) else None),
-                         (
-                             "vendor",
-@@ -3264,79 +3265,83 @@ class ChatV2Adapter:
-             payload,
-             now_ms=self._now_ms(),
-             loop=loop,
-             emit=_emit,
-         )
- 
-     def _prepare_partial_frame(self, ctx: AdapterContext, payload: Dict[str, Any]) -> Dict[str, Any]:
-         prepared = dict(payload)
-         seq_value = prepared.get("partial_seq")
-         if isinstance(seq_value, int) and seq_value > ctx.partial_seq:
-             ctx.partial_seq = seq_value
-         else:
-             ctx.partial_seq += 1
-             prepared["partial_seq"] = ctx.partial_seq
-         return prepared
- 
-     def _coerce_asr_frame(
-         self, ctx: AdapterContext, event: Mapping[str, Any]
-     ) -> Optional[Dict[str, Any]]:
-         if not isinstance(event, Mapping):
-             return None
- 
-         event_type = event.get("type")
-         if event_type == EVT_ASR_PARTIAL:
-             frame_type = "asr.partial"
-+            is_final = False
-         elif event_type == EVT_ASR_FINAL:
-             frame_type = "asr.final"
-+            is_final = True
-         else:
-             return None
- 
-         source = event.get("source")
-         if isinstance(source, str) and source == "speechmatics_client":
-             vendor = event.get("vendor")
-             if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
-                 return None
- 
-         raw_meta = event.get("meta")
-         meta = raw_meta if isinstance(raw_meta, Mapping) else None
-         text = event.get("text")
- 
-         no_speech = bool(meta and meta.get("no_speech"))
- 
-         # Try fallback text from meta if needed
-         if not isinstance(text, str) or not text.strip():
-             if meta is not None:
-                 candidate_text = meta.get("text")
-                 if isinstance(candidate_text, str):
-                     text = candidate_text
- 
-         # Drop truly empty/noise finals, but honor explicit no-speech signals.
-         if not isinstance(text, str) or not text.strip():
-             # Vendor explicitly signaled silence: end input cleanly so the UI resets.
-             if no_speech:
-                 return {"type": "input.stop", "reason": "no_speech"}
-+            if is_final:
-+                return {"type": "input.stop", "reason": "empty_transcript"}
-             return None
- 
-         frame: Dict[str, Any] = {"type": frame_type, "text": text}
- 
-         req_id = event.get("req_id")
-         if not isinstance(req_id, str) or not req_id.strip():
-             if meta is not None:
-                 meta_req = meta.get("req_id")
-                 if isinstance(meta_req, str) and meta_req.strip():
-                     req_id = meta_req
-                 else:
-                     req_id = None
-         else:
-             req_id = req_id.strip()
-         if isinstance(req_id, str) and req_id:
-             frame["req_id"] = req_id
- 
-         confidence = event.get("confidence")
-         if not isinstance(confidence, (int, float)) and meta is not None:
-             meta_conf = meta.get("confidence")
-             if isinstance(meta_conf, (int, float)):
-                 confidence = float(meta_conf)
-         if isinstance(confidence, (int, float)):
-             frame["confidence"] = float(confidence)
- 
-@@ -4546,50 +4551,51 @@ class ChatV2Adapter:
-         if handler is None:
-             return
-         try:
-             result = handler(*args)
-             if inspect.isawaitable(result):
-                 await result
-         except Exception:
-             sid = args[0] if args else None
-             _log.exception("evt=ws_engine_hook_failed hook=%s sid=%s", hook, sid)
-             raise
- 
-     async def _on_open_and_greet(
-         self,
-         ctx: AdapterContext,
-     ) -> None:
-         try:
-             _log.info("evt=ws_open_and_greet_start sid=%s", ctx.sid)
-             self._emit_session_step(
-                 ctx.sid,
-                 "ws.open_and_greet",
-                 summary="Invoking engine open + greet",
-                 source="ws.engine",
-             )
-             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
-             await self._invoke_engine("start_greet", ctx.sid)
-+            ctx.await_user_expected = False
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
- 
-     def _policy_snapshot(self) -> Dict[str, Any]:
-         engine = self.engine
-         if not engine:
-             return {}
-         try:
-             snapshot = getattr(engine, "policy_snapshot", None)
-             if callable(snapshot) and not isinstance(snapshot, dict):
-                 snapshot = snapshot()
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=ws_policy_snapshot_error")
-             return {}
-         if not isinstance(snapshot, dict):
-             return {}
-         stable: Dict[str, Any] = {}
-         for key in _POLICY_STABLE_KEYS:
-             if key in snapshot:
-                 stable[key] = snapshot[key]
-         media = snapshot.get("media")
-         if isinstance(media, dict):
-             stable["media"] = {
-                 key: media[key]
-                 for key in ("asr_input", "asr_rate_hz", "asr_channels")
+       const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+       const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+       const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+         ? runtimeState.turnState.slice(0, 32)
+         : null;
+       const gates = {
+         asrReady: Boolean(runtimeState.asrReady),
+         turnState: rawTurnState,
+         micPerm: Boolean(runtimeState.micPermissionGranted),

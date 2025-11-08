@@ -1647,8 +1647,16 @@
 
     function maybeAutoStartCapture(trigger, reason) {
       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
-      const wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
-      const wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
+      let wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
+      let wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
+
+      const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
+
+      if (bypassTriggers.has(trigger)) {
+        wantsAsrReady = true;
+        wantsTurnReady = true;
+      }
+
       if (!(wantsAsrReady || wantsTurnReady)) {
         const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
         const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';

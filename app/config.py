@@ -153,10 +153,12 @@ _DEFAULT_POLICY_ASR = {
     "keep_stream_warm_ms": 30000,
     "vendor": {"primary": "speechmatics", "secondary": None},
     "commit_on_vad_silence": True,
+    # Make VAD slightly more patient so we do not clip trailing speech.
     "commit_silence_ms": 1400,
     "max_utterance_ms": 8000,
     "dup_final_suppress_ms": 150,
     "dedupe_normalize": True,
+    # Give the utterance end detector a wider buffer to avoid premature stops.
     "utterance_end_ms": 2100,
     "min_segment_ms": 800,
     "final_guard_ms": 250,
