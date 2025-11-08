@@ -1,56 +1,158 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 850a4dde930b60e0973992958667d5468673dbd0..d5443ea341538957498217c6bb0f1d7611302672 100644
+index d5443ea341538957498217c6bb0f1d7611302672..1ec7fb084c79a8cb1f85b670a65fe89cee4bc706 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1694,50 +1694,51 @@
-         logClientMicEventText('evt=rearm_blocked reason=cooldown');
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'cooldown',
-           msRemaining,
-         });
-         return;
-       }
+@@ -2874,109 +2874,151 @@
+         }
+       } else if (becameDisconnected) {
+         Waveform.stop();
  
-       // wake-word path removed; VAD barge-in is the only gate.
+         if (audioRecorder && typeof audioRecorder.stop === 'function') {
+           try {
+             audioRecorder.stop();
+           } catch (err) {
+             console.warn('AudioRecorder stop error', err);
+           }
+         }
+         try {
+           AppState?.hub?.bindSocket?.(null);
+         } catch (err) {
+           console.warn('AppState.hub.bindSocket disconnect failed', err);
+         }
+         updateRecordingState(false, 'appstate.disconnect');
+         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
+           window.AudioPlayer.interrupt();
+         }
+       }
+       updateResumeBanner(state);
+     });
  
-       if (runtimeState.isRecording) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'recording',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
-       if (!runtimeState.micPermissionGranted) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'mic_permission',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
-       if (!runtimeState.asrReady) {
-+        requestAsrPrearm(trigger);
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'asr_ready',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
-       if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'audio_playback',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
+     const POST_TTS_RELEASE_MS = 150;
++    const ASR_PREARM_RETRY_DELAY_MS = 150;
++    const ASR_PREARM_ALLOWED_PHASES = ['connected', 'ready', 'resuming'];
  
-       logClient(`evt=mic_arm trigger=${triggerLabel} reason=${reasonLabel}`, {
-         event: 'mic_arm',
-         trigger: triggerLabel,
-         reason: reasonLabel,
-       });
-       startMicCapture()
-         .then((started) => {
-           if (!started) {
-             logClient('evt=mic_open_failed err=mic_not_started', {
-               event: 'mic_open_failed',
-               error: 'mic_not_started',
+     let asrRetry = { tries: 0, timer: null };
++    let asrPrearmRetryTimerId = null;
+ 
+     function scheduleAsrRearm() {
+       if (typeof window === 'undefined') {
+         return;
+       }
+       if (asrRetry && typeof asrRetry === 'object') {
+         clearTimeout(asrRetry.timer);
+       }
+       const tries = asrRetry && typeof asrRetry.tries === 'number' ? asrRetry.tries : 0;
+       const exponent = Math.min(5, tries);
+       const delay = Math.min(30000, 1000 * Math.pow(2, exponent));
+       if (asrRetry && typeof asrRetry === 'object') {
+         asrRetry.tries = tries + 1;
+       }
+       const timer = setTimeout(() => {
+         try {
+           const payload = { type: 'asr.rearm.request' };
+           const client = window.WSClient;
+           if (client && typeof client.send === 'function') {
+             client.send(payload);
+             return;
+           }
+           const ws = window.WS;
+           if (ws && typeof ws.send === 'function') {
+             ws.send(payload);
+           }
+         } catch (err) {
+           console.warn('Failed to send asr.rearm.request', err);
+         }
+       }, delay);
+       if (asrRetry && typeof asrRetry === 'object') {
+         asrRetry.timer = timer;
+       }
+     }
+ 
+     function requestAsrPrearm(trigger) {
+       if (asrPrearmIssued) {
+         return;
+       }
++      if (asrPrearmRetryTimerId) {
++        clearTimeout(asrPrearmRetryTimerId);
++        asrPrearmRetryTimerId = null;
++      }
++
++      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
++
++      const stateSnapshot = (() => {
++        try {
++          return typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
++        } catch (_) {
++          return AppState || null;
++        }
++      })();
++
++      const phase = typeof stateSnapshot?.wsPhase === 'string' ? stateSnapshot.wsPhase : null;
++      const connectionState =
++        typeof stateSnapshot?.connectionState === 'string' ? stateSnapshot.connectionState : null;
++      const isAllowedPhase = (value) =>
++        typeof value === 'string' && ASR_PREARM_ALLOWED_PHASES.includes(value);
++      const socketReady = isAllowedPhase(phase) || isAllowedPhase(connectionState);
++
++      if (!socketReady) {
++        const phaseLabel = phase || connectionState || 'unknown';
++        logClient(
++          `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabel}`
++        );
++        asrPrearmRetryTimerId = setTimeout(() => {
++          asrPrearmRetryTimerId = null;
++          try {
++            requestAsrPrearm(trigger);
++          } catch (err) {
++            console.warn('requestAsrPrearm retry failed', err);
++          }
++        }, ASR_PREARM_RETRY_DELAY_MS);
++        return;
++      }
++
+       asrPrearmIssued = true;
+       const payload = { type: 'asr.rearm.request' };
+       const keepWarm = getKeepWarmMs();
+       try {
+         const client = window.WSClient;
+         if (client && typeof client.send === 'function') {
+           client.send(payload);
+         } else {
+           const ws = window.WS;
+           if (ws && typeof ws.send === 'function') {
+             ws.send(payload);
+           }
+         }
+       } catch (err) {
+         console.warn('Failed to send asr.rearm.request', err);
+       }
+-      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+-      logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
++      logClient(
++        `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
++      );
+       const arm =
+         typeof requestAsrArm === 'function'
+           ? requestAsrArm
+           : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
+             ? window.WSClient.requestAsrArm
+             : null;
+       if (arm) {
+         try {
+           arm('policy');
+         } catch (err) {
+           console.warn('requestAsrArm failed after asr_prearm_requested', err);
+         }
+       }
+     }
+ 
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
+   runtimeState.audioPlaybackIdle = false;
+   cancelAsrPartialWatchdog();
+   asrPrearmIssued = false;
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
