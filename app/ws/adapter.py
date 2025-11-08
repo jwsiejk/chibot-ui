@@ -3300,11 +3300,21 @@ class ChatV2Adapter:
         raw_meta = event.get("meta")
         meta = raw_meta if isinstance(raw_meta, Mapping) else None
         text = event.get("text")
+
+        no_speech = bool(meta and meta.get("no_speech"))
+
+        # Try fallback text from meta if needed
         if not isinstance(text, str) or not text.strip():
             if meta is not None:
                 candidate_text = meta.get("text")
                 if isinstance(candidate_text, str):
                     text = candidate_text
+
+        # If still empty and we know it was no-speech, explicitly stop input
+        if (not isinstance(text, str) or not text.strip()) and no_speech:
+            return {"type": "input.stop", "reason": "no_speech"}
+
+        # Otherwise, drop truly empty/noise finals
         if not isinstance(text, str) or not text.strip():
             return None
 

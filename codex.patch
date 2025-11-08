@@ -1,160 +1,203 @@
-diff --git a/app/config.py b/app/config.py
-index 2eeb182cc6a32dc3f1d6a21dedc101859c59c2f2..df85ecf2a0099442af882553f2039e655837d789 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -31,74 +31,87 @@ def env_bool(name: str, default: bool = False) -> bool:
+diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
+index 882d4f1952ca668cb1061d6e77589dd6cec41f83..a3fcc15eed445f561847528dd022ede61a5999a8 100644
+--- a/app/services/asr/sm_rt.py
++++ b/app/services/asr/sm_rt.py
+@@ -533,60 +533,65 @@ class SMRealtimeClient:
+         self._first_partial_logged = False
+         self._first_final_logged = False
+         meta = self._extract_meta(message)
+         self._publish_event(EVT_ASR_READY, {"vendor": self.VENDOR, "meta": meta})
+         self._call_callback(self._on_ready, meta)
  
+     def _handle_partial(self, message: Dict[str, Any]) -> None:
+         text = self._extract_text(message)
+         if not text:
+             return
+         latency_ms = self._extract_latency_ms(message)
+         self._maybe_emit_first_token_latency("partial")
+         self._partial_seq += 1
+         payload = {
+             "text": text,
+             "latency_ms": latency_ms,
+             "partial_seq": self._partial_seq,
+             "vendor": self.VENDOR,
+             "meta": self._extract_meta(message),
+         }
+         self._publish_event(EVT_ASR_PARTIAL, payload)
+         self._publish_event(SM_PARTIAL, payload)
+         self._call_callback(self._on_partial, text, latency_ms)
  
- # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
- # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
- DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
- ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
- ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
- SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
- def _resolve_speechmatics_realtime_url() -> str:
-     """Return the configured Speechmatics realtime endpoint URL.
+     def _handle_final(self, message: Dict[str, Any]) -> None:
+-        text = self._extract_text(message)
+-        if not text:
+-            return
++        text = self._extract_text(message)  # may be "", None
+         latency_ms = self._extract_latency_ms(message)
+         self._maybe_emit_first_token_latency("final")
++
++        meta = self._extract_meta(message) or {}
++        if not (isinstance(text, str) and text.strip()):
++            # Explicitly tag this final as no-speech so downstream can end the turn cleanly.
++            meta = {**meta, "no_speech": True}
++            text = ""  # normalize
++
+         payload = {
+             "text": text,
+             "latency_ms": latency_ms,
+             "vendor": self.VENDOR,
+-            "meta": self._extract_meta(message),
++            "meta": meta,
+         }
+         self._publish_event(EVT_ASR_FINAL, payload)
+         self._publish_event(SM_FINAL, payload)
+         self._call_callback(self._on_final, text, latency_ms)
  
-    Historically the deployment accepted short region tokens (``wus``) or a bare
-    hostname (``wus.rt.speechmatics.com``).  The Speechmatics client, however,
-     requires a fully qualified ``wss://`` URL.  Render environments that still
-     provide the short form were failing DNS lookups which manifested as
-     ``socket.gaierror: [Errno -2]`` during the websocket connection attempt.
- 
-     To remain backwards compatible we normalise older inputs into the canonical
-     URL shape while still validating explicit URLs for correctness.
-     """
- 
-    default_url = "wss://wus.rt.speechmatics.com/v2"
-     raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
-     expanded_value = os.path.expandvars(raw_value or "")
-     expanded_value = os.path.expanduser(expanded_value)
--    candidate = expanded_value.strip()
-+    # Normalize common “invisible” characters that break DNS
-+    candidate = expanded_value.strip().replace("\u200b", "").replace("\u00a0", "")
- 
-     if not candidate:
-         return default_url
- 
-     lowered = candidate.lower()
-     if "://" in candidate:
-         if not lowered.startswith("wss://"):
-             raise ValueError(
-                 f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
-             )
-         return candidate
- 
-    # Support legacy tokens such as "wus" or "wus.rt.speechmatics.com/v2".
-     legacy = candidate.lstrip("/")
-     host_part, _, path_part = legacy.partition("/")
--    host_part = host_part.strip()
-+    host_part = host_part.strip().lower()
-     if not host_part:
-         raise ValueError(
-             f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
+     def _handle_close_ack(self, message: Dict[str, Any], message_type: str) -> None:
+         detail: Dict[str, Any] = {
+             "session_id": self.session_id,
+             "turn_id": self.turn_id,
+             "vendor_status": message_type,
+         }
+         ack_seq = message.get("last_seq_no") or message.get("seq_no")
+         if isinstance(ack_seq, (int, float)):
+             detail["vendor_last_seq_no"] = int(ack_seq)
+         self._emit_hub_log("asr.eos.ack", detail)
+         if self._close_ack_event.is_set():
+             return
+         meta = self._extract_meta(message)
+         self._publish_event(
+             ASR_VENDOR_CLOSE_ACK,
+             {"vendor": self.VENDOR, "meta": meta},
          )
+         self._close_ack_event.set()
  
-+    allowed_regions = {"wus", "eu1", "ap1"}
-     if "." not in host_part:
-+        # Region token only
-+        if host_part not in allowed_regions:
-+            raise ValueError(
-+                f"SPEECHMATICS_REALTIME_URL region must be one of {sorted(allowed_regions)} (got {host_part!r})"
-+            )
-         host_part = f"{host_part}.rt.speechmatics.com"
-+    else:
-+        # If a host is provided, enforce Speechmatics RT domain
-+        if not host_part.endswith(".rt.speechmatics.com"):
-+            raise ValueError(
-+                f"SPEECHMATICS_REALTIME_URL must point to *.rt.speechmatics.com (got {host_part!r})"
-+            )
- 
-     path = f"/{path_part}" if path_part else "/v2"
-     return f"wss://{host_part}{path}"
- 
- 
- SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()
- ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
-     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
- )
- ASR_IDLE_CLOSE_MS = 15000
- ASR_TRACE = env_bool("ASR_TRACE", False)
- 
- 
- def get_env(name: str, default=None):
-     """Retrieve an environment variable with an optional default."""
- 
-     value = os.getenv(name)
-     return value if value is not None else default
- 
- 
- _log = logging.getLogger(__name__)
- 
- _ADMIN_SETTINGS_LOCK = threading.RLock()
- _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
- _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
+     def _maybe_emit_first_token_latency(
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 717e12ec86b37388c720213dff37dadbbbaf6c77..056f881bfd017e6841435d3fb425498516742f40 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -3211,50 +3211,54 @@ import { WakeWord } from "./wake_word.js";
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+       }
+       clearPendingAsrReadyStart("stop_listening");
+       __asrReadySeen = false;
+       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+         try {
+           const reason =
+             (typeof frame?.reason === "string" && frame.reason) ||
+             "server_requested";
+           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
+         } catch (err) {
+           console.warn("stop_listening event dispatch failed", err);
+         }
+       }
+     } else if (frame.type === "input.start") {
+       _audioStreaming = true;
+       setListeningState(true);
+       emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
+       const reason = typeof frame?.reason === "string" && frame.reason
+         ? frame.reason
+         : frame?.type || "input.start";
+       hubLog("client.stream.on", { reason });
+       await handleInputStartFrame(frame);
+     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
+       __resetAudioHeaderSent();
++      if (frame.type === "asr.closed") {
++        setListeningState(false);
++        emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
++      }
+     } else if (frame.type === "input.stop") {
+       if (_audioStreaming) {
+         const reason = typeof frame?.reason === "string" && frame.reason
+           ? frame.reason
+           : frame?.type || "input.stop";
+         hubLog("client.stream.off", { reason });
+       }
+       _audioStreaming = false;
+       setListeningState(false);
+       emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
+       stopInputCapture({ reason: "input.stop" });
+       clearPendingAsrReadyStart("input.stop");
+       __asrReadySeen = false;
+       __resetAudioHeaderSent();
+     } else if (frame.type === "assistant.await_user") {
+       if (_audioStreaming) {
+         const reason = typeof frame?.reason === "string" && frame.reason
+           ? frame.reason
+           : frame?.type || "assistant.await_user";
+         hubLog("client.stream.off", { reason });
+       }
+       _audioStreaming = false;
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
+       __asrReadySeen = true;
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 9372e0f227a8cf4c14c0eb700fce76e511832ea6..dfaae2c25c0c8c30c844201dbf036cf1f211d9d6 100644
+index 95fc94f7795a9e7041218a0e75eff3b6a372c0cc..a254d129df028477dbbbb69dcbd1e34aa0f166e9 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -4995,56 +4995,61 @@ class ChatV2Adapter:
-         ctx.session.first_chunk_sent = False
-         ctx.session.queued_arm = False
-         ctx.session.closed_at_ms = None
-         ctx.session.asr = self._create_sm_client(ctx)
-         try:
-             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
-         except RuntimeError:
-             loop = asyncio.get_running_loop()
-             ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
+@@ -3278,55 +3278,65 @@ class ChatV2Adapter:
+         return prepared
  
-     async def _open_asr(self, ctx: AdapterContext) -> None:
-         send = ctx.ws_send
-         if send is None:
-             mark(ctx.session, "closed")
-             ctx.asr_open_task = None
-             return
-         client = ctx.session.asr
-         if client is None:
-             mark(ctx.session, "closed")
-             ctx.asr_open_task = None
-             return
-         try:
-             params = self._policy_to_sm_params(ctx)
-             token = self._mint_speechmatics_jwt(ctx)
-             endpoint_url = self._speechmatics_rt_url()
-+            _log.info("evt=asr_open_begin sid=%s endpoint=%s", ctx.sid, endpoint_url)
-             await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
-         except asyncio.CancelledError:
-             mark(ctx.session, "closed")
-             ctx.asr_open_task = None
-             raise
-         except Exception:
-+            try:
-+                _log.error("evt=asr_open_endpoint sid=%s endpoint=%s", ctx.sid, endpoint_url)
-+            except Exception:
-+                pass
-             ctx.session.asr = None
-             mark(ctx.session, "closed")
-             ctx.asr_open_task = None
-             _log.exception("evt=asr_open_failed sid=%s", ctx.sid)
-             try:
-                 await self._send_json(
-                     send,
-                     ctx.sid,
-                     {"type": "asr.error", "code": "open_failed"},
-                 )
-             except Exception:
-                 _log.exception("evt=asr_open_error_send sid=%s", ctx.sid)
-             await self._publish(
-                 ASR_SINGLE_STREAM_INVARIANT,
-                 ctx.sid,
-                 {"state": "closed", "ok": False, "reason": "open_failed"},
-             )
-             return
-         ctx.asr_open_task = None
-         ctx.session.queued_arm = False
+     def _coerce_asr_frame(
+         self, ctx: AdapterContext, event: Mapping[str, Any]
+     ) -> Optional[Dict[str, Any]]:
+         if not isinstance(event, Mapping):
+             return None
  
-     async def _close_asr(
-         self,
-         ctx: AdapterContext,
-         *,
+         event_type = event.get("type")
+         if event_type == EVT_ASR_PARTIAL:
+             frame_type = "asr.partial"
+         elif event_type == EVT_ASR_FINAL:
+             frame_type = "asr.final"
+         else:
+             return None
+ 
+         source = event.get("source")
+         if isinstance(source, str) and source == "speechmatics_client":
+             vendor = event.get("vendor")
+             if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
+                 return None
+ 
+         raw_meta = event.get("meta")
+         meta = raw_meta if isinstance(raw_meta, Mapping) else None
+         text = event.get("text")
++
++        no_speech = bool(meta and meta.get("no_speech"))
++
++        # Try fallback text from meta if needed
+         if not isinstance(text, str) or not text.strip():
+             if meta is not None:
+                 candidate_text = meta.get("text")
+                 if isinstance(candidate_text, str):
+                     text = candidate_text
++
++        # If still empty and we know it was no-speech, explicitly stop input
++        if (not isinstance(text, str) or not text.strip()) and no_speech:
++            return {"type": "input.stop", "reason": "no_speech"}
++
++        # Otherwise, drop truly empty/noise finals
+         if not isinstance(text, str) or not text.strip():
+             return None
+ 
+         frame: Dict[str, Any] = {"type": frame_type, "text": text}
+ 
+         req_id = event.get("req_id")
+         if not isinstance(req_id, str) or not req_id.strip():
+             if meta is not None:
+                 meta_req = meta.get("req_id")
+                 if isinstance(meta_req, str) and meta_req.strip():
+                     req_id = meta_req
+                 else:
+                     req_id = None
+         else:
+             req_id = req_id.strip()
+         if isinstance(req_id, str) and req_id:
+             frame["req_id"] = req_id
+ 
+         confidence = event.get("confidence")
+         if not isinstance(confidence, (int, float)) and meta is not None:
+             meta_conf = meta.get("confidence")
+             if isinstance(meta_conf, (int, float)):
+                 confidence = float(meta_conf)
+         if isinstance(confidence, (int, float)):
+             frame["confidence"] = float(confidence)

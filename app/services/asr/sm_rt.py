@@ -555,16 +555,21 @@ class SMRealtimeClient:
         self._call_callback(self._on_partial, text, latency_ms)
 
     def _handle_final(self, message: Dict[str, Any]) -> None:
-        text = self._extract_text(message)
-        if not text:
-            return
+        text = self._extract_text(message)  # may be "", None
         latency_ms = self._extract_latency_ms(message)
         self._maybe_emit_first_token_latency("final")
+
+        meta = self._extract_meta(message) or {}
+        if not (isinstance(text, str) and text.strip()):
+            # Explicitly tag this final as no-speech so downstream can end the turn cleanly.
+            meta = {**meta, "no_speech": True}
+            text = ""  # normalize
+
         payload = {
             "text": text,
             "latency_ms": latency_ms,
             "vendor": self.VENDOR,
-            "meta": self._extract_meta(message),
+            "meta": meta,
         }
         self._publish_event(EVT_ASR_FINAL, payload)
         self._publish_event(SM_FINAL, payload)

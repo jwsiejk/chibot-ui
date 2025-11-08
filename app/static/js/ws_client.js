@@ -3233,6 +3233,10 @@ import { WakeWord } from "./wake_word.js";
       await handleInputStartFrame(frame);
     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
       __resetAudioHeaderSent();
+      if (frame.type === "asr.closed") {
+        setListeningState(false);
+        emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
+      }
     } else if (frame.type === "input.stop") {
       if (_audioStreaming) {
         const reason = typeof frame?.reason === "string" && frame.reason
