@@ -318,8 +318,7 @@ class SMRealtimeClient:
             "last_seq_no": self._last_seq_no,
         }
         self._emit_hub_log("asr.eos.sent", detail)
-        payload = {"message": "EndOfStream"}
-        await self._send_json(payload)
+        await self._send_end_of_stream()
         await self._wait_for_close_ack()
 
     async def close(self) -> None:
@@ -409,10 +408,11 @@ class SMRealtimeClient:
                     self._pcm_queue.task_done()
                     break
                 try:
+                    next_seq = self._seq_counter + 1
                     await ws.send(data)
                     self._last_activity = time.monotonic()
-                    self._last_seq_no = self._seq_counter
-                    self._seq_counter += 1
+                    self._seq_counter = next_seq
+                    self._last_seq_no = next_seq
                 except ConnectionClosed:
                     self._pcm_queue.task_done()
                     break
@@ -814,6 +814,15 @@ class SMRealtimeClient:
             raise RuntimeError("websocket not connected")
         data = json.dumps(payload, separators=(",", ":"))
         await ws.send(data)
+
+    async def _send_end_of_stream(self) -> None:
+        """Send an EndOfStream message including the last audio sequence number."""
+
+        payload: Dict[str, Any] = {"message": "EndOfStream"}
+        if isinstance(self._last_seq_no, int):
+            payload["last_seq_no"] = self._last_seq_no
+        _log.info("evt=sm_send_eos last_seq_no=%s", payload.get("last_seq_no"))
+        await self._send_json(payload)
 
     def _now_ms(self) -> int:
         return int(time.time() * 1000)
