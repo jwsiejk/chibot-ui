@@ -1,48 +1,8 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index d5443ea341538957498217c6bb0f1d7611302672..1ec7fb084c79a8cb1f85b670a65fe89cee4bc706 100644
+index 1ec7fb084c79a8cb1f85b670a65fe89cee4bc706..3078c2ecfda7f52f97213ef21fb50aecc4fc357d 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -2874,109 +2874,151 @@
-         }
-       } else if (becameDisconnected) {
-         Waveform.stop();
- 
-         if (audioRecorder && typeof audioRecorder.stop === 'function') {
-           try {
-             audioRecorder.stop();
-           } catch (err) {
-             console.warn('AudioRecorder stop error', err);
-           }
-         }
-         try {
-           AppState?.hub?.bindSocket?.(null);
-         } catch (err) {
-           console.warn('AppState.hub.bindSocket disconnect failed', err);
-         }
-         updateRecordingState(false, 'appstate.disconnect');
-         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-           window.AudioPlayer.interrupt();
-         }
-       }
-       updateResumeBanner(state);
-     });
- 
-     const POST_TTS_RELEASE_MS = 150;
-+    const ASR_PREARM_RETRY_DELAY_MS = 150;
-+    const ASR_PREARM_ALLOWED_PHASES = ['connected', 'ready', 'resuming'];
- 
-     let asrRetry = { tries: 0, timer: null };
-+    let asrPrearmRetryTimerId = null;
- 
-     function scheduleAsrRearm() {
-       if (typeof window === 'undefined') {
-         return;
-       }
-       if (asrRetry && typeof asrRetry === 'object') {
-         clearTimeout(asrRetry.timer);
-       }
-       const tries = asrRetry && typeof asrRetry.tries === 'number' ? asrRetry.tries : 0;
-       const exponent = Math.min(5, tries);
+@@ -2914,108 +2914,149 @@
        const delay = Math.min(30000, 1000 * Math.pow(2, exponent));
        if (asrRetry && typeof asrRetry === 'object') {
          asrRetry.tries = tries + 1;
@@ -68,10 +28,74 @@ index d5443ea341538957498217c6bb0f1d7611302672..1ec7fb084c79a8cb1f85b670a65fe89c
        }
      }
  
-     function requestAsrPrearm(trigger) {
-       if (asrPrearmIssued) {
-         return;
-       }
+-    function requestAsrPrearm(trigger) {
+-      if (asrPrearmIssued) {
+-        return;
+-      }
+-      if (asrPrearmRetryTimerId) {
+-        clearTimeout(asrPrearmRetryTimerId);
+-        asrPrearmRetryTimerId = null;
+-      }
+-
+-      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+-
++    function readSocketPhaseSnapshot() {
+       const stateSnapshot = (() => {
+         try {
+           return typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
+         } catch (_) {
+           return AppState || null;
+         }
+       })();
+ 
+       const phase = typeof stateSnapshot?.wsPhase === 'string' ? stateSnapshot.wsPhase : null;
+       const connectionState =
+         typeof stateSnapshot?.connectionState === 'string' ? stateSnapshot.connectionState : null;
+       const isAllowedPhase = (value) =>
+         typeof value === 'string' && ASR_PREARM_ALLOWED_PHASES.includes(value);
+       const socketReady = isAllowedPhase(phase) || isAllowedPhase(connectionState);
++      const phaseLabel = phase || connectionState || 'unknown';
+ 
+-      if (!socketReady) {
+-        const phaseLabel = phase || connectionState || 'unknown';
++      return { phase, connectionState, socketReady, phaseLabel };
++    }
++
++    function scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel, options) {
++      const phaseLabelValue = phaseLabel || 'unknown';
++      const { logRetry } = options || {};
++      if (logRetry) {
+         logClient(
+-          `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabel}`
++          `evt=asr_prearm_retry source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
+         );
+-        asrPrearmRetryTimerId = setTimeout(() => {
+-          asrPrearmRetryTimerId = null;
+-          try {
+-            requestAsrPrearm(trigger);
+-          } catch (err) {
+-            console.warn('requestAsrPrearm retry failed', err);
+-          }
+-        }, ASR_PREARM_RETRY_DELAY_MS);
++      }
++      logClient(
++        `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
++      );
++      asrPrearmIssued = false;
++      asrPrearmRetryTimerId = setTimeout(() => {
++        asrPrearmRetryTimerId = null;
++        try {
++          requestAsrPrearm(trigger);
++        } catch (err) {
++          console.warn('requestAsrPrearm retry failed', err);
++        }
++      }, ASR_PREARM_RETRY_DELAY_MS);
++    }
++
++    function requestAsrPrearm(trigger) {
++      if (asrPrearmIssued) {
++        return;
++      }
 +      if (asrPrearmRetryTimerId) {
 +        clearTimeout(asrPrearmRetryTimerId);
 +        asrPrearmRetryTimerId = null;
@@ -79,58 +103,56 @@ index d5443ea341538957498217c6bb0f1d7611302672..1ec7fb084c79a8cb1f85b670a65fe89c
 +
 +      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
 +
-+      const stateSnapshot = (() => {
-+        try {
-+          return typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
-+        } catch (_) {
-+          return AppState || null;
-+        }
-+      })();
-+
-+      const phase = typeof stateSnapshot?.wsPhase === 'string' ? stateSnapshot.wsPhase : null;
-+      const connectionState =
-+        typeof stateSnapshot?.connectionState === 'string' ? stateSnapshot.connectionState : null;
-+      const isAllowedPhase = (value) =>
-+        typeof value === 'string' && ASR_PREARM_ALLOWED_PHASES.includes(value);
-+      const socketReady = isAllowedPhase(phase) || isAllowedPhase(connectionState);
++      const { socketReady, phaseLabel } = readSocketPhaseSnapshot();
 +
 +      if (!socketReady) {
-+        const phaseLabel = phase || connectionState || 'unknown';
-+        logClient(
-+          `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabel}`
-+        );
-+        asrPrearmRetryTimerId = setTimeout(() => {
-+          asrPrearmRetryTimerId = null;
-+          try {
-+            requestAsrPrearm(trigger);
-+          } catch (err) {
-+            console.warn('requestAsrPrearm retry failed', err);
-+          }
-+        }, ASR_PREARM_RETRY_DELAY_MS);
-+        return;
-+      }
-+
++        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel);
+         return;
+       }
+ 
        asrPrearmIssued = true;
        const payload = { type: 'asr.rearm.request' };
        const keepWarm = getKeepWarmMs();
++      const liveSnapshot = readSocketPhaseSnapshot();
++      if (!liveSnapshot.socketReady) {
++        scheduleAsrPrearmRetry(trigger, triggerLabel, liveSnapshot.phaseLabel, { logRetry: true });
++        return;
++      }
++
++      let sendAttempted = false;
++      let sendSucceeded = false;
++      let sendError = null;
        try {
          const client = window.WSClient;
          if (client && typeof client.send === 'function') {
++          sendAttempted = true;
            client.send(payload);
++          sendSucceeded = true;
          } else {
            const ws = window.WS;
            if (ws && typeof ws.send === 'function') {
++            sendAttempted = true;
              ws.send(payload);
++            sendSucceeded = true;
            }
          }
        } catch (err) {
-         console.warn('Failed to send asr.rearm.request', err);
+-        console.warn('Failed to send asr.rearm.request', err);
++        sendError = err;
        }
--      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
--      logClient(`evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`);
-+      logClient(
-+        `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
-+      );
++
++      if (!sendSucceeded) {
++        const phaseForRetry = liveSnapshot.phaseLabel;
++        const error =
++          sendError || (sendAttempted ? new Error('Unknown send failure') : new Error('No websocket client available'));
++        console.warn('Failed to send asr.rearm.request', error);
++        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseForRetry, { logRetry: true });
++        return;
++      }
++
+       logClient(
+         `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
+       );
        const arm =
          typeof requestAsrArm === 'function'
            ? requestAsrArm
@@ -153,6 +175,3 @@ index d5443ea341538957498217c6bb0f1d7611302672..1ec7fb084c79a8cb1f85b670a65fe89c
    }
    runtimeState.audioPlaybackIdle = false;
    cancelAsrPartialWatchdog();
-   asrPrearmIssued = false;
-   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
-     try {

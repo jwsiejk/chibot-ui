@@ -2936,17 +2936,7 @@
       }
     }
 
-    function requestAsrPrearm(trigger) {
-      if (asrPrearmIssued) {
-        return;
-      }
-      if (asrPrearmRetryTimerId) {
-        clearTimeout(asrPrearmRetryTimerId);
-        asrPrearmRetryTimerId = null;
-      }
-
-      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
-
+    function readSocketPhaseSnapshot() {
       const stateSnapshot = (() => {
         try {
           return typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
@@ -2961,39 +2951,90 @@
       const isAllowedPhase = (value) =>
         typeof value === 'string' && ASR_PREARM_ALLOWED_PHASES.includes(value);
       const socketReady = isAllowedPhase(phase) || isAllowedPhase(connectionState);
+      const phaseLabel = phase || connectionState || 'unknown';
+
+      return { phase, connectionState, socketReady, phaseLabel };
+    }
+
+    function scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel, options) {
+      const phaseLabelValue = phaseLabel || 'unknown';
+      const { logRetry } = options || {};
+      if (logRetry) {
+        logClient(
+          `evt=asr_prearm_retry source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
+        );
+      }
+      logClient(
+        `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
+      );
+      asrPrearmIssued = false;
+      asrPrearmRetryTimerId = setTimeout(() => {
+        asrPrearmRetryTimerId = null;
+        try {
+          requestAsrPrearm(trigger);
+        } catch (err) {
+          console.warn('requestAsrPrearm retry failed', err);
+        }
+      }, ASR_PREARM_RETRY_DELAY_MS);
+    }
+
+    function requestAsrPrearm(trigger) {
+      if (asrPrearmIssued) {
+        return;
+      }
+      if (asrPrearmRetryTimerId) {
+        clearTimeout(asrPrearmRetryTimerId);
+        asrPrearmRetryTimerId = null;
+      }
+
+      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
+
+      const { socketReady, phaseLabel } = readSocketPhaseSnapshot();
 
       if (!socketReady) {
-        const phaseLabel = phase || connectionState || 'unknown';
-        logClient(
-          `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabel}`
-        );
-        asrPrearmRetryTimerId = setTimeout(() => {
-          asrPrearmRetryTimerId = null;
-          try {
-            requestAsrPrearm(trigger);
-          } catch (err) {
-            console.warn('requestAsrPrearm retry failed', err);
-          }
-        }, ASR_PREARM_RETRY_DELAY_MS);
+        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel);
         return;
       }
 
       asrPrearmIssued = true;
       const payload = { type: 'asr.rearm.request' };
       const keepWarm = getKeepWarmMs();
+      const liveSnapshot = readSocketPhaseSnapshot();
+      if (!liveSnapshot.socketReady) {
+        scheduleAsrPrearmRetry(trigger, triggerLabel, liveSnapshot.phaseLabel, { logRetry: true });
+        return;
+      }
+
+      let sendAttempted = false;
+      let sendSucceeded = false;
+      let sendError = null;
       try {
         const client = window.WSClient;
         if (client && typeof client.send === 'function') {
+          sendAttempted = true;
           client.send(payload);
+          sendSucceeded = true;
         } else {
           const ws = window.WS;
           if (ws && typeof ws.send === 'function') {
+            sendAttempted = true;
             ws.send(payload);
+            sendSucceeded = true;
           }
         }
       } catch (err) {
-        console.warn('Failed to send asr.rearm.request', err);
+        sendError = err;
       }
+
+      if (!sendSucceeded) {
+        const phaseForRetry = liveSnapshot.phaseLabel;
+        const error =
+          sendError || (sendAttempted ? new Error('Unknown send failure') : new Error('No websocket client available'));
+        console.warn('Failed to send asr.rearm.request', error);
+        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseForRetry, { logRetry: true });
+        return;
+      }
+
       logClient(
         `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
       );
