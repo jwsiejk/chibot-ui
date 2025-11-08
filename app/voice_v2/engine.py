@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import inspect
 import json
 import logging
 import re
 import threading
 import time
 import uuid
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from app import config
 from app.logging_config import apply_logging_policy
@@ -39,6 +40,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
     EVT_WS_OPEN,
+    EVT_CLIENT_MIC_OPEN,
 )
 from app.voice_v2.nlu import NLUAdapter
 from app.voice_v2.policy_decider import PolicyDecider, EVT_POLICY_DECISION
@@ -1928,6 +1930,120 @@ class EngineV2:
         return summary
 
 
+class VoiceEngine(EngineV2):
+    """Voice engine with proactive barge-in cancellation support."""
+
+    def __init__(
+        self,
+        exporter: FileExporter | None = None,
+        *,
+        telemetry_bus=bus,
+        fake_exporter: FileExporter | None = None,
+        tts_runtime: Any | None = None,
+    ) -> None:
+        super().__init__(
+            exporter=exporter,
+            telemetry_bus=telemetry_bus,
+            fake_exporter=fake_exporter,
+        )
+        self.tts_runtime = tts_runtime
+        self._llm_generator_task: asyncio.Task[Any] | None = None
+        self._mic_open_tokens: Dict[str, tuple[Callable[[str], bool], str]] = {}
+
+    async def on_open(self, sid: str, headers: Mapping[str, str]) -> None:
+        maybe_coro = super().on_open(sid, headers)
+        if inspect.isawaitable(maybe_coro):
+            await maybe_coro
+
+        self._unsubscribe_barge_in(sid)
+
+        def _handler(event: dict, *, _sid=sid) -> None:
+            self._on_client_mic_open(_sid, event)
+
+        subscribe_func = getattr(self._bus, "subscribe", None)
+        unsubscribe_func = getattr(self._bus, "unsubscribe", None)
+        if callable(subscribe_func) and callable(unsubscribe_func):
+            token = subscribe_func(EVT_CLIENT_MIC_OPEN, _handler)
+            unsubscribe_cb: Callable[[str], bool] = unsubscribe_func
+        else:
+            token = bus.subscribe(EVT_CLIENT_MIC_OPEN, _handler)
+            unsubscribe_cb = bus.unsubscribe
+
+        self._mic_open_tokens[sid] = (unsubscribe_cb, token)
+
+    async def on_close(self, sid: str, code: int, reason: Optional[str]) -> None:
+        try:
+            maybe_coro = super().on_close(sid, code, reason)
+            if inspect.isawaitable(maybe_coro):
+                await maybe_coro
+        finally:
+            self._unsubscribe_barge_in(sid)
+
+    async def _handle_barge_in(
+        self, sid: str, event: Mapping[str, Any] | None = None
+    ) -> None:
+        runtime = getattr(self, "tts_runtime", None)
+        if not getattr(runtime, "is_active", False):
+            return
+
+        _log.info("evt=barge_in_detected sid=%s", sid)
+
+        llm_task = getattr(self, "_llm_generator_task", None)
+        if isinstance(llm_task, asyncio.Task):
+            if not llm_task.done():
+                llm_task.cancel()
+                try:
+                    await llm_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:  # pragma: no cover - defensive logging
+                    _log.exception("evt=barge_in_llm_cancel_failed sid=%s", sid)
+        self._llm_generator_task = None
+
+        interrupt = getattr(runtime, "interrupt", None)
+        if callable(interrupt):
+            try:
+                interrupt()
+            except Exception:  # pragma: no cover - defensive logging
+                _log.exception("evt=barge_in_tts_interrupt_failed sid=%s", sid)
+            else:
+                _log.info("evt=barge_in_tts_interrupted sid=%s", sid)
+
+    def _on_client_mic_open(self, sid: str, event: Mapping[str, Any] | None) -> None:
+        runtime = getattr(self, "tts_runtime", None)
+        if not getattr(runtime, "is_active", False):
+            return
+        if not isinstance(event, Mapping):
+            return
+        event_sid = event.get("sid")
+        if not isinstance(event_sid, str) or event_sid != sid:
+            return
+
+        coroutine = self._handle_barge_in(sid, event)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            loop.create_task(coroutine)
+        else:
+            try:
+                asyncio.run(coroutine)
+            except RuntimeError:  # pragma: no cover - defensive logging
+                _log.exception("evt=barge_in_task_schedule_failed sid=%s", sid)
+
+    def _unsubscribe_barge_in(self, sid: str) -> None:
+        entry = self._mic_open_tokens.pop(sid, None)
+        if not entry:
+            return
+        unsubscribe_cb, token = entry
+        try:
+            unsubscribe_cb(token)
+        except Exception:  # pragma: no cover - defensive logging
+            _log.exception("evt=barge_in_unsubscribe_failed sid=%s", sid)
+
+
 __all__ = [
     "EngineV2",
     "EVT_TURN_BEGIN",
@@ -1938,4 +2054,5 @@ __all__ = [
     "LISTENING",
     "THINKING",
     "RESPONDING",
+    "VoiceEngine",
 ]
