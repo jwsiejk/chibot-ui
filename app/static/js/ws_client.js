@@ -2621,7 +2621,7 @@ import { WakeWord } from "./wake_word.js";
     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
     input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
     asr: {
-      prearm_on_tts_end: true,
+      prearm_on_tts_end: false,
       keep_stream_warm_ms: 30000,
       commit_on_vad_silence: true,
       commit_silence_ms: 900,
@@ -3234,6 +3234,7 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
       __resetAudioHeaderSent();
       if (frame.type === "asr.closed") {
+        _audioStreaming = false;
         setListeningState(false);
         emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
       }

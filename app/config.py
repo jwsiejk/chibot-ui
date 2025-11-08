@@ -149,7 +149,7 @@ _DEFAULT_POLICY_INPUT = {
 }
 
 _DEFAULT_POLICY_ASR = {
-    "prearm_on_tts_end": True,
+    "prearm_on_tts_end": False,
     "keep_stream_warm_ms": 30000,
     "vendor": {"primary": "speechmatics", "secondary": None},
     "commit_on_vad_silence": True,

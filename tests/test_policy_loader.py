@@ -102,7 +102,7 @@ class InteractionPolicyLoaderTests(unittest.TestCase):
 
         asr = policy["asr"]
         self.assertIsInstance(asr, dict)
-        self.assertTrue(asr["prearm_on_tts_end"])
+        self.assertFalse(asr["prearm_on_tts_end"])
         self.assertEqual(asr["commit_silence_ms"], 900)
 
         telemetry = snapshot["telemetry"]

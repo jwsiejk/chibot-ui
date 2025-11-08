@@ -43,7 +43,7 @@
       require_hotword_to_start: false,
     },
     policy_asr: {
-      prearm_on_tts_end: true,
+      prearm_on_tts_end: false,
       keep_stream_warm_ms: 30000,
       commit_on_vad_silence: true,
       commit_silence_ms: 900,

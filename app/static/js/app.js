@@ -1105,7 +1105,7 @@
       if (asrPolicy && typeof asrPolicy.prearm_on_tts_end === 'boolean') {
         return asrPolicy.prearm_on_tts_end;
       }
-      return true;
+      return false;
     }
 
     function getKeepWarmMs() {

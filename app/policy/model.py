@@ -40,7 +40,7 @@ class ASRPolicy:
     """Server-side ASR endpointing configuration."""
 
     vendor: ASRVendorPolicy = field(default_factory=ASRVendorPolicy)
-    prearm_on_tts_end: bool = True
+    prearm_on_tts_end: bool = False
     keep_stream_warm_ms: int = 30000
     commit_on_vad_silence: bool = True
     commit_silence_ms: int = 900

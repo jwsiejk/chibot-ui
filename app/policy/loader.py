@@ -35,7 +35,7 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
             "require_hotword_to_start": False,
         },
         "asr": {
-            "prearm_on_tts_end": True,
+            "prearm_on_tts_end": False,
             "keep_stream_warm_ms": 30000,
             "commit_on_vad_silence": True,
             "commit_silence_ms": 900,
