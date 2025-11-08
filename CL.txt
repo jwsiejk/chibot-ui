@@ -1,36 +1,29 @@
-app.js?v=94f7fb2:661 client.appstate.delta
-2
-app.js?v=94f7fb2:661 client.pcm.chunk
-app.js?v=94f7fb2:661 client.audio_chunk_send
-app.js?v=94f7fb2:661 client.pcm.chunk
-app.js?v=94f7fb2:661 client.appstate.delta
-2
-app.js?v=94f7fb2:661 client.pcm.chunk
-app.js?v=94f7fb2:661 client.audio_chunk_send
-app.js?v=94f7fb2:661 client.appstate.delta
-2
-app.js?v=94f7fb2:661 client.pcm.chunk
-app.js?v=94f7fb2:661 client.appstate.delta
-app.js?v=94f7fb2:661 client.pcm.capture_stop
-app.js?v=94f7fb2:1309 client.mic evt=mic_stop reason=watchdog
-app.js?v=94f7fb2:661 client.audio_chunk_send
-3
-app.js?v=94f7fb2:661 client.appstate.heartbeat
-app.js?v=94f7fb2:661 client.ws
-app.js?v=94f7fb2:661 client.stream.off
-app.js?v=94f7fb2:661 client.vad.state
-ws_client.js?v=94f7fb2:3869 WSClient.send skipped (phase not ready) 
-Object
-app.js?v=94f7fb2:661 client.ws
-app.js?v=94f7fb2:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=94f7fb2:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=94f7fb2:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=94f7fb2:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=94f7fb2:933 fsm.transition prev=Greeting next=Disconnected
-app.js?v=94f7fb2:661 client.appstate.delta
-ws_client.js?v=94f7fb2:3707 WebSocket closed 
-Object
-app.js?v=94f7fb2:661 client.ws
-app.js?v=94f7fb2:661 client.appstate.delta
-﻿
-
+app.js?v=2d06c84:661 client.appstate.delta
+2app.js?v=2d06c84:661 client.pcm.chunk
+app.js?v=2d06c84:661 client.audio_chunk_send
+app.js?v=2d06c84:661 client.appstate.delta
+app.js?v=2d06c84:661 client.pcm.capture_stop
+app.js?v=2d06c84:1309 client.mic evt=mic_stop reason=watchdog
+2app.js?v=2d06c84:661 client.appstate.heartbeat
+app.js?v=2d06c84:661 client.ws
+2app.js?v=2d06c84:661 client.appstate.heartbeat
+app.js?v=2d06c84:661 client.ping
+app.js?v=2d06c84:661 client.ws
+2app.js?v=2d06c84:661 client.appstate.heartbeat
+app.js?v=2d06c84:661 client.ws
+app.js?v=2d06c84:661 client.appstate.heartbeat
+app.js?v=2d06c84:661 client.stream.off
+app.js?v=2d06c84:661 client.vad.state
+ws_client.js?v=2d06c84:3869 WSClient.send skipped (phase not ready) Object
+send @ ws_client.js?v=2d06c84:3869Understand this warning
+app.js?v=2d06c84:661 client.ws
+app.js?v=2d06c84:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=2d06c84:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=2d06c84:1309 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=2d06c84:1309 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=2d06c84:933 fsm.transition prev=Listening next=Disconnected
+app.js?v=2d06c84:661 client.appstate.delta
+ws_client.js?v=2d06c84:3707 WebSocket closed Object
+ws.onclose @ ws_client.js?v=2d06c84:3707Understand this error
+app.js?v=2d06c84:661 client.ws
+app.js?v=2d06c84:661 client.appstate.delta
