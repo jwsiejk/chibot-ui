@@ -1841,6 +1841,7 @@ class ChatV2Adapter:
                 ctx.sid,
                 keep_warm_ms,
             )
+            self._emit_hud_state(ctx, "Listening")
             try:
                 await self._send_asr_ready_bundle(send, ctx)
             except Exception:  # pragma: no cover - defensive logging
@@ -3286,8 +3287,10 @@ class ChatV2Adapter:
         event_type = event.get("type")
         if event_type == EVT_ASR_PARTIAL:
             frame_type = "asr.partial"
+            is_final = False
         elif event_type == EVT_ASR_FINAL:
             frame_type = "asr.final"
+            is_final = True
         else:
             return None
 
@@ -3315,6 +3318,8 @@ class ChatV2Adapter:
             # Vendor explicitly signaled silence: end input cleanly so the UI resets.
             if no_speech:
                 return {"type": "input.stop", "reason": "no_speech"}
+            if is_final:
+                return {"type": "input.stop", "reason": "empty_transcript"}
             return None
 
         frame: Dict[str, Any] = {"type": frame_type, "text": text}
@@ -4568,6 +4573,7 @@ class ChatV2Adapter:
             )
             await self._invoke_engine("on_open", ctx.sid, ctx.headers)
             await self._invoke_engine("start_greet", ctx.sid)
+            ctx.await_user_expected = False
         except Exception:  # pragma: no cover - defensive logging
             _log.exception("evt=ws_open_task_failed sid=%s", ctx.sid)
 
