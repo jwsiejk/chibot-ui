@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import logging
 import os
 import threading
 from typing import Any, Mapping, MutableMapping, Optional
+
+from app.ws.policy import normalize_policy
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -154,7 +157,7 @@ _DEFAULT_POLICY_ASR = {
     "vendor": {"primary": "speechmatics", "secondary": None},
     "commit_on_vad_silence": True,
     # Make VAD slightly more patient so we do not clip trailing speech.
-    "commit_silence_ms": 1400,
+    "commit_silence_ms": 900,
     "max_utterance_ms": 8000,
     "dup_final_suppress_ms": 150,
     "dedupe_normalize": True,
@@ -734,6 +737,45 @@ def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None)
     return value
 
 
+def _merge_mapping(dst: MutableMapping[str, Any], src: Mapping[str, Any]) -> None:
+    """Recursively merge ``src`` into ``dst`` while copying nested mappings."""
+
+    for key, value in src.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, Mapping):
+            existing = dst.get(key)
+            if isinstance(existing, Mapping):
+                merged_child: MutableMapping[str, Any] = dict(existing)
+            else:
+                merged_child = {}
+            _merge_mapping(merged_child, value)
+            dst[key] = merged_child
+        else:
+            dst[key] = deepcopy(value)
+
+
+def build_session_policy(
+    admin_overrides: Mapping[str, Any] | None,
+    env: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a normalized session policy using v2 defaults and legacy mapping."""
+
+    merged: MutableMapping[str, Any] = {}
+
+    if isinstance(env, Mapping):
+        _merge_mapping(merged, env)
+
+    if isinstance(admin_overrides, Mapping):
+        _merge_mapping(merged, admin_overrides)
+
+    policy_block = merged.pop("policy", None)
+    if isinstance(policy_block, Mapping):
+        _merge_mapping(merged, policy_block)
+
+    return normalize_policy(dict(merged))
+
+
 ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(
     "ASR_DUP_FINAL_SUPPRESS_MS", default=150, minimum=0
 )
@@ -963,6 +1005,7 @@ __all__ = [
     "POLICY_ROUTING",
     "POLICY_OVERRIDES",
     "bool_env_or_db",
+    "build_session_policy",
     "get_admin_setting_raw",
     "get_client_config_snapshot",
     "get_env",

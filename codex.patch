@@ -1,60 +1,347 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 363d99736aca072e1659e3b051c7eaba798752c1..72d6622e037251eec0a8ca9df8513d7f1991737f 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -2343,51 +2343,54 @@ import { WakeWord } from "./wake_word.js";
-         } catch {}
-       } else {
-         state = AppState;
-       }
-     }
-     const live = client && client._ws
-       ? client._ws
-       : (state && state.websocket ? state.websocket : null);
-     if (dropIfBusy && live && live.readyState === WebSocket.OPEN && live.bufferedAmount > 512 * 1024) {
-       return false;
-     }
-     if (!(payload instanceof Blob) && !(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) {
-       logTransportMisuse("sendBinary_non_buffer_payload");
-       console.error("WSClient.sendBinary: expected ArrayBuffer, TypedArray, or Blob");
-       return false;
-     }
-     const result = send.call(client, payload, { binary: true });
-     if (result && typeof result.then === "function") {
-       return result;
-     }
-     return result !== false;
-   }
+diff --git a/app/config.py b/app/config.py
+index 7d69662748b476aa11c7f69dbf1dcc684140e62a..f371f3f73a85c401887eb16e7cb8d3836aeae118 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,35 +1,38 @@
+ """Application configuration helpers."""
  
-   function sendJson(frame) {
-     try {
--      return WSClient.sendJSON(frame);
-+      if (WSClient && typeof WSClient.sendJSON === "function") {
-+        return WSClient.sendJSON(frame);
-+      }
-+      return send(frame, { binary: false });
-     } catch (err) {
-       console.error("WSClient sendJson error", err);
-       return false;
-     }
-   }
+ from __future__ import annotations
  
-   function canSendHeartbeat() {
-     if (!socket || socket.readyState !== WebSocket.OPEN) {
-       return false;
-     }
-     const client = WSClient;
-     if (client && typeof client.isConnected === "function") {
-       try {
-         if (!client.isConnected()) {
-           return false;
-         }
-       } catch (err) {
-         console.warn("WSClient.isConnected check failed", err);
-       }
-     }
-     return true;
-   }
++from copy import deepcopy
+ import json
+ import logging
+ import os
+ import threading
+ from typing import Any, Mapping, MutableMapping, Optional
  
-   function sendPing() {
-     if (!canSendHeartbeat()) return;
++from app.ws.policy import normalize_policy
++
+ try:
+     from dotenv import load_dotenv  # type: ignore
+ except ImportError:  # pragma: no cover - optional dependency
+     load_dotenv = None
+ else:  # pragma: no branch
+     load_dotenv(dotenv_path=".env", override=False)
+ 
+ 
+ def env_bool(name: str, default: bool = False) -> bool:
+     """Return an environment variable parsed as a boolean."""
+ 
+     value = os.getenv(name)
+     if value is None:
+         return bool(default)
+     value = value.strip().lower()
+     if value in {"1", "true", "t", "yes", "y", "on"}:
+         return True
+     if value in {"0", "false", "f", "no", "n", "off"}:
+         return False
+     return bool(default)
+ 
+ 
+ # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+ # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
+ DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
+@@ -132,51 +135,51 @@ _DEFAULT_POLICY_MEDIA = {
+     "fallbacks_allowed": False,
+ }
+ 
+ _DEFAULT_POLICY_CAPTURE = {
+     "start_on_asr_ready": True,
+     "start_on_turn_ready": True,
+     "timeslice_ms": 200,
+     "mask_during_tts": True,
+ }
+ 
+ _DEFAULT_POLICY_RECORDER = {
+     "stop_on_tts_start": False,
+     "mute_send_during_tts": True,
+ }
+ 
+ _DEFAULT_POLICY_INPUT = {
+     "require_hotword_to_start": False,
+ }
+ 
+ _DEFAULT_POLICY_ASR = {
+     "prearm_on_tts_end": False,
+     "keep_stream_warm_ms": 30000,
+     "vendor": {"primary": "speechmatics", "secondary": None},
+     "commit_on_vad_silence": True,
+     # Make VAD slightly more patient so we do not clip trailing speech.
+-    "commit_silence_ms": 1400,
++    "commit_silence_ms": 900,
+     "max_utterance_ms": 8000,
+     "dup_final_suppress_ms": 150,
+     "dedupe_normalize": True,
+     # Give the utterance end detector a wider buffer to avoid premature stops.
+     "utterance_end_ms": 2100,
+     "min_segment_ms": 800,
+     "final_guard_ms": 250,
+     "allow_word_finals": False,
+ }
+ 
+ _DEFAULT_POLICY_ROUTING = {
+     "ws_version": "v2",
+ }
+ 
+ _DEFAULT_POLICY_AUDIO = {
+     "pipeline": {"mode": "pcm16"},
+ }
+ 
+ POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
+ POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
+ POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
+ POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
+ POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
+ POLICY_AUDIO: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_AUDIO)
+ POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
+@@ -712,50 +715,89 @@ def _resolve_mapping_setting(
+     return dict(base_default), "default", None
+ 
+ 
+ def _resolve_int_setting(
+     name: str, default: int, *, minimum: Optional[int] = None
+ ) -> tuple[int, str, Any]:
+     env_value = os.getenv(_env_name(name))
+     if env_value is not None:
+         return _coerce_int(env_value, default, minimum=minimum), "env", env_value
+     stored = _get_cached_admin_setting(name)
+     if stored is not None:
+         return _coerce_db_int(stored, default, minimum=minimum), "db", stored
+     fallback = int(default)
+     if minimum is not None and fallback < minimum:
+         fallback = minimum
+     return fallback, "default", None
+ 
+ 
+ def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
+     """Resolve an integer config value from env, admin settings, or default."""
+ 
+     value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
+     return value
+ 
+ 
++def _merge_mapping(dst: MutableMapping[str, Any], src: Mapping[str, Any]) -> None:
++    """Recursively merge ``src`` into ``dst`` while copying nested mappings."""
++
++    for key, value in src.items():
++        if not isinstance(key, str):
++            continue
++        if isinstance(value, Mapping):
++            existing = dst.get(key)
++            if isinstance(existing, Mapping):
++                merged_child: MutableMapping[str, Any] = dict(existing)
++            else:
++                merged_child = {}
++            _merge_mapping(merged_child, value)
++            dst[key] = merged_child
++        else:
++            dst[key] = deepcopy(value)
++
++
++def build_session_policy(
++    admin_overrides: Mapping[str, Any] | None,
++    env: Mapping[str, Any] | None,
++) -> dict[str, Any]:
++    """Return a normalized session policy using v2 defaults and legacy mapping."""
++
++    merged: MutableMapping[str, Any] = {}
++
++    if isinstance(env, Mapping):
++        _merge_mapping(merged, env)
++
++    if isinstance(admin_overrides, Mapping):
++        _merge_mapping(merged, admin_overrides)
++
++    policy_block = merged.pop("policy", None)
++    if isinstance(policy_block, Mapping):
++        _merge_mapping(merged, policy_block)
++
++    return normalize_policy(dict(merged))
++
++
+ ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(
+     "ASR_DUP_FINAL_SUPPRESS_MS", default=150, minimum=0
+ )
+ ASR_DEDUPE_NORMALIZE = bool_env_or_db("ASR_DEDUPE_NORMALIZE", default=True)
+ 
+ 
+ def reload_runtime_flags() -> None:
+     """Refresh runtime configuration flags from env and admin settings."""
+ 
+     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
+         "diag_client_hud", default=False
+     )
+     audio_guardrails_default = {"enabled": True}
+     audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
+         "audio_guardrails", default=audio_guardrails_default
+     )
+     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
+         "diag_audio_guard", default=True
+     )
+     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
+         "diag_chunk_sample_n", default=10, minimum=1
+     )
+ 
+     policy_media_raw, media_source, media_raw = _resolve_mapping_setting(
+         "policy_media", default=_DEFAULT_POLICY_MEDIA
+@@ -941,34 +983,35 @@ reload_runtime_flags()
+ 
+ __all__ = [
+     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
+     "ASR_IDLE_CLOSE_MS",
+     "ASR_TRACE",
+     "ASR_DUP_FINAL_SUPPRESS_MS",
+     "ASR_DEDUPE_NORMALIZE",
+     "ASR_DEEPGRAM_ENABLED",
+     "ASR_SPEECHMATICS_ENABLED",
+     "AUDIO_GUARDRAILS",
+     "DEEPGRAM_API_KEY",
+     "SPEECHMATICS_API_KEY",
+     "SPEECHMATICS_REALTIME_URL",
+     "DIAG_AUDIO_GUARD",
+     "DIAG_CHUNK_SAMPLE_N",
+     "DIAG_CLIENT_HUD",
+     "POLICY_MEDIA",
+     "POLICY_CAPTURE",
+     "POLICY_RECORDER",
+     "POLICY_INPUT",
+     "POLICY_ASR",
+     "POLICY_AUDIO",
+     "POLICY_ROUTING",
+     "POLICY_OVERRIDES",
+     "bool_env_or_db",
++    "build_session_policy",
+     "get_admin_setting_raw",
+     "get_client_config_snapshot",
+     "get_env",
+     "int_env_or_db",
+     "reload_runtime_flags",
+     "set_admin_setting_raw",
+     "set_admin_settings",
+     "update_admin_settings_cache",
+ ]
+diff --git a/app/ws/policy.py b/app/ws/policy.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b1d708ea9ff94412dc7e5e2e5d733485fc154548
+--- /dev/null
++++ b/app/ws/policy.py
+@@ -0,0 +1,119 @@
++from __future__ import annotations
++
++from copy import deepcopy
++from typing import Any, Mapping, MutableMapping, Sequence
++
++POLICY_VERSION = 2
++
++# map legacy → new; omit keys to drop
++LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
++    # legacy ASR
++    ("asr", "prearm_on_tts_end"): ("asr", "prearm_on_tts_end"),
++    ("asr", "start_on_ready"): ("asr", "server_starts_input"),  # legacy name
++    # legacy VAD/gating
++    ("vad", "auto_vad_active"): None,  # runtime state, not a policy knob
++    ("vad", "allow_auto_vad"): ("vad", "sender_gate_on_tts"),  # best fit
++    # legacy UI badge behavior
++    ("ui", "badge_listen_on_asr"): ("ui", "status", "require_active_turn"),
++}
++
++DEPRECATED_KEYS = {
++    ("input", "require_hotword_to_start"),
++    ("input", "require_user_gesture_first_visit"),  # keep only if UX requires
++    ("audio", "pipeline", "mode"),
++    ("media", "asr_input"),
++}
++
++SAFE_DEFAULTS_V2: dict[str, Any] = {
++    "version": POLICY_VERSION,
++    "asr": {
++        "server_starts_input": True,
++        "prearm_on_tts_end": True,
++        "cold_start_grace_ms": 2500,
++    },
++    "vad": {
++        "warmup_ms": 1200,
++        "sender_gate_on_tts": True,
++    },
++    "watchdog": {
++        "partial_wait_ms_first_turn": 2500,
++    },
++    "server": {
++        "buffer_prestart_audio_ms": 300,
++    },
++    "capture": {
++        "constraints": {
++            "echoCancellation": True,
++            "noiseSuppression": True,
++            "autoGainControl": False,
++            "channelCount": 1,
++            "sampleRate": 48000,
++        }
++    },
++    "ui": {
++        "status": {
++            "require_active_turn": True,
++            "enable_meter": True,
++        }
++    },
++}
++
++
++def _get(d: Mapping[str, Any], path: Sequence[str], default: Any = None) -> Any:
++    cur: Any = d
++    for key in path:
++        if not isinstance(cur, Mapping) or key not in cur:
++            return default
++        cur = cur[key]
++    return cur
++
++
++def _set(d: MutableMapping[str, Any], path: Sequence[str], value: Any) -> None:
++    cur: MutableMapping[str, Any] = d
++    for key in path[:-1]:
++        next_val = cur.get(key)
++        if not isinstance(next_val, MutableMapping):
++            next_val = {}
++            cur[key] = next_val  # type: ignore[assignment]
++        cur = next_val  # type: ignore[assignment]
++    cur[path[-1]] = value
++
++
++def normalize_policy(incoming: Mapping[str, Any] | None) -> dict[str, Any]:
++    """Merge SAFE_DEFAULTS_V2 ← incoming (mapped), drop deprecated, prefer v2 keys."""
++
++    src = deepcopy(dict(incoming or {}))
++    out = deepcopy(SAFE_DEFAULTS_V2)
++
++    def deep_merge(dst: MutableMapping[str, Any], src_: Mapping[str, Any] | None) -> None:
++        for key, value in (src_ or {}).items():
++            if isinstance(value, Mapping) and isinstance(dst.get(key), MutableMapping):
++                deep_merge(dst[key], value)  # type: ignore[index]
++            else:
++                dst[key] = deepcopy(value)
++
++    deep_merge(out, {key: value for key, value in src.items() if key in out})
++
++    for legacy_path, new_path in LEGACY_MAP.items():
++        val = _get(src, legacy_path, None)
++        if val is None or new_path is None:
++            continue
++        if legacy_path == ("ui", "badge_listen_on_asr"):
++            val = not bool(val)
++        if _get(out, new_path, None) is None:
++            _set(out, new_path, val)
++
++    for path in DEPRECATED_KEYS:
++        parent = _get(src, path[:-1], None)
++        if isinstance(parent, MutableMapping) and path[-1] in parent:
++            try:
++                del parent[path[-1]]
++            except Exception:
++                pass
++
++    out["version"] = POLICY_VERSION
++    out["_normalized_from"] = "v2"
++    return out
++
++
++__all__ = ["POLICY_VERSION", "normalize_policy"]
