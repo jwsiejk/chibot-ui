@@ -1351,7 +1351,8 @@ import { initVAD } from "./audio/vad_client.js";
       console.warn("AudioRecorder unavailable; cannot start streaming");
       return;
     }
-    // The server owns the input.start lifecycle; never emit it from the client.
+    // The server typically owns the input.start lifecycle; client emits only in
+    // policy-driven autostart paths where we must request capture proactively.
     try {
       await recorder.start({ onChunk: handleRecorderChunk, policy });
     } catch (err) {
@@ -3593,6 +3594,9 @@ import { initVAD } from "./audio/vad_client.js";
         __pendingAutoArm = false;
         if (!_audioStreaming && !AppState?.micLive) {
           try {
+            WSClient.send({ type: "input.start", reason: "auto_asr_ready" });
+          } catch {}
+          try {
             await startRecorderStreaming(frame?.policy || {});
             _audioStreaming = true;
             if (AppState && typeof AppState === "object") {
@@ -3688,6 +3692,9 @@ import { initVAD } from "./audio/vad_client.js";
       if (begin && __pendingAutoArm) {
         __pendingAutoArm = false;
         if (!_audioStreaming && !AppState?.micLive) {
+          try {
+            WSClient.send({ type: "input.start", reason: "auto_turn_begin" });
+          } catch {}
           try {
             await startRecorderStreaming(AppState?.policy || {});
             _audioStreaming = true;
