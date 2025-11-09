@@ -65,6 +65,68 @@
     }
   }
 
+  function logClientMicEventText(text) {
+    if (typeof text !== 'string' || !text) {
+      return;
+    }
+    const win = typeof window !== 'undefined' ? window : null;
+    if (win && typeof win.__logClientMicString === 'function') {
+      try {
+        win.__logClientMicString(text);
+        return;
+      } catch (_) {}
+    }
+    emitClientLog('client.mic', { message: text });
+  }
+
+  function sanitizeLogText(value, fallback = 'unknown', maxLength = 160) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) {
+        if (trimmed.length > maxLength) {
+          return `${trimmed.slice(0, maxLength - 1)}…`;
+        }
+        return trimmed;
+      }
+    }
+    if (value == null) {
+      return fallback;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    try {
+      const serialized = JSON.stringify(value);
+      if (typeof serialized === 'string' && serialized) {
+        if (serialized.length > maxLength) {
+          return `${serialized.slice(0, maxLength - 1)}…`;
+        }
+        return serialized;
+      }
+    } catch (_) {}
+    try {
+      const text = String(value);
+      if (text.length > maxLength) {
+        return `${text.slice(0, maxLength - 1)}…`;
+      }
+      return text;
+    } catch (_) {}
+    return fallback;
+  }
+
+  function serializeConstraintsForLog(constraints) {
+    try {
+      const json = JSON.stringify(constraints);
+      if (typeof json === 'string' && json) {
+        if (json.length > 512) {
+          return `${json.slice(0, 511)}…`;
+        }
+        return json;
+      }
+    } catch (_) {}
+    return '"unserializable"';
+  }
+
   function normalizeReason(reason) {
     if (typeof reason === 'string' && reason) {
       return reason;
@@ -284,11 +346,28 @@
 
       let stream;
       try {
+        const constraintsLog = serializeConstraintsForLog(audioConstraints);
+        logClientMicEventText(`evt=mic_get_user_media_start constraints=${constraintsLog}`);
         stream = await navigator.mediaDevices.getUserMedia({
           audio: audioConstraints,
           video: false,
         });
+        const audioTracks = stream && typeof stream.getAudioTracks === 'function'
+          ? stream.getAudioTracks()
+          : [];
+        const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
+        const trackId = primaryTrack && typeof primaryTrack.id === 'string' && primaryTrack.id
+          ? primaryTrack.id
+          : 'unknown';
+        const safeTrackId = sanitizeLogText(trackId, 'unknown', 80);
+        logClientMicEventText(`evt=mic_get_user_media_success track_id=${safeTrackId}`);
       } catch (err) {
+        const errorName = sanitizeLogText(err && err.name ? err.name : null, 'unknown', 64);
+        const errorMessageSource = err && typeof err.message === 'string' && err.message
+          ? err.message
+          : err;
+        const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
+        logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
         emitClientLog('client.pcm.capture_error', {
           stage: 'getUserMedia',
           message: err && err.message ? err.message : String(err),
@@ -467,6 +546,8 @@
 
     startMicCaptureIfIdle() {
       if (this._active || this._initializing) {
+        const reason = this._initializing ? 'initializing' : 'active';
+        logClientMicEventText(`evt=mic_capture_request_blocked reason=${reason}`);
         return this._initializing || Promise.resolve(null);
       }
       return this.start();

@@ -1,135 +1,243 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index e5a15f51f8da2fa4f94efda453ac2a675a7b36ac..b0aa0de93c0c9bcd7138e7cd8abd2430567e82ec 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -661,51 +661,63 @@ class ChatV2Adapter:
-             for hit in legacy_hits or ():
-                 if not isinstance(hit, (list, tuple)) or len(hit) != 2:
-                     continue
-                 legacy_path, new_path = hit
-                 if not isinstance(legacy_path, (list, tuple)) or not isinstance(
-                     new_path, (list, tuple)
-                 ):
-                     continue
-                 mapped_hits.append(
-                     [list(map(str, legacy_path)), list(map(str, new_path))]
-                 )
+diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
+index d9292db2a76df1f330def1e75016571e6dac4ab1..7eec50f7c6ac2224a2cee598011ca598b97136c9 100644
+--- a/app/static/js/audio/pcm_recorder.js
++++ b/app/static/js/audio/pcm_recorder.js
+@@ -43,50 +43,112 @@
  
-             asr_candidate = policy.get("asr")
-             asr_block = asr_candidate if isinstance(asr_candidate, Mapping) else {}
-             vad_candidate = policy.get("vad")
-             vad_block = vad_candidate if isinstance(vad_candidate, Mapping) else {}
-             server_starts_input = None
-             cold_start_grace_ms = None
-             warmup_ms = None
-             if isinstance(asr_block, Mapping):
-                 server_starts_input = asr_block.get("server_starts_input")
-                 cold_start_grace_ms = asr_block.get("cold_start_grace_ms")
-             if isinstance(vad_block, Mapping):
-                 warmup_ms = vad_block.get("warmup_ms")
+   function emitClientLog(label, detail = {}) {
+     const payload = detail && typeof detail === 'object' ? detail : { value: detail };
+     const AppState = typeof window !== 'undefined' ? window.AppState : null;
+     if (AppState && AppState.hub && typeof AppState.hub.log === 'function') {
+       try {
+         AppState.hub.log(label, payload);
+         return;
+       } catch (err) {
+         try {
+           console.warn('client.log hub emit failed', err);
+         } catch (_) {}
+       }
+     }
+     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+       try {
+         window.dispatchEvent(new CustomEvent('client.log', { detail: { label, detail: payload } }));
+       } catch (err) {
+         try {
+           console.warn('client.log dispatch failed', err);
+         } catch (_) {}
+       }
+     }
+   }
  
--            self._bus("policy.snapshot", policy, sid=ctx.sid)
-+            snapshot_payload = {
-+                "version": version,
-+                "server_starts_input": bool(asr_block.get("server_starts_input")),
-+                "warmup_ms": self._coerce_non_negative_int(
-+                    vad_block.get("warmup_ms"),
-+                    0,
-+                ),
-+                "cold_start_grace_ms": self._coerce_non_negative_int(
-+                    asr_block.get("cold_start_grace_ms"),
-+                    0,
-+                ),
-+            }
-+            self._bus("policy.snapshot", snapshot_payload, sid=ctx.sid)
-             self._bus(
-                 "policy.deprecation_report",
-                 {
-                     "version": version,
-                     "mapped_legacy_keys": mapped_hits,
-                     "server_starts_input": server_starts_input,
-                     "warmup_ms": warmup_ms,
-                     "cold_start_grace_ms": cold_start_grace_ms,
-                 },
-                 sid=ctx.sid,
-             )
-             ctx.policy_snapshot_fingerprint = fingerprint
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=policy_snapshot_emit_failed sid=%s", ctx.sid)
++  function logClientMicEventText(text) {
++    if (typeof text !== 'string' || !text) {
++      return;
++    }
++    const win = typeof window !== 'undefined' ? window : null;
++    if (win && typeof win.__logClientMicString === 'function') {
++      try {
++        win.__logClientMicString(text);
++        return;
++      } catch (_) {}
++    }
++    emitClientLog('client.mic', { message: text });
++  }
++
++  function sanitizeLogText(value, fallback = 'unknown', maxLength = 160) {
++    if (typeof value === 'string') {
++      const trimmed = value.trim();
++      if (trimmed) {
++        if (trimmed.length > maxLength) {
++          return `${trimmed.slice(0, maxLength - 1)}…`;
++        }
++        return trimmed;
++      }
++    }
++    if (value == null) {
++      return fallback;
++    }
++    if (typeof value === 'number' || typeof value === 'boolean') {
++      return String(value);
++    }
++    try {
++      const serialized = JSON.stringify(value);
++      if (typeof serialized === 'string' && serialized) {
++        if (serialized.length > maxLength) {
++          return `${serialized.slice(0, maxLength - 1)}…`;
++        }
++        return serialized;
++      }
++    } catch (_) {}
++    try {
++      const text = String(value);
++      if (text.length > maxLength) {
++        return `${text.slice(0, maxLength - 1)}…`;
++      }
++      return text;
++    } catch (_) {}
++    return fallback;
++  }
++
++  function serializeConstraintsForLog(constraints) {
++    try {
++      const json = JSON.stringify(constraints);
++      if (typeof json === 'string' && json) {
++        if (json.length > 512) {
++          return `${json.slice(0, 511)}…`;
++        }
++        return json;
++      }
++    } catch (_) {}
++    return '"unserializable"';
++  }
++
+   function normalizeReason(reason) {
+     if (typeof reason === 'string' && reason) {
+       return reason;
+     }
+     if (reason && typeof reason === 'object') {
+       if (typeof reason.reason === 'string' && reason.reason) {
+         return reason.reason;
+       }
+       if (typeof reason.code === 'string' && reason.code) {
+         return reason.code;
+       }
+       if (typeof reason.message === 'string' && reason.message) {
+         return reason.message;
+       }
+     }
+     return 'unknown';
+   }
  
-     def _policy(self, ctx: AdapterContext) -> Dict[str, Any]:
-         if isinstance(ctx.policy, Mapping):
-             return dict(ctx.policy)
-         return {}
+   function emitAppStateRecordingStarted(policy) {
+     const AppState = typeof window !== 'undefined' ? window.AppState : null;
+     if (!AppState || typeof AppState.emit !== 'function') {
+       return;
+     }
+     try {
+       AppState.emit('recordingStarted', { policy: policy || null, source: 'pcm_recorder' });
+@@ -262,55 +324,72 @@
+         audioConstraints.sampleSize = 16;
+       } else if (Number.isFinite(audioConstraints.sampleSize)) {
+         audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
+       }
  
-     def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
-         legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
-         try:
-             normalized = normalize_policy(payload, legacy_hits=legacy_hits)
-         except Exception:  # pragma: no cover - defensive logging
-@@ -2730,56 +2742,64 @@ class ChatV2Adapter:
-                 reason = "not_ready"
-             elif not mic_open:
-                 reason = "mic_closed"
-             elif not send_open:
-                 reason = "send_closed"
-             else:
-                 reason = "backpressure"
-             _log.info(
-                 "evt=audio_drop sid=%s len=%d reason=%s",
-                 ctx.sid,
-                 byte_count,
-                 reason,
-             )
-             return
-         asr_client = ctx.session.asr
-         if ctx.session.asr_state == "open" and asr_client is not None:
-             try:
-                 await asr_client.send_pcm(chunk)
-             except Exception:
-                 _log.warning("evt=asr_pcm_send_failed sid=%s", ctx.sid, exc_info=True)
-             else:
-                 ctx.asr_bytes_sent += byte_count
-                 if not ctx.session.first_chunk_sent:
-                     ctx.session.first_chunk_sent = True
-                 streamed = getattr(asr_client, "bytes_streamed", 0) or 0
--                setattr(asr_client, "bytes_streamed", streamed + byte_count)
-+                streamed += byte_count
-+                setattr(asr_client, "bytes_streamed", streamed)
-                 now_mono = time.monotonic()
-                 first_packet = getattr(asr_client, "first_packet_monotonic", None)
-                 if not isinstance(first_packet, (int, float)):
-                     first_packet = now_mono
-                     setattr(asr_client, "first_packet_monotonic", first_packet)
-+                    try:
-+                        self._bus(
-+                            "asr.first_packet",
-+                            {"sid": ctx.sid, "bytes": byte_count},
-+                        )
-+                    except Exception:
-+                        pass
-                 elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
-                 setattr(asr_client, "ms_since_first_packet", elapsed_ms)
-         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+       if (typeof audioConstraints.echoCancellation === 'undefined') {
+         audioConstraints.echoCancellation = true;
+       } else {
+         audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
+       }
  
-     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
-         removed = False
-         for key in list(ctx.audio_buffer):
-             if key < threshold:
-                 ctx.audio_buffer.pop(key, None)
-                 removed = True
-         if removed:
-             if ctx.audio_buffer:
-                 ctx.audio_highest_seq = max(ctx.audio_buffer)
-             else:
-                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+       if (typeof audioConstraints.noiseSuppression === 'undefined') {
+         audioConstraints.noiseSuppression = true;
+       } else {
+         audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
+       }
  
-     def _log_speechmatics_control_summary(
-         self, sid: str, payload: Mapping[str, Any]
-     ) -> None:
-         if not isinstance(payload, Mapping):
-             return
-         vendor = payload.get("vendor")
-         if not (isinstance(vendor, str) and vendor.strip().lower() == "speechmatics"):
-             return
-         command_value = payload.get("command")
+       if (typeof audioConstraints.autoGainControl === 'undefined') {
+         audioConstraints.autoGainControl = false;
+       } else {
+         audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
+       }
+ 
+       let stream;
+       try {
++        const constraintsLog = serializeConstraintsForLog(audioConstraints);
++        logClientMicEventText(`evt=mic_get_user_media_start constraints=${constraintsLog}`);
+         stream = await navigator.mediaDevices.getUserMedia({
+           audio: audioConstraints,
+           video: false,
+         });
++        const audioTracks = stream && typeof stream.getAudioTracks === 'function'
++          ? stream.getAudioTracks()
++          : [];
++        const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
++        const trackId = primaryTrack && typeof primaryTrack.id === 'string' && primaryTrack.id
++          ? primaryTrack.id
++          : 'unknown';
++        const safeTrackId = sanitizeLogText(trackId, 'unknown', 80);
++        logClientMicEventText(`evt=mic_get_user_media_success track_id=${safeTrackId}`);
+       } catch (err) {
++        const errorName = sanitizeLogText(err && err.name ? err.name : null, 'unknown', 64);
++        const errorMessageSource = err && typeof err.message === 'string' && err.message
++          ? err.message
++          : err;
++        const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
++        logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
+         emitClientLog('client.pcm.capture_error', {
+           stage: 'getUserMedia',
+           message: err && err.message ? err.message : String(err),
+         });
+         throw err;
+       }
+ 
+       const sourceNode = context.createMediaStreamSource(stream);
+       let workletNode;
+       try {
+         workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
+           numberOfOutputs: 0,
+           processorOptions: {
+             targetSampleRate: TARGET_SAMPLE_RATE,
+             minFrameSamples: MIN_FRAME_SAMPLES,
+             maxFrameSamples: MAX_FRAME_SAMPLES,
+           },
+         });
+       } catch (err) {
+         emitClientLog('client.pcm.capture_error', {
+           stage: 'createWorkletNode',
+           message: err && err.message ? err.message : String(err),
+         });
+         stream.getTracks().forEach((track) => {
+           try { track.stop(); } catch (_) {}
+@@ -445,50 +524,52 @@
+       if (!policy || typeof policy !== 'object') {
+         this._policy = {};
+         this._applyPolicyDefaults();
+         return;
+       }
+       this._policy = { ...policy };
+       this._applyPolicyDefaults();
+     }
+ 
+     handleTtsStart() {
+       if (this._stopOnTts) {
+         this.stopListening({ reason: 'tts_start_policy' });
+         return;
+       }
+       if (this._shouldMuteOnTts) {
+         this._muted = true;
+       }
+     }
+ 
+     handleTtsEnd() {
+       this._muted = false;
+     }
+ 
+     startMicCaptureIfIdle() {
+       if (this._active || this._initializing) {
++        const reason = this._initializing ? 'initializing' : 'active';
++        logClientMicEventText(`evt=mic_capture_request_blocked reason=${reason}`);
+         return this._initializing || Promise.resolve(null);
+       }
+       return this.start();
+     }
+ 
+     _attachPort(port) {
+       if (!port) {
+         return;
+       }
+       port.onmessage = (event) => {
+         const data = event ? event.data : null;
+         if (!data || data.type !== 'pcm16' || !data.buffer) {
+           return;
+         }
+         const buffer = data.buffer;
+         const byteLength = buffer.byteLength || 0;
+         if (byteLength === 0) {
+           return;
+         }
+         if (!this._listening || this._muted) {
+           return;
+         }
+         const seq = this._chunkSeq;
+         this._chunkSeq += 1;
+         if (!this._firstChunkSent) {
