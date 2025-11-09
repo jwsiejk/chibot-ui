@@ -393,22 +393,22 @@ class EngineV2:
         session.turn_id = turn_id
         session.req_id = req_id
 
-        self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
+self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
 
         # --- OMNI-CHANNEL FIX START: Trigger NLU/LLM pipeline for text input ---
         nlu_result = self._nlu.extract(req_id, text)
         nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
-
+        
         nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
         self._publish(nlu_event)
-
+        
         session.nlu_emitted = True
         session.nlu_req_id = req_id
-
+        
         self._emit_dialog_plan(sid, session, req_id, turn_id, text)
         self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
         # --- OMNI-CHANNEL FIX END ---
-
+        
         self._set_state(sid, THINKING, reason="text_input")
 
     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
