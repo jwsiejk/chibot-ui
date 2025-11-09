@@ -1,176 +1,27 @@
-BUILD_ID aba150f
-app.js?v=aba150f:27 AskChip build: aba150f
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.vad.state
-app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:2253 evt=ws_open_attempt Object
-ws_client.js?v=aba150f:4041 evt=ws_client_open_params Object
-ws_client.js?v=aba150f:4045 WS opening Object
-app.js?v=aba150f:651 client.appstate.delta
-ws_client.js?v=aba150f:4063 WebSocket open Object
-app.js?v=aba150f:651 client.ws
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.appstate.heartbeat
-app.js?v=aba150f:651 client.ws
-ws_client.js?v=aba150f:3848 evt=ws_linked AppState true WSClient true
-app.js?v=aba150f:651 client.ws
-ws_client.js?v=aba150f:2848 WS server banner Object
-app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:1004 client.mic evt=policy_capture asr_input= timeslice_ms=200
-2app.js?v=aba150f:651 client.ws
-app.js?v=aba150f:651 client.audio.worklet_load_ok
-2app.js?v=aba150f:1004 client.mic evt=mic_get_user_media_start constraints={"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16,"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false}
-app.js?v=aba150f:1004 client.mic evt=mic_get_user_media_success track_id=1595dc87-6158-4691-ab32-5021366d28ba
-app.js?v=aba150f:1004 evt=mic_perm_granted
-app.js?v=aba150f:1004 client.mic evt=mic_get_user_media_success track_id=b45e89ac-5d50-4c2f-9897-0c3892487c75
-app.js?v=aba150f:651 client.appstate.heartbeat
-ws_client.js?v=aba150f:3212 evt=ui_transcript_filter allow=true type=chat.message role=assistant
-app.js?v=aba150f:651 client.ws
-app.js?v=aba150f:1004 client.turn: evt=tts_end_logic_start audio_idle=true
-app.js?v=aba150f:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
-app.js?v=aba150f:1004 evt=asr_prearm_requested source=client trigger=turn_ready keep_stream_warm_ms=30000
-app.js?v=aba150f:651 client.asr_rearm_request
-app.js?v=aba150f:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=turn_ready reason=tts_end
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=Ready micPerm=true recording=false}
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.appstate.delta
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.pcm.capture_start
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.vad.params
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.mic
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.asr
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.asr.autostart_gates
-app.js?v=aba150f:651 diag
-app.js?v=aba150f:651 client.asr_arm_clear
-app.js?v=aba150f:651 client.audio_header_send
-app.js?v=aba150f:1004 client.mic evt=guard_arm ts_ms=1762689940020
-app.js?v=aba150f:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
-app.js?v=aba150f:1004 evt=mic_arm trigger=asr_ready reason=policy
-app.js?v=aba150f:1004 client.mic evt=mic_capture_request_blocked reason=active
-app.js?v=aba150f:2990 diag=asr_ready
-app.js?v=aba150f:1004 client.mic evt=mic_capture_request_blocked reason=active
-app.js?v=aba150f:1004 evt=mic_open_failed err=mic_not_started
-app.js?v=aba150f:651 client.stream.on
-ws_client.js?v=aba150f:421 diag=awaiting_asr_ready reason=input.start
-2app.js?v=aba150f:651 client.mic
-app.js?v=aba150f:1004 evt=ui_rec_badge_on
-app.js?v=aba150f:1004 client.mic evt=mic_start timeslice_ms=200
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-ws_client.js?v=aba150f:3438 diag=start_listening_order vendor=null vad_warmup_ms=1200 require_active_turn=true
-app.js?v=aba150f:651 client.mic
-ws_client.js?v=aba150f:421 diag=awaiting_asr_ready reason=start_listening
-app.js?v=aba150f:651 client.mic
-app.js?v=aba150f:651 client.asr
-app.js?v=aba150f:651 client.asr.autostart_gates
-app.js?v=aba150f:651 diag
-app.js?v=aba150f:651 client.asr_arm_clear
-app.js?v=aba150f:651 client.audio_header_send
-app.js?v=aba150f:1004 client.mic evt=guard_arm ts_ms=1762689940853
-app.js?v=aba150f:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=true
-app.js?v=aba150f:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":true,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=asr_ready reason=policy
-app.js?v=aba150f:1004 evt=maybe_autostart_blocked gates={asrReady=true turnState=Ready micPerm=true recording=true}
-app.js?v=aba150f:2990 diag=asr_ready
-app.js?v=aba150f:1004 client.mic evt=mic_capture_request_blocked reason=active
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-3app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.vad.meter
-2app.js?v=aba150f:651 client.appstate.delta
-app.js?v=aba150f:651 client.pcm.capture_stop
-app.js?v=aba150f:1004 client.mic evt=mic_stop reason=watchdog
-app.js?v=aba150f:651 client.appstate.heartbeat
-app.js?v=aba150f:651 client.ws
-app.js?v=aba150f:651 client.stream.off
-app.js?v=aba150f:651 client.vad.state
-ws_client.js?v=aba150f:4248 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=aba150f:4248Understand this warning
-app.js?v=aba150f:651 client.ws
-app.js?v=aba150f:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=aba150f:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=aba150f:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=aba150f:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=aba150f:651 client.appstate.delta
-ws_client.js?v=aba150f:4084 WebSocket closed Object
-ws.onclose @ ws_client.js?v=aba150f:4084Understand this error
-app.js?v=aba150f:651 client.ws
-app.js?v=aba150f:651 client.appstate.delta
+app.js?v=5c81cbe:651 client.asr
+app.js?v=5c81cbe:651 client.asr.autostart_gates
+app.js?v=5c81cbe:651 diag
+app.js?v=5c81cbe:651 client.asr_arm_clear
+app.js?v=5c81cbe:651 client.audio_header_send
+app.js?v=5c81cbe:1004 client.mic evt=guard_arm ts_ms=1762692142364
+app.js?v=5c81cbe:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
+app.js?v=5c81cbe:1004 evt=mic_arm trigger=asr_ready reason=policy
+app.js?v=5c81cbe:1004 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=5c81cbe:2990 diag=asr_ready
+app.js?v=5c81cbe:1004 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=5c81cbe:1004 evt=mic_open_failed err=mic_not_started
+app.js?v=5c81cbe:651 client.ws
+app.js?v=5c81cbe:651 client.stream.off
+app.js?v=5c81cbe:651 client.vad.state
+ws_client.js?v=5c81cbe:4293 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=5c81cbe:4293Understand this warning
+app.js?v=5c81cbe:651 client.ws
+app.js?v=5c81cbe:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=5c81cbe:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=5c81cbe:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=5c81cbe:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=5c81cbe:651 client.appstate.delta
+ws_client.js?v=5c81cbe:4129 WebSocket closed Object
+ws.onclose @ ws_client.js?v=5c81cbe:4129Understand this error
+app.js?v=5c81cbe:651 client.ws
+app.js?v=5c81cbe:651 client.appstate.delta

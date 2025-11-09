@@ -1478,6 +1478,13 @@
       });
       startMicCapture()
         .then((started) => {
+          const recorderIsActive = window.AudioRecorder?.listening === true || AppState?.listening === true;
+          if (!started && recorderIsActive) {
+            logClient('evt=mic_start_ok reason=already_active');
+            updateRecordingState(true, 'auto_start_already_active');
+            noteMicOpen('auto_start_already_active');
+            return;
+          }
           if (!started) {
             logClient('evt=mic_open_failed err=mic_not_started', {
               event: 'mic_open_failed',
