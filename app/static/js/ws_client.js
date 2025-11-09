@@ -279,7 +279,11 @@ import { WakeWord } from "./wake_word.js";
         return;
       }
       const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
-      target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
+      const existingClient = existingVad.client && typeof existingVad.client === "object"
+        ? existingVad.client
+        : {};
+      // Merge: runtime/client overrides survive; our defaults fill gaps.
+      target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
     };
     ensureVadBlock(policyRoot);
     if (FEATURE_LEGACY_POLICY) {
@@ -567,8 +571,6 @@ import { WakeWord } from "./wake_word.js";
     } catch {}
     return CLIENT_VAD_POLICY.warmup_ms; // 1200 fallback
   }
-
-  const VAD_WARMUP_MS = getWarmupMs();
 
   function getTtsActiveSnapshot() {
     try {
@@ -2823,7 +2825,7 @@ import { WakeWord } from "./wake_word.js";
     const sanitized = sanitizeAsrReadyFrame(frame);
     AppState.asrReady = true;
     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
-    beginWarmup(VAD_WARMUP_MS);
+    beginWarmup(getWarmupMs());
     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
     if (typeof AppState.emit === "function") {
@@ -3362,7 +3364,7 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "tts.end") {
       setAppStateValue("ttsActive", false);
       AppState.tts = false;
-      beginWarmup(VAD_WARMUP_MS);
+      beginWarmup(getWarmupMs());
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
       if (typeof AppState.emit === "function") {
         AppState.emit("ttsActive", { active: false });
@@ -3406,10 +3408,11 @@ import { WakeWord } from "./wake_word.js";
             asrInput,
           );
         } else {
+          const warmupMs = getWarmupMs();
           console.info(
             "diag=start_listening_order vendor=%s vad_warmup_ms=%s require_active_turn=%s",
             vendor,
-            Number.isFinite(VAD_WARMUP_MS) ? VAD_WARMUP_MS : null,
+            Number.isFinite(warmupMs) ? warmupMs : null,
             REQUIRE_ACTIVE_TURN,
           );
         }

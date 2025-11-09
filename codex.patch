@@ -1,86 +1,14 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e213d2af5 100644
+index 5bcb4cd2f62fb23c19f00862f0daa72e213d2af5..c8c8a6813b379408d4e7d9afebb57366547158db 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1,47 +1,50 @@
- // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
- import { initVAD } from "./audio/vad_client.js";
- import { WakeWord } from "./wake_word.js";
- (() => {
-   const HEARTBEAT_INTERVAL_MS = 20000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
-   const CLIENT_VAD_POLICY = Object.freeze({
-     enable: true,
-     sensitivity: 0.5,
-     min_speech_ms: 200,
-     min_silence_ms: 400,
-     hold_ms: 250,
-     echo_suppression_db: 10,
-     tts_threshold_boost_db: 12,
-     debounce_ms: 40,
--    stream_gate: "none",
-+    // Enable true gating; preroll remains handled internally by the VAD.
-+    stream_gate: "gate",
-     max_gate_silence_ms: 3000,
-+    // Optional: per-deployment configurable warmup in ms
-+    warmup_ms: 1200,
-   });
-   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
-   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
- 
-   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
- 
-   // ---- Golden-path turn trace & mic outcomes (additive) ----
-   // ---- Telemetry (additive) ----
-   const MIC_OUTCOME = {
-     PERM_GRANTED: 'perm_granted',
-     ARMED: 'armed',
-     STREAMING: 'streaming',
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
-   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-   const DEFAULT_ASR_VENDOR = 'speechmatics';
-   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
-@@ -235,51 +238,50 @@ import { WakeWord } from "./wake_word.js";
-     sanitizedPolicy.ui.status = { ...DEFAULT_POLICY_STATUS, ...statusSource };
-     if (!Number.isFinite(sanitizedPolicy.version)) {
-       sanitizedPolicy.version = 2;
-     }
-     if (typeof sanitizedPolicy._normalized_from !== "string") {
-       sanitizedPolicy._normalized_from = "v2";
-     }
- 
-     const normalizedPolicy = { ...basePolicy };
-     Object.keys(sanitizedPolicy).forEach((key) => {
-       const value = sanitizedPolicy[key];
-       if (typeof value === "undefined") {
-         return;
-       }
-       normalizedPolicy[key] = cloneValue(value);
-     });
- 
-     AppState.policy = normalizedPolicy;
-   }
+@@ -257,51 +257,55 @@ import { WakeWord } from "./wake_word.js";
  
    const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
    const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
    const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
    const POLICY_STATUS = POLICY?.ui?.status
      || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
--  const VAD_WARMUP_MS = Number(POLICY_VAD?.warmup_ms ?? DEFAULT_POLICY_VAD.warmup_ms);
    const WATCHDOG_FIRST_MS = Number(
      POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
    );
@@ -100,63 +28,65 @@ index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e
          return;
        }
        const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
-       target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
+-      target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
++      const existingClient = existingVad.client && typeof existingVad.client === "object"
++        ? existingVad.client
++        : {};
++      // Merge: runtime/client overrides survive; our defaults fill gaps.
++      target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
      };
      ensureVadBlock(policyRoot);
      if (FEATURE_LEGACY_POLICY) {
        if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
          policyRoot.policy = {};
-@@ -521,53 +523,75 @@ import { WakeWord } from "./wake_word.js";
-   let pcmFlushTimerId = null;
- 
-   function hubLog(label, detail) {
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-       try {
-         hub.log(label, detail);
-         return true;
-       } catch (err) {
-         console.warn("AppState.hub.log failed", err);
        }
+       ensureVadBlock(policyRoot.policy);
      }
-     if (typeof window !== "undefined") {
-       try {
-         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
-         return true;
-       } catch (err) {
-         console.warn("client.log dispatch failed", err);
-       }
-     }
-     return false;
    }
  
+   installClientVadPolicySnapshot();
+ 
+   const appStateEventEmitter = createEventEmitter();
+   if (typeof AppState.on !== "function") {
+     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
+   }
+   if (typeof AppState.emit !== "function") {
+     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+   }
+   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
+     AppState.__pcmBreadcrumbHandlersInstalled = true;
+     AppState.on("recordingStarted", () => {
+       __micRecordingStartAt = Date.now();
+       __micFirstChunkBreadcrumbSent = false;
+       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
+@@ -546,52 +550,50 @@ import { WakeWord } from "./wake_word.js";
+ 
    function getVadPolicySnapshot() {
-+    try {
-+      const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
-+        ? AppState.policy
-+        : null;
-+      const client = root?.vad?.client;
-+      if (client && typeof client === "object") {
-+        // Shallow merge: runtime overrides hard-coded safe defaults
-+        return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
-+      }
-+    } catch {}
+     try {
+       const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
+         ? AppState.policy
+         : null;
+       const client = root?.vad?.client;
+       if (client && typeof client === "object") {
+         // Shallow merge: runtime overrides hard-coded safe defaults
+         return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
+       }
+     } catch {}
      return CLIENT_VAD_POLICY_ROOT;
    }
  
-+  // Resolve warmup once per session start (policy or default)
-+  function getWarmupMs() {
-+    try {
-+      const snap = getVadPolicySnapshot();
-+      const ms = snap?.vad?.client?.warmup_ms;
-+      if (Number.isFinite(ms) && ms >= 0 && ms <= 10000) return ms;
-+    } catch {}
-+    return CLIENT_VAD_POLICY.warmup_ms; // 1200 fallback
-+  }
-+
-+  const VAD_WARMUP_MS = getWarmupMs();
-+
+   // Resolve warmup once per session start (policy or default)
+   function getWarmupMs() {
+     try {
+       const snap = getVadPolicySnapshot();
+       const ms = snap?.vad?.client?.warmup_ms;
+       if (Number.isFinite(ms) && ms >= 0 && ms <= 10000) return ms;
+     } catch {}
+     return CLIENT_VAD_POLICY.warmup_ms; // 1200 fallback
+   }
+ 
+-  const VAD_WARMUP_MS = getWarmupMs();
+-
    function getTtsActiveSnapshot() {
      try {
        if (typeof AppState.getState === "function") {
@@ -182,7 +112,7 @@ index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e
      }
      const keys = Object.keys(sanitized);
      if (!keys.length) {
-@@ -2777,51 +2801,51 @@ import { WakeWord } from "./wake_word.js";
+@@ -2801,51 +2803,51 @@ import { WakeWord } from "./wake_word.js";
            hasInputField = true;
            break;
          }
@@ -208,8 +138,8 @@ index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e
      const sanitized = sanitizeAsrReadyFrame(frame);
      AppState.asrReady = true;
      AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
--    beginWarmup(1200);
-+    beginWarmup(VAD_WARMUP_MS);
+-    beginWarmup(VAD_WARMUP_MS);
++    beginWarmup(getWarmupMs());
      updateState({ asrReady: true, asrVendor: AppState.asrVendor });
      window.requestAnimationFrame(() => window.AppUI?.refresh?.());
      if (typeof AppState.emit === "function") {
@@ -235,7 +165,7 @@ index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e
      input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
      asr: {
        prearm_on_tts_end: false,
-@@ -3316,51 +3340,51 @@ import { WakeWord } from "./wake_word.js";
+@@ -3340,98 +3342,99 @@ import { WakeWord } from "./wake_word.js";
        handlePongFrame(frame);
      } else if (frame.type === "error") {
        handleErrorFrame(frame);
@@ -261,8 +191,8 @@ index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e
      } else if (frame.type === "tts.end") {
        setAppStateValue("ttsActive", false);
        AppState.tts = false;
--      beginWarmup(1200);
-+      beginWarmup(VAD_WARMUP_MS);
+-      beginWarmup(VAD_WARMUP_MS);
++      beginWarmup(getWarmupMs());
        window.requestAnimationFrame(() => window.AppUI?.refresh?.());
        if (typeof AppState.emit === "function") {
          AppState.emit("ttsActive", { active: false });
@@ -288,3 +218,52 @@ index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e
          dur_ms: frame?.dur_ms,
          reason,
        });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
+     } else if (frame.type === "start_listening") {
+       const ar = window.AudioRecorder || null;
+       const policy = frame?.policy || {};
+       let unifiedArmed = false;
+       try {
+         if (ar?.setPolicy) ar.setPolicy(policy);
+         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
+         if (FEATURE_LEGACY_POLICY) {
+           const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
+           const asrInput = frame?.policy?.media?.asr_input ?? null;
+           console.info(
+             "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
+             vendor,
+             pipeline,
+             asrInput,
+           );
+         } else {
++          const warmupMs = getWarmupMs();
+           console.info(
+             "diag=start_listening_order vendor=%s vad_warmup_ms=%s require_active_turn=%s",
+             vendor,
+-            Number.isFinite(VAD_WARMUP_MS) ? VAD_WARMUP_MS : null,
++            Number.isFinite(warmupMs) ? warmupMs : null,
+             REQUIRE_ACTIVE_TURN,
+           );
+         }
+         if (ar?.start) {
+           await ar.start(policy);
+           unifiedArmed = true;
+         }
+       } catch (err) {
+         console.warn("AudioRecorder start_listening preflight failed", err);
+       }
+       try {
+         __micAttempts += 1;
+         __micChunks = 0;
+         __micBytes = 0;
+         __micArmedAt = Date.now();
+         if (!__turnTraceId) {
+           __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
+         }
+         logMic({ outcome: MIC_OUTCOME.ARMED });
+       } catch {}
+ 
+       setPendingAsrReadyStart({ frame, policy, reason: frame?.reason || frame?.type || "start_listening" });
+       if (AppState?.asrReady) {
+         try {
+           await startStreamingAfterAsrReady("start_listening_asr_ready");
