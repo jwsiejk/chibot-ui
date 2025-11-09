@@ -1,659 +1,597 @@
-diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
-index 98f518269697f94168105f3e91bfa289d64c8475..dd1744b1759b72d0fa93239f03fc02857984f11f 100644
---- a/app/services/asr/sm_rt.py
-+++ b/app/services/asr/sm_rt.py
-@@ -109,88 +109,94 @@ class SMRealtimeClient:
-         self._pcm_queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
-         self._pcm_sentinel: object = object()
-         self._receiver_task: asyncio.Task[None] | None = None
-         self._sender_task: asyncio.Task[None] | None = None
-         self._ws_ping_task: asyncio.Task[None] | None = None
-         self._closing = False
-         self._closed_event = asyncio.Event()
-         self._close_reason: str | None = None
-         self._sent_end_of_stream = False
-         self._seq_counter = 0
-         self._last_seq_no: Optional[int] = None
-         self._first_pcm_sent_at: float | None = None
-         self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
-         self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
-         self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
+diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
+index bc271ddb7485b09ca6f9b3e46ceb217b34bd5e20..8eb9b79a1b90af85008be21c62e034899b1ef19f 100644
+--- a/app/static/js/audio/pcm_recorder.js
++++ b/app/static/js/audio/pcm_recorder.js
+@@ -158,50 +158,52 @@
+       } catch (_) {}
+     }
+   }
  
-         self._on_ready = on_ready or (lambda info: None)
-         self._on_partial = on_partial or (lambda text, latency: None)
-         self._on_final = on_final or (lambda text, latency: None)
-         self._on_notice = on_notice or (lambda meta: None)
-         self._on_closed = on_closed or (lambda reason: None)
+   class PcmRecorder {
+     constructor() {
+       this._audioContext = null;
+       this._sourceNode = null;
+       this._workletNode = null;
+       this._stream = null;
+       this._socket = null;
+       this._active = false;
+       this._listening = false;
+       this._muted = false;
+       this._chunkSeq = 0;
+       this._listeningStartedAt = 0;
+       this._firstChunkSent = false;
+       this._policy = {};
+       this._shouldMuteOnTts = true;
+       this._stopOnTts = false;
+       this._onChunk = null;
+       this._deviceSampleRate = null;
+       this._initializing = null;
+       this._workletLoaded = false;
+       this._tearDownPromise = null;
++      this._clientVadConfig = this._extractClientVadConfig({});
++      this._clientVadState = this._createClientVadState();
+     }
  
-         self._input_start_ms: Optional[int] = None
-         self._first_partial_logged = False
-         self._first_final_logged = False
-+        self._first_pcm_logged = False
-+        self._eos_logged = False
-+        self._eos_suppress_logged = False
+     get listening() {
+       return this._listening;
+     }
  
-     # ------------------------------------------------------------------
-     # Public properties
-     # ------------------------------------------------------------------
-     @property
-     def state(self) -> str:
-         """Return the current connection state."""
+     isActive() {
+       return this._active;
+     }
  
-         return self._state
+     isListening() {
+       return this._listening;
+     }
  
-     # ------------------------------------------------------------------
-     # Lifecycle management
-     # ------------------------------------------------------------------
-     async def open(
-         self, *, endpoint_url: str, jwt_token: str | None, params: Dict[str, Any]
-     ) -> None:
-         """Open the Speechmatics websocket and wait for RecognitionStarted."""
+     async init() {
+       if (this._initializing) {
+         return this._initializing;
+       }
+       if (this._audioContext && this._audioContext.state === 'closed') {
+         this._audioContext = null;
+         this._workletLoaded = false;
+       }
+       if (this._audioContext && this._workletLoaded) {
+         return this._audioContext;
+       }
+@@ -411,66 +413,68 @@
+       }
  
-         if not isinstance(params, dict):
-             raise TypeError("params must be a dict")
-         if not endpoint_url:
-             raise ValueError("endpoint_url must be provided")
+       this._stream = stream;
+       this._sourceNode = sourceNode;
+       this._workletNode = workletNode;
+       this._active = true;
+       this._muted = false;
+       this._firstChunkSent = false;
+       return context;
+     }
  
-         async with self._state_lock:
-             if self._state not in {"idle", "closed"}:
-                 raise RuntimeError(f"client state {self._state} cannot connect")
-             self._state = "opening"
+     async startListening(policy = {}) {
+       if (policy && typeof policy === 'object' && Object.keys(policy).length) {
+         this.setPolicy(policy);
+       }
+       if (!this._active) {
+         await this.start(policy || {});
+       }
+       if (this._listening) {
+         return;
+       }
+       this._listening = true;
+       this._chunkSeq = 0;
+       this._firstChunkSent = false;
+       this._listeningStartedAt = Date.now();
++      this._resetClientVadState();
+       const chunkMs = DEFAULT_CHUNK_MS;
+       emitClientLog('client.pcm.capture_start', {
+         device_rate: this._deviceSampleRate || null,
+         target_rate: TARGET_SAMPLE_RATE,
+         chunk_ms: chunkMs,
+       });
+       emitAppStateRecordingStarted(this._policy);
+     }
  
-         self._stop_event = asyncio.Event()
-         self._ready_event = asyncio.Event()
-         self._close_ack_event = asyncio.Event()
-         self._closed_event = asyncio.Event()
-         self._close_reason = None
-         self._sent_end_of_stream = False
-         self._pcm_queue = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
-         self._seq_counter = 0
-         self._last_seq_no = None
-         self._first_pcm_sent_at = None
-+        self._first_pcm_logged = False
-+        self._eos_logged = False
-+        self._eos_suppress_logged = False
+     stopListening(reason = {}) {
+       if (!this._listening) {
+         return;
+       }
+       const reasonLabel = normalizeReason(reason);
+       this._listening = false;
+       this._muted = false;
++      this._resetClientVadState();
+       emitClientLog('client.pcm.capture_stop', { reason: reasonLabel });
+     }
  
-         url = endpoint_url.strip()
-         if not url:
-             raise ValueError("endpoint_url must be provided")
-         if not url.startswith("wss://"):
-             raise ValueError(f"Invalid Speechmatics endpoint (must be wss://): {url!r}")
-         self._endpoint_url = url
-         self._publish_event(
-             ASR_VENDOR_CONNECT_INTENT,
-             {
-                 "vendor": self.VENDOR,
-                 "meta": {"reason": "connect", "endpoint": url},
-             },
-         )
+     async stop(reason = {}) {
+       this.stopListening(reason);
+       if (!this._active) {
+         return;
+       }
+       if (this._tearDownPromise) {
+         return this._tearDownPromise;
+       }
+       const cleanup = (async () => {
+         const stream = this._stream;
+         const source = this._sourceNode;
+         const worklet = this._workletNode;
+         this._stream = null;
+         this._sourceNode = null;
+         this._workletNode = null;
+         this._active = false;
+         this._muted = false;
+         this._onChunk = null;
+         if (worklet && worklet.port) {
+           try {
+             worklet.port.onmessage = null;
+           } catch (_) {}
+@@ -544,77 +548,253 @@
+       if (this._active || this._initializing) {
+         const reason = this._initializing ? 'initializing' : 'active';
+         logClientMicEventText(`evt=mic_capture_request_blocked reason=${reason}`);
+         return this._initializing || Promise.resolve(null);
+       }
+       return this.start();
+     }
  
-         headers: dict[str, str] = {}
-         if jwt_token:
-             ws_url = f"{url}?jwt={jwt_token}"
-             auth_mode = "jwt"
-         else:
-             ws_url = url
-             from app.config import SPEECHMATICS_API_KEY
- 
-             if not SPEECHMATICS_API_KEY:
-                 raise RuntimeError("Speechmatics API key missing for header auth")
-@@ -281,50 +287,57 @@ class SMRealtimeClient:
-         if not isinstance(chunk, (bytes, bytearray, memoryview)):
-             raise TypeError("chunk must be bytes-like")
-         data = bytes(chunk)
-         if not data:
-             return
-         if len(data) % 2 != 0:
-             raise ValueError("pcm chunk must contain complete 16-bit samples")
- 
-         if self._state != "open":
-             self._emit_notice({"kind": "pcm_ignored_state", "state": self._state})
-             return
- 
-         queue = self._pcm_queue
-         if queue.full():
-             try:
-                 dropped = queue.get_nowait()
-             except asyncio.QueueEmpty:  # pragma: no cover - defensive
-                 dropped = None
-             else:
-                 if dropped is not None and dropped is not self._pcm_sentinel:
-                     self._emit_notice(
-                         {"kind": "backpressure_drop", "bytes": len(dropped)}
-                     )
-                 queue.task_done()
-         await queue.put(data)
-+        if not self._first_pcm_logged:
-+            try:
-+                _log.info("evt=sm_pcm_enqueue_first bytes=%d", len(data))
-+            except Exception:  # pragma: no cover - defensive
-+                pass
-+            else:
-+                self._first_pcm_logged = True
-         if self._first_pcm_sent_at is None:
-             try:
-                 self._first_pcm_sent_at = time.monotonic()
-             except Exception:  # pragma: no cover - defensive
-                 self._first_pcm_sent_at = 0.0
- 
-     async def send_end_of_stream(self) -> None:
-         """Send the vendor end-of-stream marker and await acknowledgement."""
- 
-         if self._state != "open":
-             return
-         if self._sent_end_of_stream:
-             await self._wait_for_close_ack()
-             return
- 
-         if self._last_seq_no is None:
-             detail = {
-                 "session_id": self.session_id,
-                 "turn_id": self.turn_id,
-                 "reason": "no_audio",
-             }
-             self._emit_hub_log("asr.eos.skipped", detail)
-             self._emit_notice({"kind": "eos_skipped_no_audio"})
-             self._sent_end_of_stream = True
-             self._close_ack_event.set()
-@@ -822,36 +835,42 @@ class SMRealtimeClient:
-         meta = {}
-         if isinstance(message.get("metadata"), dict):
-             meta.update(message["metadata"])
-         session_id = message.get("session_id") or message.get("sessionId")
-         if isinstance(session_id, str):
-             meta.setdefault("session_id", session_id)
-         seq = message.get("seq_no") or message.get("sequence") or message.get("id")
-         if isinstance(seq, (int, float)):
-             meta.setdefault("seq", int(seq))
-         message_type = self._message_type(message)
-         if message_type:
-             meta.setdefault("message_type", message_type)
-         return meta
- 
-     async def _send_json(self, payload: Dict[str, Any]) -> None:
-         ws = self._ws
-         if ws is None:
-             raise RuntimeError("websocket not connected")
-         data = json.dumps(payload, separators=(",", ":"))
-         await ws.send(data)
- 
-     async def _send_end_of_stream(self) -> None:
-         """Send an EndOfStream message including the last audio sequence number."""
- 
-         if self._first_pcm_sent_at is None and self._last_seq_no is None:
--            _log.info("evt=sm_send_eos_suppressed reason=no_audio_sent")
-+            if not self._eos_suppress_logged:
-+                _log.info(
-+                    "evt=sm_send_eos_suppressed reason=no_audio_sent last_seq_no=None"
-+                )
-+                self._eos_suppress_logged = True
-             return
- 
-         payload: Dict[str, Any] = {"message": "EndOfStream"}
-         if isinstance(self._last_seq_no, int):
-             payload["last_seq_no"] = self._last_seq_no
--        _log.info("evt=sm_send_eos last_seq_no=%s", payload.get("last_seq_no"))
-+        if not self._eos_logged:
-+            _log.info("evt=sm_send_eos last_seq_no=%s", payload.get("last_seq_no"))
-+            self._eos_logged = True
-         await self._send_json(payload)
- 
-     def _now_ms(self) -> int:
-         return int(time.time() * 1000)
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index b0aa0de93c0c9bcd7138e7cd8abd2430567e82ec..7f42e8fd9aa84358195916c00fc0984b6086a251 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -424,50 +424,54 @@ class AdapterContext:
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-     audio_subscription_token: Optional[str] = None
-     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
-     audio_send_closed: bool = False
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     asr_subscription_bus: Optional[Any] = None
-     asr_open_subscription_token: Optional[str] = None
-     asr_unavailable_subscription_token: Optional[str] = None
-     asr_partial_subscription_token: Optional[str] = None
-     asr_final_subscription_token: Optional[str] = None
-     asr_closed_subscription_token: Optional[str] = None
-     asr_recovering_until: float = 0.0
-     asr_recovering_reason: Optional[str] = None
-     asr_recovering_audio_logged: bool = False
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-     policy_snapshot: Optional[Dict[str, Any]] = None
-     policy: Optional[Dict[str, Any]] = None
-     policy_warning_logged: bool = False
-     policy_snapshot_fingerprint: Optional[str] = None
-+    policy_snapshot_logged: bool = False
-+    asr_first_packet_logged: bool = False
-+    asr_silence_hold_logged: bool = False
-+    asr_silence_eot_logged: bool = False
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-     send_lock: asyncio.Lock | None = None
-     ws_send: Callable[[dict], Awaitable[None]] | None = None
-     asr_open_task: asyncio.Task[None] | None = None
-     asr_bytes_sent: int = 0
-     asr_opened_ms: Optional[int] = None
-     asr_close_reason: Optional[str] = None
-     tts_end_ts: Optional[float] = None
-     diag_audio_seen: bool = False
-     diag_timer: asyncio.TimerHandle | None = None
-     diag_timer_key: Optional[str] = None
-     await_user_expected: bool = False
-     await_user_pending: bool = False
-     await_user_pending_key: Optional[str] = None
-     await_user_after_mask: bool = False
-     await_user_after_mask_key: Optional[str] = None
-     tts_mask_phase: str = "off"
-     mask_subscription_token: Optional[str] = None
-     pending_start_listening: Optional[Dict[str, Any]] = None
-     pending_start_listening_sent: bool = False
-     tts_end_subscription_token: Optional[str] = None
-     turn_state_subscription_token: Optional[str] = None
-     hud_state: Optional[str] = None
-     client_mic_open: bool = False
-@@ -652,72 +656,103 @@ class ChatV2Adapter:
-             fingerprint: Optional[str]
-             try:
-                 fingerprint = json.dumps(policy, sort_keys=True, ensure_ascii=False)
-             except (TypeError, ValueError):
-                 fingerprint = repr(policy)
-             if ctx.policy_snapshot_fingerprint == fingerprint:
-                 return
- 
-             mapped_hits: List[List[List[str]]] = []
-             for hit in legacy_hits or ():
-                 if not isinstance(hit, (list, tuple)) or len(hit) != 2:
-                     continue
-                 legacy_path, new_path = hit
-                 if not isinstance(legacy_path, (list, tuple)) or not isinstance(
-                     new_path, (list, tuple)
-                 ):
-                     continue
-                 mapped_hits.append(
-                     [list(map(str, legacy_path)), list(map(str, new_path))]
-                 )
- 
-             asr_candidate = policy.get("asr")
-             asr_block = asr_candidate if isinstance(asr_candidate, Mapping) else {}
-             vad_candidate = policy.get("vad")
-             vad_block = vad_candidate if isinstance(vad_candidate, Mapping) else {}
-+            ui_block_candidate = policy.get("ui")
-+            ui_block = ui_block_candidate if isinstance(ui_block_candidate, Mapping) else {}
-+            ui_status_candidate = ui_block.get("status")
-+            ui_status_block = (
-+                ui_status_candidate if isinstance(ui_status_candidate, Mapping) else {}
-+            )
-+            capture_candidate = policy.get("capture")
-+            capture_block = capture_candidate if isinstance(capture_candidate, Mapping) else {}
-+            capture_mode_value = capture_block.get("mode")
-+            capture_constraints_candidate = capture_block.get("constraints")
-+            capture_constraints_block = (
-+                capture_constraints_candidate
-+                if isinstance(capture_constraints_candidate, Mapping)
-+                else {}
-+            )
+     _attachPort(port) {
+       if (!port) {
+         return;
+       }
+       port.onmessage = (event) => {
+         const data = event ? event.data : null;
+         if (!data || data.type !== 'pcm16' || !data.buffer) {
+           return;
+         }
+         const buffer = data.buffer;
+         const byteLength = buffer.byteLength || 0;
+         if (byteLength === 0) {
+           return;
+         }
+         if (!this._listening || this._muted) {
+           return;
+         }
+-        const seq = this._chunkSeq;
+-        this._chunkSeq += 1;
+-        if (!this._firstChunkSent) {
+-          this._firstChunkSent = true;
+-          emitClientLog('client.audio_first_chunk', {
+-            bytes: byteLength,
+-            seq,
+-          });
++        this._handleIncomingChunk(buffer);
++      };
++    }
 +
-             server_starts_input = None
-             cold_start_grace_ms = None
-             warmup_ms = None
-             if isinstance(asr_block, Mapping):
-                 server_starts_input = asr_block.get("server_starts_input")
-                 cold_start_grace_ms = asr_block.get("cold_start_grace_ms")
-             if isinstance(vad_block, Mapping):
-                 warmup_ms = vad_block.get("warmup_ms")
++    _handleIncomingChunk(buffer) {
++      const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
++      if (!byteLength) {
++        return;
++      }
++
++      const cfg = this._clientVadConfig || this._extractClientVadConfig({});
++      if (!cfg.enable) {
++        this._dispatchChunk(buffer);
++        return;
++      }
++
++      let state = this._clientVadState;
++      if (!state) {
++        state = this._createClientVadState();
++        this._clientVadState = state;
++      }
++
++      const now = Date.now();
++      const dbfs = this._clientVadRmsDbfs(buffer);
++      const chunkMs = this._clientVadEstimateChunkMs(buffer);
++      const threshold = cfg.thresholdDbfs;
++      const above = dbfs >= threshold;
++      const maxPrerollChunks = cfg.preRollMs <= 0
++        ? 0
++        : Math.max(1, Math.round(cfg.preRollMs / Math.max(chunkMs, 1)));
++
++      if (!state.active) {
++        let shouldActivate = false;
++        if (above) {
++          if (!state.aboveSince) {
++            state.aboveSince = now;
++          }
++          if ((now - state.aboveSince) >= cfg.attackMs) {
++            shouldActivate = true;
++          }
++        } else {
++          state.aboveSince = 0;
++        }
++
++        if (shouldActivate) {
++          state.active = true;
++          state.activeSince = now;
++          state.belowSince = 0;
++          state.aboveSince = now;
++          const flushed = this._clientVadFlushPreroll(state);
++          if (flushed > 0) {
++            try {
++              emitClientLog('client.vad.preroll_flush', { chunks: flushed });
++            } catch (_) {}
++          }
++          try {
++            emitClientLog('client.vad.state', { state: 'active', dbfs });
++          } catch (_) {}
++          this._dispatchChunk(buffer);
++          return;
++        }
++
++        if (maxPrerollChunks > 0) {
++          state.preroll.push(buffer.slice(0));
++          while (state.preroll.length > maxPrerollChunks) {
++            state.preroll.shift();
++          }
++        } else if (state.preroll.length) {
++          state.preroll = [];
+         }
+-        const startedAt = this._listeningStartedAt || Date.now();
+-        const msSinceStart = Math.max(0, Date.now() - startedAt);
+-        emitClientLog('client.pcm.chunk', {
++        return;
++      }
++
++      this._dispatchChunk(buffer);
++      if (above) {
++        state.belowSince = 0;
++        return;
++      }
++
++      if (!state.belowSince) {
++        state.belowSince = now;
++      }
++      const activeMs = state.activeSince ? Math.max(0, now - state.activeSince) : 0;
++      const belowMs = Math.max(0, now - state.belowSince);
++      if (belowMs >= cfg.releaseMs && activeMs >= cfg.minActiveMs) {
++        state.active = false;
++        state.aboveSince = 0;
++        state.belowSince = 0;
++        state.activeSince = 0;
++        state.preroll = [];
++        try {
++          emitClientLog('client.vad.state', { state: 'paused', dbfs });
++        } catch (_) {}
++      }
++    }
++
++    _dispatchChunk(buffer) {
++      const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
++      if (!byteLength) {
++        return false;
++      }
++      const seq = this._chunkSeq;
++      this._chunkSeq += 1;
++      if (!this._firstChunkSent) {
++        this._firstChunkSent = true;
++        emitClientLog('client.audio_first_chunk', {
++          bytes: byteLength,
++          seq,
++        });
++      }
++      const startedAt = this._listeningStartedAt || Date.now();
++      const msSinceStart = Math.max(0, Date.now() - startedAt);
++      emitClientLog('client.pcm.chunk', {
++        seq,
++        bytes: byteLength,
++        ms_since_start: msSinceStart,
++      });
++      const delivered = this._deliverChunk(buffer, seq);
++      if (!delivered) {
++        emitClientLog('client.pcm.chunk_drop', {
+           seq,
+           bytes: byteLength,
+-          ms_since_start: msSinceStart,
++          reason: 'delivery_failed',
+         });
+-        const delivered = this._deliverChunk(buffer, seq);
+-        if (!delivered) {
+-          emitClientLog('client.pcm.chunk_drop', {
+-            seq,
+-            bytes: byteLength,
+-            reason: 'delivery_failed',
+-          });
++      }
++      return delivered;
++    }
++
++    _clientVadEstimateChunkMs(buffer) {
++      if (!buffer || !buffer.byteLength) {
++        return DEFAULT_CHUNK_MS;
++      }
++      const samples = buffer.byteLength / 2;
++      if (!samples || !Number.isFinite(samples)) {
++        return DEFAULT_CHUNK_MS;
++      }
++      return (samples / TARGET_SAMPLE_RATE) * 1000;
++    }
++
++    _clientVadRmsDbfs(buffer) {
++      if (!buffer || buffer.byteLength < 2) {
++        return -Infinity;
++      }
++      let view;
++      try {
++        view = new Int16Array(buffer);
++      } catch (_) {
++        return -Infinity;
++      }
++      const length = view.length || 0;
++      if (!length) {
++        return -Infinity;
++      }
++      let sumSquares = 0;
++      for (let i = 0; i < length; i += 1) {
++        const sample = view[i] / 32768;
++        sumSquares += sample * sample;
++      }
++      if (sumSquares <= 0) {
++        return -Infinity;
++      }
++      const mean = sumSquares / length;
++      if (mean <= 0) {
++        return -Infinity;
++      }
++      const rms = Math.sqrt(mean);
++      if (rms <= 1e-9) {
++        return -Infinity;
++      }
++      return 20 * Math.log10(rms);
++    }
++
++    _clientVadFlushPreroll(state) {
++      if (!state || !Array.isArray(state.preroll) || state.preroll.length === 0) {
++        state.preroll = [];
++        return 0;
++      }
++      let sent = 0;
++      for (let i = 0; i < state.preroll.length; i += 1) {
++        const chunk = state.preroll[i];
++        if (chunk && chunk.byteLength) {
++          this._dispatchChunk(chunk);
++          sent += 1;
+         }
++      }
++      state.preroll = [];
++      return sent;
++    }
++
++    _createClientVadState() {
++      return {
++        active: false,
++        aboveSince: 0,
++        belowSince: 0,
++        activeSince: 0,
++        preroll: [],
+       };
+     }
  
-             snapshot_payload = {
-                 "version": version,
--                "server_starts_input": bool(asr_block.get("server_starts_input")),
--                "warmup_ms": self._coerce_non_negative_int(
--                    vad_block.get("warmup_ms"),
--                    0,
-+                "asr.server_starts_input": bool(asr_block.get("server_starts_input")),
-+                "asr.cold_start_grace_ms": self._coerce_non_negative_int(
-+                    asr_block.get("cold_start_grace_ms"), 0
-                 ),
--                "cold_start_grace_ms": self._coerce_non_negative_int(
--                    asr_block.get("cold_start_grace_ms"),
--                    0,
-+                "vad.warmup_ms": self._coerce_non_negative_int(
-+                    vad_block.get("warmup_ms"), 0
-                 ),
-+                "ui.require_active_turn": bool(
-+                    ui_status_block.get("require_active_turn", True)
-+                ),
-+                "capture.mode": (
-+                    str(capture_mode_value).strip()
-+                    if isinstance(capture_mode_value, str)
-+                    else "webrtc_aec"
-+                ),
-+                "capture.constraints": {
-+                    "echoCancellation": capture_constraints_block.get("echoCancellation"),
-+                    "noiseSuppression": capture_constraints_block.get("noiseSuppression"),
-+                    "autoGainControl": capture_constraints_block.get("autoGainControl"),
-+                    "channelCount": capture_constraints_block.get("channelCount"),
-+                    "sampleRate": capture_constraints_block.get("sampleRate"),
-+                },
-             }
--            self._bus("policy.snapshot", snapshot_payload, sid=ctx.sid)
-+            if not ctx.policy_snapshot_logged:
-+                self._bus("policy.snapshot", snapshot_payload, sid=ctx.sid)
-+                ctx.policy_snapshot_logged = True
-             self._bus(
-                 "policy.deprecation_report",
-                 {
-                     "version": version,
-                     "mapped_legacy_keys": mapped_hits,
-                     "server_starts_input": server_starts_input,
-                     "warmup_ms": warmup_ms,
-                     "cold_start_grace_ms": cold_start_grace_ms,
-                 },
-                 sid=ctx.sid,
-             )
-             ctx.policy_snapshot_fingerprint = fingerprint
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=policy_snapshot_emit_failed sid=%s", ctx.sid)
++    _resetClientVadState() {
++      this._clientVadState = this._createClientVadState();
++    }
++
+     _deliverChunk(buffer, seq) {
+       let delivered = false;
+       if (typeof this._onChunk === 'function') {
+         try {
+           this._onChunk({ buffer, seq });
+           delivered = true;
+         } catch (err) {
+           emitClientLog('client.pcm.chunk_callback_error', {
+             seq,
+             message: err && err.message ? err.message : String(err),
+           });
+         }
+       }
  
-     def _policy(self, ctx: AdapterContext) -> Dict[str, Any]:
-         if isinstance(ctx.policy, Mapping):
-             return dict(ctx.policy)
-         return {}
+       if (!delivered) {
+         delivered = this._sendViaSocket(buffer, seq);
+       }
  
-     def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
-         legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
-         try:
-             normalized = normalize_policy(payload, legacy_hits=legacy_hits)
-         except Exception:  # pragma: no cover - defensive logging
-@@ -938,76 +973,111 @@ class ChatV2Adapter:
-                 policy = self._resolve_server_vad_policy(ctx)
-                 client_silence_ms = self._compute_client_silence_ms(ctx, now_ms)
-                 server_silence_ms = self._compute_server_silence_ms(
-                     ctx, now_ms, policy, client_silence_ms
-                 )
-                 vendor_idle_ms = self._compute_vendor_idle_ms(ctx, now_ms)
-                 min_silence_ms = max(0, int(policy.get("min_silence_ms", 0)))
-                 eot_silence_ms = max(0, int(policy.get("eot_silence_ms", 0)))
-                 client_ok = client_silence_ms >= min_silence_ms
-                 server_ok = (not policy.get("enable", True)) or server_silence_ms >= min_silence_ms
-                 silence_ok = client_ok and server_ok
-                 vendor_ok = vendor_idle_ms >= eot_silence_ms
-                 denom_client = max(1, min_silence_ms)
-                 client_norm = _clamp(client_silence_ms / denom_client, 0.0, 1.0)
-                 if policy.get("enable", True):
-                     server_norm = _clamp(server_silence_ms / denom_client, 0.0, 1.0)
-                     combined_norm = min(client_norm, server_norm)
-                 else:
-                     combined_norm = client_norm
-                 denom_vendor = max(1, eot_silence_ms)
-                 vendor_norm = _clamp(vendor_idle_ms / denom_vendor, 0.0, 1.0)
-                 fuse_mode = str(policy.get("fuse_mode", "and")).strip().lower()
-                 if fuse_mode not in {"and", "or", "weighted"}:
-                     fuse_mode = "and"
-                 should_close = False
-+                score: float | None = None
-+                weight_client: float | None = None
-+                weight_vendor: float | None = None
-                 if fuse_mode == "and":
-                     should_close = silence_ok and vendor_ok
-                 elif fuse_mode == "or":
-                     should_close = silence_ok or vendor_ok
-                 elif fuse_mode == "weighted":
-                     weight_client = float(policy.get("weight_client", 0.5) or 0.0)
-                     weight_vendor = float(policy.get("weight_vendor", 0.5) or 0.0)
-                     score = (weight_client * combined_norm) + (weight_vendor * vendor_norm)
-                     should_close = score >= 1.0 and (combined_norm > 0.0 or vendor_norm > 0.0)
-                 if not should_close:
-                     continue
-                 min_stream_ms = 1200
-                 asr_client = ctx.session.asr
-                 bytes_streamed = getattr(asr_client, "bytes_streamed", 0) if asr_client else 0
-                 stream_age_ms = (
-                     getattr(asr_client, "ms_since_first_packet", min_stream_ms)
-                     if asr_client
-                     else min_stream_ms
-                 )
-+                base_meta: Dict[str, Any] = {
-+                    "sid": ctx.sid,
-+                    "fuse_mode": fuse_mode,
-+                    "client_silence_ms": int(client_silence_ms),
-+                    "server_silence_ms": int(server_silence_ms),
-+                    "vendor_idle_ms": int(vendor_idle_ms),
-+                    "min_silence_ms": int(min_silence_ms),
-+                    "eot_silence_ms": int(eot_silence_ms),
-+                    "bytes_streamed": int(bytes_streamed),
-+                    "ms_since_first_packet": int(stream_age_ms),
-+                    "min_stream_ms": int(min_stream_ms),
-+                    "silence_ok": bool(silence_ok),
-+                    "vendor_ok": bool(vendor_ok),
-+                }
-+                if score is not None:
-+                    base_meta["weighted_score"] = float(score)
-+                if weight_client is not None:
-+                    base_meta["weight_client"] = float(weight_client)
-+                if weight_vendor is not None:
-+                    base_meta["weight_vendor"] = float(weight_vendor)
-                 if bytes_streamed <= 0 or stream_age_ms < min_stream_ms:
-+                    if not ctx.asr_silence_hold_logged:
-+                        hold_meta = dict(base_meta)
-+                        hold_meta["decision"] = "hold"
-+                        hold_meta["hold_reason"] = "insufficient_audio"
-+                        self._bus("asr.silence_hold", hold_meta, sid=ctx.sid)
-+                        ctx.asr_silence_hold_logged = True
-                     continue
-                 reason = "silence_final"
-                 if silence_ok and not vendor_ok:
-                     reason = "silence_only"
-                 elif not silence_ok and vendor_ok:
-                     reason = "policy_close"
-+                if not ctx.asr_silence_eot_logged:
-+                    eot_meta = dict(base_meta)
-+                    eot_meta["decision"] = "eot"
-+                    eot_meta["close_reason"] = reason
-+                    self._bus("asr.silence_eot", eot_meta, sid=ctx.sid)
-+                    ctx.asr_silence_eot_logged = True
-                 await self._handle_vad_eot(
-                     ctx,
-                     reason,
-                     fuse_mode,
-                     client_silence_ms,
-                     vendor_idle_ms,
-                     server_silence_ms,
-                 )
-         except asyncio.CancelledError:
-             raise
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=server_vad_fusion_loop_error sid=%s", ctx.sid)
-         finally:
-             ctx.vad_fusion_task = None
+       return delivered;
+     }
  
-     def _compute_client_silence_ms(self, ctx: AdapterContext, now_ms: int) -> int:
-         if ctx.client_vad_speech:
-             return 0
-         if ctx.client_vad_since_ms is not None and not ctx.client_vad_speech:
-             return max(0, now_ms - int(ctx.client_vad_since_ms))
-         if ctx.client_vad_last_speech_end_ms is not None:
-             return max(0, now_ms - int(ctx.client_vad_last_speech_end_ms))
-         if ctx.session.last_pcm_ms is not None:
-             return max(0, now_ms - int(ctx.session.last_pcm_ms))
-         return 0
-@@ -2749,57 +2819,60 @@ class ChatV2Adapter:
-             _log.info(
-                 "evt=audio_drop sid=%s len=%d reason=%s",
-                 ctx.sid,
-                 byte_count,
-                 reason,
-             )
-             return
-         asr_client = ctx.session.asr
-         if ctx.session.asr_state == "open" and asr_client is not None:
-             try:
-                 await asr_client.send_pcm(chunk)
-             except Exception:
-                 _log.warning("evt=asr_pcm_send_failed sid=%s", ctx.sid, exc_info=True)
-             else:
-                 ctx.asr_bytes_sent += byte_count
-                 if not ctx.session.first_chunk_sent:
-                     ctx.session.first_chunk_sent = True
-                 streamed = getattr(asr_client, "bytes_streamed", 0) or 0
-                 streamed += byte_count
-                 setattr(asr_client, "bytes_streamed", streamed)
-                 now_mono = time.monotonic()
-                 first_packet = getattr(asr_client, "first_packet_monotonic", None)
-                 if not isinstance(first_packet, (int, float)):
-                     first_packet = now_mono
-                     setattr(asr_client, "first_packet_monotonic", first_packet)
-+                if not ctx.asr_first_packet_logged:
-                     try:
-                         self._bus(
-                             "asr.first_packet",
-                             {"sid": ctx.sid, "bytes": byte_count},
-                         )
-                     except Exception:
-                         pass
-+                    else:
-+                        ctx.asr_first_packet_logged = True
-                 elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
-                 setattr(asr_client, "ms_since_first_packet", elapsed_ms)
-         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+     _sendViaSocket(buffer, seq) {
+       const byteLength = buffer.byteLength || 0;
+       if (!byteLength) {
+         return true;
+@@ -657,61 +837,134 @@
+       const socket = this._socket;
+       if (socket && socket.readyState === WebSocket.OPEN) {
+         try {
+           socket.send(buffer);
+           return true;
+         } catch (err) {
+           emitClientLog('client.pcm.send_error', {
+             seq,
+             message: err && err.message ? err.message : String(err),
+             path: 'socket.send',
+           });
+         }
+       }
+       return false;
+     }
  
-     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
-         removed = False
-         for key in list(ctx.audio_buffer):
-             if key < threshold:
-                 ctx.audio_buffer.pop(key, None)
-                 removed = True
-         if removed:
-             if ctx.audio_buffer:
-                 ctx.audio_highest_seq = max(ctx.audio_buffer)
-             else:
-                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+     _applyPolicyDefaults() {
+       const recorderPolicy = this._extractRecorderPolicy(this._policy);
+       if (recorderPolicy && typeof recorderPolicy === 'object') {
+         this._shouldMuteOnTts = recorderPolicy.mute_send_during_tts !== false;
+         this._stopOnTts = recorderPolicy.stop_on_tts_start === true;
+       } else {
+         this._shouldMuteOnTts = true;
+         this._stopOnTts = false;
+       }
++      this._clientVadConfig = this._extractClientVadConfig(this._policy);
++      this._resetClientVadState();
+     }
  
-     def _log_speechmatics_control_summary(
-         self, sid: str, payload: Mapping[str, Any]
-     ) -> None:
-         if not isinstance(payload, Mapping):
-             return
-         vendor = payload.get("vendor")
-         if not (isinstance(vendor, str) and vendor.strip().lower() == "speechmatics"):
-             return
-         command_value = payload.get("command")
-@@ -5355,50 +5428,53 @@ class ChatV2Adapter:
-         client = SMRealtimeClient(
-             ctx.sid,
-             on_ready=_on_ready,
-             on_notice=_on_notice,
-             on_closed=_on_closed,
-         )
-         setattr(client, "bytes_streamed", 0)
-         setattr(client, "first_packet_monotonic", None)
-         setattr(client, "ms_since_first_packet", 0)
-         return client
+     _extractRecorderPolicy(policy) {
+       if (!policy || typeof policy !== 'object') {
+         return null;
+       }
+       if (policy.recorder && typeof policy.recorder === 'object') {
+         return policy.recorder;
+       }
+       if (policy.policy && typeof policy.policy === 'object' && policy.policy.recorder) {
+         return policy.policy.recorder;
+       }
+       return null;
+     }
  
-     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
-         if ctx.ws_send is None:
-             raise RuntimeError("websocket send unavailable for asr.open")
-         if not can_open(ctx.session):
-             return
-         if ctx.asr_open_task and not ctx.asr_open_task.done():
-             return
-         mark(ctx.session, "opening")
-         ctx.asr_bytes_sent = 0
-         ctx.asr_opened_ms = None
-         ctx.asr_close_reason = None
-         ctx.session.first_chunk_sent = False
-         ctx.session.queued_arm = False
-         ctx.session.closed_at_ms = None
-+        ctx.asr_first_packet_logged = False
-+        ctx.asr_silence_hold_logged = False
-+        ctx.asr_silence_eot_logged = False
-         ctx.session.asr = self._create_sm_client(ctx)
-         try:
-             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
-         except RuntimeError:
-             loop = asyncio.get_running_loop()
-             ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
++    _extractClientVadConfig(policy) {
++      const defaults = {
++        enable: true,
++        thresholdDbfs: -55,
++        attackMs: 100,
++        releaseMs: 250,
++        preRollMs: 240,
++        minActiveMs: 300,
++      };
++      if (!policy || typeof policy !== 'object') {
++        return { ...defaults };
++      }
++      let vadPolicy = null;
++      if (policy.vad && typeof policy.vad === 'object') {
++        vadPolicy = policy.vad;
++      } else if (policy.policy && typeof policy.policy === 'object' && policy.policy.vad && typeof policy.policy.vad === 'object') {
++        vadPolicy = policy.policy.vad;
++      }
++      const clientCfg = vadPolicy && typeof vadPolicy.client === 'object' ? vadPolicy.client : null;
++      if (!clientCfg || typeof clientCfg !== 'object') {
++        return { ...defaults };
++      }
++
++      const normalized = { ...defaults };
++      const coerceNumber = (value) => {
++        if (typeof value === 'number' && Number.isFinite(value)) {
++          return value;
++        }
++        if (typeof value === 'string' && value.trim()) {
++          const parsed = Number(value);
++          if (Number.isFinite(parsed)) {
++            return parsed;
++          }
++        }
++        return null;
++      };
++
++      if (clientCfg.enable === false) {
++        normalized.enable = false;
++      } else if (clientCfg.enable === true) {
++        normalized.enable = true;
++      }
++
++      const threshold = coerceNumber(clientCfg.threshold_dbfs);
++      if (threshold !== null) {
++        normalized.thresholdDbfs = threshold;
++      }
++
++      const attack = coerceNumber(clientCfg.attack_ms);
++      if (attack !== null && attack >= 0) {
++        normalized.attackMs = attack;
++      }
++
++      const release = coerceNumber(clientCfg.release_ms);
++      if (release !== null && release >= 0) {
++        normalized.releaseMs = release;
++      }
++
++      const preRoll = coerceNumber(clientCfg.pre_roll_ms);
++      if (preRoll !== null) {
++        normalized.preRollMs = Math.max(0, preRoll);
++      }
++
++      const minActive = coerceNumber(clientCfg.min_active_ms);
++      if (minActive !== null) {
++        normalized.minActiveMs = Math.max(0, minActive);
++      }
++
++      return normalized;
++    }
++
+     _extractPolicyFromConfig(config) {
+       if (!config || typeof config !== 'object') {
+         return null;
+       }
+       if (config.policy && typeof config.policy === 'object') {
+         return config.policy;
+       }
+       const knownKeys = new Set(['onChunk']);
+       const hasOnlyPolicyKeys = Object.keys(config).every((key) => knownKeys.has(key));
+       if (!hasOnlyPolicyKeys) {
+         return config;
+       }
+       return null;
+     }
+   }
  
-     async def _open_asr(self, ctx: AdapterContext) -> None:
-         send = ctx.ws_send
-         if send is None:
-             mark(ctx.session, "closed")
-             ctx.asr_open_task = None
-             return
-         client = ctx.session.asr
-         if client is None:
-             mark(ctx.session, "closed")
-             ctx.asr_open_task = None
-             return
-         try:
-             params = self._policy_to_sm_params(ctx)
-             # Force header-only auth when configured; otherwise allow JWT minting (optional)
-             from app import config as _cfg
+   const recorder = new PcmRecorder();
+   if (typeof window !== 'undefined') {
+     window.AudioRecorder = recorder;
+   }
+ })();
+diff --git a/app/ws/policy.py b/app/ws/policy.py
+index d9f7ca4bfabca132b48de5d965f10c5127bc3a3a..35b8bdd76bff805e95bb94795225354a4bd52fbe 100644
+--- a/app/ws/policy.py
++++ b/app/ws/policy.py
+@@ -12,50 +12,58 @@ LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
+     ("asr", "start_on_ready"): ("asr", "server_starts_input"),  # legacy name
+     # legacy VAD/gating
+     ("vad", "auto_vad_active"): None,  # runtime state, not a policy knob
+     ("vad", "allow_auto_vad"): ("vad", "sender_gate_on_tts"),  # best fit
+     # legacy UI badge behavior
+     ("ui", "badge_listen_on_asr"): ("ui", "status", "require_active_turn"),
+ }
  
-             token = None if _cfg.SPEECHMATICS_FORCE_HEADER_AUTH else self._mint_speechmatics_jwt(ctx)
-             _log.info("evt=sm_auth_mode sid=%s mode=%s", ctx.sid, "api_key_header" if token is None else "jwt")
-@@ -5481,50 +5557,58 @@ class ChatV2Adapter:
-                 if isinstance(ctx.policy_snapshot, Mapping)
-                 else None
-             )
-         else:
-             policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
-         if not isinstance(policy_block, Mapping):
-             return 0
-         asr_block = policy_block.get("asr")
-         if not isinstance(asr_block, Mapping):
-             return 0
-         value = asr_block.get("keep_stream_warm_ms")
-         try:
-             keep_warm = int(value)
-         except (TypeError, ValueError):
-             keep_warm = 0
-         if keep_warm < 0:
-             return 0
-         return keep_warm
+ DEPRECATED_KEYS = {
+     ("input", "require_hotword_to_start"),
+     ("input", "require_user_gesture_first_visit"),  # keep only if UX requires
+     ("audio", "pipeline", "mode"),
+     ("media", "asr_input"),
+ }
  
-     def _prepare_asr_turn_begin(self, ctx: AdapterContext, reason: str) -> Optional[Dict[str, Any]]:
-         if ctx.asr_turn_active:
-             return None
-         ctx.asr_turn_active = True
-         ctx.asr_turn_begin_sent = True
-         ctx.asr_turn_armed_sent = False
-+        ctx.asr_first_packet_logged = False
-+        ctx.asr_silence_hold_logged = False
-+        ctx.asr_silence_eot_logged = False
-+        asr_client = ctx.session.asr
-+        if asr_client is not None:
-+            setattr(asr_client, "bytes_streamed", 0)
-+            setattr(asr_client, "first_packet_monotonic", None)
-+            setattr(asr_client, "ms_since_first_packet", 0)
-         self._bus("asr.turn.begin", {"sid": ctx.sid, "reason": reason})
-         return {"type": "asr.turn", "state": "begin"}
+ SAFE_DEFAULTS_V2: dict[str, Any] = {
+     "version": POLICY_VERSION,
+     "asr": {
+         "server_starts_input": True,
+         "prearm_on_tts_end": True,
+         "cold_start_grace_ms": 3000,
+     },
+     "vad": {
+         "warmup_ms": 1500,
+         "sender_gate_on_tts": True,
++        "client": {
++            "enable": True,
++            "threshold_dbfs": -55,
++            "attack_ms": 100,
++            "release_ms": 250,
++            "pre_roll_ms": 240,
++            "min_active_ms": 300,
++        },
+     },
+     "watchdog": {
+         "partial_wait_ms_first_turn": 3500,
+     },
+     "server": {
+         "buffer_prestart_audio_ms": 300,
+     },
+     "capture": {
+         "mode": "webrtc_aec",  # "webrtc_aec" | "pcm"
+         "constraints": {
+             "echoCancellation": True,
+             "noiseSuppression": True,
+             "autoGainControl": False,
+             "channelCount": 1,
+             "sampleRate": 48000,
+         }
+     },
+     "ui": {
+         "status": {
+             "require_active_turn": True,
+             "enable_meter": True,
+         }
+     },
+ }
  
-     def _emit_asr_turn_armed(self, ctx: AdapterContext) -> None:
-         if not ctx.asr_turn_active or ctx.asr_turn_armed_sent:
-             return
-         ctx.asr_turn_armed_sent = True
-         self._bus("asr.turn.armed", {"sid": ctx.sid})
- 
-     def _prepare_asr_turn_end(self, ctx: AdapterContext, reason: str) -> Optional[Dict[str, Any]]:
-         if not ctx.asr_turn_active:
-             return None
-         ctx.asr_turn_active = False
-         ctx.asr_turn_begin_sent = False
-         ctx.asr_turn_armed_sent = False
-         self._bus("asr.turn.end", {"sid": ctx.sid, "reason": reason})
-         return {"type": "asr.turn", "state": "end"}
- 
-     async def _send_asr_ready_bundle(
-         self,
-         send: Callable[[dict], Awaitable[None]],
-         ctx: AdapterContext,
-     ) -> None:
-         mode = ctx.audio_pipeline_mode or "pcm16"
-         descriptor = dict(self._input_descriptor_for_mode(mode))

@@ -34,6 +34,14 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
     "vad": {
         "warmup_ms": 1500,
         "sender_gate_on_tts": True,
+        "client": {
+            "enable": True,
+            "threshold_dbfs": -55,
+            "attack_ms": 100,
+            "release_ms": 250,
+            "pre_roll_ms": 240,
+            "min_active_ms": 300,
+        },
     },
     "watchdog": {
         "partial_wait_ms_first_turn": 3500,

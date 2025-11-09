@@ -180,6 +180,8 @@
       this._initializing = null;
       this._workletLoaded = false;
       this._tearDownPromise = null;
+      this._clientVadConfig = this._extractClientVadConfig({});
+      this._clientVadState = this._createClientVadState();
     }
 
     get listening() {
@@ -433,6 +435,7 @@
       this._chunkSeq = 0;
       this._firstChunkSent = false;
       this._listeningStartedAt = Date.now();
+      this._resetClientVadState();
       const chunkMs = DEFAULT_CHUNK_MS;
       emitClientLog('client.pcm.capture_start', {
         device_rate: this._deviceSampleRate || null,
@@ -449,6 +452,7 @@
       const reasonLabel = normalizeReason(reason);
       this._listening = false;
       this._muted = false;
+      this._resetClientVadState();
       emitClientLog('client.pcm.capture_stop', { reason: reasonLabel });
     }
 
@@ -566,31 +570,207 @@
         if (!this._listening || this._muted) {
           return;
         }
-        const seq = this._chunkSeq;
-        this._chunkSeq += 1;
-        if (!this._firstChunkSent) {
-          this._firstChunkSent = true;
-          emitClientLog('client.audio_first_chunk', {
-            bytes: byteLength,
-            seq,
-          });
+        this._handleIncomingChunk(buffer);
+      };
+    }
+
+    _handleIncomingChunk(buffer) {
+      const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
+      if (!byteLength) {
+        return;
+      }
+
+      const cfg = this._clientVadConfig || this._extractClientVadConfig({});
+      if (!cfg.enable) {
+        this._dispatchChunk(buffer);
+        return;
+      }
+
+      let state = this._clientVadState;
+      if (!state) {
+        state = this._createClientVadState();
+        this._clientVadState = state;
+      }
+
+      const now = Date.now();
+      const dbfs = this._clientVadRmsDbfs(buffer);
+      const chunkMs = this._clientVadEstimateChunkMs(buffer);
+      const threshold = cfg.thresholdDbfs;
+      const above = dbfs >= threshold;
+      const maxPrerollChunks = cfg.preRollMs <= 0
+        ? 0
+        : Math.max(1, Math.round(cfg.preRollMs / Math.max(chunkMs, 1)));
+
+      if (!state.active) {
+        let shouldActivate = false;
+        if (above) {
+          if (!state.aboveSince) {
+            state.aboveSince = now;
+          }
+          if ((now - state.aboveSince) >= cfg.attackMs) {
+            shouldActivate = true;
+          }
+        } else {
+          state.aboveSince = 0;
         }
-        const startedAt = this._listeningStartedAt || Date.now();
-        const msSinceStart = Math.max(0, Date.now() - startedAt);
-        emitClientLog('client.pcm.chunk', {
+
+        if (shouldActivate) {
+          state.active = true;
+          state.activeSince = now;
+          state.belowSince = 0;
+          state.aboveSince = now;
+          const flushed = this._clientVadFlushPreroll(state);
+          if (flushed > 0) {
+            try {
+              emitClientLog('client.vad.preroll_flush', { chunks: flushed });
+            } catch (_) {}
+          }
+          try {
+            emitClientLog('client.vad.state', { state: 'active', dbfs });
+          } catch (_) {}
+          this._dispatchChunk(buffer);
+          return;
+        }
+
+        if (maxPrerollChunks > 0) {
+          state.preroll.push(buffer.slice(0));
+          while (state.preroll.length > maxPrerollChunks) {
+            state.preroll.shift();
+          }
+        } else if (state.preroll.length) {
+          state.preroll = [];
+        }
+        return;
+      }
+
+      this._dispatchChunk(buffer);
+      if (above) {
+        state.belowSince = 0;
+        return;
+      }
+
+      if (!state.belowSince) {
+        state.belowSince = now;
+      }
+      const activeMs = state.activeSince ? Math.max(0, now - state.activeSince) : 0;
+      const belowMs = Math.max(0, now - state.belowSince);
+      if (belowMs >= cfg.releaseMs && activeMs >= cfg.minActiveMs) {
+        state.active = false;
+        state.aboveSince = 0;
+        state.belowSince = 0;
+        state.activeSince = 0;
+        state.preroll = [];
+        try {
+          emitClientLog('client.vad.state', { state: 'paused', dbfs });
+        } catch (_) {}
+      }
+    }
+
+    _dispatchChunk(buffer) {
+      const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
+      if (!byteLength) {
+        return false;
+      }
+      const seq = this._chunkSeq;
+      this._chunkSeq += 1;
+      if (!this._firstChunkSent) {
+        this._firstChunkSent = true;
+        emitClientLog('client.audio_first_chunk', {
+          bytes: byteLength,
+          seq,
+        });
+      }
+      const startedAt = this._listeningStartedAt || Date.now();
+      const msSinceStart = Math.max(0, Date.now() - startedAt);
+      emitClientLog('client.pcm.chunk', {
+        seq,
+        bytes: byteLength,
+        ms_since_start: msSinceStart,
+      });
+      const delivered = this._deliverChunk(buffer, seq);
+      if (!delivered) {
+        emitClientLog('client.pcm.chunk_drop', {
           seq,
           bytes: byteLength,
-          ms_since_start: msSinceStart,
+          reason: 'delivery_failed',
         });
-        const delivered = this._deliverChunk(buffer, seq);
-        if (!delivered) {
-          emitClientLog('client.pcm.chunk_drop', {
-            seq,
-            bytes: byteLength,
-            reason: 'delivery_failed',
-          });
+      }
+      return delivered;
+    }
+
+    _clientVadEstimateChunkMs(buffer) {
+      if (!buffer || !buffer.byteLength) {
+        return DEFAULT_CHUNK_MS;
+      }
+      const samples = buffer.byteLength / 2;
+      if (!samples || !Number.isFinite(samples)) {
+        return DEFAULT_CHUNK_MS;
+      }
+      return (samples / TARGET_SAMPLE_RATE) * 1000;
+    }
+
+    _clientVadRmsDbfs(buffer) {
+      if (!buffer || buffer.byteLength < 2) {
+        return -Infinity;
+      }
+      let view;
+      try {
+        view = new Int16Array(buffer);
+      } catch (_) {
+        return -Infinity;
+      }
+      const length = view.length || 0;
+      if (!length) {
+        return -Infinity;
+      }
+      let sumSquares = 0;
+      for (let i = 0; i < length; i += 1) {
+        const sample = view[i] / 32768;
+        sumSquares += sample * sample;
+      }
+      if (sumSquares <= 0) {
+        return -Infinity;
+      }
+      const mean = sumSquares / length;
+      if (mean <= 0) {
+        return -Infinity;
+      }
+      const rms = Math.sqrt(mean);
+      if (rms <= 1e-9) {
+        return -Infinity;
+      }
+      return 20 * Math.log10(rms);
+    }
+
+    _clientVadFlushPreroll(state) {
+      if (!state || !Array.isArray(state.preroll) || state.preroll.length === 0) {
+        state.preroll = [];
+        return 0;
+      }
+      let sent = 0;
+      for (let i = 0; i < state.preroll.length; i += 1) {
+        const chunk = state.preroll[i];
+        if (chunk && chunk.byteLength) {
+          this._dispatchChunk(chunk);
+          sent += 1;
         }
+      }
+      state.preroll = [];
+      return sent;
+    }
+
+    _createClientVadState() {
+      return {
+        active: false,
+        aboveSince: 0,
+        belowSince: 0,
+        activeSince: 0,
+        preroll: [],
       };
+    }
+
+    _resetClientVadState() {
+      this._clientVadState = this._createClientVadState();
     }
 
     _deliverChunk(buffer, seq) {
@@ -679,6 +859,8 @@
         this._shouldMuteOnTts = true;
         this._stopOnTts = false;
       }
+      this._clientVadConfig = this._extractClientVadConfig(this._policy);
+      this._resetClientVadState();
     }
 
     _extractRecorderPolicy(policy) {
@@ -692,6 +874,77 @@
         return policy.policy.recorder;
       }
       return null;
+    }
+
+    _extractClientVadConfig(policy) {
+      const defaults = {
+        enable: true,
+        thresholdDbfs: -55,
+        attackMs: 100,
+        releaseMs: 250,
+        preRollMs: 240,
+        minActiveMs: 300,
+      };
+      if (!policy || typeof policy !== 'object') {
+        return { ...defaults };
+      }
+      let vadPolicy = null;
+      if (policy.vad && typeof policy.vad === 'object') {
+        vadPolicy = policy.vad;
+      } else if (policy.policy && typeof policy.policy === 'object' && policy.policy.vad && typeof policy.policy.vad === 'object') {
+        vadPolicy = policy.policy.vad;
+      }
+      const clientCfg = vadPolicy && typeof vadPolicy.client === 'object' ? vadPolicy.client : null;
+      if (!clientCfg || typeof clientCfg !== 'object') {
+        return { ...defaults };
+      }
+
+      const normalized = { ...defaults };
+      const coerceNumber = (value) => {
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          return value;
+        }
+        if (typeof value === 'string' && value.trim()) {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed)) {
+            return parsed;
+          }
+        }
+        return null;
+      };
+
+      if (clientCfg.enable === false) {
+        normalized.enable = false;
+      } else if (clientCfg.enable === true) {
+        normalized.enable = true;
+      }
+
+      const threshold = coerceNumber(clientCfg.threshold_dbfs);
+      if (threshold !== null) {
+        normalized.thresholdDbfs = threshold;
+      }
+
+      const attack = coerceNumber(clientCfg.attack_ms);
+      if (attack !== null && attack >= 0) {
+        normalized.attackMs = attack;
+      }
+
+      const release = coerceNumber(clientCfg.release_ms);
+      if (release !== null && release >= 0) {
+        normalized.releaseMs = release;
+      }
+
+      const preRoll = coerceNumber(clientCfg.pre_roll_ms);
+      if (preRoll !== null) {
+        normalized.preRollMs = Math.max(0, preRoll);
+      }
+
+      const minActive = coerceNumber(clientCfg.min_active_ms);
+      if (minActive !== null) {
+        normalized.minActiveMs = Math.max(0, minActive);
+      }
+
+      return normalized;
     }
 
     _extractPolicyFromConfig(config) {
