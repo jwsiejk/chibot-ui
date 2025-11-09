@@ -2365,7 +2365,10 @@ import { WakeWord } from "./wake_word.js";
 
   function sendJson(frame) {
     try {
-      return WSClient.sendJSON(frame);
+      if (WSClient && typeof WSClient.sendJSON === "function") {
+        return WSClient.sendJSON(frame);
+      }
+      return send(frame, { binary: false });
     } catch (err) {
       console.error("WSClient sendJson error", err);
       return false;
