@@ -1,377 +1,128 @@
 diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
-index bc271ddb7485b09ca6f9b3e46ceb217b34bd5e20..8eb9b79a1b90af85008be21c62e034899b1ef19f 100644
+index 8eb9b79a1b90af85008be21c62e034899b1ef19f..08a62f75093d7cfa3776653a9c282ff06c219782 100644
 --- a/app/static/js/audio/pcm_recorder.js
 +++ b/app/static/js/audio/pcm_recorder.js
-@@ -158,50 +158,52 @@
-       } catch (_) {}
-     }
-   }
- 
-   class PcmRecorder {
-     constructor() {
-       this._audioContext = null;
-       this._sourceNode = null;
-       this._workletNode = null;
-       this._stream = null;
-       this._socket = null;
-       this._active = false;
-       this._listening = false;
-       this._muted = false;
-       this._chunkSeq = 0;
-       this._listeningStartedAt = 0;
-       this._firstChunkSent = false;
-       this._policy = {};
-       this._shouldMuteOnTts = true;
-       this._stopOnTts = false;
-       this._onChunk = null;
-       this._deviceSampleRate = null;
-       this._initializing = null;
-       this._workletLoaded = false;
-       this._tearDownPromise = null;
-+      this._clientVadConfig = this._extractClientVadConfig({});
-+      this._clientVadState = this._createClientVadState();
+@@ -575,72 +575,85 @@
      }
  
-     get listening() {
-       return this._listening;
-     }
- 
-     isActive() {
-       return this._active;
-     }
- 
-     isListening() {
-       return this._listening;
-     }
- 
-     async init() {
-       if (this._initializing) {
-         return this._initializing;
-       }
-       if (this._audioContext && this._audioContext.state === 'closed') {
-         this._audioContext = null;
-         this._workletLoaded = false;
-       }
-       if (this._audioContext && this._workletLoaded) {
-         return this._audioContext;
-       }
-@@ -411,66 +413,68 @@
-       }
- 
-       this._stream = stream;
-       this._sourceNode = sourceNode;
-       this._workletNode = workletNode;
-       this._active = true;
-       this._muted = false;
-       this._firstChunkSent = false;
-       return context;
-     }
- 
-     async startListening(policy = {}) {
-       if (policy && typeof policy === 'object' && Object.keys(policy).length) {
-         this.setPolicy(policy);
-       }
-       if (!this._active) {
-         await this.start(policy || {});
-       }
-       if (this._listening) {
+     _handleIncomingChunk(buffer) {
+       const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
+       if (!byteLength) {
          return;
        }
-       this._listening = true;
-       this._chunkSeq = 0;
-       this._firstChunkSent = false;
-       this._listeningStartedAt = Date.now();
-+      this._resetClientVadState();
-       const chunkMs = DEFAULT_CHUNK_MS;
-       emitClientLog('client.pcm.capture_start', {
-         device_rate: this._deviceSampleRate || null,
-         target_rate: TARGET_SAMPLE_RATE,
-         chunk_ms: chunkMs,
-       });
-       emitAppStateRecordingStarted(this._policy);
-     }
  
-     stopListening(reason = {}) {
-       if (!this._listening) {
+       const cfg = this._clientVadConfig || this._extractClientVadConfig({});
+       if (!cfg.enable) {
+         this._dispatchChunk(buffer);
          return;
        }
-       const reasonLabel = normalizeReason(reason);
-       this._listening = false;
-       this._muted = false;
-+      this._resetClientVadState();
-       emitClientLog('client.pcm.capture_stop', { reason: reasonLabel });
-     }
  
-     async stop(reason = {}) {
-       this.stopListening(reason);
-       if (!this._active) {
-         return;
+       let state = this._clientVadState;
+       if (!state) {
+         state = this._createClientVadState();
+         this._clientVadState = state;
        }
-       if (this._tearDownPromise) {
-         return this._tearDownPromise;
-       }
-       const cleanup = (async () => {
-         const stream = this._stream;
-         const source = this._sourceNode;
-         const worklet = this._workletNode;
-         this._stream = null;
-         this._sourceNode = null;
-         this._workletNode = null;
-         this._active = false;
-         this._muted = false;
-         this._onChunk = null;
-         if (worklet && worklet.port) {
-           try {
-             worklet.port.onmessage = null;
-           } catch (_) {}
-@@ -544,77 +548,253 @@
-       if (this._active || this._initializing) {
-         const reason = this._initializing ? 'initializing' : 'active';
-         logClientMicEventText(`evt=mic_capture_request_blocked reason=${reason}`);
-         return this._initializing || Promise.resolve(null);
-       }
-       return this.start();
-     }
  
-     _attachPort(port) {
-       if (!port) {
-         return;
-       }
-       port.onmessage = (event) => {
-         const data = event ? event.data : null;
-         if (!data || data.type !== 'pcm16' || !data.buffer) {
-           return;
-         }
-         const buffer = data.buffer;
-         const byteLength = buffer.byteLength || 0;
-         if (byteLength === 0) {
-           return;
-         }
-         if (!this._listening || this._muted) {
-           return;
-         }
--        const seq = this._chunkSeq;
--        this._chunkSeq += 1;
--        if (!this._firstChunkSent) {
--          this._firstChunkSent = true;
--          emitClientLog('client.audio_first_chunk', {
--            bytes: byteLength,
--            seq,
--          });
-+        this._handleIncomingChunk(buffer);
-+      };
-+    }
-+
-+    _handleIncomingChunk(buffer) {
-+      const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
-+      if (!byteLength) {
-+        return;
-+      }
-+
-+      const cfg = this._clientVadConfig || this._extractClientVadConfig({});
-+      if (!cfg.enable) {
-+        this._dispatchChunk(buffer);
-+        return;
-+      }
-+
-+      let state = this._clientVadState;
-+      if (!state) {
-+        state = this._createClientVadState();
-+        this._clientVadState = state;
-+      }
-+
-+      const now = Date.now();
-+      const dbfs = this._clientVadRmsDbfs(buffer);
-+      const chunkMs = this._clientVadEstimateChunkMs(buffer);
-+      const threshold = cfg.thresholdDbfs;
-+      const above = dbfs >= threshold;
-+      const maxPrerollChunks = cfg.preRollMs <= 0
-+        ? 0
-+        : Math.max(1, Math.round(cfg.preRollMs / Math.max(chunkMs, 1)));
-+
-+      if (!state.active) {
-+        let shouldActivate = false;
-+        if (above) {
-+          if (!state.aboveSince) {
-+            state.aboveSince = now;
-+          }
-+          if ((now - state.aboveSince) >= cfg.attackMs) {
-+            shouldActivate = true;
-+          }
-+        } else {
-+          state.aboveSince = 0;
-+        }
-+
-+        if (shouldActivate) {
-+          state.active = true;
-+          state.activeSince = now;
-+          state.belowSince = 0;
-+          state.aboveSince = now;
-+          const flushed = this._clientVadFlushPreroll(state);
-+          if (flushed > 0) {
-+            try {
-+              emitClientLog('client.vad.preroll_flush', { chunks: flushed });
-+            } catch (_) {}
-+          }
+       const now = Date.now();
+       const dbfs = this._clientVadRmsDbfs(buffer);
+       const chunkMs = this._clientVadEstimateChunkMs(buffer);
+       const threshold = cfg.thresholdDbfs;
+       const above = dbfs >= threshold;
++      // meter: log a few samples until first activation
++      if (!state.meterDone) {
++        state.meterSamples = (state.meterSamples || 0) + 1;
++        if (state.meterSamples % 5 === 0) {
 +          try {
-+            emitClientLog('client.vad.state', { state: 'active', dbfs });
++            emitClientLog('client.vad.meter', { dbfs, above, threshold });
 +          } catch (_) {}
-+          this._dispatchChunk(buffer);
-+          return;
-+        }
-+
-+        if (maxPrerollChunks > 0) {
-+          state.preroll.push(buffer.slice(0));
-+          while (state.preroll.length > maxPrerollChunks) {
-+            state.preroll.shift();
++          if (state.active) {
++            state.meterDone = true;
 +          }
-+        } else if (state.preroll.length) {
-+          state.preroll = [];
++        }
++      }
+       const maxPrerollChunks = cfg.preRollMs <= 0
+         ? 0
+         : Math.max(1, Math.round(cfg.preRollMs / Math.max(chunkMs, 1)));
+ 
+       if (!state.active) {
+         let shouldActivate = false;
+         if (above) {
+           if (!state.aboveSince) {
+             state.aboveSince = now;
+           }
+           if ((now - state.aboveSince) >= cfg.attackMs) {
+             shouldActivate = true;
+           }
+         } else {
+           state.aboveSince = 0;
          }
--        const startedAt = this._listeningStartedAt || Date.now();
--        const msSinceStart = Math.max(0, Date.now() - startedAt);
--        emitClientLog('client.pcm.chunk', {
-+        return;
-+      }
-+
-+      this._dispatchChunk(buffer);
-+      if (above) {
-+        state.belowSince = 0;
-+        return;
-+      }
-+
-+      if (!state.belowSince) {
-+        state.belowSince = now;
-+      }
-+      const activeMs = state.activeSince ? Math.max(0, now - state.activeSince) : 0;
-+      const belowMs = Math.max(0, now - state.belowSince);
-+      if (belowMs >= cfg.releaseMs && activeMs >= cfg.minActiveMs) {
-+        state.active = false;
-+        state.aboveSince = 0;
-+        state.belowSince = 0;
-+        state.activeSince = 0;
-+        state.preroll = [];
-+        try {
-+          emitClientLog('client.vad.state', { state: 'paused', dbfs });
-+        } catch (_) {}
-+      }
-+    }
-+
-+    _dispatchChunk(buffer) {
-+      const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
-+      if (!byteLength) {
-+        return false;
-+      }
-+      const seq = this._chunkSeq;
-+      this._chunkSeq += 1;
-+      if (!this._firstChunkSent) {
-+        this._firstChunkSent = true;
-+        emitClientLog('client.audio_first_chunk', {
-+          bytes: byteLength,
-+          seq,
-+        });
-+      }
-+      const startedAt = this._listeningStartedAt || Date.now();
-+      const msSinceStart = Math.max(0, Date.now() - startedAt);
-+      emitClientLog('client.pcm.chunk', {
-+        seq,
-+        bytes: byteLength,
-+        ms_since_start: msSinceStart,
-+      });
-+      const delivered = this._deliverChunk(buffer, seq);
-+      if (!delivered) {
-+        emitClientLog('client.pcm.chunk_drop', {
-           seq,
-           bytes: byteLength,
--          ms_since_start: msSinceStart,
-+          reason: 'delivery_failed',
-         });
--        const delivered = this._deliverChunk(buffer, seq);
--        if (!delivered) {
--          emitClientLog('client.pcm.chunk_drop', {
--            seq,
--            bytes: byteLength,
--            reason: 'delivery_failed',
--          });
-+      }
-+      return delivered;
-+    }
-+
-+    _clientVadEstimateChunkMs(buffer) {
-+      if (!buffer || !buffer.byteLength) {
-+        return DEFAULT_CHUNK_MS;
-+      }
-+      const samples = buffer.byteLength / 2;
-+      if (!samples || !Number.isFinite(samples)) {
-+        return DEFAULT_CHUNK_MS;
-+      }
-+      return (samples / TARGET_SAMPLE_RATE) * 1000;
-+    }
-+
-+    _clientVadRmsDbfs(buffer) {
-+      if (!buffer || buffer.byteLength < 2) {
-+        return -Infinity;
-+      }
-+      let view;
-+      try {
-+        view = new Int16Array(buffer);
-+      } catch (_) {
-+        return -Infinity;
-+      }
-+      const length = view.length || 0;
-+      if (!length) {
-+        return -Infinity;
-+      }
-+      let sumSquares = 0;
-+      for (let i = 0; i < length; i += 1) {
-+        const sample = view[i] / 32768;
-+        sumSquares += sample * sample;
-+      }
-+      if (sumSquares <= 0) {
-+        return -Infinity;
-+      }
-+      const mean = sumSquares / length;
-+      if (mean <= 0) {
-+        return -Infinity;
-+      }
-+      const rms = Math.sqrt(mean);
-+      if (rms <= 1e-9) {
-+        return -Infinity;
-+      }
-+      return 20 * Math.log10(rms);
-+    }
-+
-+    _clientVadFlushPreroll(state) {
-+      if (!state || !Array.isArray(state.preroll) || state.preroll.length === 0) {
-+        state.preroll = [];
-+        return 0;
-+      }
-+      let sent = 0;
-+      for (let i = 0; i < state.preroll.length; i += 1) {
-+        const chunk = state.preroll[i];
-+        if (chunk && chunk.byteLength) {
-+          this._dispatchChunk(chunk);
-+          sent += 1;
+ 
+         if (shouldActivate) {
+           state.active = true;
+           state.activeSince = now;
+           state.belowSince = 0;
+           state.aboveSince = now;
++          state.meterDone = true;
+           const flushed = this._clientVadFlushPreroll(state);
+           if (flushed > 0) {
+             try {
+               emitClientLog('client.vad.preroll_flush', { chunks: flushed });
+             } catch (_) {}
+           }
+           try {
+             emitClientLog('client.vad.state', { state: 'active', dbfs });
+           } catch (_) {}
+           this._dispatchChunk(buffer);
+           return;
          }
-+      }
-+      state.preroll = [];
-+      return sent;
-+    }
-+
-+    _createClientVadState() {
-+      return {
-+        active: false,
-+        aboveSince: 0,
-+        belowSince: 0,
-+        activeSince: 0,
-+        preroll: [],
+ 
+         if (maxPrerollChunks > 0) {
+           state.preroll.push(buffer.slice(0));
+           while (state.preroll.length > maxPrerollChunks) {
+             state.preroll.shift();
+           }
+         } else if (state.preroll.length) {
+           state.preroll = [];
+         }
+         return;
+       }
+ 
+       this._dispatchChunk(buffer);
+@@ -744,50 +757,52 @@
+ 
+     _clientVadFlushPreroll(state) {
+       if (!state || !Array.isArray(state.preroll) || state.preroll.length === 0) {
+         state.preroll = [];
+         return 0;
+       }
+       let sent = 0;
+       for (let i = 0; i < state.preroll.length; i += 1) {
+         const chunk = state.preroll[i];
+         if (chunk && chunk.byteLength) {
+           this._dispatchChunk(chunk);
+           sent += 1;
+         }
+       }
+       state.preroll = [];
+       return sent;
+     }
+ 
+     _createClientVadState() {
+       return {
+         active: false,
+         aboveSince: 0,
+         belowSince: 0,
+         activeSince: 0,
+         preroll: [],
++        meterSamples: 0,
++        meterDone: false,
        };
      }
  
-+    _resetClientVadState() {
-+      this._clientVadState = this._createClientVadState();
-+    }
-+
+     _resetClientVadState() {
+       this._clientVadState = this._createClientVadState();
+     }
+ 
      _deliverChunk(buffer, seq) {
        let delivered = false;
        if (typeof this._onChunk === 'function') {
@@ -390,41 +141,14 @@ index bc271ddb7485b09ca6f9b3e46ceb217b34bd5e20..8eb9b79a1b90af85008be21c62e03489
          delivered = this._sendViaSocket(buffer, seq);
        }
  
-       return delivered;
-     }
- 
-     _sendViaSocket(buffer, seq) {
-       const byteLength = buffer.byteLength || 0;
-       if (!byteLength) {
-         return true;
-@@ -657,61 +837,134 @@
-       const socket = this._socket;
-       if (socket && socket.readyState === WebSocket.OPEN) {
-         try {
-           socket.send(buffer);
-           return true;
-         } catch (err) {
-           emitClientLog('client.pcm.send_error', {
-             seq,
-             message: err && err.message ? err.message : String(err),
-             path: 'socket.send',
-           });
-         }
-       }
-       return false;
-     }
- 
-     _applyPolicyDefaults() {
-       const recorderPolicy = this._extractRecorderPolicy(this._policy);
-       if (recorderPolicy && typeof recorderPolicy === 'object') {
-         this._shouldMuteOnTts = recorderPolicy.mute_send_during_tts !== false;
+@@ -857,52 +872,52 @@
          this._stopOnTts = recorderPolicy.stop_on_tts_start === true;
        } else {
          this._shouldMuteOnTts = true;
          this._stopOnTts = false;
        }
-+      this._clientVadConfig = this._extractClientVadConfig(this._policy);
-+      this._resetClientVadState();
+       this._clientVadConfig = this._extractClientVadConfig(this._policy);
+       this._resetClientVadState();
      }
  
      _extractRecorderPolicy(policy) {
@@ -440,105 +164,165 @@ index bc271ddb7485b09ca6f9b3e46ceb217b34bd5e20..8eb9b79a1b90af85008be21c62e03489
        return null;
      }
  
-+    _extractClientVadConfig(policy) {
-+      const defaults = {
-+        enable: true,
-+        thresholdDbfs: -55,
-+        attackMs: 100,
-+        releaseMs: 250,
-+        preRollMs: 240,
-+        minActiveMs: 300,
-+      };
-+      if (!policy || typeof policy !== 'object') {
-+        return { ...defaults };
-+      }
-+      let vadPolicy = null;
-+      if (policy.vad && typeof policy.vad === 'object') {
-+        vadPolicy = policy.vad;
-+      } else if (policy.policy && typeof policy.policy === 'object' && policy.policy.vad && typeof policy.policy.vad === 'object') {
-+        vadPolicy = policy.policy.vad;
-+      }
-+      const clientCfg = vadPolicy && typeof vadPolicy.client === 'object' ? vadPolicy.client : null;
-+      if (!clientCfg || typeof clientCfg !== 'object') {
-+        return { ...defaults };
-+      }
-+
-+      const normalized = { ...defaults };
-+      const coerceNumber = (value) => {
-+        if (typeof value === 'number' && Number.isFinite(value)) {
-+          return value;
-+        }
-+        if (typeof value === 'string' && value.trim()) {
-+          const parsed = Number(value);
-+          if (Number.isFinite(parsed)) {
-+            return parsed;
-+          }
-+        }
-+        return null;
-+      };
-+
-+      if (clientCfg.enable === false) {
-+        normalized.enable = false;
-+      } else if (clientCfg.enable === true) {
-+        normalized.enable = true;
-+      }
-+
-+      const threshold = coerceNumber(clientCfg.threshold_dbfs);
-+      if (threshold !== null) {
-+        normalized.thresholdDbfs = threshold;
-+      }
-+
-+      const attack = coerceNumber(clientCfg.attack_ms);
-+      if (attack !== null && attack >= 0) {
-+        normalized.attackMs = attack;
-+      }
-+
-+      const release = coerceNumber(clientCfg.release_ms);
-+      if (release !== null && release >= 0) {
-+        normalized.releaseMs = release;
-+      }
-+
-+      const preRoll = coerceNumber(clientCfg.pre_roll_ms);
-+      if (preRoll !== null) {
-+        normalized.preRollMs = Math.max(0, preRoll);
-+      }
-+
-+      const minActive = coerceNumber(clientCfg.min_active_ms);
-+      if (minActive !== null) {
-+        normalized.minActiveMs = Math.max(0, minActive);
-+      }
-+
-+      return normalized;
-+    }
-+
-     _extractPolicyFromConfig(config) {
-       if (!config || typeof config !== 'object') {
-         return null;
+     _extractClientVadConfig(policy) {
+       const defaults = {
+         enable: true,
+-        thresholdDbfs: -55,
+-        attackMs: 100,
++        thresholdDbfs: -60,
++        attackMs: 80,
+         releaseMs: 250,
+         preRollMs: 240,
+         minActiveMs: 300,
+       };
+       if (!policy || typeof policy !== 'object') {
+         return { ...defaults };
        }
-       if (config.policy && typeof config.policy === 'object') {
-         return config.policy;
+       let vadPolicy = null;
+       if (policy.vad && typeof policy.vad === 'object') {
+         vadPolicy = policy.vad;
+       } else if (policy.policy && typeof policy.policy === 'object' && policy.policy.vad && typeof policy.policy.vad === 'object') {
+         vadPolicy = policy.policy.vad;
        }
-       const knownKeys = new Set(['onChunk']);
-       const hasOnlyPolicyKeys = Object.keys(config).every((key) => knownKeys.has(key));
-       if (!hasOnlyPolicyKeys) {
-         return config;
+       const clientCfg = vadPolicy && typeof vadPolicy.client === 'object' ? vadPolicy.client : null;
+       if (!clientCfg || typeof clientCfg !== 'object') {
+         return { ...defaults };
        }
-       return null;
+ 
+       const normalized = { ...defaults };
+       const coerceNumber = (value) => {
+         if (typeof value === 'number' && Number.isFinite(value)) {
+           return value;
+         }
+         if (typeof value === 'string' && value.trim()) {
+           const parsed = Number(value);
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 14a0157eba1d2ae23516849b5ed123a6a4fc80d6..f38aa2f32235e480b7ad12e60f69a0c5c655b0de 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -961,55 +961,51 @@ import { WakeWord } from "./wake_word.js";
+       AppState.recorder = recorderState;
+     }
+     if (!listening && AppState.wsConnected) {
+       setWsPhase("connected");
      }
    }
  
-   const recorder = new PcmRecorder();
-   if (typeof window !== 'undefined') {
-     window.AudioRecorder = recorder;
+   function setAsrArmInFlight(inFlight) {
+     setAppStateValue("asrArmInFlight", Boolean(inFlight));
    }
- })();
+ 
+   function setArmAfterTtsEnd(pending) {
+     setAppStateValue("armAfterTtsEnd", Boolean(pending));
+   }
+ 
+   function setWsConnected(connected) {
+     setAppStateValue("wsConnected", Boolean(connected));
+   }
+ 
+   function setWsPhase(phase) {
+     if (typeof phase !== "string" || !phase) {
+       return;
+     }
+     setAppStateValue("wsPhase", phase);
+     if (WS_READY_PHASES.has(phase)) {
+-      try {
+-        flushQueuedFrames();
+-      } catch (err) {
+-        console.warn("WSClient queue flush failed", err);
+-      }
++      flushQueuedFrames();
+     }
+   }
+ 
+   function flushQueuedFrames(client = WSClient) {
+     const target = client || WSClient;
+     if (!Array.isArray(target?._queue) || target._queue.length === 0) {
+       return;
+     }
+     const liveSocket = target._ws || AppState?.websocket || null;
+     if (!liveSocket || liveSocket.readyState !== WebSocket.OPEN) {
+       return;
+     }
+     const phase = AppState?.wsPhase || AppState?.connectionState;
+     if (!WS_READY_PHASES.has(phase)) {
+       return;
+     }
+     const pending = target._queue.splice(0, target._queue.length);
+     for (const entry of pending) {
+       if (!entry || typeof entry !== "object") {
+         continue;
+       }
+       const { data, isBinary } = entry;
+       try {
+         send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
+       } catch (err) {
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 7f42e8fd9aa84358195916c00fc0984b6086a251..d183115f02b3597f1e7e88b955cf9d56b8d12884 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1096,50 +1096,56 @@ class ChatV2Adapter:
+         if ctx.session.server_vad_speech:
+             return 0
+         if ctx.session.server_vad_since_ms is not None:
+             return max(0, now_ms - int(ctx.session.server_vad_since_ms))
+         return client_silence_ms
+ 
+     def _compute_vendor_idle_ms(self, ctx: AdapterContext, now_ms: int) -> int:
+         last_vendor = ctx.session.last_vendor_activity_ms
+         if last_vendor is None:
+             last_vendor = ctx.session.last_pcm_ms
+         if last_vendor is None:
+             return 0
+         return max(0, now_ms - int(last_vendor))
+ 
+     async def _handle_vad_eot(
+         self,
+         ctx: AdapterContext,
+         reason: str,
+         fuse_mode: str,
+         client_silence_ms: int,
+         vendor_idle_ms: int,
+         server_silence_ms: int,
+     ) -> None:
+         if not ctx.session.eot_armed:
+             return
++        asr_client = getattr(ctx.session, "asr", None)
++        bytes_streamed = int(getattr(asr_client, "bytes_streamed", 0) or 0)
++        ms_since_first = int(getattr(asr_client, "ms_since_first_packet", 0) or 0)
++        if bytes_streamed <= 0 or ms_since_first < 1200:
++            # no real audio yet → hold; let client VAD open when speech appears
++            return
+         ctx.session.eot_armed = False
+         _log.info(
+             "evt=vad_eot sid=%s reason=%s fuse_mode=%s client_silence_ms=%d vendor_idle_ms=%d server_silence_ms=%d",
+             ctx.sid,
+             reason,
+             fuse_mode,
+             client_silence_ms,
+             vendor_idle_ms,
+             server_silence_ms,
+         )
+         meta = {
+             "reason": reason,
+             "fuse_mode": fuse_mode,
+             "client_silence_ms": int(client_silence_ms),
+             "vendor_idle_ms": int(vendor_idle_ms),
+             "server_silence_ms": int(server_silence_ms),
+         }
+         await self._publish("asr.turn_ended", ctx.sid, meta)
+         send = ctx.ws_send
+         turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
+         if send is not None:
+             try:
+                 if turn_end_payload is not None:
+                     await self._send_json(send, ctx.sid, turn_end_payload)
+                 await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
 diff --git a/app/ws/policy.py b/app/ws/policy.py
-index d9f7ca4bfabca132b48de5d965f10c5127bc3a3a..35b8bdd76bff805e95bb94795225354a4bd52fbe 100644
+index 35b8bdd76bff805e95bb94795225354a4bd52fbe..2ed5d6f3b539f35fdf014179e2932fb6c5503f3e 100644
 --- a/app/ws/policy.py
 +++ b/app/ws/policy.py
-@@ -12,50 +12,58 @@ LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
-     ("asr", "start_on_ready"): ("asr", "server_starts_input"),  # legacy name
-     # legacy VAD/gating
+@@ -14,52 +14,52 @@ LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
      ("vad", "auto_vad_active"): None,  # runtime state, not a policy knob
      ("vad", "allow_auto_vad"): ("vad", "sender_gate_on_tts"),  # best fit
      # legacy UI badge behavior
@@ -562,14 +346,16 @@ index d9f7ca4bfabca132b48de5d965f10c5127bc3a3a..35b8bdd76bff805e95bb94795225354a
      "vad": {
          "warmup_ms": 1500,
          "sender_gate_on_tts": True,
-+        "client": {
-+            "enable": True,
-+            "threshold_dbfs": -55,
-+            "attack_ms": 100,
-+            "release_ms": 250,
-+            "pre_roll_ms": 240,
-+            "min_active_ms": 300,
-+        },
+         "client": {
+             "enable": True,
+-            "threshold_dbfs": -55,
+-            "attack_ms": 100,
++            "threshold_dbfs": -60,
++            "attack_ms": 80,
+             "release_ms": 250,
+             "pre_roll_ms": 240,
+             "min_active_ms": 300,
+         },
      },
      "watchdog": {
          "partial_wait_ms_first_turn": 3500,
@@ -591,7 +377,3 @@ index d9f7ca4bfabca132b48de5d965f10c5127bc3a3a..35b8bdd76bff805e95bb94795225354a
          "status": {
              "require_active_turn": True,
              "enable_meter": True,
-         }
-     },
- }
- 

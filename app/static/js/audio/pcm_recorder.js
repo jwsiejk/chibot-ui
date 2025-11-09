@@ -597,6 +597,18 @@
       const chunkMs = this._clientVadEstimateChunkMs(buffer);
       const threshold = cfg.thresholdDbfs;
       const above = dbfs >= threshold;
+      // meter: log a few samples until first activation
+      if (!state.meterDone) {
+        state.meterSamples = (state.meterSamples || 0) + 1;
+        if (state.meterSamples % 5 === 0) {
+          try {
+            emitClientLog('client.vad.meter', { dbfs, above, threshold });
+          } catch (_) {}
+          if (state.active) {
+            state.meterDone = true;
+          }
+        }
+      }
       const maxPrerollChunks = cfg.preRollMs <= 0
         ? 0
         : Math.max(1, Math.round(cfg.preRollMs / Math.max(chunkMs, 1)));
@@ -619,6 +631,7 @@
           state.activeSince = now;
           state.belowSince = 0;
           state.aboveSince = now;
+          state.meterDone = true;
           const flushed = this._clientVadFlushPreroll(state);
           if (flushed > 0) {
             try {
@@ -766,6 +779,8 @@
         belowSince: 0,
         activeSince: 0,
         preroll: [],
+        meterSamples: 0,
+        meterDone: false,
       };
     }
 
@@ -879,8 +894,8 @@
     _extractClientVadConfig(policy) {
       const defaults = {
         enable: true,
-        thresholdDbfs: -55,
-        attackMs: 100,
+        thresholdDbfs: -60,
+        attackMs: 80,
         releaseMs: 250,
         preRollMs: 240,
         minActiveMs: 300,

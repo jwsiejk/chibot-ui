@@ -1118,6 +1118,12 @@ class ChatV2Adapter:
     ) -> None:
         if not ctx.session.eot_armed:
             return
+        asr_client = getattr(ctx.session, "asr", None)
+        bytes_streamed = int(getattr(asr_client, "bytes_streamed", 0) or 0)
+        ms_since_first = int(getattr(asr_client, "ms_since_first_packet", 0) or 0)
+        if bytes_streamed <= 0 or ms_since_first < 1200:
+            # no real audio yet → hold; let client VAD open when speech appears
+            return
         ctx.session.eot_armed = False
         _log.info(
             "evt=vad_eot sid=%s reason=%s fuse_mode=%s client_silence_ms=%d vendor_idle_ms=%d server_silence_ms=%d",

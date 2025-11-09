@@ -983,11 +983,7 @@ import { WakeWord } from "./wake_word.js";
     }
     setAppStateValue("wsPhase", phase);
     if (WS_READY_PHASES.has(phase)) {
-      try {
-        flushQueuedFrames();
-      } catch (err) {
-        console.warn("WSClient queue flush failed", err);
-      }
+      flushQueuedFrames();
     }
   }
 
