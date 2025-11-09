@@ -219,17 +219,73 @@
         }
       }
 
+      const localConstraints = this._policy
+        && typeof this._policy === 'object'
+        && this._policy.capture
+        && typeof this._policy.capture === 'object'
+        && this._policy.capture.constraints
+        && typeof this._policy.capture.constraints === 'object'
+          ? this._policy.capture.constraints
+          : null;
+      const globalConstraints = window.AppState?.policy?.capture?.constraints;
+      const constraintSource =
+        (localConstraints && typeof localConstraints === 'object')
+          ? localConstraints
+          : (globalConstraints && typeof globalConstraints === 'object')
+            ? globalConstraints
+            : {};
+
+      const audioConstraints = {};
+      Object.keys(constraintSource).forEach((key) => {
+        const value = constraintSource[key];
+        if (typeof value !== 'undefined') {
+          audioConstraints[key] = value;
+        }
+      });
+
+      if (typeof audioConstraints.channelCount === 'undefined') {
+        audioConstraints.channelCount = 1;
+      } else if (Number.isFinite(audioConstraints.channelCount)) {
+        audioConstraints.channelCount = Number(audioConstraints.channelCount);
+      }
+
+      const sampleRateSource = audioConstraints.sampleRate;
+      if (typeof sampleRateSource === 'undefined') {
+        audioConstraints.sampleRate = { ideal: 48000 };
+      } else if (Number.isFinite(sampleRateSource)) {
+        audioConstraints.sampleRate = { ideal: Number(sampleRateSource) };
+      } else if (sampleRateSource && typeof sampleRateSource === 'object') {
+        audioConstraints.sampleRate = { ...sampleRateSource };
+      }
+
+      if (typeof audioConstraints.sampleSize === 'undefined') {
+        audioConstraints.sampleSize = 16;
+      } else if (Number.isFinite(audioConstraints.sampleSize)) {
+        audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
+      }
+
+      if (typeof audioConstraints.echoCancellation === 'undefined') {
+        audioConstraints.echoCancellation = true;
+      } else {
+        audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
+      }
+
+      if (typeof audioConstraints.noiseSuppression === 'undefined') {
+        audioConstraints.noiseSuppression = true;
+      } else {
+        audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
+      }
+
+      if (typeof audioConstraints.autoGainControl === 'undefined') {
+        audioConstraints.autoGainControl = false;
+      } else {
+        audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
+      }
+
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: { ideal: 1, max: 2 },
-            sampleRate: { ideal: 48000 },
-            sampleSize: 16,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: false,
-          },
+          audio: audioConstraints,
           video: false,
         });
       } catch (err) {

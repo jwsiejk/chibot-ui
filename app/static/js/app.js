@@ -158,6 +158,7 @@
       const recorder = snapshot.recorder && typeof snapshot.recorder === "object" ? snapshot.recorder : {};
       const merged = {
         ...snapshot,
+        policy: snapshot.policy ?? (window.AppState?.policy || {}),
         wsConn: snapshot.wsConn ?? snapshot.wsConnected ?? appState.wsConnected,
         wsConning: snapshot.wsConning ?? snapshot.wsConnecting ?? appState.wsConnecting,
         asrReady: snapshot.asrReady ?? appState.asrReady,

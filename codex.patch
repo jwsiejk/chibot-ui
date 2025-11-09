@@ -1,1521 +1,264 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 72d6622e037251eec0a8ca9df8513d7f1991737f..d3c0bae91036df614e43ce3f4197cd8b2f9e4640 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -118,145 +118,244 @@ import { WakeWord } from "./wake_word.js";
-       Object.defineProperty(window, "__turnTraceId", {
-         configurable: true,
-         get() { return __turnTraceId; },
-         set(value) {
-           if (typeof value === "string" || value === null) {
-             __turnTraceId = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__pendingAsrReadyStart", {
-         configurable: true,
-         get() { return __pendingAsrReadyStart; },
-         set(value) {
-           if (value === null || (value && typeof value === "object" && !Array.isArray(value))) {
-             __pendingAsrReadyStart = value;
-           }
-         },
-       });
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 49b17b16e5f52395dabfc7198b7a4d9e40bb6ac2..2e48b3715597d6fd694c63973e74f7604c777117 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -136,50 +136,51 @@
+     if (isSpecialScheme(src)) {
+       return src;
+     }
+ 
+     if (/^(?:[a-z]+:)?\/\//i.test(src) || src.startsWith("/")) {
+       if (!isSameOrigin(src)) {
+         return src;
+       }
+       return appendVersionQuery(src);
+     }
+ 
+     const normalized = src.replace(/^\.\//, "");
+     const base = STATIC_JS_BASE.replace(/\/?$/, "/");
+     const joined = `${base}${normalized}`;
+ 
+     return appendVersionQuery(joined);
+   }
+ 
+   function renderStatusBarFromState() {
+     try {
+       const appState = window.AppState || {};
+       const snapshot = typeof appState.getState === "function" ? appState.getState() : appState;
+       const recorder = snapshot.recorder && typeof snapshot.recorder === "object" ? snapshot.recorder : {};
+       const merged = {
+         ...snapshot,
++        policy: snapshot.policy ?? (window.AppState?.policy || {}),
+         wsConn: snapshot.wsConn ?? snapshot.wsConnected ?? appState.wsConnected,
+         wsConning: snapshot.wsConning ?? snapshot.wsConnecting ?? appState.wsConnecting,
+         asrReady: snapshot.asrReady ?? appState.asrReady,
+         micLive: snapshot.micLive ?? recorder.active ?? appState.micLive ?? window.AudioRecorder?.listening,
+         tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts,
+         senderPaused: snapshot.senderPaused ?? appState.senderPaused,
+       };
+       window.StatusBar?.render(merged);
      } catch {}
    }
  
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
-   }
--  const P0 = AppState.policy || {};
--  const P0Policy = P0 && typeof P0.policy === "object" && P0.policy
--    ? { ...P0.policy }
--    : {};
--  AppState.policy = {
--    ...P0,
--    auto_record_after_greet: P0.auto_record_after_greet ?? true,
--    require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
--    tts_gate_enabled: P0.tts_gate_enabled ?? true,
--    autostart_retry_on: Array.isArray(P0.autostart_retry_on)
--      ? P0.autostart_retry_on.slice()
--      : ["asrReady", "ttsEnded", "turnState:Ready"],
--    autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
--      ? P0.autostart_backoff_ms.slice()
--      : [0, 300, 1000],
--    autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
--    show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
--      ? P0.show_tap_to_speak_cta_after_ms
--      : 2000,
--    reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
--    policy: {
--      ...P0Policy,
--      input: {
--        ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
--        require_hotword_to_start: false,
--        require_user_gesture_first_visit: false,
--      },
--    },
-+  const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
-+  const P0 = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-+  const DEFAULT_AUTOSTART_RETRY = ["asrReady", "ttsEnded", "turnState:Ready"];
-+  const DEFAULT_AUTOSTART_BACKOFF = [0, 300, 1000];
-+  const DEFAULT_AUTOSTART_ATTEMPTS = 5;
-+  const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
-+  const DEFAULT_POLICY_WATCHDOG = { partial_wait_ms_first_turn: 2500 };
-+  const DEFAULT_POLICY_STATUS = { require_active_turn: true };
-+
-+  const cloneValue = (value) => {
-+    if (Array.isArray(value)) {
-+      return value.slice();
-+    }
-+    if (value && typeof value === "object") {
-+      return { ...value };
-+    }
-+    return value;
-   };
- 
-+  if (FEATURE_LEGACY_POLICY) {
-+    const P0Policy = P0 && typeof P0.policy === "object" && P0.policy
-+      ? { ...P0.policy }
-+      : {};
-+    AppState.policy = {
-+      ...P0,
-+      auto_record_after_greet: P0.auto_record_after_greet ?? true,
-+      require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
-+      tts_gate_enabled: P0.tts_gate_enabled ?? true,
-+      autostart_retry_on: Array.isArray(P0.autostart_retry_on)
-+        ? P0.autostart_retry_on.slice()
-+        : DEFAULT_AUTOSTART_RETRY.slice(),
-+      autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
-+        ? P0.autostart_backoff_ms.slice()
-+        : DEFAULT_AUTOSTART_BACKOFF.slice(),
-+      autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts)
-+        ? P0.autostart_max_attempts
-+        : DEFAULT_AUTOSTART_ATTEMPTS,
-+      show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
-+        ? P0.show_tap_to_speak_cta_after_ms
-+        : 2000,
-+      reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
-+      policy: {
-+        ...P0Policy,
-+        input: {
-+          ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
-+          require_hotword_to_start: false,
-+          require_user_gesture_first_visit: false,
-+        },
-+      },
-+    };
-+  } else {
-+    const basePolicy = {
-+      auto_record_after_greet: P0?.auto_record_after_greet ?? true,
-+      require_user_gesture_first_visit: P0?.require_user_gesture_first_visit ?? false,
-+      tts_gate_enabled: P0?.tts_gate_enabled ?? true,
-+      autostart_retry_on: Array.isArray(P0?.autostart_retry_on)
-+        ? P0.autostart_retry_on.filter((item) => typeof item === "string" && item)
-+        : DEFAULT_AUTOSTART_RETRY.slice(),
-+      autostart_backoff_ms: Array.isArray(P0?.autostart_backoff_ms)
-+        ? P0.autostart_backoff_ms
-+            .map((value) => Number(value))
-+            .filter((value) => Number.isFinite(value) && value >= 0)
-+        : DEFAULT_AUTOSTART_BACKOFF.slice(),
-+      autostart_max_attempts: Number.isFinite(P0?.autostart_max_attempts)
-+        ? Number(P0.autostart_max_attempts)
-+        : DEFAULT_AUTOSTART_ATTEMPTS,
-+      show_tap_to_speak_cta_after_ms: Number.isFinite(P0?.show_tap_to_speak_cta_after_ms)
-+        ? Number(P0.show_tap_to_speak_cta_after_ms)
-+        : 2000,
-+      reopen_asr_on_idle: P0?.reopen_asr_on_idle ?? true,
-+    };
-+
-+    const sanitizedPolicy = {};
-+    if (P0 && typeof P0 === "object") {
-+      Object.keys(P0).forEach((key) => {
-+        const value = P0[key];
-+        if (typeof value === "undefined") {
-+          return;
-+        }
-+        sanitizedPolicy[key] = cloneValue(value);
-+      });
-+    }
-+
-+    const vadSource = P0 && typeof P0.vad === "object" ? P0.vad : {};
-+    const watchdogSource = P0 && typeof P0.watchdog === "object" ? P0.watchdog : {};
-+    const uiSource = P0 && typeof P0.ui === "object" ? P0.ui : {};
-+    const statusSource = uiSource && typeof uiSource.status === "object" ? uiSource.status : {};
-+
-+    sanitizedPolicy.vad = { ...DEFAULT_POLICY_VAD, ...vadSource };
-+    sanitizedPolicy.watchdog = { ...DEFAULT_POLICY_WATCHDOG, ...watchdogSource };
-+    sanitizedPolicy.ui = { ...uiSource };
-+    sanitizedPolicy.ui.status = { ...DEFAULT_POLICY_STATUS, ...statusSource };
-+    if (!Number.isFinite(sanitizedPolicy.version)) {
-+      sanitizedPolicy.version = 2;
-+    }
-+    if (typeof sanitizedPolicy._normalized_from !== "string") {
-+      sanitizedPolicy._normalized_from = "v2";
-+    }
-+
-+    const normalizedPolicy = { ...basePolicy };
-+    Object.keys(sanitizedPolicy).forEach((key) => {
-+      const value = sanitizedPolicy[key];
-+      if (typeof value === "undefined") {
-+        return;
-+      }
-+      normalizedPolicy[key] = cloneValue(value);
-+    });
-+
-+    AppState.policy = normalizedPolicy;
-+  }
-+
-+  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-+  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
-+  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
-+  const POLICY_STATUS = POLICY?.ui?.status
-+    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
-+  const VAD_WARMUP_MS = Number(POLICY_VAD?.warmup_ms ?? DEFAULT_POLICY_VAD.warmup_ms);
-+  const WATCHDOG_FIRST_MS = Number(
-+    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
-+  );
-+  const SENDER_GATE_ON_TTS = Boolean(
-+    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
-+  );
-+  const REQUIRE_ACTIVE_TURN = Boolean(
-+    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
-+  );
-+
-   function installClientVadPolicySnapshot() {
-     const policyRoot = AppState.policy && typeof AppState.policy === "object"
-       ? AppState.policy
-       : (AppState.policy = {});
-     const ensureVadBlock = (target) => {
-       if (!target || typeof target !== "object") {
-         return;
-       }
-       const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
-       target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
-     };
-     ensureVadBlock(policyRoot);
--    if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
--      policyRoot.policy = {};
-+    if (FEATURE_LEGACY_POLICY) {
-+      if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
-+        policyRoot.policy = {};
-+      }
-+      ensureVadBlock(policyRoot.policy);
-     }
--    ensureVadBlock(policyRoot.policy);
-   }
- 
-   installClientVadPolicySnapshot();
- 
-   const appStateEventEmitter = createEventEmitter();
-   if (typeof AppState.on !== "function") {
-     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
-   }
-   if (typeof AppState.emit !== "function") {
-     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
-   }
-   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
-     AppState.__pcmBreadcrumbHandlersInstalled = true;
-     AppState.on("recordingStarted", () => {
-       __micRecordingStartAt = Date.now();
-       __micFirstChunkBreadcrumbSent = false;
-       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
+   if (typeof document !== "undefined") {
+     document.addEventListener("DOMContentLoaded", () => {
+       renderStatusBarFromState();
      });
    }
  
-   function clonePolicySnapshot(source) {
-     if (!source || typeof source !== "object") {
-       return {};
-     }
-     return { ...source };
-   }
- 
-   function patchPolicyVad(patch) {
-     if (!patch || typeof patch !== "object") {
-       return;
-     }
- 
-     const applyPatch = (policyRoot) => {
-       if (!policyRoot || typeof policyRoot !== "object") {
-         return;
-       }
-       const currentVad = policyRoot.vad && typeof policyRoot.vad === "object"
-         ? policyRoot.vad
-         : {};
-       policyRoot.vad = { ...currentVad, ...patch };
-     };
- 
-     try {
-       if (AppState && typeof AppState === "object") {
-         const policyRoot = AppState.policy && typeof AppState.policy === "object"
-           ? AppState.policy
-           : (AppState.policy = {});
-         applyPatch(policyRoot);
--        if (policyRoot.policy && typeof policyRoot.policy === "object") {
-+        if (FEATURE_LEGACY_POLICY && policyRoot.policy && typeof policyRoot.policy === "object") {
-           applyPatch(policyRoot.policy);
-         }
-       }
-     } catch (err) {
-       try {
-         console.warn("Failed to update AppState policy VAD", err);
-       } catch {}
-     }
- 
-     const message = "client.mic diag=vad_active state=Listening";
-     try {
-       console.log(message);
-     } catch {}
-     try {
-       hubLog("client.mic", { message });
-     } catch (err) {
-       try {
-         console.warn("Failed to log VAD activation after asr.ready", err);
-       } catch {}
-     }
-   }
- 
-   function setPendingAsrReadyStart(detail) {
-     if (!detail || typeof detail !== "object") {
-       __pendingAsrReadyStart = null;
-@@ -501,55 +600,57 @@ import { WakeWord } from "./wake_word.js";
-     }
-     const bus = resolveConsoleBusFunction();
-     if (!bus) {
-       return;
-     }
-     try {
-       if (payload === undefined) {
-         bus(event);
-       } else {
-         bus(event, payload);
-       }
-     } catch (err) {
-       try {
-         console.warn("consoleBus emit failed", err);
-       } catch {}
-     }
-   }
- 
-   function getClientVadPolicyConfig() {
-     const policyRoot = AppState && typeof AppState.policy === "object" ? AppState.policy : null;
-     if (policyRoot && typeof policyRoot === "object") {
-       const direct = policyRoot.vad && typeof policyRoot.vad === "object" ? policyRoot.vad : null;
-       if (direct && typeof direct.client === "object") {
-         return direct.client;
-       }
--      const nestedRoot = policyRoot.policy && typeof policyRoot.policy === "object" ? policyRoot.policy : null;
--      if (nestedRoot) {
--        const nested = nestedRoot.vad && typeof nestedRoot.vad === "object" ? nestedRoot.vad : null;
--        if (nested && typeof nested.client === "object") {
--          return nested.client;
-+      if (FEATURE_LEGACY_POLICY) {
-+        const nestedRoot = policyRoot.policy && typeof policyRoot.policy === "object" ? policyRoot.policy : null;
-+        if (nestedRoot) {
-+          const nested = nestedRoot.vad && typeof nestedRoot.vad === "object" ? nestedRoot.vad : null;
-+          if (nested && typeof nested.client === "object") {
-+            return nested.client;
-+          }
-         }
-       }
-     }
-     return CLIENT_VAD_POLICY;
-   }
- 
-   function getVadSilenceTimeoutMs() {
-     const config = getClientVadPolicyConfig();
-     const candidate = config && Object.prototype.hasOwnProperty.call(config, "max_gate_silence_ms")
-       ? Number(config.max_gate_silence_ms)
-       : Number(config && config.max_silence_ms);
-     if (Number.isFinite(candidate) && candidate > 0) {
-       return Math.round(candidate);
-     }
-     const fallback = Number(CLIENT_VAD_POLICY.max_gate_silence_ms);
-     if (Number.isFinite(fallback) && fallback > 0) {
-       return Math.round(fallback);
-     }
-     return null;
-   }
- 
-   function clearVadSilenceTimer() {
-     if (vadSilenceTimerId) {
-       clearTimeout(vadSilenceTimerId);
-       vadSilenceTimerId = null;
-@@ -718,63 +819,57 @@ import { WakeWord } from "./wake_word.js";
- 
-   function logStage(label, detail = {}) {
-     try {
-       hubLog(label, { trace_id: __turnTraceId || null, ...detail });
-     } catch {}
-   }
+   window.AppUI = window.AppUI || {};
+   window.AppUI.refresh = function () {
+     renderStatusBarFromState();
+   };
  
    if (typeof window !== "undefined") {
-     try { window.__logMic = logMic; } catch {}
-     try { window.__logStage = logStage; } catch {}
-     try { window.__MIC_OUTCOME = MIC_OUTCOME; } catch {}
-   }
- 
-   const AUDIO_HEADER_FRAME = Object.freeze({
-     type: "audio.header",
-     format: "pcm16",
-     sample_rate: 16000,
-     channels: 1,
-   });
-   // --- Begin: header idempotency + strict schema ---
-   let __audioHeaderSent = false;
-   function __resetAudioHeaderSent() { __audioHeaderSent = false; }
-   function __buildStrictAudioHeader(frameOrPolicy) {
-     const base = AUDIO_HEADER_FRAME;
-     const source = (frameOrPolicy?.policy || frameOrPolicy) || {};
--    const audioPolicy = source.audio || {};
--    const mediaAudioPolicy = (source.media && source.media.audio) || {};
--    const formatCandidate = audioPolicy.format ?? mediaAudioPolicy.format ?? base.format;
-+    const audioPolicy = source && typeof source.audio === "object" ? source.audio : {};
-+    const formatCandidate = audioPolicy.format ?? base.format;
-     const rateCandidate =
-       audioPolicy.sample_rate ??
-       audioPolicy.rate ??
--      mediaAudioPolicy.sample_rate ??
--      mediaAudioPolicy.rate ??
-       base.sample_rate;
--    const channelsCandidate =
--      audioPolicy.channels ??
--      mediaAudioPolicy.channels ??
--      base.channels;
-+    const channelsCandidate = audioPolicy.channels ?? base.channels;
- 
-     const normalizedRate = Number(rateCandidate);
-     const normalizedChannels = Number(channelsCandidate);
- 
-     if (formatCandidate && formatCandidate !== "pcm16") {
+     window.addEventListener("client.log", (event) => {
        try {
-         console.warn(
-           "audio.header format policy overridden",
-           formatCandidate,
-           "→ pcm16"
-         );
-       } catch {}
-     }
- 
-     return {
-       type: base.type,
-       format: "pcm16",
-       sample_rate: Number.isFinite(normalizedRate) ? normalizedRate : base.sample_rate,
-       channels: Number.isFinite(normalizedChannels) ? normalizedChannels : base.channels,
-     };
-   }
-   function __sendAudioHeaderOnce(frameOrPolicy) {
-     if (__audioHeaderSent) { return; }
-     try {
-       const header = __buildStrictAudioHeader(frameOrPolicy);
-@@ -2206,51 +2301,52 @@ import { WakeWord } from "./wake_word.js";
-       return;
-     }
-     const info = ws.__accessTokenInfo || { token: null, mintedAt: null };
-     const mintedAt = info && typeof info.mintedAt === "number" && Number.isFinite(info.mintedAt)
-       ? info.mintedAt
-       : null;
-     let message = null;
-     if (!mintedAt) {
-       message = "Couldn’t connect. Please login or complete your profile.";
-     } else if (Date.now() - mintedAt > TOKEN_EXPIRY_MS) {
-       message = "Session token expired. Click Start again.";
-     } else {
-       message = "Connection failed. Please try again.";
-     }
-     showConnectionToast(message);
-     ws.__handshakeToastShown = true;
-     recordClientBannerEvent("ws.handshake.toast", {
-       message,
-       minted_ms: mintedAt,
-       close_code: closeCode,
-     });
-   }
- 
-   function resolveWsPath() {
-     try {
--      const routing = AppState?.policy?.policy?.routing;
-+      const routing = AppState?.policy?.routing
-+        || (FEATURE_LEGACY_POLICY ? AppState?.policy?.policy?.routing : undefined);
-       const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
-       if (candidate && candidate.toLowerCase() !== 'v2') {
-         console.warn('Unsupported ws_version from policy; normalizing to v2', candidate);
+diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
+index 5ac16c1d871e24a36d794348bfb7769c29205011..d9292db2a76df1f330def1e75016571e6dac4ab1 100644
+--- a/app/static/js/audio/pcm_recorder.js
++++ b/app/static/js/audio/pcm_recorder.js
+@@ -197,61 +197,117 @@
        }
-     } catch (err) {
-       console.warn('Failed to inspect policy routing version', err);
-     }
-     return '/ws/v2/chat';
-   }
+       const policyCandidate = this._extractPolicyFromConfig(config);
+       if (policyCandidate) {
+         this.setPolicy(policyCandidate);
+       }
+       if (this._active) {
+         return this._audioContext;
+       }
+       if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+         throw new Error('MediaDevices.getUserMedia is not available');
+       }
  
-   function computeUrl(resumeToken) {
-     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-     const base = `${protocol}//${window.location.host}${resolveWsPath()}`;
-     const params = new URLSearchParams();
-     if (typeof resumeToken === "string" && resumeToken.trim()) {
-       params.set("resume", resumeToken.trim());
-     }
-     const query = params.toString();
-     return query ? `${base}?${query}` : base;
-   }
+       const context = await this.init();
+       if (!context) {
+         throw new Error('Audio context unavailable');
+       }
  
-   function clearInfoWatchdog() {
-     if (infoWatchdogTimerId) {
-       clearTimeout(infoWatchdogTimerId);
-       infoWatchdogTimerId = null;
-@@ -2683,50 +2779,90 @@ import { WakeWord } from "./wake_word.js";
-       vendor: AppState.asrVendor,
-       input: sanitized.input ?? null,
-     });
-     return sanitized;
-   }
+       if (context.state === 'suspended') {
+         try {
+           await context.resume();
+         } catch (err) {
+           console.warn('Failed to resume audio context', err);
+         }
+       }
  
-   const ASR_VENDOR_OPTIONS = ['speechmatics'];
-   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
- 
-   const DEFAULT_POLICY_FLAGS = {
-     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
-     input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
-     asr: {
-       prearm_on_tts_end: false,
-       keep_stream_warm_ms: 30000,
-       commit_on_vad_silence: true,
-       commit_silence_ms: 900,
-       max_utterance_ms: 8000,
-       vendor: { primary: 'speechmatics', secondary: null },
-     },
-     routing: { ws_version: 'v2' },
-     audio: { pipeline: { mode: 'pcm16' } },
-   };
- 
-   function sanitizePolicySnapshot(source) {
-+    if (!FEATURE_LEGACY_POLICY) {
-+      const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
-+      const sanitized = { ...base };
-+      const safeSource = source && typeof source === 'object' ? source : {};
++      const localConstraints = this._policy
++        && typeof this._policy === 'object'
++        && this._policy.capture
++        && typeof this._policy.capture === 'object'
++        && this._policy.capture.constraints
++        && typeof this._policy.capture.constraints === 'object'
++          ? this._policy.capture.constraints
++          : null;
++      const globalConstraints = window.AppState?.policy?.capture?.constraints;
++      const constraintSource =
++        (localConstraints && typeof localConstraints === 'object')
++          ? localConstraints
++          : (globalConstraints && typeof globalConstraints === 'object')
++            ? globalConstraints
++            : {};
 +
-+      const safeVad = safeSource && typeof safeSource.vad === 'object' ? safeSource.vad : {};
-+      const baseVad = base && typeof base.vad === 'object' ? base.vad : {};
-+      sanitized.vad = { ...DEFAULT_POLICY_VAD, ...baseVad, ...safeVad };
-+
-+      const safeWatchdog = safeSource && typeof safeSource.watchdog === 'object' ? safeSource.watchdog : {};
-+      const baseWatchdog = base && typeof base.watchdog === 'object' ? base.watchdog : {};
-+      sanitized.watchdog = { ...DEFAULT_POLICY_WATCHDOG, ...baseWatchdog, ...safeWatchdog };
-+
-+      const baseUi = base && typeof base.ui === 'object' ? base.ui : {};
-+      const safeUi = safeSource && typeof safeSource.ui === 'object' ? safeSource.ui : {};
-+      const baseStatus = baseUi && typeof baseUi.status === 'object' ? baseUi.status : {};
-+      const safeStatus = safeUi && typeof safeUi.status === 'object' ? safeUi.status : {};
-+      sanitized.ui = { ...baseUi, ...safeUi };
-+      sanitized.ui.status = { ...DEFAULT_POLICY_STATUS, ...baseStatus, ...safeStatus };
-+
-+      Object.keys(safeSource).forEach((key) => {
-+        if (key === 'vad' || key === 'watchdog' || key === 'ui') {
-+          return;
++      const audioConstraints = {};
++      Object.keys(constraintSource).forEach((key) => {
++        const value = constraintSource[key];
++        if (typeof value !== 'undefined') {
++          audioConstraints[key] = value;
 +        }
-+        const value = safeSource[key];
-+        if (typeof value === 'undefined') {
-+          return;
-+        }
-+        sanitized[key] = cloneValue(value);
 +      });
 +
-+      if (!Number.isFinite(sanitized.version)) {
-+        sanitized.version = 2;
++      if (typeof audioConstraints.channelCount === 'undefined') {
++        audioConstraints.channelCount = 1;
++      } else if (Number.isFinite(audioConstraints.channelCount)) {
++        audioConstraints.channelCount = Number(audioConstraints.channelCount);
 +      }
-+      if (typeof sanitized._normalized_from !== 'string') {
-+        sanitized._normalized_from = 'v2';
-+      }
-+      return sanitized;
-+    }
 +
-     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
-     const policy = { ...base };
- 
-     if (source && typeof source === 'object') {
-       if (typeof source.mode === 'string') {
-         policy.mode = source.mode;
-       }
-       if (typeof source.allow_auto_vad === 'boolean') {
-         policy.allow_auto_vad = source.allow_auto_vad;
-       }
-       if (typeof source.barge_in_enabled === 'boolean') {
-         policy.barge_in_enabled = source.barge_in_enabled;
-       }
-       if (typeof source.ws_auth_mode === 'string' && source.ws_auth_mode.trim()) {
-         policy.ws_auth_mode = source.ws_auth_mode.trim();
-       }
-       if (typeof source.require_user_gesture_first_visit === 'boolean') {
-         policy.require_user_gesture_first_visit = source.require_user_gesture_first_visit;
-       }
-       if (typeof source.auto_record_after_greet === 'boolean') {
-         policy.auto_record_after_greet = source.auto_record_after_greet;
-       }
-       if (typeof source.tts_gate_enabled === 'boolean') {
-         policy.tts_gate_enabled = source.tts_gate_enabled;
-       }
-@@ -3179,58 +3315,67 @@ import { WakeWord } from "./wake_word.js";
-       const uttIdEnd = frame?.utt_id || 'utt-00001';
-       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       if (AppState.armAfterTtsEnd) {
-         schedulePostTtsArm("post_greet");
-         setArmAfterTtsEnd(false);
-       }
-     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
-       const uttId = frame?.utt_id || 'utt-00001';
-       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
-       setAppStateValue("ttsActive", false);
-       logStage('client.tts', {
-         outcome: 'ended',
-         utt_id: uttId,
-         dur_ms: frame?.dur_ms,
-         reason,
-       });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
-     } else if (frame.type === "start_listening") {
-       const ar = window.AudioRecorder || null;
-       const policy = frame?.policy || {};
-       let unifiedArmed = false;
++      const sampleRateSource = audioConstraints.sampleRate;
++      if (typeof sampleRateSource === 'undefined') {
++        audioConstraints.sampleRate = { ideal: 48000 };
++      } else if (Number.isFinite(sampleRateSource)) {
++        audioConstraints.sampleRate = { ideal: Number(sampleRateSource) };
++      } else if (sampleRateSource && typeof sampleRateSource === 'object') {
++        audioConstraints.sampleRate = { ...sampleRateSource };
++      }
++
++      if (typeof audioConstraints.sampleSize === 'undefined') {
++        audioConstraints.sampleSize = 16;
++      } else if (Number.isFinite(audioConstraints.sampleSize)) {
++        audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
++      }
++
++      if (typeof audioConstraints.echoCancellation === 'undefined') {
++        audioConstraints.echoCancellation = true;
++      } else {
++        audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
++      }
++
++      if (typeof audioConstraints.noiseSuppression === 'undefined') {
++        audioConstraints.noiseSuppression = true;
++      } else {
++        audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
++      }
++
++      if (typeof audioConstraints.autoGainControl === 'undefined') {
++        audioConstraints.autoGainControl = false;
++      } else {
++        audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
++      }
++
+       let stream;
        try {
-         if (ar?.setPolicy) ar.setPolicy(policy);
-         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
--        const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
--        const asrInput = frame?.policy?.media?.asr_input ?? null;
--        console.info(
--          "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
--          vendor,
--          pipeline,
--          asrInput,
--        );
-+        if (FEATURE_LEGACY_POLICY) {
-+          const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
-+          const asrInput = frame?.policy?.media?.asr_input ?? null;
-+          console.info(
-+            "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
-+            vendor,
-+            pipeline,
-+            asrInput,
-+          );
-+        } else {
-+          console.info(
-+            "diag=start_listening_order vendor=%s vad_warmup_ms=%s require_active_turn=%s",
-+            vendor,
-+            Number.isFinite(VAD_WARMUP_MS) ? VAD_WARMUP_MS : null,
-+            REQUIRE_ACTIVE_TURN,
-+          );
-+        }
-         if (ar?.start) {
-           await ar.start(policy);
-           unifiedArmed = true;
-         }
+         stream = await navigator.mediaDevices.getUserMedia({
+-          audio: {
+-            channelCount: { ideal: 1, max: 2 },
+-            sampleRate: { ideal: 48000 },
+-            sampleSize: 16,
+-            echoCancellation: true,
+-            noiseSuppression: true,
+-            autoGainControl: false,
+-          },
++          audio: audioConstraints,
+           video: false,
+         });
        } catch (err) {
-         console.warn("AudioRecorder start_listening preflight failed", err);
+         emitClientLog('client.pcm.capture_error', {
+           stage: 'getUserMedia',
+           message: err && err.message ? err.message : String(err),
+         });
+         throw err;
        }
+ 
+       const sourceNode = context.createMediaStreamSource(stream);
+       let workletNode;
        try {
-         __micAttempts += 1;
-         __micChunks = 0;
-         __micBytes = 0;
-         __micArmedAt = Date.now();
-         if (!__turnTraceId) {
-           __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-         }
-         logMic({ outcome: MIC_OUTCOME.ARMED });
-       } catch {}
+         workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
+           numberOfOutputs: 0,
+           processorOptions: {
+             targetSampleRate: TARGET_SAMPLE_RATE,
+             minFrameSamples: MIN_FRAME_SAMPLES,
+             maxFrameSamples: MAX_FRAME_SAMPLES,
+           },
+         });
+       } catch (err) {
+         emitClientLog('client.pcm.capture_error', {
+           stage: 'createWorkletNode',
+           message: err && err.message ? err.message : String(err),
+diff --git a/app/static/js/ui/statusbar.js b/app/static/js/ui/statusbar.js
+index 6a49fd8fcb7119a26b4c73d2e9e441017aa4f56d..ca12d2313f6c38a0adcd1437a41e91dfb9e51b42 100644
+--- a/app/static/js/ui/statusbar.js
++++ b/app/static/js/ui/statusbar.js
+@@ -1,48 +1,67 @@
+ // UMD-style module: attaches to window.StatusBar
+ (function (global) {
+   const StatusBar = {
+     mountId: "statusbar-root",
+     render(ui = {}) {
+       const host = document.getElementById(this.mountId);
+       if (!host) return;
  
-       setPendingAsrReadyStart({ frame, policy, reason: frame?.reason || frame?.type || "start_listening" });
-       if (AppState?.asrReady) {
-         try {
-           await startStreamingAfterAsrReady("start_listening_asr_ready");
-         } catch (err) {
-           console.error("Deferred mic start after start_listening failed", err);
-         }
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index d24a80f5e23a7b9c78d68cb62c935532bc7381a0..ec8c866c6ac2f760414ec87f5f5e46d1ce65fbc7 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -55,50 +55,51 @@ from app.voice_v2 import (
-     EVT_HUD_STATE,
-     EVT_SESSION_STEP,
-     EVT_TTS_END,
-     EVT_TTS_MASK,
-     EVT_CLIENT_LOG,
-     EVT_WS_AUDIO_RECV,
-     EVT_WS_AUDIO_SEND,
-     EVT_WS_JSON_RECV,
-     EVT_WS_JSON_SEND,
- )
- from app.services.asr.sm_rt import SMRealtimeClient
- from app.ws.validator import validate_audio_header_against_policy, validate_frame
- from app.ws.state import SessionCtx, can_open, mark
- from app.ws.policy import normalize_policy
- 
- try:  # pragma: no cover - uvicorn is an optional dependency in tests
-     from uvicorn.protocols.utils import ClientDisconnected
- except Exception:  # pragma: no cover - fallback when uvicorn missing
-     class ClientDisconnected(Exception):  # type: ignore[no-redef]
-         """Fallback placeholder when uvicorn is unavailable."""
- 
- 
- CHAT_V2_SUBPROTOCOL = "chat.v2"
- TEXT_FRAME_LIMIT_BYTES = 64 * 1024
- BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
-+FEATURE_LEGACY_POLICY = os.getenv("FEATURE_LEGACY_POLICY", "false").lower() == "true"
- ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
- PING_MIN_INTERVAL_MS = 500
- RATE_LIMIT_CAPACITY = 25
- RATE_LIMIT_WINDOW_SECONDS = 2.0
- RATE_LIMIT_CLOSE_CODE = 1013
- _AUDIO_VIOLATION_LIMIT = 3
- 
- AUDIO_SEQ_WINDOW = 8
- 
- QUEUE_ON_THRESHOLD = 12
- QUEUE_OFF_THRESHOLD = 6
- 
- _DEFAULT_WS_PING_INTERVAL_MS = 20_000
- _HEARTBEAT_TIMEOUT_MS = 30_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
- EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
- ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
-@@ -655,91 +656,96 @@ class ChatV2Adapter:
-         return candidate
- 
-     @staticmethod
-     def _coerce_float(value: Any, default: float | None) -> float | None:
-         try:
-             candidate = float(value)
-         except (TypeError, ValueError):
-             return default
-         if math.isnan(candidate) or math.isinf(candidate):
-             return default
-         return candidate
- 
-     @staticmethod
-     def _set_client_vad_state(ctx: AdapterContext, speech: bool, now_ms: int) -> None:
-         if speech == ctx.client_vad_speech and ctx.client_vad_since_ms is not None:
-             return
-         ctx.client_vad_speech = speech
-         ctx.client_vad_since_ms = now_ms
-         if speech:
-             ctx.client_vad_last_speech_end_ms = None
-         else:
-             ctx.client_vad_last_speech_end_ms = now_ms
- 
-     def _resolve_server_vad_policy(self, ctx: AdapterContext) -> Dict[str, Any]:
-         policy = dict(_SERVER_VAD_DEFAULT_POLICY)
--        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
--        if isinstance(snapshot, Mapping):
--            policy_block = snapshot.get("policy")
--            if isinstance(policy_block, Mapping):
--                vad_block = policy_block.get("vad")
--                if isinstance(vad_block, Mapping):
--                    server_block = vad_block.get("server")
--                    if isinstance(server_block, Mapping):
--                        enable_flag = server_block.get("enable")
--                        if isinstance(enable_flag, bool):
--                            policy["enable"] = enable_flag
--                        policy["min_speech_ms"] = self._coerce_non_negative_int(
--                            server_block.get("min_speech_ms"), policy["min_speech_ms"]
--                        )
--                        policy["min_silence_ms"] = self._coerce_non_negative_int(
--                            server_block.get("min_silence_ms"), policy["min_silence_ms"]
--                        )
--                        policy["eot_silence_ms"] = self._coerce_non_negative_int(
--                            server_block.get("eot_silence_ms"), policy["eot_silence_ms"]
--                        )
--                        fuse_mode_value = server_block.get("fuse_mode")
--                        if isinstance(fuse_mode_value, str):
--                            normalized = fuse_mode_value.strip().lower()
--                            if normalized in {"and", "or", "weighted"}:
--                                policy["fuse_mode"] = normalized
--                        weight_client = self._coerce_float(
--                            server_block.get("weight_client"), policy["weight_client"]
--                        )
--                        if weight_client is not None:
--                            policy["weight_client"] = max(0.0, weight_client)
--                        weight_vendor = self._coerce_float(
--                            server_block.get("weight_vendor"), policy["weight_vendor"]
--                        )
--                        if weight_vendor is not None:
--                            policy["weight_vendor"] = max(0.0, weight_vendor)
--                        threshold_value = self._coerce_float(
--                            server_block.get("energy_threshold_dbfs"),
--                            policy["energy_threshold_dbfs"],
--                        )
--                        if threshold_value is not None:
--                            policy["energy_threshold_dbfs"] = threshold_value
-+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
-+            snapshot = ctx.policy_snapshot
-+            policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-+            vad_source = (
-+                policy_block.get("vad") if isinstance(policy_block, Mapping) else None
-+            )
-+        else:
-+            policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
-+            vad_source = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
++      const policy = ui && typeof ui.policy === "object" ? ui.policy : {};
++      const policyUi = policy && typeof policy.ui === "object" ? policy.ui : {};
++      const policyStatus = policyUi && typeof policyUi.status === "object" ? policyUi.status : {};
++      const REQUIRE_ACTIVE_TURN = Boolean(policyStatus?.require_active_turn ?? true);
 +
-+        if isinstance(vad_source, Mapping):
-+            server_block = vad_source.get("server")
-+            if isinstance(server_block, Mapping):
-+                enable_flag = server_block.get("enable")
-+                if isinstance(enable_flag, bool):
-+                    policy["enable"] = enable_flag
-+                policy["min_speech_ms"] = self._coerce_non_negative_int(
-+                    server_block.get("min_speech_ms"), policy["min_speech_ms"]
-+                )
-+                policy["min_silence_ms"] = self._coerce_non_negative_int(
-+                    server_block.get("min_silence_ms"), policy["min_silence_ms"]
-+                )
-+                policy["eot_silence_ms"] = self._coerce_non_negative_int(
-+                    server_block.get("eot_silence_ms"), policy["eot_silence_ms"]
-+                )
-+                fuse_mode_value = server_block.get("fuse_mode")
-+                if isinstance(fuse_mode_value, str):
-+                    normalized = fuse_mode_value.strip().lower()
-+                    if normalized in {"and", "or", "weighted"}:
-+                        policy["fuse_mode"] = normalized
-+                weight_client = self._coerce_float(
-+                    server_block.get("weight_client"), policy["weight_client"]
-+                )
-+                if weight_client is not None:
-+                    policy["weight_client"] = max(0.0, weight_client)
-+                weight_vendor = self._coerce_float(
-+                    server_block.get("weight_vendor"), policy["weight_vendor"]
-+                )
-+                if weight_vendor is not None:
-+                    policy["weight_vendor"] = max(0.0, weight_vendor)
-+                threshold_value = self._coerce_float(
-+                    server_block.get("energy_threshold_dbfs"),
-+                    policy["energy_threshold_dbfs"],
-+                )
-+                if threshold_value is not None:
-+                    policy["energy_threshold_dbfs"] = threshold_value
-         return policy
+       const f = {
+         connected:    !!(ui.wsConn || ui.wsConning),
+         asrReady:     !!ui.asrReady,
+         micOpen:      !!ui.micLive,
+         ttsActive:    !!ui.tts,
+         senderPaused: !!ui.senderPaused,
+       };
+-      const canCapture = f.asrReady && f.micOpen && !f.ttsActive && !f.senderPaused;
++      const activeTurn = !!ui.asrTurnActive;
++      let canCapture = f.asrReady && f.micOpen && !f.ttsActive && !f.senderPaused;
++      if (REQUIRE_ACTIVE_TURN) {
++        canCapture = canCapture && activeTurn;
++      }
  
-     def _publish_server_vad_event(
-         self, ctx: AdapterContext, event_type: str, meta: Mapping[str, Any]
-     ) -> None:
-         try:
-             payload = {
-                 "schema_version": "1",
-                 "type": event_type,
-                 "sid": ctx.sid,
-                 "who": "server",
-                 "source": "ws_server",
-                 "meta": dict(meta),
-             }
-             bus.publish(payload)
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=server_vad_event_publish_failed sid=%s event=%s", ctx.sid, event_type)
+       let st;
+-      if (f.ttsActive)        st = { label: "Speaking…",      sub: "Say “Hold on” to interrupt.", tone: "blue"  };
+-      else if (!f.connected)  st = { label: "Ready",          sub: "Press Start to begin.",       tone: "gray"  };
+-      else if (canCapture)    st = { label: "Listening",      sub: "You can speak now.",          tone: "green" };
+-      else if (f.asrReady)    st = { label: "Preparing mic…", sub: "Getting ready to listen.",    tone: "amber" };
+-      else                    st = { label: "Ready",          sub: "",                            tone: "gray"  };
++      if (f.ttsActive) {
++        st = { label: "Speaking…", sub: "Say “Hold on” to interrupt.", tone: "blue" };
++      } else if (!f.connected) {
++        st = { label: "Ready", sub: "Press Start to begin.", tone: "gray" };
++      } else if (f.senderPaused) {
++        st = { label: "Paused", sub: "Resume to keep listening.", tone: "gray" };
++      } else if (canCapture) {
++        st = { label: "Listening", sub: "You can speak now.", tone: "green" };
++      } else if (REQUIRE_ACTIVE_TURN && !activeTurn) {
++        st = { label: "Stand by", sub: "Waiting for your turn…", tone: "amber" };
++      } else if (f.asrReady) {
++        st = { label: "Preparing mic…", sub: "Getting ready to listen.", tone: "amber" };
++      } else {
++        st = { label: "Ready", sub: "", tone: "gray" };
++      }
  
-     def _update_server_vad_state(
-         self,
-         ctx: AdapterContext,
-         energy_db: float,
-         now_ms: int,
-         policy: Mapping[str, Any],
-     ) -> None:
-@@ -1306,103 +1312,110 @@ class ChatV2Adapter:
-             )
-             self._emit_session_step(
-                 sid,
-                 "ws.banner_sent",
-                 summary="Sent server banner",
-                 meta={
-                     "build_id": build_id,
-                     "host": host,
-                     "pid": pid,
-                     "subprotocol": selected,
-                 },
-             )
-         except Exception:
-             _log.exception("evt=server_banner_emit_failed")
-         # ---- END RUNTIME BANNER ----
+       host.innerHTML = `
+         <div class="statusbar status-${st.tone}">
+           <div class="status-dot"></div>
+           <div class="status-text">
+             <div class="status-label">${st.label}</div>
+             <div class="status-sub">${st.sub}</div>
+           </div>
+           <div class="status-meter" id="micMeter" aria-hidden="true">
+             <div class="status-meter-fill" style="width:0%"></div>
+           </div>
+         </div>`;
+     },
+     updateMeter(rms /* 0..1 */) {
+       const el = document.getElementById("micMeter");
+       if (!el) return;
+       const fill = el.querySelector(".status-meter-fill");
+       if (!fill) return;
+       const pct = Math.max(0, Math.min(100, Math.round(rms * 100)));
+       fill.style.width = pct + "%";
+     }
+   };
  
-         now_ms = int(time.time() * 1000)
-         info_frame: Dict[str, Any] = {
-             "type": "info",
-             "protocol": CHAT_V2_SUBPROTOCOL,
-             "sid": sid,
-             "ts_ms": now_ms,
-             "build_id": current_build_id(),
-         }
-         info_frame["meta"] = {"sid": sid}
--        policy_snapshot = self._policy_snapshot()
-+        policy_snapshot = self._policy_snapshot() if FEATURE_LEGACY_POLICY else None
-         session_policy_v2 = self._build_session_policy()
-         allowed_asr_vendors = ["speechmatics"]
-         snapshot_mapping: Mapping[str, Any] | None
--        if isinstance(policy_snapshot, Mapping):
-+        if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, Mapping):
-             snapshot_mapping = policy_snapshot
-         else:
--            snapshot_mapping = None
-+            snapshot_mapping = session_policy_v2 if isinstance(session_policy_v2, Mapping) else None
- 
-         provisional_ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
-         )
--        provisional_ctx.policy_snapshot = (
--            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
--        )
-+        if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, dict):
-+            provisional_ctx.policy_snapshot = dict(policy_snapshot)
-+        elif FEATURE_LEGACY_POLICY:
-+            provisional_ctx.policy_snapshot = policy_snapshot
-+        else:
-+            provisional_ctx.policy_snapshot = None
-         provisional_ctx.policy = dict(session_policy_v2)
-         provisional_ctx.session.policy = provisional_ctx.policy
-         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-         selected_vendor = "speechmatics"
-         selection_reason = "pcm16_only"
--        if policy_snapshot:
-+        if FEATURE_LEGACY_POLICY and policy_snapshot:
-             self._log_policy_flags(sid, policy_snapshot)
-         info_frame["policy"] = self._policy_for_client(session_policy_v2)
-         await self._send_json(send, sid, info_frame)
-         _log.info("evt=ws_info_sent sid=%s", sid)
-         self._emit_session_step(
-             sid,
-             "ws.info_sent",
-             summary="Sent info frame",
-             meta={"has_policy": bool(policy_snapshot)},
-         )
- 
-         ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
-         )
--        ctx.policy_snapshot = (
--            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
--        )
-+        if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, dict):
-+            ctx.policy_snapshot = dict(policy_snapshot)
-+        elif FEATURE_LEGACY_POLICY:
-+            ctx.policy_snapshot = policy_snapshot
-+        else:
-+            ctx.policy_snapshot = None
-         ctx.policy = dict(session_policy_v2)
-         ctx.session.policy = ctx.policy
-         ctx.last_client_activity_ms = now_ms
-         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
--        snapshot_mapping = (
--            ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
--        )
-+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
-+            snapshot_mapping = ctx.policy_snapshot
-+        else:
-+            snapshot_mapping = session_policy_v2 if isinstance(session_policy_v2, Mapping) else None
-         ctx.asr_vendor = selected_vendor
-         allowed_display = ",".join(ctx.allowed_asr_vendors)
-         _log.info(
-             "asr_vendor_selected primary=%s allowed=%s reason=%s",
-             ctx.asr_vendor,
-             allowed_display,
-             selection_reason,
-         )
-         ctx.asr_vendor_logged = True
-         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
-         if ctx.asr_vendor == "speechmatics":
-             ctx.audio_pipeline_mode = "pcm16"
-         mode = ctx.audio_pipeline_mode or "pcm16"
-         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
-         ctx.ws_send = send
-         self._ensure_ingress_tick_timer(ctx)
- 
-         token = current_sid.set(ctx.sid)
-         try:
-             if not (
-                 inspect.iscoroutinefunction(self._on_open_and_greet)
-                 and inspect.iscoroutinefunction(self._invoke_engine)
-             ):
-                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-                 raise RuntimeError("WebSocket async contract violation")
-@@ -1882,80 +1895,98 @@ class ChatV2Adapter:
-                     and incoming_channels == existing_channels
-                 ):
-                     _log.info(
-                         "evt=audio_header_duplicate sid=%s codec=%s rate_hz=%s ch=%s",
-                         ctx.sid,
-                         incoming_codec,
-                         incoming_rate,
-                         incoming_channels,
-                     )
-                     await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                     return self._HandleResult(True)
- 
-                 meta["error"] = "schema_invalid"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 await self._send_error(
-                     send,
-                     ctx.sid,
-                     "schema_invalid",
-                     "conflicting audio.header",
-                 )
-                 return self._HandleResult(True)
-             normalized_header = dict(frame)
-             normalized_header.setdefault("format", expected["format"])
-             normalized_header.setdefault("sample_rate", expected["sample_rate"])
-             normalized_header.setdefault("channels", expected["channels"])
-+            policy_for_validation: Mapping[str, Any] | None
-+            if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
-+                policy_for_validation = ctx.policy_snapshot
-+            else:
-+                policy_for_validation = (
-+                    ctx.policy if isinstance(ctx.policy, Mapping) else None
-+                )
-             err = validate_audio_header_against_policy(
--                normalized_header, ctx.policy_snapshot, ctx.asr_vendor
-+                normalized_header, policy_for_validation, ctx.asr_vendor
-             )
-             if err:
-                 meta["error"] = "policy_violation"
-                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
-                 await self._send_error(send, ctx.sid, "policy_violation", err)
-                 turn_id = getattr(ctx.session, "turn_id", None)
-                 log_detail = {
-                     "session_id": ctx.sid,
-                     "code": "policy_violation",
-                     "detail": err,
-                 }
-                 if isinstance(turn_id, str) and turn_id:
-                     log_detail["turn_id"] = turn_id
-                 self._emit_hub_log(ctx, "policy.violation", log_detail)
-                 return self._HandleResult(False, 4400, "policy_violation")
-             ctx.audio_profile = profile
-             self._arm_no_audio_watchdog(ctx)
-             if getattr(ctx, "await_user_vad_check_pending", False):
-                 ctx.await_user_vad_check_pending = False
--                snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
--                policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
--                vad_block = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
--                auto_active = None
--                if isinstance(vad_block, Mapping) and "auto_vad_active" in vad_block:
--                    auto_active = bool(vad_block.get("auto_vad_active"))
--                if auto_active is not True:
--                    _log.warning("evt=warn_vad_inactive sid=%s expected=true", ctx.sid)
-+                if FEATURE_LEGACY_POLICY:
-+                    snapshot = (
-+                        ctx.policy_snapshot
-+                        if isinstance(ctx.policy_snapshot, Mapping)
-+                        else None
-+                    )
-+                    policy_block = (
-+                        snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-+                    )
-+                    vad_block = (
-+                        policy_block.get("vad")
-+                        if isinstance(policy_block, Mapping)
-+                        else None
-+                    )
-+                    auto_active = None
-+                    if isinstance(vad_block, Mapping) and "auto_vad_active" in vad_block:
-+                        auto_active = bool(vad_block.get("auto_vad_active"))
-+                    if auto_active is not True:
-+                        _log.warning("evt=warn_vad_inactive sid=%s expected=true", ctx.sid)
-             if seq_start is not None:
-                 ctx.audio_seq = max(0, seq_start)
-                 ctx.audio_expected_seq = ctx.audio_seq
-                 ctx.audio_highest_seq = ctx.audio_seq - 1
-                 ctx.audio_buffer.clear()
-             audio_meta = {
-                 key: value
-                 for key, value in (
-                     ("format", profile.get("format")),
-                     ("sample_rate", profile.get("sample_rate")),
-                     ("channels", profile.get("channels")),
-                     ("seq_start", profile.get("seq_start")),
-                 )
-                 if value is not None
-             }
-             await self._publish(
-                 WS_AUDIO_HEADER_ACCEPT,
-                 ctx.sid,
-                 audio_meta,
-             )
-             self._emit_session_step(
-                 ctx.sid,
-                 "audio.header.accepted",
-                 summary="Accepted audio header",
-                 meta=audio_meta,
-@@ -2916,56 +2947,57 @@ class ChatV2Adapter:
-             _queue_payload(payload)
- 
-         def _handle_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
-             meta_obj = event.get("meta")
-             if isinstance(meta_obj, Mapping):
-                 ws_meta = meta_obj.get("ws")
-                 if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
-                     return
-             payload = self._extract_outbound_payload(ctx, event)
-             if payload is None:
-                 return
- 
-             def _on_loop() -> None:
-                 frame_type = payload.get("type")
-                 if frame_type == "tts.end":
-                     self._handle_tts_end_diag(ctx, loop, payload)
-                     req_val = payload.get("req_id") if isinstance(payload, dict) else None
-                     req_value = req_val if isinstance(req_val, str) and req_val else None
-                     if req_value:
-                         ctx.last_tts_end_req_id = req_value
-                         ctx.await_user_req_id = req_value
-                     elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
-                         ctx.last_tts_end_req_id = ctx.await_user_req_id
--                    policy = (
-+                    policy_mapping = (
-                         ctx.policy_snapshot
--                        if isinstance(ctx.policy_snapshot, Mapping)
--                        else {}
-+                        if FEATURE_LEGACY_POLICY
-+                        and isinstance(ctx.policy_snapshot, Mapping)
-+                        else self._policy(ctx)
-                     )
--                    self._maybe_emit_await_user(ctx, policy)
-+                    self._maybe_emit_await_user(ctx, policy_mapping)
-                     _schedule_listen_handoff(req_value)
-                     ctx.session.tts_active = False
-                     if ctx.session.queued_arm and can_open(ctx.session):
-                         ctx.session.queued_arm = False
-                         try:
-                             self._schedule_asr_open(ctx)
-                         except Exception:
-                             _log.exception("evt=asr_open_after_tts_failed sid=%s", ctx.sid)
-                         else:
-                             try:
-                                 loop.create_task(
-                                     self._publish(
-                                         ASR_OPEN_AFTER_TTS,
-                                         ctx.sid,
-                                         {
-                                             "reason": "tts_end",
-                                             "state": ctx.session.asr_state,
-                                         },
-                                     )
-                                 )
-                             except RuntimeError:
-                                 pass
-                 elif frame_type == "tts.start":
-                     ctx.session.tts_active = True
-                 _enqueue(payload)
-@@ -3227,54 +3259,57 @@ class ChatV2Adapter:
-                 return
- 
-             def _on_loop() -> None:
-                 if ctx.await_user_pending:
-                     _schedule_listen_handoff(None)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
- 
-         def _handle_tts_end_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
-             req_id = event.get("req_id")
-             req_value = req_id if isinstance(req_id, str) and req_id else None
- 
-             def _on_loop() -> None:
-                 if req_value:
-                     ctx.last_tts_end_req_id = req_value
-                     ctx.await_user_req_id = req_value
-                 elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
-                     ctx.last_tts_end_req_id = ctx.await_user_req_id
--                policy = (
--                    ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-+                policy_mapping = (
-+                    ctx.policy_snapshot
-+                    if FEATURE_LEGACY_POLICY
-+                    and isinstance(ctx.policy_snapshot, Mapping)
-+                    else self._policy(ctx)
-                 )
--                self._maybe_emit_await_user(ctx, policy)
-+                self._maybe_emit_await_user(ctx, policy_mapping)
-                 _schedule_listen_handoff(req_value)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 pass
- 
-         ctx.tts_end_subscription_token = bus.subscribe(EVT_TTS_END, _handle_tts_end_event)
- 
-         def _handle_tts_mask_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
- 
-             raw_phase = event.get("phase")
-             if not isinstance(raw_phase, str):
-                 return
- 
-             stripped = raw_phase.strip()
-             normalized = stripped.lower()
-             phase_value = normalized or stripped or raw_phase
- 
-             def _on_loop() -> None:
-                 ctx.tts_mask_phase = phase_value
-                 if ctx.tts_mask_phase != "off":
-                     ctx.await_user_after_mask = False
-@@ -3297,56 +3332,57 @@ class ChatV2Adapter:
-             if event.get("type") != "EVT_TURN_STATE":
-                 return
-             if event.get("sid") != ctx.sid:
-                 return
- 
-             raw_meta = event.get("meta")
-             if isinstance(raw_meta, Mapping):
-                 meta = {key: value for key, value in dict(raw_meta).items() if key}
-             else:
-                 meta = {}
- 
-             state = meta.get("state", event.get("state"))
-             reason = meta.get("reason", event.get("reason"))
-             state_text = state if isinstance(state, str) else None
-             reason_text = reason if isinstance(reason, str) else None
- 
-             def _on_loop() -> None:
-                 frame: Dict[str, Any] = {
-                     "type": "turn.state",
-                     "state": state,
-                     "reason": reason,
-                     "meta": meta,
-                 }
-                 _enqueue(frame)
-                 if state_text == "Ready" and reason_text == "tts_end":
--                    policy = (
-+                    policy_mapping = (
-                         ctx.policy_snapshot
--                        if isinstance(ctx.policy_snapshot, Mapping)
--                        else {}
-+                        if FEATURE_LEGACY_POLICY
-+                        and isinstance(ctx.policy_snapshot, Mapping)
-+                        else self._policy(ctx)
-                     )
--                    self._maybe_emit_await_user(ctx, policy)
-+                    self._maybe_emit_await_user(ctx, policy_mapping)
- 
-             try:
-                 loop.call_soon_threadsafe(_on_loop)
-             except RuntimeError:
-                 _on_loop()
- 
-         ctx.turn_state_subscription_token = bus.subscribe(
-             "EVT_TURN_STATE", _handle_turn_state_event
-         )
- 
-         def _handle_audio_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
-             if ctx.audio_send_closed:
-                 return
-             source = event.get("source")
-             if source == "ws_server":
-                 meta = event.get("meta")
-                 audio_meta = meta.get("audio") if isinstance(meta, Mapping) else None
-                 if not isinstance(audio_meta, Mapping):
-                     _log.debug(
-                         "evt=audio_event_ignored sid=%s source=%s", ctx.sid, source
-                     )
-                     return
-             chunk = event.get("chunk")
-@@ -3674,54 +3710,62 @@ class ChatV2Adapter:
-                 ctx.await_user_after_mask_key = None
-                 ctx.last_tts_end_req_id = None
-                 ctx.mic_nudge_sent = False
-                 self._cancel_mic_open_timer(ctx)
-                 ctx.await_user_cue_emitted = False
-         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
-             return None
-         normalized = dict(payload)
-         if frame_type == "policy.interaction":
-             normalized = self._sanitize_policy_interaction(normalized)
-             last_policy = ctx.last_policy_interaction
-             if last_policy is not None and last_policy == normalized:
-                 return None
-             ctx.last_policy_interaction = json.loads(
-                 json.dumps(normalized, separators=(",", ":"))
-             )
-         if frame_type == "info":
-             meta = {}
-             source_meta = normalized.get("meta")
-             if isinstance(source_meta, dict):
-                 meta = dict(source_meta)
-             meta["sid"] = ctx.sid
-             normalized["meta"] = meta
-             policy_payload = normalized.get("policy")
-             if isinstance(policy_payload, dict):
--                ctx.policy_snapshot = policy_payload
-+                if FEATURE_LEGACY_POLICY:
-+                    ctx.policy_snapshot = policy_payload
-+                else:
-+                    ctx.policy_snapshot = None
-                 self._replace_policy(ctx, policy_payload)
-                 ctx.allowed_asr_vendors = ["speechmatics"]
--                snapshot_mapping = policy_payload
-+                if FEATURE_LEGACY_POLICY:
-+                    snapshot_mapping = policy_payload
-+                else:
-+                    snapshot_mapping = (
-+                        ctx.policy if isinstance(ctx.policy, Mapping) else None
-+                    )
-                 ctx.asr_vendor = "speechmatics"
-                 if not ctx.asr_vendor_logged:
-                     allowed_display = ",".join(ctx.allowed_asr_vendors)
-                     _log.info(
-                         "asr_vendor_selected primary=%s allowed=%s reason=%s",
-                         ctx.asr_vendor,
-                         allowed_display,
-                         "pcm16_only",
-                     )
-                     ctx.asr_vendor_logged = True
-                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
-                     snapshot_mapping
-                 )
-                 ctx.audio_pipeline_mode = "pcm16"
-                 mode = ctx.audio_pipeline_mode or "pcm16"
-                 ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
-         return normalized
- 
-     @staticmethod
-     def _truncate_banner_string(value: str, limit: int = 240) -> str:
-         if not isinstance(value, str):
-             return ""
-         if limit <= 0:
-             return ""
-         if len(value) <= limit:
-@@ -4960,55 +5004,62 @@ class ChatV2Adapter:
-                 "capture": {
-                     "asr_input": "pcm_16k",
-                     "sample_rate": 16000,
-                     "channels": 1,
-                     "timeslice_ms": 50,
-                 },
-                 "audio": {"pipeline": {"mode": "pcm16"}},
-             }
-         return {
-             "media": {
-                 "asr_input": "pcm_16k",
-                 "asr_rate_hz": 16000,
-                 "asr_channels": 1,
-             },
-             "capture": {
-                 "asr_input": "pcm_16k",
-                 "sample_rate": 16000,
-                 "channels": 1,
-                 "timeslice_ms": 50,
-             },
-             "audio": {"pipeline": {"mode": "pcm16"}},
-         }
- 
-     def _resolve_capture_timeslice(self, ctx: AdapterContext, mode: str) -> int:
-         candidates: List[Mapping[str, Any]] = []
--        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
--        if isinstance(snapshot, Mapping):
--            capture_block = snapshot.get("capture")
-+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
-+            capture_block = ctx.policy_snapshot.get("capture")
-             if isinstance(capture_block, Mapping):
-                 candidates.append(capture_block)
-+        else:
-+            policy_capture = (
-+                ctx.policy.get("capture")
-+                if isinstance(ctx.policy, Mapping)
-+                else None
-+            )
-+            if isinstance(policy_capture, Mapping):
-+                candidates.append(policy_capture)
-         session_policy = ctx.session_capture_policy
-         if isinstance(session_policy, Mapping):
-             capture_policy = session_policy.get("capture")
-             if isinstance(capture_policy, Mapping):
-                 candidates.append(capture_policy)
- 
-         for candidate in candidates:
-             raw_value = candidate.get("timeslice_ms")
-             try:
-                 parsed = int(raw_value)
-             except (TypeError, ValueError):
-                 continue
-             if parsed > 0:
-                 return parsed
- 
-         return 50 if mode == "pcm16" else 250
- 
-     def _log_policy_flags(self, sid: str, snapshot: Mapping[str, Any]) -> None:
-         if not isinstance(snapshot, Mapping):
-             return
-         policy_block = snapshot.get("policy")
-         if not isinstance(policy_block, Mapping):
-             return
- 
-         recorder_block = policy_block.get("recorder")
-@@ -5091,66 +5142,71 @@ class ChatV2Adapter:
-         except Exception as exc:  # pragma: no cover - network call
-             _log.error("evt=sm_jwt_mint_failed err=%s", exc)
-             return None
- 
-         token = (
-             payload.get("key")
-             or payload.get("jwt")
-             or payload.get("token")
-             or payload.get("key_value")
-         )
-         if not token:
-             _log.error("evt=sm_jwt_response_missing_token obj=%s", payload)
-             return None
- 
-         ttl_raw = payload.get("ttl", 60)  # many responses omit TTL for temp keys
-         try:
-             ttl = int(ttl_raw)
-         except (TypeError, ValueError):
-             ttl = 60
- 
-         _SM_JWT_CACHE.update({"token": token, "exp": now + max(ttl, 1)})
-         _log.info("evt=sm_jwt_minted ttl=%s", ttl)
-         return token
- 
-     def _policy_to_sm_params(self, ctx: AdapterContext) -> Dict[str, Any]:
--        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-         language = "en"
-         enable_partials = True
--        if snapshot is not None:
--            policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
--            if isinstance(policy_block, Mapping):
--                nlu_block = policy_block.get("nlu")
--                if isinstance(nlu_block, Mapping):
--                    lang_candidate = nlu_block.get("language")
--                    if isinstance(lang_candidate, str) and lang_candidate.strip():
--                        language = lang_candidate.strip()
--                transcription_block = policy_block.get("asr")
--                if isinstance(transcription_block, Mapping):
--                    partials_flag = transcription_block.get("enable_partials")
--                    if isinstance(partials_flag, bool):
--                        enable_partials = partials_flag
-+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
-+            policy_block = (
-+                ctx.policy_snapshot.get("policy")
-+                if isinstance(ctx.policy_snapshot, Mapping)
-+                else None
-+            )
-+        else:
-+            policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
-+        if isinstance(policy_block, Mapping):
-+            nlu_block = policy_block.get("nlu")
-+            if isinstance(nlu_block, Mapping):
-+                lang_candidate = nlu_block.get("language")
-+                if isinstance(lang_candidate, str) and lang_candidate.strip():
-+                    language = lang_candidate.strip()
-+            transcription_block = policy_block.get("asr")
-+            if isinstance(transcription_block, Mapping):
-+                partials_flag = transcription_block.get("enable_partials")
-+                if isinstance(partials_flag, bool):
-+                    enable_partials = partials_flag
- 
-         ctx.active_asr_config = {"language": language, "enable_partials": enable_partials}
-         # Minimal, spec-exact StartRecognition envelope
-         return {
-             "message": "StartRecognition",
-             "audio_format": {"type": "raw", "encoding": "pcm_s16le", "sample_rate": 16000},
-             "transcription_config": {"language": language},
-         }
- 
-     def _create_sm_client(self, ctx: AdapterContext) -> SMRealtimeClient:
-         loop = asyncio.get_running_loop()
- 
-         def _publish_invariant(state: str, ok: bool, extra: Optional[Dict[str, Any]] = None) -> None:
-             meta: Dict[str, Any] = {"state": state, "ok": ok}
-             if extra:
-                 meta.update(extra)
-             try:
-                 loop.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
-             except RuntimeError:
-                 try:
-                     asyncio.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
-                 except RuntimeError:
-                     _log.debug("evt=asr_invariant_emit_skipped sid=%s", ctx.sid)
- 
-         def _on_ready(_meta: Dict[str, Any]) -> None:
-@@ -5267,52 +5323,58 @@ class ChatV2Adapter:
-             mark(ctx.session, "closing")
-         if client is not None:
-             try:
-                 client.turn_id = getattr(ctx.session, "turn_id", None)
-             except AttributeError:
-                 client.turn_id = None
-             try:
-                 await client.send_end_of_stream()
-             except Exception:
-                 _log.warning("evt=asr_send_eos_failed sid=%s", ctx.sid, exc_info=True)
-             try:
-                 await client.close()
-             except Exception:
-                 _log.warning("evt=asr_close_failed sid=%s", ctx.sid, exc_info=True)
-         mark(ctx.session, "closed")
-         ctx.session.first_chunk_sent = False
-         ctx.session.queued_arm = False
-         ctx.asr_ready = False
-         if reason:
-             ctx.asr_close_reason = reason
-         ctx.session.eot_armed = False
-         ctx.session.server_vad_speech = False
-         ctx.session.server_vad_since_ms = None
- 
-     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
--        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
--        policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
-+            policy_block = (
-+                ctx.policy_snapshot.get("policy")
-+                if isinstance(ctx.policy_snapshot, Mapping)
-+                else None
-+            )
-+        else:
-+            policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
-         if not isinstance(policy_block, Mapping):
-             return 0
-         asr_block = policy_block.get("asr")
-         if not isinstance(asr_block, Mapping):
-             return 0
-         value = asr_block.get("keep_stream_warm_ms")
-         try:
-             keep_warm = int(value)
-         except (TypeError, ValueError):
-             keep_warm = 0
-         if keep_warm < 0:
-             return 0
-         return keep_warm
- 
-     async def _send_asr_ready_bundle(
-         self,
-         send: Callable[[dict], Awaitable[None]],
-         ctx: AdapterContext,
-     ) -> None:
-         mode = ctx.audio_pipeline_mode or "pcm16"
-         descriptor = dict(self._input_descriptor_for_mode(mode))
-         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
-         vendor = ctx.asr_vendor or "speechmatics"
-         ready_frame = {
-             "type": "asr.ready",
+   global.StatusBar = StatusBar;
+ })(window);

@@ -6,6 +6,11 @@
       const host = document.getElementById(this.mountId);
       if (!host) return;
 
+      const policy = ui && typeof ui.policy === "object" ? ui.policy : {};
+      const policyUi = policy && typeof policy.ui === "object" ? policy.ui : {};
+      const policyStatus = policyUi && typeof policyUi.status === "object" ? policyUi.status : {};
+      const REQUIRE_ACTIVE_TURN = Boolean(policyStatus?.require_active_turn ?? true);
+
       const f = {
         connected:    !!(ui.wsConn || ui.wsConning),
         asrReady:     !!ui.asrReady,
@@ -13,14 +18,28 @@
         ttsActive:    !!ui.tts,
         senderPaused: !!ui.senderPaused,
       };
-      const canCapture = f.asrReady && f.micOpen && !f.ttsActive && !f.senderPaused;
+      const activeTurn = !!ui.asrTurnActive;
+      let canCapture = f.asrReady && f.micOpen && !f.ttsActive && !f.senderPaused;
+      if (REQUIRE_ACTIVE_TURN) {
+        canCapture = canCapture && activeTurn;
+      }
 
       let st;
-      if (f.ttsActive)        st = { label: "Speaking…",      sub: "Say “Hold on” to interrupt.", tone: "blue"  };
-      else if (!f.connected)  st = { label: "Ready",          sub: "Press Start to begin.",       tone: "gray"  };
-      else if (canCapture)    st = { label: "Listening",      sub: "You can speak now.",          tone: "green" };
-      else if (f.asrReady)    st = { label: "Preparing mic…", sub: "Getting ready to listen.",    tone: "amber" };
-      else                    st = { label: "Ready",          sub: "",                            tone: "gray"  };
+      if (f.ttsActive) {
+        st = { label: "Speaking…", sub: "Say “Hold on” to interrupt.", tone: "blue" };
+      } else if (!f.connected) {
+        st = { label: "Ready", sub: "Press Start to begin.", tone: "gray" };
+      } else if (f.senderPaused) {
+        st = { label: "Paused", sub: "Resume to keep listening.", tone: "gray" };
+      } else if (canCapture) {
+        st = { label: "Listening", sub: "You can speak now.", tone: "green" };
+      } else if (REQUIRE_ACTIVE_TURN && !activeTurn) {
+        st = { label: "Stand by", sub: "Waiting for your turn…", tone: "amber" };
+      } else if (f.asrReady) {
+        st = { label: "Preparing mic…", sub: "Getting ready to listen.", tone: "amber" };
+      } else {
+        st = { label: "Ready", sub: "", tone: "gray" };
+      }
 
       host.innerHTML = `
         <div class="statusbar status-${st.tone}">
