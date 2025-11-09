@@ -32,6 +32,8 @@ def env_bool(name: str, default: bool = False) -> bool:
         return False
     return bool(default)
 
+# Feature flag to allow overriding the capture mode if WebRTC AEC must be disabled.
+FEATURE_WEBRTC_AEC = env_bool("FEATURE_WEBRTC_AEC", True)
 
 # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
@@ -775,7 +777,13 @@ def build_session_policy(
     if isinstance(policy_block, Mapping):
         _merge_mapping(merged, policy_block)
 
-    return normalize_policy(dict(merged), legacy_hits=legacy_hits)
+    policy_v2 = normalize_policy(dict(merged), legacy_hits=legacy_hits)
+
+    if not FEATURE_WEBRTC_AEC:
+        capture_policy = policy_v2.setdefault("capture", {})
+        capture_policy["mode"] = "pcm"
+
+    return policy_v2
 
 
 ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(

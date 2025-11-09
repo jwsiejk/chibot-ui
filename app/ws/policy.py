@@ -42,6 +42,7 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
         "buffer_prestart_audio_ms": 300,
     },
     "capture": {
+        "mode": "webrtc_aec",  # "webrtc_aec" | "pcm"
         "constraints": {
             "echoCancellation": True,
             "noiseSuppression": True,

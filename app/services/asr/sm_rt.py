@@ -303,6 +303,11 @@ class SMRealtimeClient:
                     )
                 queue.task_done()
         await queue.put(data)
+        if self._first_pcm_sent_at is None:
+            try:
+                self._first_pcm_sent_at = time.monotonic()
+            except Exception:  # pragma: no cover - defensive
+                self._first_pcm_sent_at = 0.0
 
     async def send_end_of_stream(self) -> None:
         """Send the vendor end-of-stream marker and await acknowledgement."""
@@ -837,6 +842,10 @@ class SMRealtimeClient:
 
     async def _send_end_of_stream(self) -> None:
         """Send an EndOfStream message including the last audio sequence number."""
+
+        if self._first_pcm_sent_at is None and self._last_seq_no is None:
+            _log.info("evt=sm_send_eos_suppressed reason=no_audio_sent")
+            return
 
         payload: Dict[str, Any] = {"message": "EndOfStream"}
         if isinstance(self._last_seq_no, int):
