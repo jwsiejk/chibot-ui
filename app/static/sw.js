@@ -10,7 +10,6 @@ const CORE = [
   "/static/js/ws_client.js?v={{ BUILD_ID }}",
   "/static/js/transcript_view.js?v={{ BUILD_ID }}",
   "/static/js/errors.js?v={{ BUILD_ID }}",
-  "/static/js/wake_word.js?v={{ BUILD_ID }}",
   "/static/js/admin_logs.js?v={{ BUILD_ID }}",
   "/admin/ui/config_panel.js?v={{ BUILD_ID }}",
   "/static/css/styles.css?v={{ BUILD_ID }}",
