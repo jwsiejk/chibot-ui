@@ -29,14 +29,14 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
     "asr": {
         "server_starts_input": True,
         "prearm_on_tts_end": True,
-        "cold_start_grace_ms": 2500,
+        "cold_start_grace_ms": 3000,
     },
     "vad": {
-        "warmup_ms": 1200,
+        "warmup_ms": 1500,
         "sender_gate_on_tts": True,
     },
     "watchdog": {
-        "partial_wait_ms_first_turn": 2500,
+        "partial_wait_ms_first_turn": 3500,
     },
     "server": {
         "buffer_prestart_audio_ms": 300,

@@ -959,6 +959,16 @@ class ChatV2Adapter:
                     should_close = score >= 1.0 and (combined_norm > 0.0 or vendor_norm > 0.0)
                 if not should_close:
                     continue
+                min_stream_ms = 1200
+                asr_client = ctx.session.asr
+                bytes_streamed = getattr(asr_client, "bytes_streamed", 0) if asr_client else 0
+                stream_age_ms = (
+                    getattr(asr_client, "ms_since_first_packet", min_stream_ms)
+                    if asr_client
+                    else min_stream_ms
+                )
+                if bytes_streamed <= 0 or stream_age_ms < min_stream_ms:
+                    continue
                 reason = "silence_final"
                 if silence_ok and not vendor_ok:
                     reason = "silence_only"
@@ -2741,6 +2751,15 @@ class ChatV2Adapter:
                 ctx.asr_bytes_sent += byte_count
                 if not ctx.session.first_chunk_sent:
                     ctx.session.first_chunk_sent = True
+                streamed = getattr(asr_client, "bytes_streamed", 0) or 0
+                setattr(asr_client, "bytes_streamed", streamed + byte_count)
+                now_mono = time.monotonic()
+                first_packet = getattr(asr_client, "first_packet_monotonic", None)
+                if not isinstance(first_packet, (int, float)):
+                    first_packet = now_mono
+                    setattr(asr_client, "first_packet_monotonic", first_packet)
+                elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
+                setattr(asr_client, "ms_since_first_packet", elapsed_ms)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -5313,12 +5332,16 @@ class ChatV2Adapter:
         def _on_notice(meta: Dict[str, Any]) -> None:
             _log.info("evt=sm_notice sid=%s meta=%s", ctx.sid, meta)
 
-        return SMRealtimeClient(
+        client = SMRealtimeClient(
             ctx.sid,
             on_ready=_on_ready,
             on_notice=_on_notice,
             on_closed=_on_closed,
         )
+        setattr(client, "bytes_streamed", 0)
+        setattr(client, "first_packet_monotonic", None)
+        setattr(client, "ms_since_first_packet", 0)
+        return client
 
     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
         if ctx.ws_send is None:

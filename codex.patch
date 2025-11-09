@@ -1,223 +1,253 @@
-diff --git a/app/services/asr/sm_rt.py b/app/services/asr/sm_rt.py
-index 5da3c303ba428b0471da64e6d7a637b4c8278cb0..598db58730b9b0c5c57394b0d11600c0a6abae62 100644
---- a/app/services/asr/sm_rt.py
-+++ b/app/services/asr/sm_rt.py
-@@ -95,100 +95,102 @@ class SMRealtimeClient:
-         self.session_id = sid
-         self.turn_id: Optional[str] = None
-         self._bus = telemetry_bus
-         self._state = "idle"
-         self._state_lock = asyncio.Lock()
-         self._ws: WebSocketClientProtocol | None = None
-         self._endpoint_url: str | None = None
-         self._url: str | None = None
-         self._connected_at = 0.0
-         self._last_activity = time.monotonic()
-         self._partial_seq = 0
-         self._ready_event = asyncio.Event()
-         self._close_ack_event = asyncio.Event()
-         self._stop_event = asyncio.Event()
-         self._pcm_queue: asyncio.Queue[bytes | object] = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
-         self._pcm_sentinel: object = object()
-         self._receiver_task: asyncio.Task[None] | None = None
-         self._sender_task: asyncio.Task[None] | None = None
-         self._ws_ping_task: asyncio.Task[None] | None = None
-         self._closing = False
-         self._closed_event = asyncio.Event()
-         self._close_reason: str | None = None
-         self._sent_end_of_stream = False
-         self._seq_counter = 0
-         self._last_seq_no: Optional[int] = None
-+        self._first_pcm_sent_at: float | None = None
-         self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
-         self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
-         self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
- 
-         self._on_ready = on_ready or (lambda info: None)
-         self._on_partial = on_partial or (lambda text, latency: None)
-         self._on_final = on_final or (lambda text, latency: None)
-         self._on_notice = on_notice or (lambda meta: None)
-         self._on_closed = on_closed or (lambda reason: None)
- 
-         self._input_start_ms: Optional[int] = None
-         self._first_partial_logged = False
-         self._first_final_logged = False
- 
-     # ------------------------------------------------------------------
-     # Public properties
-     # ------------------------------------------------------------------
-     @property
-     def state(self) -> str:
-         """Return the current connection state."""
- 
-         return self._state
- 
-     # ------------------------------------------------------------------
-     # Lifecycle management
-     # ------------------------------------------------------------------
-     async def open(
-         self, *, endpoint_url: str, jwt_token: str | None, params: Dict[str, Any]
-     ) -> None:
-         """Open the Speechmatics websocket and wait for RecognitionStarted."""
- 
-         if not isinstance(params, dict):
-             raise TypeError("params must be a dict")
-         if not endpoint_url:
-             raise ValueError("endpoint_url must be provided")
- 
-         async with self._state_lock:
-             if self._state not in {"idle", "closed"}:
-                 raise RuntimeError(f"client state {self._state} cannot connect")
-             self._state = "opening"
- 
-         self._stop_event = asyncio.Event()
-         self._ready_event = asyncio.Event()
-         self._close_ack_event = asyncio.Event()
-         self._closed_event = asyncio.Event()
-         self._close_reason = None
-         self._sent_end_of_stream = False
-         self._pcm_queue = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
-         self._seq_counter = 0
-         self._last_seq_no = None
-+        self._first_pcm_sent_at = None
- 
-         url = endpoint_url.strip()
-         if not url:
-             raise ValueError("endpoint_url must be provided")
-         if not url.startswith("wss://"):
-             raise ValueError(f"Invalid Speechmatics endpoint (must be wss://): {url!r}")
-         self._endpoint_url = url
-         self._publish_event(
-             ASR_VENDOR_CONNECT_INTENT,
-             {
-                 "vendor": self.VENDOR,
-                 "meta": {"reason": "connect", "endpoint": url},
-             },
-         )
- 
-         headers: dict[str, str] = {}
-         if jwt_token:
-             ws_url = f"{url}?jwt={jwt_token}"
-             auth_mode = "jwt"
-         else:
-             ws_url = url
-             from app.config import SPEECHMATICS_API_KEY
- 
-             if not SPEECHMATICS_API_KEY:
-                 raise RuntimeError("Speechmatics API key missing for header auth")
-@@ -289,50 +291,62 @@ class SMRealtimeClient:
-             return
- 
-         queue = self._pcm_queue
-         if queue.full():
-             try:
-                 dropped = queue.get_nowait()
-             except asyncio.QueueEmpty:  # pragma: no cover - defensive
-                 dropped = None
-             else:
-                 if dropped is not None and dropped is not self._pcm_sentinel:
-                     self._emit_notice(
-                         {"kind": "backpressure_drop", "bytes": len(dropped)}
-                     )
-                 queue.task_done()
-         await queue.put(data)
- 
-     async def send_end_of_stream(self) -> None:
-         """Send the vendor end-of-stream marker and await acknowledgement."""
- 
-         if self._state != "open":
-             return
-         if self._sent_end_of_stream:
-             await self._wait_for_close_ack()
-             return
- 
-+        if self._last_seq_no is None:
-+            detail = {
-+                "session_id": self.session_id,
-+                "turn_id": self.turn_id,
-+                "reason": "no_audio",
-+            }
-+            self._emit_hub_log("asr.eos.skipped", detail)
-+            self._emit_notice({"kind": "eos_skipped_no_audio"})
-+            self._sent_end_of_stream = True
-+            self._close_ack_event.set()
-+            return
-+
-         self._sent_end_of_stream = True
-         detail = {
-             "session_id": self.session_id,
-             "turn_id": self.turn_id,
-             "last_seq_no": self._last_seq_no,
-         }
-         self._emit_hub_log("asr.eos.sent", detail)
-         await self._send_end_of_stream()
-         await self._wait_for_close_ack()
- 
-     async def close(self) -> None:
-         """Gracefully close the websocket connection."""
- 
-         if self._state in {"idle", "closed"}:
-             return
-         if self._closing:
-             await self._closed_event.wait()
-             return
- 
-         self._closing = True
-         await self._stop_sender()
-         await self._stop_receiver()
-         await self._stop_ws_ping()
- 
-         ws = self._ws
-@@ -389,50 +403,52 @@ class SMRealtimeClient:
-             await self._finalize_close(reason=self._close_reason or "vendor_closed")
- 
-     async def _pcm_sender_loop(self) -> None:
-         await self._ready_event.wait()
-         try:
-             while not self._stop_event.is_set():
-                 try:
-                     item = await asyncio.wait_for(self._pcm_queue.get(), timeout=0.5)
-                 except asyncio.TimeoutError:
-                     continue
-                 if item is self._pcm_sentinel:
-                     self._pcm_queue.task_done()
-                     break
-                 if not isinstance(item, (bytes, bytearray)):
-                     self._pcm_queue.task_done()
-                     continue
-                 data = bytes(item)
-                 ws = self._ws
-                 if ws is None:
-                     self._pcm_queue.task_done()
-                     break
-                 try:
-                     next_seq = self._seq_counter + 1
-                     await ws.send(data)
-                     self._last_activity = time.monotonic()
-+                    if self._first_pcm_sent_at is None:
-+                        self._first_pcm_sent_at = self._last_activity
-                     self._seq_counter = next_seq
-                     self._last_seq_no = next_seq
-                 except ConnectionClosed:
-                     self._pcm_queue.task_done()
-                     break
-                 except Exception:  # pragma: no cover - defensive
-                     _log.exception("speechmatics pcm send failed")
-                     self._pcm_queue.task_done()
-                     break
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index fa62bc6a57151b7048f4b69eeb51f148a9c79c1f..e5a15f51f8da2fa4f94efda453ac2a675a7b36ac 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -937,50 +937,60 @@ class ChatV2Adapter:
+                 vendor_ok = vendor_idle_ms >= eot_silence_ms
+                 denom_client = max(1, min_silence_ms)
+                 client_norm = _clamp(client_silence_ms / denom_client, 0.0, 1.0)
+                 if policy.get("enable", True):
+                     server_norm = _clamp(server_silence_ms / denom_client, 0.0, 1.0)
+                     combined_norm = min(client_norm, server_norm)
                  else:
-                     self._pcm_queue.task_done()
-         except asyncio.CancelledError:  # pragma: no cover - cooperative cancel
+                     combined_norm = client_norm
+                 denom_vendor = max(1, eot_silence_ms)
+                 vendor_norm = _clamp(vendor_idle_ms / denom_vendor, 0.0, 1.0)
+                 fuse_mode = str(policy.get("fuse_mode", "and")).strip().lower()
+                 if fuse_mode not in {"and", "or", "weighted"}:
+                     fuse_mode = "and"
+                 should_close = False
+                 if fuse_mode == "and":
+                     should_close = silence_ok and vendor_ok
+                 elif fuse_mode == "or":
+                     should_close = silence_ok or vendor_ok
+                 elif fuse_mode == "weighted":
+                     weight_client = float(policy.get("weight_client", 0.5) or 0.0)
+                     weight_vendor = float(policy.get("weight_vendor", 0.5) or 0.0)
+                     score = (weight_client * combined_norm) + (weight_vendor * vendor_norm)
+                     should_close = score >= 1.0 and (combined_norm > 0.0 or vendor_norm > 0.0)
+                 if not should_close:
+                     continue
++                min_stream_ms = 1200
++                asr_client = ctx.session.asr
++                bytes_streamed = getattr(asr_client, "bytes_streamed", 0) if asr_client else 0
++                stream_age_ms = (
++                    getattr(asr_client, "ms_since_first_packet", min_stream_ms)
++                    if asr_client
++                    else min_stream_ms
++                )
++                if bytes_streamed <= 0 or stream_age_ms < min_stream_ms:
++                    continue
+                 reason = "silence_final"
+                 if silence_ok and not vendor_ok:
+                     reason = "silence_only"
+                 elif not silence_ok and vendor_ok:
+                     reason = "policy_close"
+                 await self._handle_vad_eot(
+                     ctx,
+                     reason,
+                     fuse_mode,
+                     client_silence_ms,
+                     vendor_idle_ms,
+                     server_silence_ms,
+                 )
+         except asyncio.CancelledError:
              raise
+         except Exception:  # pragma: no cover - defensive logging
+             _log.exception("evt=server_vad_fusion_loop_error sid=%s", ctx.sid)
+         finally:
+             ctx.vad_fusion_task = None
  
-     async def _ws_ping_loop(self) -> None:
+     def _compute_client_silence_ms(self, ctx: AdapterContext, now_ms: int) -> int:
+         if ctx.client_vad_speech:
+             return 0
+         if ctx.client_vad_since_ms is not None and not ctx.client_vad_speech:
+             return max(0, now_ms - int(ctx.client_vad_since_ms))
+@@ -2719,50 +2729,59 @@ class ChatV2Adapter:
+             elif not ready_gate:
+                 reason = "not_ready"
+             elif not mic_open:
+                 reason = "mic_closed"
+             elif not send_open:
+                 reason = "send_closed"
+             else:
+                 reason = "backpressure"
+             _log.info(
+                 "evt=audio_drop sid=%s len=%d reason=%s",
+                 ctx.sid,
+                 byte_count,
+                 reason,
+             )
+             return
+         asr_client = ctx.session.asr
+         if ctx.session.asr_state == "open" and asr_client is not None:
+             try:
+                 await asr_client.send_pcm(chunk)
+             except Exception:
+                 _log.warning("evt=asr_pcm_send_failed sid=%s", ctx.sid, exc_info=True)
+             else:
+                 ctx.asr_bytes_sent += byte_count
+                 if not ctx.session.first_chunk_sent:
+                     ctx.session.first_chunk_sent = True
++                streamed = getattr(asr_client, "bytes_streamed", 0) or 0
++                setattr(asr_client, "bytes_streamed", streamed + byte_count)
++                now_mono = time.monotonic()
++                first_packet = getattr(asr_client, "first_packet_monotonic", None)
++                if not isinstance(first_packet, (int, float)):
++                    first_packet = now_mono
++                    setattr(asr_client, "first_packet_monotonic", first_packet)
++                elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
++                setattr(asr_client, "ms_since_first_packet", elapsed_ms)
+         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+ 
+     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
+         removed = False
+         for key in list(ctx.audio_buffer):
+             if key < threshold:
+                 ctx.audio_buffer.pop(key, None)
+                 removed = True
+         if removed:
+             if ctx.audio_buffer:
+                 ctx.audio_highest_seq = max(ctx.audio_buffer)
+             else:
+                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+ 
+     def _log_speechmatics_control_summary(
+         self, sid: str, payload: Mapping[str, Any]
+     ) -> None:
+         if not isinstance(payload, Mapping):
+             return
+         vendor = payload.get("vendor")
+         if not (isinstance(vendor, str) and vendor.strip().lower() == "speechmatics"):
+             return
+         command_value = payload.get("command")
+         if not isinstance(command_value, str):
+             return
+@@ -5291,56 +5310,60 @@ class ChatV2Adapter:
+             try:
+                 loop.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
+             except RuntimeError:
+                 try:
+                     asyncio.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
+                 except RuntimeError:
+                     _log.debug("evt=asr_invariant_emit_skipped sid=%s", ctx.sid)
+ 
+         def _on_ready(_meta: Dict[str, Any]) -> None:
+             mark(ctx.session, "open")
+             ctx.asr_opened_ms = self._now_ms()
+             ctx.asr_close_reason = None
+             ctx.session.first_chunk_sent = False
+             _publish_invariant("open", True)
+ 
+         def _on_closed(reason: str) -> None:
+             ctx.session.asr = None
+             mark(ctx.session, "closed")
+             ctx.asr_close_reason = reason
+             ctx.asr_open_task = None
+             _publish_invariant("closed", True, {"reason": reason})
+ 
+         def _on_notice(meta: Dict[str, Any]) -> None:
+             _log.info("evt=sm_notice sid=%s meta=%s", ctx.sid, meta)
+ 
+-        return SMRealtimeClient(
++        client = SMRealtimeClient(
+             ctx.sid,
+             on_ready=_on_ready,
+             on_notice=_on_notice,
+             on_closed=_on_closed,
+         )
++        setattr(client, "bytes_streamed", 0)
++        setattr(client, "first_packet_monotonic", None)
++        setattr(client, "ms_since_first_packet", 0)
++        return client
+ 
+     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
+         if ctx.ws_send is None:
+             raise RuntimeError("websocket send unavailable for asr.open")
+         if not can_open(ctx.session):
+             return
+         if ctx.asr_open_task and not ctx.asr_open_task.done():
+             return
+         mark(ctx.session, "opening")
+         ctx.asr_bytes_sent = 0
+         ctx.asr_opened_ms = None
+         ctx.asr_close_reason = None
+         ctx.session.first_chunk_sent = False
+         ctx.session.queued_arm = False
+         ctx.session.closed_at_ms = None
+         ctx.session.asr = self._create_sm_client(ctx)
          try:
-             while not self._stop_event.is_set():
-                 await asyncio.sleep(self._keepalive_interval_s)
-                 if self._stop_event.is_set():
-                     break
-                 if self._state != "open":
-                     continue
-                 now = time.monotonic()
-                 if now - self._last_activity < self._keepalive_interval_s:
-                     continue
+             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
+         except RuntimeError:
+             loop = asyncio.get_running_loop()
+             ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
+ 
+     async def _open_asr(self, ctx: AdapterContext) -> None:
+         send = ctx.ws_send
+         if send is None:
+diff --git a/app/ws/policy.py b/app/ws/policy.py
+index 42fa174901659117d3cfbd3cbaaace3c91590429..bfe41cca83f959f9f3f3533fcc44112d4fb4376f 100644
+--- a/app/ws/policy.py
++++ b/app/ws/policy.py
+@@ -7,58 +7,58 @@ POLICY_VERSION = 2
+ 
+ # map legacy → new; omit keys to drop
+ LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
+     # legacy ASR
+     ("asr", "prearm_on_tts_end"): ("asr", "prearm_on_tts_end"),
+     ("asr", "start_on_ready"): ("asr", "server_starts_input"),  # legacy name
+     # legacy VAD/gating
+     ("vad", "auto_vad_active"): None,  # runtime state, not a policy knob
+     ("vad", "allow_auto_vad"): ("vad", "sender_gate_on_tts"),  # best fit
+     # legacy UI badge behavior
+     ("ui", "badge_listen_on_asr"): ("ui", "status", "require_active_turn"),
+ }
+ 
+ DEPRECATED_KEYS = {
+     ("input", "require_hotword_to_start"),
+     ("input", "require_user_gesture_first_visit"),  # keep only if UX requires
+     ("audio", "pipeline", "mode"),
+     ("media", "asr_input"),
+ }
+ 
+ SAFE_DEFAULTS_V2: dict[str, Any] = {
+     "version": POLICY_VERSION,
+     "asr": {
+         "server_starts_input": True,
+         "prearm_on_tts_end": True,
+-        "cold_start_grace_ms": 2500,
++        "cold_start_grace_ms": 3000,
+     },
+     "vad": {
+-        "warmup_ms": 1200,
++        "warmup_ms": 1500,
+         "sender_gate_on_tts": True,
+     },
+     "watchdog": {
+-        "partial_wait_ms_first_turn": 2500,
++        "partial_wait_ms_first_turn": 3500,
+     },
+     "server": {
+         "buffer_prestart_audio_ms": 300,
+     },
+     "capture": {
+         "constraints": {
+             "echoCancellation": True,
+             "noiseSuppression": True,
+             "autoGainControl": False,
+             "channelCount": 1,
+             "sampleRate": 48000,
+         }
+     },
+     "ui": {
+         "status": {
+             "require_active_turn": True,
+             "enable_meter": True,
+         }
+     },
+ }
+ 
+ 
+ def _get(d: Mapping[str, Any], path: Sequence[str], default: Any = None) -> Any:
+     cur: Any = d
+     for key in path:
