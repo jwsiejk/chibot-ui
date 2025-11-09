@@ -1,637 +1,406 @@
-diff --git a/app/config.py b/app/config.py
-index f371f3f73a85c401887eb16e7cb8d3836aeae118..2eab52feb9b2e2242ea815ac9ff52d5f367c6fcb 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,35 +1,35 @@
- """Application configuration helpers."""
- 
- from __future__ import annotations
- 
- from copy import deepcopy
- import json
- import logging
- import os
- import threading
--from typing import Any, Mapping, MutableMapping, Optional
-+from typing import Any, Mapping, MutableMapping, MutableSequence, Optional
- 
- from app.ws.policy import normalize_policy
- 
- try:
-     from dotenv import load_dotenv  # type: ignore
- except ImportError:  # pragma: no cover - optional dependency
-     load_dotenv = None
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
- 
- 
- def env_bool(name: str, default: bool = False) -> bool:
-     """Return an environment variable parsed as a boolean."""
- 
-     value = os.getenv(name)
-     if value is None:
-         return bool(default)
-     value = value.strip().lower()
-     if value in {"1", "true", "t", "yes", "y", "on"}:
-         return True
-     if value in {"0", "false", "f", "no", "n", "off"}:
-         return False
-     return bool(default)
- 
- 
-@@ -736,66 +736,68 @@ def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None)
-     value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
-     return value
- 
- 
- def _merge_mapping(dst: MutableMapping[str, Any], src: Mapping[str, Any]) -> None:
-     """Recursively merge ``src`` into ``dst`` while copying nested mappings."""
- 
-     for key, value in src.items():
-         if not isinstance(key, str):
-             continue
-         if isinstance(value, Mapping):
-             existing = dst.get(key)
-             if isinstance(existing, Mapping):
-                 merged_child: MutableMapping[str, Any] = dict(existing)
-             else:
-                 merged_child = {}
-             _merge_mapping(merged_child, value)
-             dst[key] = merged_child
-         else:
-             dst[key] = deepcopy(value)
- 
- 
- def build_session_policy(
-     admin_overrides: Mapping[str, Any] | None,
-     env: Mapping[str, Any] | None,
-+    *,
-+    legacy_hits: MutableSequence[tuple[tuple[str, ...], tuple[str, ...]]] | None = None,
- ) -> dict[str, Any]:
-     """Return a normalized session policy using v2 defaults and legacy mapping."""
- 
-     merged: MutableMapping[str, Any] = {}
- 
-     if isinstance(env, Mapping):
-         _merge_mapping(merged, env)
- 
-     if isinstance(admin_overrides, Mapping):
-         _merge_mapping(merged, admin_overrides)
- 
-     policy_block = merged.pop("policy", None)
-     if isinstance(policy_block, Mapping):
-         _merge_mapping(merged, policy_block)
- 
--    return normalize_policy(dict(merged))
-+    return normalize_policy(dict(merged), legacy_hits=legacy_hits)
- 
- 
- ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(
-     "ASR_DUP_FINAL_SUPPRESS_MS", default=150, minimum=0
- )
- ASR_DEDUPE_NORMALIZE = bool_env_or_db("ASR_DEDUPE_NORMALIZE", default=True)
- 
- 
- def reload_runtime_flags() -> None:
-     """Refresh runtime configuration flags from env and admin settings."""
- 
-     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
-         "diag_client_hud", default=False
-     )
-     audio_guardrails_default = {"enabled": True}
-     audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
-         "audio_guardrails", default=audio_guardrails_default
-     )
-     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
-         "diag_audio_guard", default=True
-     )
-     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
-         "diag_chunk_sample_n", default=10, minimum=1
-     )
- 
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index ec8c866c6ac2f760414ec87f5f5e46d1ce65fbc7..09f4fd36bb0431234983abc9c614ed1db1889a0c 100644
+index 09f4fd36bb0431234983abc9c614ed1db1889a0c..fa62bc6a57151b7048f4b69eeb51f148a9c79c1f 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -1,43 +1,55 @@
- # // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
- """chat.v2 WebSocket adapter for AskChip."""
- from __future__ import annotations
+@@ -483,50 +483,53 @@ class AdapterContext:
+     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+     client_banner_info: Optional[Dict[str, Any]] = None
+     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
+     allowed_asr_vendors: List[str] = field(default_factory=list)
+     asr_vendor: Optional[str] = None
+     audio_pipeline_mode: Optional[str] = None
+     asr_vendor_logged: bool = False
+     session_capture_policy: Optional[Dict[str, Any]] = None
+     client_vad_speech: bool = False
+     client_vad_since_ms: Optional[int] = None
+     client_vad_last_event_ms: Optional[int] = None
+     client_vad_last_speech_end_ms: Optional[int] = None
+     client_vad_confidence: float = 0.0
+     client_vad_energy_db: Optional[float] = None
+     client_vad_noise_db: Optional[float] = None
+     server_vad_candidate_start_ms: Optional[int] = None
+     server_vad_silence_candidate_ms: Optional[int] = None
+     server_vad_energy_db: Optional[float] = None
+     vad_fusion_task: asyncio.Task[None] | None = None
+     input_start_ms: Optional[int] = None
+     first_partial_logged: bool = False
+     first_final_logged: bool = False
+     active_asr_config: Optional[Dict[str, Any]] = None
+     hub_log_last_turn: Optional[str] = None
+     hub_log_seq: int = 0
++    asr_turn_active: bool = False
++    asr_turn_begin_sent: bool = False
++    asr_turn_armed_sent: bool = False
  
- import os
- import array
- import asyncio
- import contextlib
- import logging
- import math
- import threading
- import time
- import inspect
- import platform
- import socket
- import sys
- from dataclasses import dataclass, field
--from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
-+from typing import (
-+    Any,
-+    Awaitable,
-+    Callable,
-+    Dict,
-+    Iterable,
-+    List,
-+    Literal,
-+    Mapping,
-+    Optional,
-+    Protocol,
-+    runtime_checkable,
-+)
+     def __post_init__(self) -> None:
+         self.session = SessionCtx(sid=self.sid, policy=None)
  
- import json
- import urllib.request
- from urllib.parse import parse_qs
  
- from app import config
- from app.config_build import current_build_id
- from app.logging_setup import current_sid
- from app.security.jwt_utils import verify_ws_token
- from app.telemetry import bus
- from app.telemetry.events import (
-     AUDIO_WIRE_ROLLUP,
-     ASR_OPEN_AFTER_TTS,
-     ASR_OPEN_DEDUP,
-     ASR_OPEN_QUEUED,
-     ASR_POST_CLOSE_DROP,
-     ASR_SINGLE_STREAM_INVARIANT,
-     ASR_VENDOR_BYTES_TOTAL,
-     ASR_ROLLUP,
-     EVT_ASR_CLOSE,
-     EVT_ASR_OPEN,
-     EVT_SESSION_TRANSPORT_CLOSED,
-     SESSION_TEARDOWN_COMPLETE,
-     WS_AUDIO_FIRST_CHUNK,
-     WS_AUDIO_HEADER_ACCEPT,
-@@ -411,50 +423,51 @@ class AdapterContext:
-     client_capture_armed: bool = False
-     outbound_queue_depth: int = 0
-     backpressure_state: Literal["off", "on"] = "off"
-     outbox: asyncio.Queue[Dict[str, Any]] | None = None
-     outbound_task: asyncio.Task[None] | None = None
-     subscription_token: Optional[str] = None
-     audio_subscription_token: Optional[str] = None
-     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
-     audio_send_closed: bool = False
-     asr_ready: bool = False
-     asr_subscription_token: Optional[str] = None
-     asr_subscription_bus: Optional[Any] = None
-     asr_open_subscription_token: Optional[str] = None
-     asr_unavailable_subscription_token: Optional[str] = None
-     asr_partial_subscription_token: Optional[str] = None
-     asr_final_subscription_token: Optional[str] = None
-     asr_closed_subscription_token: Optional[str] = None
-     asr_recovering_until: float = 0.0
-     asr_recovering_reason: Optional[str] = None
-     asr_recovering_audio_logged: bool = False
-     server_keepalive_task: asyncio.Task[None] | None = None
-     last_policy_interaction: Optional[Dict[str, Any]] = None
-     policy_snapshot: Optional[Dict[str, Any]] = None
-     policy: Optional[Dict[str, Any]] = None
-     policy_warning_logged: bool = False
-+    policy_snapshot_fingerprint: Optional[str] = None
-     partial_seq: int = 0
-     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
-     send_lock: asyncio.Lock | None = None
-     ws_send: Callable[[dict], Awaitable[None]] | None = None
-     asr_open_task: asyncio.Task[None] | None = None
-     asr_bytes_sent: int = 0
-     asr_opened_ms: Optional[int] = None
-     asr_close_reason: Optional[str] = None
-     tts_end_ts: Optional[float] = None
-     diag_audio_seen: bool = False
-     diag_timer: asyncio.TimerHandle | None = None
-     diag_timer_key: Optional[str] = None
-     await_user_expected: bool = False
-     await_user_pending: bool = False
-     await_user_pending_key: Optional[str] = None
-     await_user_after_mask: bool = False
-     await_user_after_mask_key: Optional[str] = None
-     tts_mask_phase: str = "off"
-     mask_subscription_token: Optional[str] = None
-     pending_start_listening: Optional[Dict[str, Any]] = None
-     pending_start_listening_sent: bool = False
-     tts_end_subscription_token: Optional[str] = None
-     turn_state_subscription_token: Optional[str] = None
-     hud_state: Optional[str] = None
-     client_mic_open: bool = False
-@@ -537,131 +550,190 @@ class ChatV2Adapter:
-             if not value:
-                 continue
-             candidates.append((name, value))
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
  
-         for source, raw in candidates:
-             try:
-                 parsed = json.loads(raw)
-             except json.JSONDecodeError:
-                 if not self._policy_env_warning_logged:
-                     _log.warning(
-                         "evt=session_policy_env_invalid source=%s", source
-                     )
-                     self._policy_env_warning_logged = True
-                 continue
-             if isinstance(parsed, Mapping):
-                 return parsed
-             if not self._policy_env_warning_logged:
-                 _log.warning(
-                     "evt=session_policy_env_not_mapping source=%s type=%s",
-                     source,
-                     type(parsed).__name__,
-                 )
-                 self._policy_env_warning_logged = True
-         return None
- 
--    def _build_session_policy(self) -> Dict[str, Any]:
-+    def _build_session_policy(
-+        self,
-+        *,
-+        legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] | None = None,
-+    ) -> Dict[str, Any]:
-         admin_overrides = getattr(config, "POLICY_OVERRIDES", None)
-         env_overrides = self._session_policy_env()
-         try:
--            policy = config.build_session_policy(admin_overrides, env_overrides)
-+            policy = config.build_session_policy(
-+                admin_overrides,
-+                env_overrides,
-+                legacy_hits=legacy_hits,
-+            )
-         except Exception:
-             _log.exception("evt=session_policy_build_failed")
--            policy = normalize_policy({})
-+            policy = normalize_policy({}, legacy_hits=legacy_hits)
-         return dict(policy)
- 
-     @staticmethod
-     def _policy_for_client(policy: Mapping[str, Any] | None) -> Dict[str, Any]:
-         if not isinstance(policy, Mapping):
-             return {}
-         allowed_keys = {
-             "version",
-             "asr",
-             "vad",
-             "watchdog",
-             "server",
-             "capture",
-             "ui",
-             "_normalized_from",
-         }
-         filtered = {key: policy[key] for key in allowed_keys if key in policy}
-         try:
-             return json.loads(json.dumps(filtered, ensure_ascii=False))
-         except (TypeError, ValueError):
-             return dict(filtered)
- 
-     def _bus(
-         self, event_type: str, payload: Mapping[str, Any], *, sid: Optional[str] = None
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
      ) -> None:
-         event_payload: Dict[str, Any]
-         try:
-             event_payload = json.loads(json.dumps(payload, ensure_ascii=False))
-         except (TypeError, ValueError):
-             event_payload = dict(payload)
- 
-         event: Dict[str, Any] = {
-             "schema_version": "1",
-             "type": event_type,
-             "who": "server",
-             "source": "ws_server",
-             "payload": event_payload,
-         }
-         event_sid = sid if isinstance(sid, str) and sid else current_sid.get(None)
-         if isinstance(event_sid, str) and event_sid:
-             event["sid"] = event_sid
-         bus.publish(event)
- 
--    def _emit_policy_snapshot(self, ctx: AdapterContext) -> None:
-+    def _emit_policy_snapshot(
-+        self,
-+        ctx: AdapterContext,
-+        legacy_hits: Iterable[tuple[tuple[str, ...], tuple[str, ...]]] | None = None,
-+    ) -> None:
-         policy = ctx.policy if isinstance(ctx.policy, Mapping) else None
-         if not policy:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+@@ -1020,52 +1023,55 @@ class ChatV2Adapter:
+         client_silence_ms: int,
+         vendor_idle_ms: int,
+         server_silence_ms: int,
+     ) -> None:
+         if not ctx.session.eot_armed:
              return
-         version = policy.get("version")
-         if version != 2 and not ctx.policy_warning_logged:
-             _log.warning(
-                 "warn=policy_legacy_only; using_v2_defaults sid=%s", ctx.sid
-             )
-             ctx.policy_warning_logged = True
-         try:
-+            fingerprint: Optional[str]
-+            try:
-+                fingerprint = json.dumps(policy, sort_keys=True, ensure_ascii=False)
-+            except (TypeError, ValueError):
-+                fingerprint = repr(policy)
-+            if ctx.policy_snapshot_fingerprint == fingerprint:
-+                return
-+
-+            mapped_hits: List[List[List[str]]] = []
-+            for hit in legacy_hits or ():
-+                if not isinstance(hit, (list, tuple)) or len(hit) != 2:
-+                    continue
-+                legacy_path, new_path = hit
-+                if not isinstance(legacy_path, (list, tuple)) or not isinstance(
-+                    new_path, (list, tuple)
-+                ):
-+                    continue
-+                mapped_hits.append(
-+                    [list(map(str, legacy_path)), list(map(str, new_path))]
-+                )
-+
-+            asr_candidate = policy.get("asr")
-+            asr_block = asr_candidate if isinstance(asr_candidate, Mapping) else {}
-+            vad_candidate = policy.get("vad")
-+            vad_block = vad_candidate if isinstance(vad_candidate, Mapping) else {}
-+            server_starts_input = None
-+            cold_start_grace_ms = None
-+            warmup_ms = None
-+            if isinstance(asr_block, Mapping):
-+                server_starts_input = asr_block.get("server_starts_input")
-+                cold_start_grace_ms = asr_block.get("cold_start_grace_ms")
-+            if isinstance(vad_block, Mapping):
-+                warmup_ms = vad_block.get("warmup_ms")
-+
-             self._bus("policy.snapshot", policy, sid=ctx.sid)
-+            self._bus(
-+                "policy.deprecation_report",
-+                {
-+                    "version": version,
-+                    "mapped_legacy_keys": mapped_hits,
-+                    "server_starts_input": server_starts_input,
-+                    "warmup_ms": warmup_ms,
-+                    "cold_start_grace_ms": cold_start_grace_ms,
-+                },
-+                sid=ctx.sid,
-+            )
-+            ctx.policy_snapshot_fingerprint = fingerprint
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=policy_snapshot_emit_failed sid=%s", ctx.sid)
- 
-     def _policy(self, ctx: AdapterContext) -> Dict[str, Any]:
-         if isinstance(ctx.policy, Mapping):
-             return dict(ctx.policy)
-         return {}
- 
-     def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
-+        legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
-         try:
--            normalized = normalize_policy(payload)
-+            normalized = normalize_policy(payload, legacy_hits=legacy_hits)
-         except Exception:  # pragma: no cover - defensive logging
-             _log.exception("evt=policy_normalize_failed sid=%s", ctx.sid)
-             return
-         ctx.policy = normalized
-         ctx.session.policy = normalized
-         ctx.policy_warning_logged = False
--        self._emit_policy_snapshot(ctx)
-+        self._emit_policy_snapshot(ctx, legacy_hits)
- 
-     @staticmethod
-     def _allowed_asr_vendors() -> List[str]:
-         return ["speechmatics"]
- 
-     @staticmethod
-     def _coerce_non_negative_int(value: Any, default: int) -> int:
-         try:
-             candidate = int(value)
-         except (TypeError, ValueError):
-             return default
-         if candidate < 0:
-             return default
-         return candidate
- 
-     @staticmethod
-     def _coerce_float(value: Any, default: float | None) -> float | None:
-         try:
-             candidate = float(value)
-         except (TypeError, ValueError):
-             return default
-         if math.isnan(candidate) or math.isinf(candidate):
-             return default
-         return candidate
- 
-@@ -1313,51 +1385,52 @@ class ChatV2Adapter:
-             self._emit_session_step(
-                 sid,
-                 "ws.banner_sent",
-                 summary="Sent server banner",
-                 meta={
-                     "build_id": build_id,
-                     "host": host,
-                     "pid": pid,
-                     "subprotocol": selected,
-                 },
-             )
-         except Exception:
-             _log.exception("evt=server_banner_emit_failed")
-         # ---- END RUNTIME BANNER ----
- 
-         now_ms = int(time.time() * 1000)
-         info_frame: Dict[str, Any] = {
-             "type": "info",
-             "protocol": CHAT_V2_SUBPROTOCOL,
-             "sid": sid,
-             "ts_ms": now_ms,
-             "build_id": current_build_id(),
-         }
-         info_frame["meta"] = {"sid": sid}
-         policy_snapshot = self._policy_snapshot() if FEATURE_LEGACY_POLICY else None
--        session_policy_v2 = self._build_session_policy()
-+        legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
-+        session_policy_v2 = self._build_session_policy(legacy_hits=legacy_hits)
-         allowed_asr_vendors = ["speechmatics"]
-         snapshot_mapping: Mapping[str, Any] | None
-         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, Mapping):
-             snapshot_mapping = policy_snapshot
-         else:
-             snapshot_mapping = session_policy_v2 if isinstance(session_policy_v2, Mapping) else None
- 
-         provisional_ctx = AdapterContext(
-             sid=sid,
-             headers=dict(headers),
-             principal=principal,
-             user_id=sub,
-             is_admin=is_admin,
+         ctx.session.eot_armed = False
+         _log.info(
+             "evt=vad_eot sid=%s reason=%s fuse_mode=%s client_silence_ms=%d vendor_idle_ms=%d server_silence_ms=%d",
+             ctx.sid,
+             reason,
+             fuse_mode,
+             client_silence_ms,
+             vendor_idle_ms,
+             server_silence_ms,
          )
-         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, dict):
-             provisional_ctx.policy_snapshot = dict(policy_snapshot)
-         elif FEATURE_LEGACY_POLICY:
-             provisional_ctx.policy_snapshot = policy_snapshot
-         else:
-             provisional_ctx.policy_snapshot = None
-         provisional_ctx.policy = dict(session_policy_v2)
-         provisional_ctx.session.policy = provisional_ctx.policy
-         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-         selected_vendor = "speechmatics"
-         selection_reason = "pcm16_only"
-@@ -1408,51 +1481,51 @@ class ChatV2Adapter:
-             ctx.audio_pipeline_mode = "pcm16"
-         mode = ctx.audio_pipeline_mode or "pcm16"
-         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
-         ctx.ws_send = send
-         self._ensure_ingress_tick_timer(ctx)
- 
-         token = current_sid.set(ctx.sid)
-         try:
-             if not (
-                 inspect.iscoroutinefunction(self._on_open_and_greet)
-                 and inspect.iscoroutinefunction(self._invoke_engine)
-             ):
-                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
-                 raise RuntimeError("WebSocket async contract violation")
- 
-             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
-             client = scope.get("client")
-             ctx.ip = client[0] if isinstance(client, tuple) and client else None
-             if ctx.ip:
-                 ctx.ip_bucket = self._ip_buckets.setdefault(
-                     ctx.ip,
-                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
-                 )
- 
-             self._contexts[ctx.sid] = ctx
--            self._emit_policy_snapshot(ctx)
-+            self._emit_policy_snapshot(ctx, legacy_hits)
- 
-             _log.info("evt=ws_open sid=%s", ctx.sid)
-             self._start_asr_ready_tracker(ctx, bus)
-             self._start_outbound_bridge(ctx, send)
-             self._start_server_keepalive(ctx, send)
- 
-             if self.exporter:
-                 self.exporter.begin(ctx.sid)
-                 self._emit_session_step(
-                     ctx.sid,
-                     "session.export_started",
-                     summary="Started session export",
-                     source="ws.exporter",
-                 )
- 
-             await self._on_open_and_greet(ctx)
- 
-             close_code = 1000
-             close_reason: Optional[str] = None
- 
-             try:
-                 while True:
-                     message = await receive()
-                     msg_type = message.get("type")
- 
-diff --git a/app/ws/policy.py b/app/ws/policy.py
-index b1d708ea9ff94412dc7e5e2e5d733485fc154548..42fa174901659117d3cfbd3cbaaace3c91590429 100644
---- a/app/ws/policy.py
-+++ b/app/ws/policy.py
-@@ -1,29 +1,29 @@
- from __future__ import annotations
- 
- from copy import deepcopy
--from typing import Any, Mapping, MutableMapping, Sequence
-+from typing import Any, Mapping, MutableMapping, MutableSequence, Sequence, Tuple
- 
- POLICY_VERSION = 2
- 
- # map legacy → new; omit keys to drop
- LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
-     # legacy ASR
-     ("asr", "prearm_on_tts_end"): ("asr", "prearm_on_tts_end"),
-     ("asr", "start_on_ready"): ("asr", "server_starts_input"),  # legacy name
-     # legacy VAD/gating
-     ("vad", "auto_vad_active"): None,  # runtime state, not a policy knob
-     ("vad", "allow_auto_vad"): ("vad", "sender_gate_on_tts"),  # best fit
-     # legacy UI badge behavior
-     ("ui", "badge_listen_on_asr"): ("ui", "status", "require_active_turn"),
- }
- 
- DEPRECATED_KEYS = {
-     ("input", "require_hotword_to_start"),
-     ("input", "require_user_gesture_first_visit"),  # keep only if UX requires
-     ("audio", "pipeline", "mode"),
-     ("media", "asr_input"),
- }
- 
- SAFE_DEFAULTS_V2: dict[str, Any] = {
-     "version": POLICY_VERSION,
-     "asr": {
-@@ -57,63 +57,72 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
+         meta = {
+             "reason": reason,
+             "fuse_mode": fuse_mode,
+             "client_silence_ms": int(client_silence_ms),
+             "vendor_idle_ms": int(vendor_idle_ms),
+             "server_silence_ms": int(server_silence_ms),
          }
-     },
- }
- 
- 
- def _get(d: Mapping[str, Any], path: Sequence[str], default: Any = None) -> Any:
-     cur: Any = d
-     for key in path:
-         if not isinstance(cur, Mapping) or key not in cur:
-             return default
-         cur = cur[key]
-     return cur
- 
- 
- def _set(d: MutableMapping[str, Any], path: Sequence[str], value: Any) -> None:
-     cur: MutableMapping[str, Any] = d
-     for key in path[:-1]:
-         next_val = cur.get(key)
-         if not isinstance(next_val, MutableMapping):
-             next_val = {}
-             cur[key] = next_val  # type: ignore[assignment]
-         cur = next_val  # type: ignore[assignment]
-     cur[path[-1]] = value
- 
- 
--def normalize_policy(incoming: Mapping[str, Any] | None) -> dict[str, Any]:
-+LegacyHit = Tuple[Tuple[str, ...], Tuple[str, ...]]
-+
-+
-+def normalize_policy(
-+    incoming: Mapping[str, Any] | None,
-+    *,
-+    legacy_hits: MutableSequence[LegacyHit] | None = None,
-+) -> dict[str, Any]:
-     """Merge SAFE_DEFAULTS_V2 ← incoming (mapped), drop deprecated, prefer v2 keys."""
- 
-     src = deepcopy(dict(incoming or {}))
-     out = deepcopy(SAFE_DEFAULTS_V2)
- 
-     def deep_merge(dst: MutableMapping[str, Any], src_: Mapping[str, Any] | None) -> None:
-         for key, value in (src_ or {}).items():
-             if isinstance(value, Mapping) and isinstance(dst.get(key), MutableMapping):
-                 deep_merge(dst[key], value)  # type: ignore[index]
-             else:
-                 dst[key] = deepcopy(value)
- 
-     deep_merge(out, {key: value for key, value in src.items() if key in out})
- 
-     for legacy_path, new_path in LEGACY_MAP.items():
-         val = _get(src, legacy_path, None)
-         if val is None or new_path is None:
-             continue
-         if legacy_path == ("ui", "badge_listen_on_asr"):
-             val = not bool(val)
-+        if legacy_hits is not None:
-+            legacy_hits.append((tuple(legacy_path), tuple(new_path)))
-         if _get(out, new_path, None) is None:
-             _set(out, new_path, val)
- 
-     for path in DEPRECATED_KEYS:
-         parent = _get(src, path[:-1], None)
-         if isinstance(parent, MutableMapping) and path[-1] in parent:
+         await self._publish("asr.turn_ended", ctx.sid, meta)
+         send = ctx.ws_send
++        turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
+         if send is not None:
              try:
-                 del parent[path[-1]]
-             except Exception:
++                if turn_end_payload is not None:
++                    await self._send_json(send, ctx.sid, turn_end_payload)
+                 await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
+             except Exception:  # pragma: no cover - defensive logging
+                 _log.warning("evt=vad_eot_send_failed sid=%s", ctx.sid, exc_info=True)
+         await self._close_asr(ctx, reason="eot")
+ 
+     def _handle_client_telemetry(
+         self, ctx: AdapterContext, event_name: str, meta: Mapping[str, Any]
+     ) -> None:
+         now_ms = self._now_ms()
+         if event_name == "client.vad.speech_start":
+             self._set_client_vad_state(ctx, True, now_ms)
+             ctx.client_vad_last_event_ms = now_ms
+             conf = self._coerce_float(meta.get("conf"), ctx.client_vad_confidence)
+             if conf is not None:
+                 ctx.client_vad_confidence = _clamp(conf, 0.0, 1.0)
+             energy = self._coerce_float(meta.get("energyDb"), ctx.client_vad_energy_db)
+             if energy is not None:
+                 ctx.client_vad_energy_db = energy
+             noise = self._coerce_float(meta.get("noiseDb"), ctx.client_vad_noise_db)
+             if noise is not None:
+                 ctx.client_vad_noise_db = noise
+         elif event_name == "client.vad.speech_end":
+             self._set_client_vad_state(ctx, False, now_ms)
+             ctx.client_vad_last_event_ms = now_ms
+             ctx.client_vad_last_speech_end_ms = now_ms
+@@ -2043,50 +2049,51 @@ class ChatV2Adapter:
+                 ctx.audio_expected_seq = ctx.audio_seq
+                 ctx.audio_highest_seq = ctx.audio_seq - 1
+                 ctx.audio_buffer.clear()
+             audio_meta = {
+                 key: value
+                 for key, value in (
+                     ("format", profile.get("format")),
+                     ("sample_rate", profile.get("sample_rate")),
+                     ("channels", profile.get("channels")),
+                     ("seq_start", profile.get("seq_start")),
+                 )
+                 if value is not None
+             }
+             await self._publish(
+                 WS_AUDIO_HEADER_ACCEPT,
+                 ctx.sid,
+                 audio_meta,
+             )
+             self._emit_session_step(
+                 ctx.sid,
+                 "audio.header.accepted",
+                 summary="Accepted audio header",
+                 meta=audio_meta,
+                 source="ws.audio",
+             )
++            self._emit_asr_turn_armed(ctx)
+ 
+         if frame_type == "asr.rearm.request":
+             keep_warm_ms = self._policy_keep_warm_ms(ctx)
+             _log.info(
+                 "evt=asr_prearm_requested sid=%s source=client keep_stream_warm_ms=%s",
+                 ctx.sid,
+                 keep_warm_ms,
+             )
+             # --- START FIX: Explicitly send HUD state to fix the UI badge ---
+             self._emit_hud_state(ctx, "Listening")
+             # --- END FIX ---
+             try:
+                 await self._send_asr_ready_bundle(send, ctx)
+             except Exception:  # pragma: no cover - defensive logging
+                 _log.exception("evt=ws_asr_ready_bundle_failed sid=%s", ctx.sid)
+ 
+         if frame_type == "client.ready":
+             mic_info = frame.get("mic")
+             if isinstance(mic_info, dict):
+                 state = mic_info.get("state")
+                 if isinstance(state, str) and state.lower() == "open":
+                     vendor = mic_info.get("vendor")
+                     opened_ts = mic_info.get("ts")
+                     ts_value = opened_ts if isinstance(opened_ts, int) else None
+                     self._emit_client_mic_open(
+@@ -3098,50 +3105,53 @@ class ChatV2Adapter:
+                     self._maybe_emit_first_token_latency(ctx, "final", now_ms)
+ 
+             def _on_loop() -> None:
+                 frame = self._coerce_asr_frame(ctx, event)
+                 if frame is None:
+                     return
+                 _enqueue(frame)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
                  pass
  
-     out["version"] = POLICY_VERSION
-     out["_normalized_from"] = "v2"
-     return out
+         ctx.asr_partial_subscription_token = bus.subscribe(
+             EVT_ASR_PARTIAL, _handle_asr_event
+         )
+         ctx.asr_final_subscription_token = bus.subscribe(
+             EVT_ASR_FINAL, _handle_asr_event
+         )
  
+         def _handle_asr_closed_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
  
- __all__ = ["POLICY_VERSION", "normalize_policy"]
+             def _on_loop() -> None:
++                turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
++                if turn_end_payload is not None:
++                    _enqueue(turn_end_payload)
+                 frame = {"type": "asr.closed"}
+                 _enqueue(frame)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.asr_closed_subscription_token = bus.subscribe(
+             EVT_ASR_CLOSED, _handle_asr_closed_event
+         )
+ 
+         def _handle_asr_unavailable_event(event: dict) -> None:
+             if event.get("type") != "asr.unavailable":
+                 return
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 ctx.asr_ready = False
+                 ctx.awaiting_asr_ready = False
+                 ctx.client_capture_armed = False
+                 ctx.session.eot_armed = False
+                 ctx.session.server_vad_speech = False
+                 ctx.session.server_vad_since_ms = None
+@@ -3227,50 +3237,54 @@ class ChatV2Adapter:
+             session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+             input_start = {
+                 "type": "input.start",
+                 "capture": capture,
+             }
+             if session_policy:
+                 input_start["policy"] = session_policy
+ 
+             _enqueue(ready_frame)
+             _enqueue(input_start)
+             ctx.ingress_packets = 0
+             ctx.ingress_bytes = 0
+             ctx.first_ingress_ms = None
+             mic_armed_now = int(time.time() * 1000)
+             ctx.mic_armed_ms = mic_armed_now
+             ctx.asr_ready_bundle_sent_ms = mic_armed_now
+             ctx.awaiting_asr_ready = True
+             ctx.client_capture_armed = True
+             start_payload: Dict[str, Any] = {"type": "start_listening"}
+             if session_policy:
+                 start_payload["policy"] = session_policy
+             ctx.pending_start_listening = dict(start_payload)
+             ctx.pending_start_listening_sent = True
+             _enqueue(start_payload)
+ 
++            turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
++            if turn_begin_payload is not None:
++                _enqueue(turn_begin_payload)
++
+             if key is not None:
+                 ctx.listen_handoff_done.add(key)
+             self._clear_pending_for_key(ctx, key)
+             self._clear_after_mask_for_key(ctx, key)
+             current_key = self._turn_key(ctx, ctx.await_user_req_id)
+             if current_key == key:
+                 ctx.await_user_expected = False
+                 ctx.await_user_req_id = None
+             if ctx.last_tts_end_req_id == req_id:
+                 ctx.last_tts_end_req_id = None
+             ctx.client_mic_open = False
+             ctx.mic_nudge_sent = False
+ 
+             self._emit_hud_state(ctx, "Listening")
+             self._schedule_mic_open_guard(ctx, loop)
+             _log.info(
+                 "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
+                 ctx.sid,
+                 req_id,
+                 descriptor.get("mode", ""),
+                 descriptor.get("mime", ""),
+             )
+ 
+         def _schedule_listen_handoff(trigger_req_id: Optional[str]) -> None:
+             async def _attempt() -> None:
+@@ -5418,100 +5432,130 @@ class ChatV2Adapter:
+         ctx.session.server_vad_since_ms = None
+ 
+     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
+         if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+             policy_block = (
+                 ctx.policy_snapshot.get("policy")
+                 if isinstance(ctx.policy_snapshot, Mapping)
+                 else None
+             )
+         else:
+             policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
+         if not isinstance(policy_block, Mapping):
+             return 0
+         asr_block = policy_block.get("asr")
+         if not isinstance(asr_block, Mapping):
+             return 0
+         value = asr_block.get("keep_stream_warm_ms")
+         try:
+             keep_warm = int(value)
+         except (TypeError, ValueError):
+             keep_warm = 0
+         if keep_warm < 0:
+             return 0
+         return keep_warm
+ 
++    def _prepare_asr_turn_begin(self, ctx: AdapterContext, reason: str) -> Optional[Dict[str, Any]]:
++        if ctx.asr_turn_active:
++            return None
++        ctx.asr_turn_active = True
++        ctx.asr_turn_begin_sent = True
++        ctx.asr_turn_armed_sent = False
++        self._bus("asr.turn.begin", {"sid": ctx.sid, "reason": reason})
++        return {"type": "asr.turn", "state": "begin"}
++
++    def _emit_asr_turn_armed(self, ctx: AdapterContext) -> None:
++        if not ctx.asr_turn_active or ctx.asr_turn_armed_sent:
++            return
++        ctx.asr_turn_armed_sent = True
++        self._bus("asr.turn.armed", {"sid": ctx.sid})
++
++    def _prepare_asr_turn_end(self, ctx: AdapterContext, reason: str) -> Optional[Dict[str, Any]]:
++        if not ctx.asr_turn_active:
++            return None
++        ctx.asr_turn_active = False
++        ctx.asr_turn_begin_sent = False
++        ctx.asr_turn_armed_sent = False
++        self._bus("asr.turn.end", {"sid": ctx.sid, "reason": reason})
++        return {"type": "asr.turn", "state": "end"}
++
+     async def _send_asr_ready_bundle(
+         self,
+         send: Callable[[dict], Awaitable[None]],
+         ctx: AdapterContext,
+     ) -> None:
+         mode = ctx.audio_pipeline_mode or "pcm16"
+         descriptor = dict(self._input_descriptor_for_mode(mode))
+         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
+         vendor = ctx.asr_vendor or "speechmatics"
+         ready_frame = {
+             "type": "asr.ready",
+             "input": dict(descriptor),
+             "vendor": vendor,
+         }
+         capture = dict(descriptor)
+         capture["timeslice_ms"] = timeslice_ms
+         capture["manual_gate"] = False
+         session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+         input_start = {
+             "type": "input.start",
+             "capture": capture,
+         }
+         if session_policy:
+             input_start["policy"] = session_policy
+ 
+         start_payload: Dict[str, Any] = {"type": "start_listening"}
+         if session_policy:
+             start_payload["policy"] = session_policy
+ 
+         now_ms = int(time.time() * 1000)
+         ctx.awaiting_asr_ready = True
+         ctx.client_capture_armed = True
+         ctx.asr_recovering_until = 0.0
+         ctx.asr_recovering_reason = None
+         ctx.asr_recovering_audio_logged = False
+         ctx.ingress_packets = 0
+         ctx.ingress_bytes = 0
+         ctx.first_ingress_ms = None
+         ctx.mic_armed_ms = now_ms
+         ctx.asr_ready_bundle_sent_ms = now_ms
+ 
+         await self._send_json(send, ctx.sid, ready_frame)
+         self._mark_input_start(ctx)
+         await self._send_json(send, ctx.sid, input_start)
+         ctx.pending_start_listening = dict(start_payload)
+         ctx.pending_start_listening_sent = False
+         if ctx.asr_ready:
+             await self._send_json(send, ctx.sid, start_payload)
+             ctx.pending_start_listening = None
+             ctx.pending_start_listening_sent = False
++        turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
++        if turn_begin_payload is not None:
++            try:
++                await self._send_json(send, ctx.sid, turn_begin_payload)
++            except Exception:  # pragma: no cover - defensive logging
++                _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
+         _log.info(
+             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
+             ctx.sid,
+             mode,
+             descriptor.get("mime", ""),
+             timeslice_ms,
+             vendor,
+         )
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")

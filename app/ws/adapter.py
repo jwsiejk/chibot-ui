@@ -505,6 +505,9 @@ class AdapterContext:
     active_asr_config: Optional[Dict[str, Any]] = None
     hub_log_last_turn: Optional[str] = None
     hub_log_seq: int = 0
+    asr_turn_active: bool = False
+    asr_turn_begin_sent: bool = False
+    asr_turn_armed_sent: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -1042,8 +1045,11 @@ class ChatV2Adapter:
         }
         await self._publish("asr.turn_ended", ctx.sid, meta)
         send = ctx.ws_send
+        turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
         if send is not None:
             try:
+                if turn_end_payload is not None:
+                    await self._send_json(send, ctx.sid, turn_end_payload)
                 await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
             except Exception:  # pragma: no cover - defensive logging
                 _log.warning("evt=vad_eot_send_failed sid=%s", ctx.sid, exc_info=True)
@@ -2065,6 +2071,7 @@ class ChatV2Adapter:
                 meta=audio_meta,
                 source="ws.audio",
             )
+            self._emit_asr_turn_armed(ctx)
 
         if frame_type == "asr.rearm.request":
             keep_warm_ms = self._policy_keep_warm_ms(ctx)
@@ -3120,6 +3127,9 @@ class ChatV2Adapter:
                 return
 
             def _on_loop() -> None:
+                turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
+                if turn_end_payload is not None:
+                    _enqueue(turn_end_payload)
                 frame = {"type": "asr.closed"}
                 _enqueue(frame)
 
@@ -3248,6 +3258,10 @@ class ChatV2Adapter:
             ctx.pending_start_listening = dict(start_payload)
             ctx.pending_start_listening_sent = True
             _enqueue(start_payload)
+
+            turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
+            if turn_begin_payload is not None:
+                _enqueue(turn_begin_payload)
 
             if key is not None:
                 ctx.listen_handoff_done.add(key)
@@ -5440,6 +5454,30 @@ class ChatV2Adapter:
             return 0
         return keep_warm
 
+    def _prepare_asr_turn_begin(self, ctx: AdapterContext, reason: str) -> Optional[Dict[str, Any]]:
+        if ctx.asr_turn_active:
+            return None
+        ctx.asr_turn_active = True
+        ctx.asr_turn_begin_sent = True
+        ctx.asr_turn_armed_sent = False
+        self._bus("asr.turn.begin", {"sid": ctx.sid, "reason": reason})
+        return {"type": "asr.turn", "state": "begin"}
+
+    def _emit_asr_turn_armed(self, ctx: AdapterContext) -> None:
+        if not ctx.asr_turn_active or ctx.asr_turn_armed_sent:
+            return
+        ctx.asr_turn_armed_sent = True
+        self._bus("asr.turn.armed", {"sid": ctx.sid})
+
+    def _prepare_asr_turn_end(self, ctx: AdapterContext, reason: str) -> Optional[Dict[str, Any]]:
+        if not ctx.asr_turn_active:
+            return None
+        ctx.asr_turn_active = False
+        ctx.asr_turn_begin_sent = False
+        ctx.asr_turn_armed_sent = False
+        self._bus("asr.turn.end", {"sid": ctx.sid, "reason": reason})
+        return {"type": "asr.turn", "state": "end"}
+
     async def _send_asr_ready_bundle(
         self,
         send: Callable[[dict], Awaitable[None]],
@@ -5490,6 +5528,12 @@ class ChatV2Adapter:
             await self._send_json(send, ctx.sid, start_payload)
             ctx.pending_start_listening = None
             ctx.pending_start_listening_sent = False
+        turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
+        if turn_begin_payload is not None:
+            try:
+                await self._send_json(send, ctx.sid, turn_begin_payload)
+            except Exception:  # pragma: no cover - defensive logging
+                _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
         _log.info(
             "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
             ctx.sid,
