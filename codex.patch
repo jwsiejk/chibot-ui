@@ -1,63 +1,71 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 538c373307d49412b447fb3a706ce6c422af796d..987f059430995a8ec67289c645d1d146637e1583 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -3299,54 +3299,56 @@ class ChatV2Adapter:
+diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
+index b3d6b68d413d6412e7cefb8a597942d16efb08ce..7e33badabd683fac040b232428660bd0f0fc57b3 100644
+--- a/app/voice_v2/engine.py
++++ b/app/voice_v2/engine.py
+@@ -371,62 +371,62 @@ class EngineV2:
+             )
+             session = self._ensure_session(sid)
+             previous_state = session.state
  
-         source = event.get("source")
-         if isinstance(source, str) and source == "speechmatics_client":
-             vendor = event.get("vendor")
-             if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
-                 return None
+         if previous_state != READY:
+             _log.warning(
+                 "evt=text_input_ignored state=%s", previous_state, extra={"sid": sid}
+             )
+             return
  
-         raw_meta = event.get("meta")
-         meta = raw_meta if isinstance(raw_meta, Mapping) else None
-         text = event.get("text")
+         listen_reason = "text_barge" if (was_responding and barge_enabled) else "text_input"
+         self._set_state(sid, LISTENING, reason=listen_reason)
+         session = self._ensure_session(sid)
+         if session.state != LISTENING:
+             return
  
-         no_speech = bool(meta and meta.get("no_speech"))
+         self._commit_turn_start(sid, "text_input")
+         session = self._ensure_session(sid)
  
-         # Try fallback text from meta if needed
-         if not isinstance(text, str) or not text.strip():
-             if meta is not None:
-                 candidate_text = meta.get("text")
-                 if isinstance(candidate_text, str):
-                     text = candidate_text
+         session = self._ensure_session(sid)
+         turn_id = session.turn_id or str(uuid.uuid4())
+         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
+         session.turn_id = turn_id
+         session.req_id = req_id
  
-         # Drop truly empty/noise finals, but honor explicit no-speech signals.
-         if not isinstance(text, str) or not text.strip():
-             # Vendor explicitly signaled silence: end input cleanly so the UI resets.
-             if no_speech:
-                 return {"type": "input.stop", "reason": "no_speech"}
--            # --- CRITICAL FIX: Treat any empty FINAL as a clean stop ---
-+            
-+            # --- START FIX B3: Cleanly close mic on empty final to prevent hang ---
-             if frame_type == "asr.final":
-                 return {"type": "input.stop", "reason": "empty_transcript"}
--            # --- END CRITICAL FIX ---
-+            # --- END FIX B3 ---
-+            
-             return None
+-self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
++        self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
  
-         frame: Dict[str, Any] = {"type": frame_type, "text": text}
+         # --- OMNI-CHANNEL FIX START: Trigger NLU/LLM pipeline for text input ---
+         nlu_result = self._nlu.extract(req_id, text)
+         nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
+-        
++
+         nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
+         self._publish(nlu_event)
+-        
++
+         session.nlu_emitted = True
+         session.nlu_req_id = req_id
+-        
++
+         self._emit_dialog_plan(sid, session, req_id, turn_id, text)
+         self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
+         # --- OMNI-CHANNEL FIX END ---
+         
+         self._set_state(sid, THINKING, reason="text_input")
  
-         req_id = event.get("req_id")
-         if not isinstance(req_id, str) or not req_id.strip():
-             if meta is not None:
-                 meta_req = meta.get("req_id")
-                 if isinstance(meta_req, str) and meta_req.strip():
-                     req_id = meta_req
-                 else:
-                     req_id = None
+     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
+         """Capture an incoming audio chunk."""
+         session = self._ensure_session(sid)
+         if session.tts_mask_phase != "off":
+             self._publish_tts_mask(sid, "off")
+         if session.state == READY:
+             self._set_state(sid, LISTENING, reason="audio_rx")
+             session = self._ensure_session(sid)
+         elif session.state == RESPONDING:
+             self._set_state(sid, LISTENING, reason="audio_rx")
+             session = self._ensure_session(sid)
+         if session.state != LISTENING:
+             _log.warning(
+                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
+             )
          else:
-             req_id = req_id.strip()
-         if isinstance(req_id, str) and req_id:
-             frame["req_id"] = req_id
+             self._commit_turn_start(sid, "audio_rx")
  
-         confidence = event.get("confidence")
-         if not isinstance(confidence, (int, float)) and meta is not None:
-             meta_conf = meta.get("confidence")
-             if isinstance(meta_conf, (int, float)):
-                 confidence = float(meta_conf)
-         if isinstance(confidence, (int, float)):
-             frame["confidence"] = float(confidence)
- 
+         if not isinstance(chunk, (bytes, bytearray)):
