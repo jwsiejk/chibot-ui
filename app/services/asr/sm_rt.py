@@ -117,6 +117,7 @@ class SMRealtimeClient:
         self._sent_end_of_stream = False
         self._seq_counter = 0
         self._last_seq_no: Optional[int] = None
+        self._first_pcm_sent_at: float | None = None
         self._ready_timeout_s = max(0.1, ready_timeout_s or self.READY_TIMEOUT_S)
         self._close_ack_timeout_s = max(0.1, close_ack_timeout_s or self.CLOSE_ACK_TIMEOUT_S)
         self._keepalive_interval_s = max(1.0, keepalive_interval_s or self.KEEPALIVE_INTERVAL_S)
@@ -167,6 +168,7 @@ class SMRealtimeClient:
         self._pcm_queue = asyncio.Queue(maxsize=self.PCM_QUEUE_MAX)
         self._seq_counter = 0
         self._last_seq_no = None
+        self._first_pcm_sent_at = None
 
         url = endpoint_url.strip()
         if not url:
@@ -311,6 +313,18 @@ class SMRealtimeClient:
             await self._wait_for_close_ack()
             return
 
+        if self._last_seq_no is None:
+            detail = {
+                "session_id": self.session_id,
+                "turn_id": self.turn_id,
+                "reason": "no_audio",
+            }
+            self._emit_hub_log("asr.eos.skipped", detail)
+            self._emit_notice({"kind": "eos_skipped_no_audio"})
+            self._sent_end_of_stream = True
+            self._close_ack_event.set()
+            return
+
         self._sent_end_of_stream = True
         detail = {
             "session_id": self.session_id,
@@ -411,6 +425,8 @@ class SMRealtimeClient:
                     next_seq = self._seq_counter + 1
                     await ws.send(data)
                     self._last_activity = time.monotonic()
+                    if self._first_pcm_sent_at is None:
+                        self._first_pcm_sent_at = self._last_activity
                     self._seq_counter = next_seq
                     self._last_seq_no = next_seq
                 except ConnectionClosed:
