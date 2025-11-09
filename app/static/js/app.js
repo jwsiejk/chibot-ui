@@ -13,6 +13,8 @@
     }
   } catch (_) {}
 
+  // Mic capture is centralized in pcm_recorder.js and follows policy.capture.constraints.
+
   (function wrapDiag() {
     const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });
     function maybeWrap() {

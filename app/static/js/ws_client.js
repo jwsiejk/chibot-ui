@@ -44,6 +44,7 @@ import { WakeWord } from "./wake_word.js";
   };
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
   const DEFAULT_ASR_VENDOR = 'speechmatics';
+  const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
 
   let __micAttempts = 0;
   let __micChunks = 0;
@@ -981,6 +982,40 @@ import { WakeWord } from "./wake_word.js";
       return;
     }
     setAppStateValue("wsPhase", phase);
+    if (WS_READY_PHASES.has(phase)) {
+      try {
+        flushQueuedFrames();
+      } catch (err) {
+        console.warn("WSClient queue flush failed", err);
+      }
+    }
+  }
+
+  function flushQueuedFrames(client = WSClient) {
+    const target = client || WSClient;
+    if (!Array.isArray(target?._queue) || target._queue.length === 0) {
+      return;
+    }
+    const liveSocket = target._ws || AppState?.websocket || null;
+    if (!liveSocket || liveSocket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const phase = AppState?.wsPhase || AppState?.connectionState;
+    if (!WS_READY_PHASES.has(phase)) {
+      return;
+    }
+    const pending = target._queue.splice(0, target._queue.length);
+    for (const entry of pending) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const { data, isBinary } = entry;
+      try {
+        send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
+      } catch (err) {
+        console.warn("WSClient queue flush send failed", err);
+      }
+    }
   }
 
   function resetRecorderTelemetry() {
@@ -3495,6 +3530,16 @@ import { WakeWord } from "./wake_word.js";
       AppState.asrReady = true;
       setWsPhase("ready");
       emitConsoleBusEvent("client.asr.ready", { asrReady: true });
+      try {
+        const capturePolicy = AppState?.policy?.capture || {};
+        const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
+          ? capturePolicy.mode
+          : "webrtc_aec";
+        const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
+          ? window.__audioCtx.sampleRate
+          : 48000;
+        emitConsoleBusEvent("client.capture.mode", { mode, ctxSampleRate: ctxRate });
+      } catch {}
       logStage("diag", { label: "asr.ready" });
       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
       __resetAudioHeaderSent();
@@ -4057,7 +4102,7 @@ import { WakeWord } from "./wake_word.js";
     return false;
   }
 
-  function send(payload, { binary = false } = {}) {
+  function send(payload, { binary = false, skipPhaseCheck = false } = {}) {
     const client = (this && typeof this === "object") ? this : WSClient;
     if (!Array.isArray(client._queue)) {
       client._queue = [];
@@ -4107,13 +4152,16 @@ import { WakeWord } from "./wake_word.js";
       }
     }
     const live = client._ws || stateSocket;
-    try {
-      const phase = AppState?.wsPhase || AppState?.connectionState;
-      if (!binary && (phase !== "connected" && phase !== "ready" && phase !== "resuming")) {
-        console.warn("WSClient.send skipped (phase not ready)", { phase });
-        return false;
-      }
-    } catch {}
+    if (!skipPhaseCheck && !binary) {
+      try {
+        const phase = AppState?.wsPhase || AppState?.connectionState;
+        if (!WS_READY_PHASES.has(phase)) {
+          client._queue.push({ data, isBinary: false });
+          console.warn("WSClient.send queued (phase not ready)", { phase });
+          return true;
+        }
+      } catch {}
+    }
     if (!live || live.readyState !== WebSocket.OPEN) {
       client._queue.push({ data, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");

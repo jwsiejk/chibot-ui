@@ -213,6 +213,9 @@
         }
         const context = new AudioContextCtor();
         this._audioContext = context;
+        try {
+          window.__audioCtx = context;
+        } catch (_) {}
         this._deviceSampleRate = context.sampleRate || null;
         if (!context.audioWorklet || typeof context.audioWorklet.addModule !== 'function') {
           throw new Error('AudioWorklet is not supported');
@@ -281,21 +284,14 @@
         }
       }
 
-      const localConstraints = this._policy
+      const constraintSource = this._policy
         && typeof this._policy === 'object'
         && this._policy.capture
         && typeof this._policy.capture === 'object'
         && this._policy.capture.constraints
         && typeof this._policy.capture.constraints === 'object'
           ? this._policy.capture.constraints
-          : null;
-      const globalConstraints = window.AppState?.policy?.capture?.constraints;
-      const constraintSource =
-        (localConstraints && typeof localConstraints === 'object')
-          ? localConstraints
-          : (globalConstraints && typeof globalConstraints === 'object')
-            ? globalConstraints
-            : {};
+          : {};
 
       const audioConstraints = {};
       Object.keys(constraintSource).forEach((key) => {
