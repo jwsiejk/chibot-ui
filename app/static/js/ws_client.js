@@ -255,21 +255,6 @@ import { WakeWord } from "./wake_word.js";
     AppState.policy = normalizedPolicy;
   }
 
-  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
-  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
-  const POLICY_STATUS = POLICY?.ui?.status
-    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
-  const WATCHDOG_FIRST_MS = Number(
-    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
-  );
-  const SENDER_GATE_ON_TTS = Boolean(
-    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
-  );
-  const REQUIRE_ACTIVE_TURN = Boolean(
-    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
-  );
-
   function installClientVadPolicySnapshot() {
     const policyRoot = AppState.policy && typeof AppState.policy === "object"
       ? AppState.policy
@@ -295,6 +280,22 @@ import { WakeWord } from "./wake_word.js";
   }
 
   installClientVadPolicySnapshot();
+
+  // Derive POLICY *after* defaults are merged in
+  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
+  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
+  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
+  const POLICY_STATUS = POLICY?.ui?.status
+    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
+  const WATCHDOG_FIRST_MS = Number(
+    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
+  );
+  const SENDER_GATE_ON_TTS = Boolean(
+    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
+  );
+  const REQUIRE_ACTIVE_TURN = Boolean(
+    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
+  );
 
   const appStateEventEmitter = createEventEmitter();
   if (typeof AppState.on !== "function") {

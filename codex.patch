@@ -1,24 +1,48 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 5bcb4cd2f62fb23c19f00862f0daa72e213d2af5..c8c8a6813b379408d4e7d9afebb57366547158db 100644
+index c8c8a6813b379408d4e7d9afebb57366547158db..df04b12e105a11dc501c9804fbcf6d2115556853 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -257,51 +257,55 @@ import { WakeWord } from "./wake_word.js";
+@@ -233,91 +233,92 @@ import { WakeWord } from "./wake_word.js";
+     const statusSource = uiSource && typeof uiSource.status === "object" ? uiSource.status : {};
  
-   const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-   const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
-   const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
-   const POLICY_STATUS = POLICY?.ui?.status
-     || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
-   const WATCHDOG_FIRST_MS = Number(
-     POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
-   );
-   const SENDER_GATE_ON_TTS = Boolean(
-     POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
-   );
-   const REQUIRE_ACTIVE_TURN = Boolean(
-     POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
-   );
+     sanitizedPolicy.vad = { ...DEFAULT_POLICY_VAD, ...vadSource };
+     sanitizedPolicy.watchdog = { ...DEFAULT_POLICY_WATCHDOG, ...watchdogSource };
+     sanitizedPolicy.ui = { ...uiSource };
+     sanitizedPolicy.ui.status = { ...DEFAULT_POLICY_STATUS, ...statusSource };
+     if (!Number.isFinite(sanitizedPolicy.version)) {
+       sanitizedPolicy.version = 2;
+     }
+     if (typeof sanitizedPolicy._normalized_from !== "string") {
+       sanitizedPolicy._normalized_from = "v2";
+     }
  
+     const normalizedPolicy = { ...basePolicy };
+     Object.keys(sanitizedPolicy).forEach((key) => {
+       const value = sanitizedPolicy[key];
+       if (typeof value === "undefined") {
+         return;
+       }
+       normalizedPolicy[key] = cloneValue(value);
+     });
+ 
+     AppState.policy = normalizedPolicy;
+   }
+ 
+-  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
+-  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
+-  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
+-  const POLICY_STATUS = POLICY?.ui?.status
+-    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
+-  const WATCHDOG_FIRST_MS = Number(
+-    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
+-  );
+-  const SENDER_GATE_ON_TTS = Boolean(
+-    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
+-  );
+-  const REQUIRE_ACTIVE_TURN = Boolean(
+-    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
+-  );
+-
    function installClientVadPolicySnapshot() {
      const policyRoot = AppState.policy && typeof AppState.policy === "object"
        ? AppState.policy
@@ -28,12 +52,11 @@ index 5bcb4cd2f62fb23c19f00862f0daa72e213d2af5..c8c8a6813b379408d4e7d9afebb57366
          return;
        }
        const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
--      target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
-+      const existingClient = existingVad.client && typeof existingVad.client === "object"
-+        ? existingVad.client
-+        : {};
-+      // Merge: runtime/client overrides survive; our defaults fill gaps.
-+      target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
+       const existingClient = existingVad.client && typeof existingVad.client === "object"
+         ? existingVad.client
+         : {};
+       // Merge: runtime/client overrides survive; our defaults fill gaps.
+       target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
      };
      ensureVadBlock(policyRoot);
      if (FEATURE_LEGACY_POLICY) {
@@ -46,6 +69,22 @@ index 5bcb4cd2f62fb23c19f00862f0daa72e213d2af5..c8c8a6813b379408d4e7d9afebb57366
  
    installClientVadPolicySnapshot();
  
++  // Derive POLICY *after* defaults are merged in
++  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
++  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
++  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
++  const POLICY_STATUS = POLICY?.ui?.status
++    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
++  const WATCHDOG_FIRST_MS = Number(
++    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
++  );
++  const SENDER_GATE_ON_TTS = Boolean(
++    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
++  );
++  const REQUIRE_ACTIVE_TURN = Boolean(
++    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
++  );
++
    const appStateEventEmitter = createEventEmitter();
    if (typeof AppState.on !== "function") {
      AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
@@ -59,211 +98,15 @@ index 5bcb4cd2f62fb23c19f00862f0daa72e213d2af5..c8c8a6813b379408d4e7d9afebb57366
        __micRecordingStartAt = Date.now();
        __micFirstChunkBreadcrumbSent = false;
        emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
-@@ -546,52 +550,50 @@ import { WakeWord } from "./wake_word.js";
- 
-   function getVadPolicySnapshot() {
-     try {
-       const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
-         ? AppState.policy
-         : null;
-       const client = root?.vad?.client;
-       if (client && typeof client === "object") {
-         // Shallow merge: runtime overrides hard-coded safe defaults
-         return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
-       }
-     } catch {}
-     return CLIENT_VAD_POLICY_ROOT;
-   }
- 
-   // Resolve warmup once per session start (policy or default)
-   function getWarmupMs() {
-     try {
-       const snap = getVadPolicySnapshot();
-       const ms = snap?.vad?.client?.warmup_ms;
-       if (Number.isFinite(ms) && ms >= 0 && ms <= 10000) return ms;
-     } catch {}
-     return CLIENT_VAD_POLICY.warmup_ms; // 1200 fallback
-   }
- 
--  const VAD_WARMUP_MS = getWarmupMs();
--
-   function getTtsActiveSnapshot() {
-     try {
-       if (typeof AppState.getState === "function") {
-         const snapshot = AppState.getState();
-         if (snapshot && typeof snapshot.ttsActive === "boolean") {
-           return snapshot.ttsActive;
-         }
-       }
-     } catch {}
-     return Boolean(AppState?.ttsActive);
-   }
- 
-   function setVadAppState(patch) {
-     if (!patch || typeof patch !== "object") {
-       return;
-     }
-     const sanitized = {};
-     for (const key of VAD_APPSTATE_KEYS) {
-       if (Object.prototype.hasOwnProperty.call(patch, key)) {
-         sanitized[key] = patch[key];
-         AppState[key] = patch[key];
-       }
-     }
-     const keys = Object.keys(sanitized);
-     if (!keys.length) {
-@@ -2801,51 +2803,51 @@ import { WakeWord } from "./wake_word.js";
-           hasInputField = true;
-           break;
-         }
-       }
-     }
- 
-     if (!hasInputField) {
-       return safe;
-     }
- 
-     safe.input = input;
-     return safe;
-   }
- 
-   function handleServerBannerFrame(frame) {
-     const sanitized = sanitizeServerBannerFrame(frame);
-     updateState({ serverBanner: sanitized });
-     console.log("WS server banner", sanitized);
-     dispatchFrame(sanitized);
-   }
- 
-   function handleAsrReadyFrame(frame) {
-     const sanitized = sanitizeAsrReadyFrame(frame);
-     AppState.asrReady = true;
-     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
--    beginWarmup(VAD_WARMUP_MS);
-+    beginWarmup(getWarmupMs());
-     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
-     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-     if (typeof AppState.emit === "function") {
-       AppState.emit("asrReady", {
-         ready: true,
-         vendor: AppState.asrVendor,
-         input: sanitized.input ?? null,
-       });
-     }
-     logStage('client.asr', {
-       stage: 'ready',
-       vendor: AppState.asrVendor,
-       input: sanitized.input ?? null,
      });
-     return sanitized;
    }
  
-   const ASR_VENDOR_OPTIONS = ['speechmatics'];
-   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
+   function clonePolicySnapshot(source) {
+     if (!source || typeof source !== "object") {
+       return {};
+     }
+     return { ...source };
+   }
  
-   const DEFAULT_POLICY_FLAGS = {
-     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
-     input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
-     asr: {
-       prearm_on_tts_end: false,
-@@ -3340,98 +3342,99 @@ import { WakeWord } from "./wake_word.js";
-       handlePongFrame(frame);
-     } else if (frame.type === "error") {
-       handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
-       try {
-         AppState?.hub?.stopListening?.("tts");
-       } catch {}
-       stopRecorder("tts_start");
-       setAppStateValue("ttsActive", true);
-       AppState.tts = true;
-       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: true });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
-       }
-       const uttIdStart = frame?.utt_id || 'utt-00001';
-       logStage('client.tts_start', { utt_id: uttIdStart });
-       logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
-     } else if (frame.type === "tts.end") {
-       setAppStateValue("ttsActive", false);
-       AppState.tts = false;
--      beginWarmup(VAD_WARMUP_MS);
-+      beginWarmup(getWarmupMs());
-       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: false });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-       const uttIdEnd = frame?.utt_id || 'utt-00001';
-       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       if (AppState.armAfterTtsEnd) {
-         schedulePostTtsArm("post_greet");
-         setArmAfterTtsEnd(false);
-       }
-     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
-       const uttId = frame?.utt_id || 'utt-00001';
-       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
-       setAppStateValue("ttsActive", false);
-       logStage('client.tts', {
-         outcome: 'ended',
-         utt_id: uttId,
-         dur_ms: frame?.dur_ms,
-         reason,
-       });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
-     } else if (frame.type === "start_listening") {
-       const ar = window.AudioRecorder || null;
-       const policy = frame?.policy || {};
-       let unifiedArmed = false;
-       try {
-         if (ar?.setPolicy) ar.setPolicy(policy);
-         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
-         if (FEATURE_LEGACY_POLICY) {
-           const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
-           const asrInput = frame?.policy?.media?.asr_input ?? null;
-           console.info(
-             "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
-             vendor,
-             pipeline,
-             asrInput,
-           );
-         } else {
-+          const warmupMs = getWarmupMs();
-           console.info(
-             "diag=start_listening_order vendor=%s vad_warmup_ms=%s require_active_turn=%s",
-             vendor,
--            Number.isFinite(VAD_WARMUP_MS) ? VAD_WARMUP_MS : null,
-+            Number.isFinite(warmupMs) ? warmupMs : null,
-             REQUIRE_ACTIVE_TURN,
-           );
-         }
-         if (ar?.start) {
-           await ar.start(policy);
-           unifiedArmed = true;
-         }
-       } catch (err) {
-         console.warn("AudioRecorder start_listening preflight failed", err);
-       }
-       try {
-         __micAttempts += 1;
-         __micChunks = 0;
-         __micBytes = 0;
-         __micArmedAt = Date.now();
-         if (!__turnTraceId) {
-           __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-         }
-         logMic({ outcome: MIC_OUTCOME.ARMED });
-       } catch {}
- 
-       setPendingAsrReadyStart({ frame, policy, reason: frame?.reason || frame?.type || "start_listening" });
-       if (AppState?.asrReady) {
-         try {
-           await startStreamingAfterAsrReady("start_listening_asr_ready");
+   function patchPolicyVad(patch) {
+     if (!patch || typeof patch !== "object") {
