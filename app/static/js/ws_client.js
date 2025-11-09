@@ -1,6 +1,5 @@
-// CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
+// CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
 import { initVAD } from "./audio/vad_client.js";
-import { WakeWord } from "./wake_word.js";
 (() => {
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
@@ -276,6 +275,18 @@ import { WakeWord } from "./wake_word.js";
         policyRoot.policy = {};
       }
       ensureVadBlock(policyRoot.policy);
+    }
+    // Hard-disable any legacy hotword gate, regardless of incoming policy.
+    const ensureInput = (root) => {
+      if (!root || typeof root !== "object") {
+        return;
+      }
+      const existingInput = root.input && typeof root.input === "object" ? root.input : {};
+      root.input = { ...existingInput, require_hotword_to_start: false };
+    };
+    ensureInput(policyRoot);
+    if (FEATURE_LEGACY_POLICY) {
+      ensureInput(policyRoot.policy);
     }
   }
 
@@ -1398,17 +1409,6 @@ import { WakeWord } from "./wake_word.js";
 
   // Initialize the client banner state only after related constants are defined.
   ensureClientBannerState();
-
-  let wakeWordIgnoredLogged = false;
-  WakeWord.onHotword(() => {
-    if (wakeWordIgnoredLogged) {
-      return;
-    }
-    wakeWordIgnoredLogged = true;
-    try {
-      console.info("wake_word_detected_ignore=1 reason=vad_barge_in_default");
-    } catch {}
-  });
 
   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
   const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
@@ -3000,9 +3000,7 @@ import { WakeWord } from "./wake_word.js";
 
       const input = rawNested.input && typeof rawNested.input === 'object' ? rawNested.input : null;
       nested.input = {
-        require_hotword_to_start: input && typeof input.require_hotword_to_start === 'boolean'
-          ? input.require_hotword_to_start
-          : DEFAULT_POLICY_FLAGS.input.require_hotword_to_start,
+        require_hotword_to_start: false,
         require_user_gesture_first_visit: input && typeof input.require_user_gesture_first_visit === 'boolean'
           ? input.require_user_gesture_first_visit
           : DEFAULT_POLICY_FLAGS.input.require_user_gesture_first_visit,
