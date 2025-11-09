@@ -48,6 +48,15 @@ import { initVAD } from "./audio/vad_client.js";
   const DEFAULT_ASR_VENDOR = 'speechmatics';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
 
+  // ---- Debug toggles (runtime-settable) ----
+  function dbg(key, fallback = false) {
+    try {
+      return !!(window.AppState?.debug && window.AppState.debug[key]);
+    } catch {
+      return fallback;
+    }
+  }
+
   let __micAttempts = 0;
   let __micChunks = 0;
   let __micBytes = 0;
@@ -517,43 +526,37 @@ import { initVAD } from "./audio/vad_client.js";
     return ws && ws.readyState === WebSocket.OPEN ? ws : null;
   }
 
-  // ---- Turn opener (idempotent; waits for WS to be ready) ----
+  // ---- Turn opener (idempotent + retry) ----
   let __turnOpen = false, __turnOpenAt = 0;
   async function openTurnOnce(reason) {
     if (__turnOpen) return true;
-    const deadline = Date.now() + 800;
-    while (!(WSClient?.isConnected?.()) && Date.now() < deadline) {
+    const ws = () => (WSClient?._ws || window.ws);
+    const deadline = Date.now() + 1200;
+    while ((!ws() || ws().readyState !== WebSocket.OPEN) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
-    if (!(WSClient?.isConnected?.())) {
-      console.warn("openTurnOnce: WS not ready, skipping input.start");
+    if (!ws() || ws().readyState !== WebSocket.OPEN) {
+      console.warn("openTurnOnce: socket not open");
       return false;
     }
+    const reasonLabel = reason || (dbg("audio_safe_mode") ? "safe_mode" : "auto");
     try {
-      WSClient.send({ type: "input.start", reason: reason || "auto" });
+      WSClient.send({ type: "input.start", reason: reasonLabel });
     } catch {}
     __turnOpen = true;
     __turnOpenAt = Date.now();
     try {
-      hubLog?.("client.turn.intent", { action: "open", reason, wsReady: true, at: __turnOpenAt });
+      hubLog("client.turn.intent", { action: "open", reason: reasonLabel });
     } catch {}
     return true;
   }
 
   function resetTurnIntent(reason) {
-    if (!__turnOpen) {
-      return;
-    }
-    const detail = {
-      action: "close",
-      reason: reason || "reset",
-      at: Date.now(),
-      openedAt: __turnOpenAt,
-    };
+    if (!__turnOpen) return;
     __turnOpen = false;
     __turnOpenAt = 0;
     try {
-      hubLog?.("client.turn.intent", detail);
+      hubLog("client.turn.intent", { action: "close", reason: reason || "reset" });
     } catch {}
   }
 
@@ -602,6 +605,7 @@ import { initVAD } from "./audio/vad_client.js";
     return Date.now() < warmupUntil;
   }
   function _canCaptureNow() {
+    if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
     const s = window.AppState || {};
     return _warming() || (s.asrReady && s.micLive && !s.tts && !senderPaused);
   }
@@ -1412,7 +1416,7 @@ import { initVAD } from "./audio/vad_client.js";
 
   async function startRecorderStreaming(policy, reason) {
     if (AppState.listening) {
-      setAppStateValue("micLive", true);
+      AppState.micLive = true;
       return true;
     }
     resetPcmBatchState();
@@ -2592,6 +2596,22 @@ import { initVAD } from "./audio/vad_client.js";
   }
 
   function sendBinary(payload, opts = {}) {
+    if (dbg("audio_safe_mode")) {
+      const ws = WSClient?._ws || window.ws;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.warn("ws.binary queued (socket not open) [safe_mode]");
+        WSClient._queue = WSClient._queue || [];
+        WSClient._queue.push({ type: "binary", payload, options: opts, data: payload, isBinary: true });
+        return false;
+      }
+      try {
+        ws.send(payload);
+      } catch (e) {
+        console.warn("ws.binary send failed [safe_mode]", e);
+        return false;
+      }
+      return true;
+    }
     const options = opts && typeof opts === "object" ? { ...opts } : {};
     if (options.lane === "mic") {
       options.dropIfBusy = false;
@@ -3658,6 +3678,21 @@ import { initVAD } from "./audio/vad_client.js";
       AppState.micLive = false;
       resetTurnIntent(reason);
     } else if (frame.type === "asr.ready") {
+      if (dbg("audio_safe_mode")) {
+        try {
+          const turned = await openTurnOnce("safe_asr_ready");
+          if (!turned) {
+            console.warn("safe_mode autostart skipped: turn not open");
+          } else {
+            const started = await startRecorderStreaming(frame?.policy || {}, "safe_asr_ready");
+            if (!started) {
+              console.warn("safe_mode autostart recorder returned false [asr.ready]");
+            }
+          }
+        } catch (e) {
+          console.warn("safe_mode autostart failed", e);
+        }
+      }
       frame = handleAsrReadyFrame(frame) || frame;
       __asrReadySeen = true;
       setAsrArmInFlight(false);
@@ -3763,6 +3798,21 @@ import { initVAD } from "./audio/vad_client.js";
       }
     } else if (frame.type === "asr.turn") {
       const begin = frame.state === "begin";
+      if (dbg("audio_safe_mode") && begin && !AppState?.listening) {
+        try {
+          const turned = await openTurnOnce("safe_turn_begin");
+          if (!turned) {
+            console.warn("safe_mode turn autostart skipped: turn not open");
+          } else {
+            const started = await startRecorderStreaming(AppState?.policy || {}, "safe_turn_begin");
+            if (!started) {
+              console.warn("safe_mode turn autostart recorder returned false");
+            }
+          }
+        } catch (e) {
+          console.warn("safe_mode turn autostart failed", e);
+        }
+      }
       try {
         window.UIState = window.UIState || {};
         window.UIState.asrTurnActive = begin;
@@ -4476,6 +4526,24 @@ import { initVAD } from "./audio/vad_client.js";
   WSClient.getBufferedAmount = getBufferedAmount;
   WSClient.requestAsrArm = requestAsrArm;
   WSClient.requestAsrClose = requestAsrClose;
+  WSClient.selfTestAudio = async function selfTestAudio() {
+    console.log("[selfTestAudio] starting");
+    try {
+      const turnOpen = await openTurnOnce("self_test");
+      if (!turnOpen) {
+        console.warn("[selfTestAudio] FAIL: turn not open");
+        return;
+      }
+      const started = await startRecorderStreaming(AppState?.policy || {}, "self_test");
+      if (!started) {
+        console.warn("[selfTestAudio] FAIL: recorder did not start");
+        return;
+      }
+      console.log("[selfTestAudio] PASS: turn+recorder live");
+    } catch (e) {
+      console.warn("[selfTestAudio] FAIL:", e?.message || e);
+    }
+  };
   Object.defineProperty(WSClient, "socket", {
     configurable: true,
     enumerable: true,
