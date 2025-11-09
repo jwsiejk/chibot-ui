@@ -1,4 +1,21 @@
 (() => {
+  // Ensure single-store shape (idempotent)
+  try {
+    window.AppState = window.AppState || {};
+    window.AppState.policy = window.AppState.policy || {};
+    window.AppState.state =
+      window.AppState.state || {
+        asrReady: false,
+        micLive: false,
+        tts: false,
+        senderPaused: false,
+        asrTurnActive: false,
+        vadActive: false,
+        vadDbfs: null,
+        lastSpeechAt: null,
+      };
+  } catch {}
+
   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
   try {
     const el =
