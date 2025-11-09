@@ -88,10 +88,12 @@
       const appState = win.AppState = win.AppState || {};
       const storeState = appState.state = appState.state || {};
       const patch = {};
+      const nestedStatePatch = {};
 
       if (typeof next.vadActive === 'boolean') {
         if (storeState.vadActive !== next.vadActive) {
           patch.vadActive = next.vadActive;
+          nestedStatePatch.vadActive = next.vadActive;
         }
         storeState.vadActive = next.vadActive;
       }
@@ -100,6 +102,7 @@
         const normalizedDb = Number.isFinite(next.vadDbfs) ? next.vadDbfs : null;
         if (!Object.is(storeState.vadDbfs, normalizedDb)) {
           patch.vadEnergyDb = normalizedDb;
+          nestedStatePatch.vadDbfs = normalizedDb;
         }
         storeState.vadDbfs = normalizedDb;
       }
@@ -108,16 +111,24 @@
         const normalizedLastSpeech = Number.isFinite(next.lastSpeechAt) ? next.lastSpeechAt : null;
         if (!Object.is(storeState.lastSpeechAt, normalizedLastSpeech)) {
           patch.clientVadLastSpeechAt = normalizedLastSpeech;
+          nestedStatePatch.lastSpeechAt = normalizedLastSpeech;
         }
         storeState.lastSpeechAt = normalizedLastSpeech;
       }
 
       if (appState && typeof appState.setState === 'function') {
         const keys = Object.keys(patch);
-        if (keys.length) {
+        const nestedStateKeys = Object.keys(nestedStatePatch);
+        if (keys.length || nestedStateKeys.length) {
           const payload = {};
           for (const key of keys) {
             payload[key] = patch[key];
+          }
+          if (nestedStateKeys.length) {
+            payload.state = {};
+            for (const key of nestedStateKeys) {
+              payload.state[key] = nestedStatePatch[key];
+            }
           }
           appState.setState(payload);
         }

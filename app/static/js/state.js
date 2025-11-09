@@ -1,4 +1,42 @@
 (() => {
+  function isPlainObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function mergePlainObjects(base, patch) {
+    const result = { ...base };
+    if (!isPlainObject(patch)) {
+      return result;
+    }
+    for (const [key, value] of Object.entries(patch)) {
+      if (isPlainObject(value)) {
+        const nextBase = isPlainObject(result[key]) ? result[key] : {};
+        result[key] = mergePlainObjects(nextBase, value);
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  function cloneState(source) {
+    const next = { ...source };
+    if (isPlainObject(source.state)) {
+      next.state = mergePlainObjects({}, source.state);
+    } else {
+      next.state = {};
+    }
+    return next;
+  }
+
+  function getStateBag(source) {
+    if (!source || typeof source !== "object") {
+      return {};
+    }
+    const bag = source.state;
+    return isPlainObject(bag) ? bag : {};
+  }
+
   const initialState = {
     connectionState: "disconnected",
     sid: null,
@@ -30,9 +68,16 @@
     vadConfidence: 0,
     vadEnergyDb: null,
     vadNoiseDb: null,
+    vadDbfs: null,
+    lastSpeechAt: null,
+    state: {
+      vadActive: false,
+      vadDbfs: null,
+      lastSpeechAt: null,
+    },
   };
 
-  let state = { ...initialState };
+  let state = cloneState(initialState);
   const listeners = new Set();
 
   const TELEMETRY_KEYS = [
@@ -64,9 +109,13 @@
 
   function computeTelemetrySnapshot(sourceState = state) {
     const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
+    const nestedState = getStateBag(snapshot);
     const recorderActive = typeof snapshot.recorderActive === "boolean"
       ? snapshot.recorderActive
       : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
+    const vadActiveSource = Object.prototype.hasOwnProperty.call(snapshot, "vadActive")
+      ? snapshot.vadActive
+      : nestedState.vadActive;
     return {
       wsConnected: Boolean(snapshot.wsConnected),
       wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
@@ -79,7 +128,7 @@
       chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
       lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
       lastErrorDetail: snapshot.lastErrorDetail ?? null,
-      vadActive: Boolean(snapshot.vadActive),
+      vadActive: Boolean(vadActiveSource),
       vadSpeech: Boolean(snapshot.vadSpeech),
       vadConfidence: Number.isFinite(snapshot.vadConfidence) ? snapshot.vadConfidence : 0,
       vadEnergyDb: Number.isFinite(snapshot.vadEnergyDb) ? snapshot.vadEnergyDb : null,
@@ -116,6 +165,8 @@
         target[key] = snapshot[key];
       }
     }
+    const nestedState = getStateBag(state);
+    target.state = mergePlainObjects({}, nestedState);
   }
 
   function scheduleDeltaFlush() {
@@ -269,7 +320,7 @@
   syncTrackedProperties(telemetryPrev);
 
   function snapshot() {
-    return { ...state };
+    return cloneState(state);
   }
 
   function notify() {
@@ -286,6 +337,10 @@
   function setState(patch) {
     if (!patch || typeof patch !== "object") return;
     const sanitized = { ...patch };
+    const nestedPatch = sanitized.state;
+    if (Object.prototype.hasOwnProperty.call(sanitized, "state")) {
+      delete sanitized.state;
+    }
     if ("resume" in sanitized) {
       delete sanitized.resume;
     }
@@ -294,12 +349,36 @@
     }
     const preservedResume = state.resume;
     const preservedResumeError = state.resumeError;
-    state = {
+    let nextState = {
       ...state,
       ...sanitized,
       resume: preservedResume,
       resumeError: preservedResumeError
     };
+    if (isPlainObject(nestedPatch)) {
+      const mergedState = mergePlainObjects(getStateBag(state), nestedPatch);
+      nextState = {
+        ...nextState,
+        state: mergedState,
+      };
+      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadActive")) {
+        nextState.vadActive = Boolean(mergedState.vadActive);
+      }
+      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadDbfs")) {
+        const normalizedDbfs = Number.isFinite(mergedState.vadDbfs) ? mergedState.vadDbfs : null;
+        nextState.vadDbfs = normalizedDbfs;
+      }
+      if (Object.prototype.hasOwnProperty.call(nestedPatch, "lastSpeechAt")) {
+        const normalizedLastSpeech = Number.isFinite(mergedState.lastSpeechAt) ? mergedState.lastSpeechAt : null;
+        nextState.lastSpeechAt = normalizedLastSpeech;
+      }
+    } else if (!isPlainObject(nextState.state)) {
+      nextState = {
+        ...nextState,
+        state: mergePlainObjects({}, getStateBag(state)),
+      };
+    }
+    state = nextState;
     processTelemetry(state);
     notify();
   }
@@ -336,7 +415,7 @@
   }
 
   function reset() {
-    state = { ...initialState };
+    state = cloneState(initialState);
     processTelemetry(state);
     notify();
   }
@@ -361,7 +440,7 @@
     setResume,
     clearResume,
     get initialState() {
-      return { ...initialState };
+      return cloneState(initialState);
     }
   };
 

@@ -1,379 +1,475 @@
 diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
-index 8eb9b79a1b90af85008be21c62e034899b1ef19f..08a62f75093d7cfa3776653a9c282ff06c219782 100644
+index bb0a86ea582d6984c4b951cd287a48e43524d1c6..3538f10c390e5208674610caf957ddaa344340b0 100644
 --- a/app/static/js/audio/pcm_recorder.js
 +++ b/app/static/js/audio/pcm_recorder.js
-@@ -575,72 +575,85 @@
+@@ -66,81 +66,92 @@
+   }
+ 
+   function logClientMicEventText(text) {
+     if (typeof text !== 'string' || !text) {
+       return;
      }
- 
-     _handleIncomingChunk(buffer) {
-       const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
-       if (!byteLength) {
+     const win = typeof window !== 'undefined' ? window : null;
+     if (win && typeof win.__logClientMicString === 'function') {
+       try {
+         win.__logClientMicString(text);
          return;
+       } catch (_) {}
+     }
+     emitClientLog('client.mic', { message: text });
+   }
+ 
+   function publishClientVad(next = {}) {
+     if (typeof window === 'undefined') {
+       return;
+     }
+     try {
+       const win = window;
+       const appState = win.AppState = win.AppState || {};
+       const storeState = appState.state = appState.state || {};
+       const patch = {};
++      const nestedStatePatch = {};
+ 
+       if (typeof next.vadActive === 'boolean') {
+         if (storeState.vadActive !== next.vadActive) {
+           patch.vadActive = next.vadActive;
++          nestedStatePatch.vadActive = next.vadActive;
+         }
+         storeState.vadActive = next.vadActive;
        }
  
-       const cfg = this._clientVadConfig || this._extractClientVadConfig({});
-       if (!cfg.enable) {
-         this._dispatchChunk(buffer);
-         return;
+       if (Object.prototype.hasOwnProperty.call(next, 'vadDbfs')) {
+         const normalizedDb = Number.isFinite(next.vadDbfs) ? next.vadDbfs : null;
+         if (!Object.is(storeState.vadDbfs, normalizedDb)) {
+           patch.vadEnergyDb = normalizedDb;
++          nestedStatePatch.vadDbfs = normalizedDb;
+         }
+         storeState.vadDbfs = normalizedDb;
        }
  
-       let state = this._clientVadState;
-       if (!state) {
-         state = this._createClientVadState();
-         this._clientVadState = state;
+       if (Object.prototype.hasOwnProperty.call(next, 'lastSpeechAt')) {
+         const normalizedLastSpeech = Number.isFinite(next.lastSpeechAt) ? next.lastSpeechAt : null;
+         if (!Object.is(storeState.lastSpeechAt, normalizedLastSpeech)) {
+           patch.clientVadLastSpeechAt = normalizedLastSpeech;
++          nestedStatePatch.lastSpeechAt = normalizedLastSpeech;
+         }
+         storeState.lastSpeechAt = normalizedLastSpeech;
        }
  
-       const now = Date.now();
-       const dbfs = this._clientVadRmsDbfs(buffer);
-       const chunkMs = this._clientVadEstimateChunkMs(buffer);
-       const threshold = cfg.thresholdDbfs;
-       const above = dbfs >= threshold;
-+      // meter: log a few samples until first activation
-+      if (!state.meterDone) {
-+        state.meterSamples = (state.meterSamples || 0) + 1;
-+        if (state.meterSamples % 5 === 0) {
-+          try {
-+            emitClientLog('client.vad.meter', { dbfs, above, threshold });
-+          } catch (_) {}
-+          if (state.active) {
-+            state.meterDone = true;
+       if (appState && typeof appState.setState === 'function') {
+         const keys = Object.keys(patch);
+-        if (keys.length) {
++        const nestedStateKeys = Object.keys(nestedStatePatch);
++        if (keys.length || nestedStateKeys.length) {
+           const payload = {};
+           for (const key of keys) {
+             payload[key] = patch[key];
+           }
++          if (nestedStateKeys.length) {
++            payload.state = {};
++            for (const key of nestedStateKeys) {
++              payload.state[key] = nestedStatePatch[key];
++            }
 +          }
-+        }
+           appState.setState(payload);
+         }
+       }
+     } catch (err) {
+       try {
+         console.warn('publishClientVad failed', err);
+       } catch (_) {}
+     }
+   }
+ 
+   function sanitizeLogText(value, fallback = 'unknown', maxLength = 160) {
+     if (typeof value === 'string') {
+       const trimmed = value.trim();
+       if (trimmed) {
+         if (trimmed.length > maxLength) {
+           return `${trimmed.slice(0, maxLength - 1)}…`;
+         }
+         return trimmed;
+       }
+     }
+     if (value == null) {
+       return fallback;
+     }
+     if (typeof value === 'number' || typeof value === 'boolean') {
+       return String(value);
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index 3b7cdecd571f62ae84bbb65bc61dcc2ef586045f..9c10ec11282a1d004a888d8c46ded3e2df78c5a0 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -1,143 +1,194 @@
+ (() => {
++  function isPlainObject(value) {
++    return value !== null && typeof value === "object" && !Array.isArray(value);
++  }
++
++  function mergePlainObjects(base, patch) {
++    const result = { ...base };
++    if (!isPlainObject(patch)) {
++      return result;
++    }
++    for (const [key, value] of Object.entries(patch)) {
++      if (isPlainObject(value)) {
++        const nextBase = isPlainObject(result[key]) ? result[key] : {};
++        result[key] = mergePlainObjects(nextBase, value);
++      } else {
++        result[key] = value;
 +      }
-       const maxPrerollChunks = cfg.preRollMs <= 0
-         ? 0
-         : Math.max(1, Math.round(cfg.preRollMs / Math.max(chunkMs, 1)));
++    }
++    return result;
++  }
++
++  function cloneState(source) {
++    const next = { ...source };
++    if (isPlainObject(source.state)) {
++      next.state = mergePlainObjects({}, source.state);
++    } else {
++      next.state = {};
++    }
++    return next;
++  }
++
++  function getStateBag(source) {
++    if (!source || typeof source !== "object") {
++      return {};
++    }
++    const bag = source.state;
++    return isPlainObject(bag) ? bag : {};
++  }
++
+   const initialState = {
+     connectionState: "disconnected",
+     sid: null,
+     resume: null,
+     resumeError: null,
+     latencyMs: null,
+     lastPingAt: null,
+     heartbeatTimerId: null,
+     websocket: null,
+     infoFrame: null,
+     serverBanner: null,
+     clientBanner: {
+       info: null,
+       events: []
+     },
+     wsConnected: false,
+     wsPhase: "disconnected",
+     ttsActive: false,
+     asrArmInFlight: false,
+     armAfterTtsEnd: false,
+     listening: false,
+     recorderActive: false,
+     lastChunkTs: null,
+     chunkCount: 0,
+     lastErrorCode: null,
+     lastErrorDetail: null,
+     vadActive: false,
+     vadSpeech: false,
+     vadConfidence: 0,
+     vadEnergyDb: null,
+     vadNoiseDb: null,
++    vadDbfs: null,
++    lastSpeechAt: null,
++    state: {
++      vadActive: false,
++      vadDbfs: null,
++      lastSpeechAt: null,
++    },
+   };
  
-       if (!state.active) {
-         let shouldActivate = false;
-         if (above) {
-           if (!state.aboveSince) {
-             state.aboveSince = now;
-           }
-           if ((now - state.aboveSince) >= cfg.attackMs) {
-             shouldActivate = true;
-           }
-         } else {
-           state.aboveSince = 0;
-         }
+-  let state = { ...initialState };
++  let state = cloneState(initialState);
+   const listeners = new Set();
  
-         if (shouldActivate) {
-           state.active = true;
-           state.activeSince = now;
-           state.belowSince = 0;
-           state.aboveSince = now;
-+          state.meterDone = true;
-           const flushed = this._clientVadFlushPreroll(state);
-           if (flushed > 0) {
-             try {
-               emitClientLog('client.vad.preroll_flush', { chunks: flushed });
-             } catch (_) {}
-           }
-           try {
-             emitClientLog('client.vad.state', { state: 'active', dbfs });
-           } catch (_) {}
-           this._dispatchChunk(buffer);
-           return;
-         }
+   const TELEMETRY_KEYS = [
+     "wsConnected",
+     "wsPhase",
+     "ttsActive",
+     "asrArmInFlight",
+     "armAfterTtsEnd",
+     "listening",
+     "recorderActive",
+     "lastChunkTs",
+     "chunkCount",
+     "lastErrorCode",
+     "lastErrorDetail",
+     "vadActive",
+     "vadSpeech",
+     "vadConfidence",
+     "vadEnergyDb",
+     "vadNoiseDb",
+   ];
+   const DELTA_COALESCE_MS = 12;
+   const HEARTBEAT_INTERVAL_MS = 5000;
  
-         if (maxPrerollChunks > 0) {
-           state.preroll.push(buffer.slice(0));
-           while (state.preroll.length > maxPrerollChunks) {
-             state.preroll.shift();
-           }
-         } else if (state.preroll.length) {
-           state.preroll = [];
-         }
+   let telemetryPrev = null;
+   let pendingDelta = null;
+   let pendingDeltaTimerId = null;
+   let telemetryHeartbeatTimerId = null;
+   let lastHeartbeatPayload = null;
+ 
+   function computeTelemetrySnapshot(sourceState = state) {
+     const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
++    const nestedState = getStateBag(snapshot);
+     const recorderActive = typeof snapshot.recorderActive === "boolean"
+       ? snapshot.recorderActive
+       : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
++    const vadActiveSource = Object.prototype.hasOwnProperty.call(snapshot, "vadActive")
++      ? snapshot.vadActive
++      : nestedState.vadActive;
+     return {
+       wsConnected: Boolean(snapshot.wsConnected),
+       wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
+       ttsActive: Boolean(snapshot.ttsActive),
+       asrArmInFlight: Boolean(snapshot.asrArmInFlight),
+       armAfterTtsEnd: Boolean(snapshot.armAfterTtsEnd),
+       listening: Boolean(snapshot.listening),
+       recorderActive,
+       lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
+       chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
+       lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
+       lastErrorDetail: snapshot.lastErrorDetail ?? null,
+-      vadActive: Boolean(snapshot.vadActive),
++      vadActive: Boolean(vadActiveSource),
+       vadSpeech: Boolean(snapshot.vadSpeech),
+       vadConfidence: Number.isFinite(snapshot.vadConfidence) ? snapshot.vadConfidence : 0,
+       vadEnergyDb: Number.isFinite(snapshot.vadEnergyDb) ? snapshot.vadEnergyDb : null,
+       vadNoiseDb: Number.isFinite(snapshot.vadNoiseDb) ? snapshot.vadNoiseDb : null,
+     };
+   }
+ 
+   function publishTelemetry(label, payload) {
+     try {
+       const hub = window.AppState && window.AppState.hub;
+       if (hub && typeof hub.log === "function") {
+         hub.log(label, payload);
+       }
+     } catch (err) {
+       try {
+         console.warn("AppState telemetry publish failed", label, err);
+       } catch {}
+     }
+   }
+ 
+   function normalizeTelemetryValue(value) {
+     return value === undefined ? null : value;
+   }
+ 
+   function syncTrackedProperties(snapshot) {
+     const target = window.AppState;
+     if (!target || typeof target !== "object") {
+       return;
+     }
+     for (const key of TELEMETRY_KEYS) {
+       if (key === "recorderActive") {
+         target.recorderActive = snapshot.recorderActive;
+       } else {
+         target[key] = snapshot[key];
+       }
+     }
++    const nestedState = getStateBag(state);
++    target.state = mergePlainObjects({}, nestedState);
+   }
+ 
+   function scheduleDeltaFlush() {
+     if (pendingDeltaTimerId) {
+       return;
+     }
+     pendingDeltaTimerId = setTimeout(() => {
+       pendingDeltaTimerId = null;
+       if (!pendingDelta) {
          return;
        }
- 
-       this._dispatchChunk(buffer);
-@@ -744,50 +757,52 @@
- 
-     _clientVadFlushPreroll(state) {
-       if (!state || !Array.isArray(state.preroll) || state.preroll.length === 0) {
-         state.preroll = [];
-         return 0;
+       const snapshot = pendingDelta.snapshot || telemetryPrev || computeTelemetrySnapshot();
+         const detail = {
+           changed: pendingDelta.changed,
+           now_ms: Date.now(),
+           wsPhase: snapshot.wsPhase,
+           recorderActive: snapshot.recorderActive,
+           listening: snapshot.listening,
+           ttsActive: snapshot.ttsActive,
+           asrArmInFlight: snapshot.asrArmInFlight,
+           armAfterTtsEnd: snapshot.armAfterTtsEnd,
+           chunkCount: snapshot.chunkCount,
+           vadActive: snapshot.vadActive,
+           vadSpeech: snapshot.vadSpeech,
+           vadConfidence: snapshot.vadConfidence,
+@@ -247,143 +298,171 @@
        }
-       let sent = 0;
-       for (let i = 0; i < state.preroll.length; i += 1) {
-         const chunk = state.preroll[i];
-         if (chunk && chunk.byteLength) {
-           this._dispatchChunk(chunk);
-           sent += 1;
-         }
-       }
-       state.preroll = [];
-       return sent;
+       return;
      }
+     stopTelemetryHeartbeat();
+   }
  
-     _createClientVadState() {
-       return {
-         active: false,
-         aboveSince: 0,
-         belowSince: 0,
-         activeSince: 0,
-         preroll: [],
-+        meterSamples: 0,
-+        meterDone: false,
-       };
+   function processTelemetry(nextState) {
+     const nextSnapshot = computeTelemetrySnapshot(nextState);
+     if (!telemetryPrev) {
+       telemetryPrev = nextSnapshot;
+       syncTrackedProperties(nextSnapshot);
+       ensureTelemetryHeartbeat(nextSnapshot);
+       return;
      }
+     const prevSnapshot = telemetryPrev;
+     telemetryPrev = nextSnapshot;
+     syncTrackedProperties(nextSnapshot);
+     recordTelemetryChange(prevSnapshot, nextSnapshot);
+     ensureTelemetryHeartbeat(nextSnapshot);
+   }
  
-     _resetClientVadState() {
-       this._clientVadState = this._createClientVadState();
+   telemetryPrev = computeTelemetrySnapshot(state);
+   syncTrackedProperties(telemetryPrev);
+ 
+   function snapshot() {
+-    return { ...state };
++    return cloneState(state);
+   }
+ 
+   function notify() {
+     const current = snapshot();
+     listeners.forEach((listener) => {
+       try {
+         listener(current);
+       } catch (err) {
+         console.error("AppState subscriber error", err);
+       }
+     });
+   }
+ 
+   function setState(patch) {
+     if (!patch || typeof patch !== "object") return;
+     const sanitized = { ...patch };
++    const nestedPatch = sanitized.state;
++    if (Object.prototype.hasOwnProperty.call(sanitized, "state")) {
++      delete sanitized.state;
++    }
+     if ("resume" in sanitized) {
+       delete sanitized.resume;
      }
- 
-     _deliverChunk(buffer, seq) {
-       let delivered = false;
-       if (typeof this._onChunk === 'function') {
-         try {
-           this._onChunk({ buffer, seq });
-           delivered = true;
-         } catch (err) {
-           emitClientLog('client.pcm.chunk_callback_error', {
-             seq,
-             message: err && err.message ? err.message : String(err),
-           });
-         }
-       }
- 
-       if (!delivered) {
-         delivered = this._sendViaSocket(buffer, seq);
-       }
- 
-@@ -857,52 +872,52 @@
-         this._stopOnTts = recorderPolicy.stop_on_tts_start === true;
-       } else {
-         this._shouldMuteOnTts = true;
-         this._stopOnTts = false;
-       }
-       this._clientVadConfig = this._extractClientVadConfig(this._policy);
-       this._resetClientVadState();
+     if ("resumeError" in sanitized) {
+       delete sanitized.resumeError;
      }
+     const preservedResume = state.resume;
+     const preservedResumeError = state.resumeError;
+-    state = {
++    let nextState = {
+       ...state,
+       ...sanitized,
+       resume: preservedResume,
+       resumeError: preservedResumeError
+     };
++    if (isPlainObject(nestedPatch)) {
++      const mergedState = mergePlainObjects(getStateBag(state), nestedPatch);
++      nextState = {
++        ...nextState,
++        state: mergedState,
++      };
++      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadActive")) {
++        nextState.vadActive = Boolean(mergedState.vadActive);
++      }
++      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadDbfs")) {
++        const normalizedDbfs = Number.isFinite(mergedState.vadDbfs) ? mergedState.vadDbfs : null;
++        nextState.vadDbfs = normalizedDbfs;
++      }
++      if (Object.prototype.hasOwnProperty.call(nestedPatch, "lastSpeechAt")) {
++        const normalizedLastSpeech = Number.isFinite(mergedState.lastSpeechAt) ? mergedState.lastSpeechAt : null;
++        nextState.lastSpeechAt = normalizedLastSpeech;
++      }
++    } else if (!isPlainObject(nextState.state)) {
++      nextState = {
++        ...nextState,
++        state: mergePlainObjects({}, getStateBag(state)),
++      };
++    }
++    state = nextState;
+     processTelemetry(state);
+     notify();
+   }
  
-     _extractRecorderPolicy(policy) {
-       if (!policy || typeof policy !== 'object') {
-         return null;
-       }
-       if (policy.recorder && typeof policy.recorder === 'object') {
-         return policy.recorder;
-       }
-       if (policy.policy && typeof policy.policy === 'object' && policy.policy.recorder) {
-         return policy.policy.recorder;
-       }
+   function setResume(token, ttlMs) {
+     const candidate = typeof token === "string" ? token.trim() : "";
+     const ttl = Number(ttlMs);
+     if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
+       clearResume();
        return null;
      }
+     const expiresAt = Date.now() + ttl;
+     const resumeState = {
+       token: candidate,
+       ttlMs: ttl,
+       expiresAt
+     };
+     state = {
+       ...state,
+       resume: resumeState,
+       resumeError: null
+     };
+     processTelemetry(state);
+     notify();
+     return resumeState;
+   }
  
-     _extractClientVadConfig(policy) {
-       const defaults = {
-         enable: true,
--        thresholdDbfs: -55,
--        attackMs: 100,
-+        thresholdDbfs: -60,
-+        attackMs: 80,
-         releaseMs: 250,
-         preRollMs: 240,
-         minActiveMs: 300,
-       };
-       if (!policy || typeof policy !== 'object') {
-         return { ...defaults };
-       }
-       let vadPolicy = null;
-       if (policy.vad && typeof policy.vad === 'object') {
-         vadPolicy = policy.vad;
-       } else if (policy.policy && typeof policy.policy === 'object' && policy.policy.vad && typeof policy.policy.vad === 'object') {
-         vadPolicy = policy.policy.vad;
-       }
-       const clientCfg = vadPolicy && typeof vadPolicy.client === 'object' ? vadPolicy.client : null;
-       if (!clientCfg || typeof clientCfg !== 'object') {
-         return { ...defaults };
-       }
- 
-       const normalized = { ...defaults };
-       const coerceNumber = (value) => {
-         if (typeof value === 'number' && Number.isFinite(value)) {
-           return value;
-         }
-         if (typeof value === 'string' && value.trim()) {
-           const parsed = Number(value);
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 14a0157eba1d2ae23516849b5ed123a6a4fc80d6..f38aa2f32235e480b7ad12e60f69a0c5c655b0de 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -961,55 +961,51 @@ import { WakeWord } from "./wake_word.js";
-       AppState.recorder = recorderState;
-     }
-     if (!listening && AppState.wsConnected) {
-       setWsPhase("connected");
+   function clearResume() {
+     if (state.resume !== null || state.resumeError !== null) {
+       state = { ...state, resume: null, resumeError: null };
+       processTelemetry(state);
+       notify();
      }
    }
  
-   function setAsrArmInFlight(inFlight) {
-     setAppStateValue("asrArmInFlight", Boolean(inFlight));
+   function reset() {
+-    state = { ...initialState };
++    state = cloneState(initialState);
+     processTelemetry(state);
+     notify();
    }
  
-   function setArmAfterTtsEnd(pending) {
-     setAppStateValue("armAfterTtsEnd", Boolean(pending));
+   function subscribe(listener) {
+     if (typeof listener !== "function") {
+       throw new TypeError("listener must be a function");
+     }
+     listeners.add(listener);
+     listener(snapshot());
+     return () => {
+       listeners.delete(listener);
+     };
    }
  
-   function setWsConnected(connected) {
-     setAppStateValue("wsConnected", Boolean(connected));
+   const AppState = window.AppState = {
+     get: snapshot,
+     getState: snapshot,
+     setState,
+     reset,
+     subscribe,
+     setResume,
+     clearResume,
+     get initialState() {
+-      return { ...initialState };
++      return cloneState(initialState);
+     }
+   };
+ 
+   syncTrackedProperties(telemetryPrev);
+ 
+   const hubLogs = [];
+   const hubStartQueue = [];
+   const hubStopQueue = [];
+   let hubPendingSocket = { hasValue: false, value: null };
+   let hubImpl = null;
+ 
+   function enqueueLog(label, detail) {
+     if (hubLogs.length >= 40) {
+       hubLogs.shift();
+     }
+     hubLogs.push({ label, detail });
    }
  
-   function setWsPhase(phase) {
-     if (typeof phase !== "string" || !phase) {
-       return;
+   function enqueueStart(policy) {
+     if (hubStartQueue.length >= 10) {
+       hubStartQueue.shift();
      }
-     setAppStateValue("wsPhase", phase);
-     if (WS_READY_PHASES.has(phase)) {
--      try {
--        flushQueuedFrames();
--      } catch (err) {
--        console.warn("WSClient queue flush failed", err);
--      }
-+      flushQueuedFrames();
-     }
+     hubStartQueue.push(policy);
    }
  
-   function flushQueuedFrames(client = WSClient) {
-     const target = client || WSClient;
-     if (!Array.isArray(target?._queue) || target._queue.length === 0) {
-       return;
-     }
-     const liveSocket = target._ws || AppState?.websocket || null;
-     if (!liveSocket || liveSocket.readyState !== WebSocket.OPEN) {
-       return;
-     }
-     const phase = AppState?.wsPhase || AppState?.connectionState;
-     if (!WS_READY_PHASES.has(phase)) {
-       return;
-     }
-     const pending = target._queue.splice(0, target._queue.length);
-     for (const entry of pending) {
-       if (!entry || typeof entry !== "object") {
-         continue;
-       }
-       const { data, isBinary } = entry;
-       try {
-         send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
-       } catch (err) {
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 7f42e8fd9aa84358195916c00fc0984b6086a251..d183115f02b3597f1e7e88b955cf9d56b8d12884 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -1096,50 +1096,56 @@ class ChatV2Adapter:
-         if ctx.session.server_vad_speech:
-             return 0
-         if ctx.session.server_vad_since_ms is not None:
-             return max(0, now_ms - int(ctx.session.server_vad_since_ms))
-         return client_silence_ms
- 
-     def _compute_vendor_idle_ms(self, ctx: AdapterContext, now_ms: int) -> int:
-         last_vendor = ctx.session.last_vendor_activity_ms
-         if last_vendor is None:
-             last_vendor = ctx.session.last_pcm_ms
-         if last_vendor is None:
-             return 0
-         return max(0, now_ms - int(last_vendor))
- 
-     async def _handle_vad_eot(
-         self,
-         ctx: AdapterContext,
-         reason: str,
-         fuse_mode: str,
-         client_silence_ms: int,
-         vendor_idle_ms: int,
-         server_silence_ms: int,
-     ) -> None:
-         if not ctx.session.eot_armed:
-             return
-+        asr_client = getattr(ctx.session, "asr", None)
-+        bytes_streamed = int(getattr(asr_client, "bytes_streamed", 0) or 0)
-+        ms_since_first = int(getattr(asr_client, "ms_since_first_packet", 0) or 0)
-+        if bytes_streamed <= 0 or ms_since_first < 1200:
-+            # no real audio yet → hold; let client VAD open when speech appears
-+            return
-         ctx.session.eot_armed = False
-         _log.info(
-             "evt=vad_eot sid=%s reason=%s fuse_mode=%s client_silence_ms=%d vendor_idle_ms=%d server_silence_ms=%d",
-             ctx.sid,
-             reason,
-             fuse_mode,
-             client_silence_ms,
-             vendor_idle_ms,
-             server_silence_ms,
-         )
-         meta = {
-             "reason": reason,
-             "fuse_mode": fuse_mode,
-             "client_silence_ms": int(client_silence_ms),
-             "vendor_idle_ms": int(vendor_idle_ms),
-             "server_silence_ms": int(server_silence_ms),
-         }
-         await self._publish("asr.turn_ended", ctx.sid, meta)
-         send = ctx.ws_send
-         turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
-         if send is not None:
-             try:
-                 if turn_end_payload is not None:
-                     await self._send_json(send, ctx.sid, turn_end_payload)
-                 await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
-diff --git a/app/ws/policy.py b/app/ws/policy.py
-index 35b8bdd76bff805e95bb94795225354a4bd52fbe..2ed5d6f3b539f35fdf014179e2932fb6c5503f3e 100644
---- a/app/ws/policy.py
-+++ b/app/ws/policy.py
-@@ -14,52 +14,52 @@ LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
-     ("vad", "auto_vad_active"): None,  # runtime state, not a policy knob
-     ("vad", "allow_auto_vad"): ("vad", "sender_gate_on_tts"),  # best fit
-     # legacy UI badge behavior
-     ("ui", "badge_listen_on_asr"): ("ui", "status", "require_active_turn"),
- }
- 
- DEPRECATED_KEYS = {
-     ("input", "require_hotword_to_start"),
-     ("input", "require_user_gesture_first_visit"),  # keep only if UX requires
-     ("audio", "pipeline", "mode"),
-     ("media", "asr_input"),
- }
- 
- SAFE_DEFAULTS_V2: dict[str, Any] = {
-     "version": POLICY_VERSION,
-     "asr": {
-         "server_starts_input": True,
-         "prearm_on_tts_end": True,
-         "cold_start_grace_ms": 3000,
-     },
-     "vad": {
-         "warmup_ms": 1500,
-         "sender_gate_on_tts": True,
-         "client": {
-             "enable": True,
--            "threshold_dbfs": -55,
--            "attack_ms": 100,
-+            "threshold_dbfs": -60,
-+            "attack_ms": 80,
-             "release_ms": 250,
-             "pre_roll_ms": 240,
-             "min_active_ms": 300,
-         },
-     },
-     "watchdog": {
-         "partial_wait_ms_first_turn": 3500,
-     },
-     "server": {
-         "buffer_prestart_audio_ms": 300,
-     },
-     "capture": {
-         "mode": "webrtc_aec",  # "webrtc_aec" | "pcm"
-         "constraints": {
-             "echoCancellation": True,
-             "noiseSuppression": True,
-             "autoGainControl": False,
-             "channelCount": 1,
-             "sampleRate": 48000,
-         }
-     },
-     "ui": {
-         "status": {
-             "require_active_turn": True,
-             "enable_meter": True,
