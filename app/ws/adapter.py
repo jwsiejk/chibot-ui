@@ -77,6 +77,7 @@ except Exception:  # pragma: no cover - fallback when uvicorn missing
 CHAT_V2_SUBPROTOCOL = "chat.v2"
 TEXT_FRAME_LIMIT_BYTES = 64 * 1024
 BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+FEATURE_LEGACY_POLICY = os.getenv("FEATURE_LEGACY_POLICY", "false").lower() == "true"
 ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
 PING_MIN_INTERVAL_MS = 500
 RATE_LIMIT_CAPACITY = 25
@@ -677,47 +678,52 @@ class ChatV2Adapter:
 
     def _resolve_server_vad_policy(self, ctx: AdapterContext) -> Dict[str, Any]:
         policy = dict(_SERVER_VAD_DEFAULT_POLICY)
-        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-        if isinstance(snapshot, Mapping):
-            policy_block = snapshot.get("policy")
-            if isinstance(policy_block, Mapping):
-                vad_block = policy_block.get("vad")
-                if isinstance(vad_block, Mapping):
-                    server_block = vad_block.get("server")
-                    if isinstance(server_block, Mapping):
-                        enable_flag = server_block.get("enable")
-                        if isinstance(enable_flag, bool):
-                            policy["enable"] = enable_flag
-                        policy["min_speech_ms"] = self._coerce_non_negative_int(
-                            server_block.get("min_speech_ms"), policy["min_speech_ms"]
-                        )
-                        policy["min_silence_ms"] = self._coerce_non_negative_int(
-                            server_block.get("min_silence_ms"), policy["min_silence_ms"]
-                        )
-                        policy["eot_silence_ms"] = self._coerce_non_negative_int(
-                            server_block.get("eot_silence_ms"), policy["eot_silence_ms"]
-                        )
-                        fuse_mode_value = server_block.get("fuse_mode")
-                        if isinstance(fuse_mode_value, str):
-                            normalized = fuse_mode_value.strip().lower()
-                            if normalized in {"and", "or", "weighted"}:
-                                policy["fuse_mode"] = normalized
-                        weight_client = self._coerce_float(
-                            server_block.get("weight_client"), policy["weight_client"]
-                        )
-                        if weight_client is not None:
-                            policy["weight_client"] = max(0.0, weight_client)
-                        weight_vendor = self._coerce_float(
-                            server_block.get("weight_vendor"), policy["weight_vendor"]
-                        )
-                        if weight_vendor is not None:
-                            policy["weight_vendor"] = max(0.0, weight_vendor)
-                        threshold_value = self._coerce_float(
-                            server_block.get("energy_threshold_dbfs"),
-                            policy["energy_threshold_dbfs"],
-                        )
-                        if threshold_value is not None:
-                            policy["energy_threshold_dbfs"] = threshold_value
+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+            snapshot = ctx.policy_snapshot
+            policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+            vad_source = (
+                policy_block.get("vad") if isinstance(policy_block, Mapping) else None
+            )
+        else:
+            policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
+            vad_source = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
+
+        if isinstance(vad_source, Mapping):
+            server_block = vad_source.get("server")
+            if isinstance(server_block, Mapping):
+                enable_flag = server_block.get("enable")
+                if isinstance(enable_flag, bool):
+                    policy["enable"] = enable_flag
+                policy["min_speech_ms"] = self._coerce_non_negative_int(
+                    server_block.get("min_speech_ms"), policy["min_speech_ms"]
+                )
+                policy["min_silence_ms"] = self._coerce_non_negative_int(
+                    server_block.get("min_silence_ms"), policy["min_silence_ms"]
+                )
+                policy["eot_silence_ms"] = self._coerce_non_negative_int(
+                    server_block.get("eot_silence_ms"), policy["eot_silence_ms"]
+                )
+                fuse_mode_value = server_block.get("fuse_mode")
+                if isinstance(fuse_mode_value, str):
+                    normalized = fuse_mode_value.strip().lower()
+                    if normalized in {"and", "or", "weighted"}:
+                        policy["fuse_mode"] = normalized
+                weight_client = self._coerce_float(
+                    server_block.get("weight_client"), policy["weight_client"]
+                )
+                if weight_client is not None:
+                    policy["weight_client"] = max(0.0, weight_client)
+                weight_vendor = self._coerce_float(
+                    server_block.get("weight_vendor"), policy["weight_vendor"]
+                )
+                if weight_vendor is not None:
+                    policy["weight_vendor"] = max(0.0, weight_vendor)
+                threshold_value = self._coerce_float(
+                    server_block.get("energy_threshold_dbfs"),
+                    policy["energy_threshold_dbfs"],
+                )
+                if threshold_value is not None:
+                    policy["energy_threshold_dbfs"] = threshold_value
         return policy
 
     def _publish_server_vad_event(
@@ -1328,14 +1334,14 @@ class ChatV2Adapter:
             "build_id": current_build_id(),
         }
         info_frame["meta"] = {"sid": sid}
-        policy_snapshot = self._policy_snapshot()
+        policy_snapshot = self._policy_snapshot() if FEATURE_LEGACY_POLICY else None
         session_policy_v2 = self._build_session_policy()
         allowed_asr_vendors = ["speechmatics"]
         snapshot_mapping: Mapping[str, Any] | None
-        if isinstance(policy_snapshot, Mapping):
+        if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, Mapping):
             snapshot_mapping = policy_snapshot
         else:
-            snapshot_mapping = None
+            snapshot_mapping = session_policy_v2 if isinstance(session_policy_v2, Mapping) else None
 
         provisional_ctx = AdapterContext(
             sid=sid,
@@ -1344,15 +1350,18 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
-        provisional_ctx.policy_snapshot = (
-            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
-        )
+        if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, dict):
+            provisional_ctx.policy_snapshot = dict(policy_snapshot)
+        elif FEATURE_LEGACY_POLICY:
+            provisional_ctx.policy_snapshot = policy_snapshot
+        else:
+            provisional_ctx.policy_snapshot = None
         provisional_ctx.policy = dict(session_policy_v2)
         provisional_ctx.session.policy = provisional_ctx.policy
         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
         selected_vendor = "speechmatics"
         selection_reason = "pcm16_only"
-        if policy_snapshot:
+        if FEATURE_LEGACY_POLICY and policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
         info_frame["policy"] = self._policy_for_client(session_policy_v2)
         await self._send_json(send, sid, info_frame)
@@ -1371,16 +1380,20 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
-        ctx.policy_snapshot = (
-            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
-        )
+        if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, dict):
+            ctx.policy_snapshot = dict(policy_snapshot)
+        elif FEATURE_LEGACY_POLICY:
+            ctx.policy_snapshot = policy_snapshot
+        else:
+            ctx.policy_snapshot = None
         ctx.policy = dict(session_policy_v2)
         ctx.session.policy = ctx.policy
         ctx.last_client_activity_ms = now_ms
         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-        snapshot_mapping = (
-            ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-        )
+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+            snapshot_mapping = ctx.policy_snapshot
+        else:
+            snapshot_mapping = session_policy_v2 if isinstance(session_policy_v2, Mapping) else None
         ctx.asr_vendor = selected_vendor
         allowed_display = ",".join(ctx.allowed_asr_vendors)
         _log.info(
@@ -1904,8 +1917,15 @@ class ChatV2Adapter:
             normalized_header.setdefault("format", expected["format"])
             normalized_header.setdefault("sample_rate", expected["sample_rate"])
             normalized_header.setdefault("channels", expected["channels"])
+            policy_for_validation: Mapping[str, Any] | None
+            if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+                policy_for_validation = ctx.policy_snapshot
+            else:
+                policy_for_validation = (
+                    ctx.policy if isinstance(ctx.policy, Mapping) else None
+                )
             err = validate_audio_header_against_policy(
-                normalized_header, ctx.policy_snapshot, ctx.asr_vendor
+                normalized_header, policy_for_validation, ctx.asr_vendor
             )
             if err:
                 meta["error"] = "policy_violation"
@@ -1926,14 +1946,25 @@ class ChatV2Adapter:
             self._arm_no_audio_watchdog(ctx)
             if getattr(ctx, "await_user_vad_check_pending", False):
                 ctx.await_user_vad_check_pending = False
-                snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-                policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-                vad_block = policy_block.get("vad") if isinstance(policy_block, Mapping) else None
-                auto_active = None
-                if isinstance(vad_block, Mapping) and "auto_vad_active" in vad_block:
-                    auto_active = bool(vad_block.get("auto_vad_active"))
-                if auto_active is not True:
-                    _log.warning("evt=warn_vad_inactive sid=%s expected=true", ctx.sid)
+                if FEATURE_LEGACY_POLICY:
+                    snapshot = (
+                        ctx.policy_snapshot
+                        if isinstance(ctx.policy_snapshot, Mapping)
+                        else None
+                    )
+                    policy_block = (
+                        snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+                    )
+                    vad_block = (
+                        policy_block.get("vad")
+                        if isinstance(policy_block, Mapping)
+                        else None
+                    )
+                    auto_active = None
+                    if isinstance(vad_block, Mapping) and "auto_vad_active" in vad_block:
+                        auto_active = bool(vad_block.get("auto_vad_active"))
+                    if auto_active is not True:
+                        _log.warning("evt=warn_vad_inactive sid=%s expected=true", ctx.sid)
             if seq_start is not None:
                 ctx.audio_seq = max(0, seq_start)
                 ctx.audio_expected_seq = ctx.audio_seq
@@ -2938,12 +2969,13 @@ class ChatV2Adapter:
                         ctx.await_user_req_id = req_value
                     elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
                         ctx.last_tts_end_req_id = ctx.await_user_req_id
-                    policy = (
+                    policy_mapping = (
                         ctx.policy_snapshot
-                        if isinstance(ctx.policy_snapshot, Mapping)
-                        else {}
+                        if FEATURE_LEGACY_POLICY
+                        and isinstance(ctx.policy_snapshot, Mapping)
+                        else self._policy(ctx)
                     )
-                    self._maybe_emit_await_user(ctx, policy)
+                    self._maybe_emit_await_user(ctx, policy_mapping)
                     _schedule_listen_handoff(req_value)
                     ctx.session.tts_active = False
                     if ctx.session.queued_arm and can_open(ctx.session):
@@ -3249,10 +3281,13 @@ class ChatV2Adapter:
                     ctx.await_user_req_id = req_value
                 elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
                     ctx.last_tts_end_req_id = ctx.await_user_req_id
-                policy = (
-                    ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
+                policy_mapping = (
+                    ctx.policy_snapshot
+                    if FEATURE_LEGACY_POLICY
+                    and isinstance(ctx.policy_snapshot, Mapping)
+                    else self._policy(ctx)
                 )
-                self._maybe_emit_await_user(ctx, policy)
+                self._maybe_emit_await_user(ctx, policy_mapping)
                 _schedule_listen_handoff(req_value)
 
             try:
@@ -3319,12 +3354,13 @@ class ChatV2Adapter:
                 }
                 _enqueue(frame)
                 if state_text == "Ready" and reason_text == "tts_end":
-                    policy = (
+                    policy_mapping = (
                         ctx.policy_snapshot
-                        if isinstance(ctx.policy_snapshot, Mapping)
-                        else {}
+                        if FEATURE_LEGACY_POLICY
+                        and isinstance(ctx.policy_snapshot, Mapping)
+                        else self._policy(ctx)
                     )
-                    self._maybe_emit_await_user(ctx, policy)
+                    self._maybe_emit_await_user(ctx, policy_mapping)
 
             try:
                 loop.call_soon_threadsafe(_on_loop)
@@ -3696,10 +3732,18 @@ class ChatV2Adapter:
             normalized["meta"] = meta
             policy_payload = normalized.get("policy")
             if isinstance(policy_payload, dict):
-                ctx.policy_snapshot = policy_payload
+                if FEATURE_LEGACY_POLICY:
+                    ctx.policy_snapshot = policy_payload
+                else:
+                    ctx.policy_snapshot = None
                 self._replace_policy(ctx, policy_payload)
                 ctx.allowed_asr_vendors = ["speechmatics"]
-                snapshot_mapping = policy_payload
+                if FEATURE_LEGACY_POLICY:
+                    snapshot_mapping = policy_payload
+                else:
+                    snapshot_mapping = (
+                        ctx.policy if isinstance(ctx.policy, Mapping) else None
+                    )
                 ctx.asr_vendor = "speechmatics"
                 if not ctx.asr_vendor_logged:
                     allowed_display = ",".join(ctx.allowed_asr_vendors)
@@ -4982,11 +5026,18 @@ class ChatV2Adapter:
 
     def _resolve_capture_timeslice(self, ctx: AdapterContext, mode: str) -> int:
         candidates: List[Mapping[str, Any]] = []
-        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
-        if isinstance(snapshot, Mapping):
-            capture_block = snapshot.get("capture")
+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+            capture_block = ctx.policy_snapshot.get("capture")
             if isinstance(capture_block, Mapping):
                 candidates.append(capture_block)
+        else:
+            policy_capture = (
+                ctx.policy.get("capture")
+                if isinstance(ctx.policy, Mapping)
+                else None
+            )
+            if isinstance(policy_capture, Mapping):
+                candidates.append(policy_capture)
         session_policy = ctx.session_capture_policy
         if isinstance(session_policy, Mapping):
             capture_policy = session_policy.get("capture")
@@ -5113,22 +5164,27 @@ class ChatV2Adapter:
         return token
 
     def _policy_to_sm_params(self, ctx: AdapterContext) -> Dict[str, Any]:
-        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
         language = "en"
         enable_partials = True
-        if snapshot is not None:
-            policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
-            if isinstance(policy_block, Mapping):
-                nlu_block = policy_block.get("nlu")
-                if isinstance(nlu_block, Mapping):
-                    lang_candidate = nlu_block.get("language")
-                    if isinstance(lang_candidate, str) and lang_candidate.strip():
-                        language = lang_candidate.strip()
-                transcription_block = policy_block.get("asr")
-                if isinstance(transcription_block, Mapping):
-                    partials_flag = transcription_block.get("enable_partials")
-                    if isinstance(partials_flag, bool):
-                        enable_partials = partials_flag
+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+            policy_block = (
+                ctx.policy_snapshot.get("policy")
+                if isinstance(ctx.policy_snapshot, Mapping)
+                else None
+            )
+        else:
+            policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
+        if isinstance(policy_block, Mapping):
+            nlu_block = policy_block.get("nlu")
+            if isinstance(nlu_block, Mapping):
+                lang_candidate = nlu_block.get("language")
+                if isinstance(lang_candidate, str) and lang_candidate.strip():
+                    language = lang_candidate.strip()
+            transcription_block = policy_block.get("asr")
+            if isinstance(transcription_block, Mapping):
+                partials_flag = transcription_block.get("enable_partials")
+                if isinstance(partials_flag, bool):
+                    enable_partials = partials_flag
 
         ctx.active_asr_config = {"language": language, "enable_partials": enable_partials}
         # Minimal, spec-exact StartRecognition envelope
@@ -5289,8 +5345,14 @@ class ChatV2Adapter:
         ctx.session.server_vad_since_ms = None
 
     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
-        snapshot = ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
-        policy_block = snapshot.get("policy") if isinstance(snapshot, Mapping) else None
+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+            policy_block = (
+                ctx.policy_snapshot.get("policy")
+                if isinstance(ctx.policy_snapshot, Mapping)
+                else None
+            )
+        else:
+            policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
         if not isinstance(policy_block, Mapping):
             return 0
         asr_block = policy_block.get("asr")

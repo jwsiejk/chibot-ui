@@ -140,35 +140,132 @@ import { WakeWord } from "./wake_word.js";
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
   }
-  const P0 = AppState.policy || {};
-  const P0Policy = P0 && typeof P0.policy === "object" && P0.policy
-    ? { ...P0.policy }
-    : {};
-  AppState.policy = {
-    ...P0,
-    auto_record_after_greet: P0.auto_record_after_greet ?? true,
-    require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
-    tts_gate_enabled: P0.tts_gate_enabled ?? true,
-    autostart_retry_on: Array.isArray(P0.autostart_retry_on)
-      ? P0.autostart_retry_on.slice()
-      : ["asrReady", "ttsEnded", "turnState:Ready"],
-    autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
-      ? P0.autostart_backoff_ms.slice()
-      : [0, 300, 1000],
-    autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts) ? P0.autostart_max_attempts : 5,
-    show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
-      ? P0.show_tap_to_speak_cta_after_ms
-      : 2000,
-    reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
-    policy: {
-      ...P0Policy,
-      input: {
-        ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
-        require_hotword_to_start: false,
-        require_user_gesture_first_visit: false,
-      },
-    },
+  const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
+  const P0 = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
+  const DEFAULT_AUTOSTART_RETRY = ["asrReady", "ttsEnded", "turnState:Ready"];
+  const DEFAULT_AUTOSTART_BACKOFF = [0, 300, 1000];
+  const DEFAULT_AUTOSTART_ATTEMPTS = 5;
+  const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
+  const DEFAULT_POLICY_WATCHDOG = { partial_wait_ms_first_turn: 2500 };
+  const DEFAULT_POLICY_STATUS = { require_active_turn: true };
+
+  const cloneValue = (value) => {
+    if (Array.isArray(value)) {
+      return value.slice();
+    }
+    if (value && typeof value === "object") {
+      return { ...value };
+    }
+    return value;
   };
+
+  if (FEATURE_LEGACY_POLICY) {
+    const P0Policy = P0 && typeof P0.policy === "object" && P0.policy
+      ? { ...P0.policy }
+      : {};
+    AppState.policy = {
+      ...P0,
+      auto_record_after_greet: P0.auto_record_after_greet ?? true,
+      require_user_gesture_first_visit: P0.require_user_gesture_first_visit ?? false,
+      tts_gate_enabled: P0.tts_gate_enabled ?? true,
+      autostart_retry_on: Array.isArray(P0.autostart_retry_on)
+        ? P0.autostart_retry_on.slice()
+        : DEFAULT_AUTOSTART_RETRY.slice(),
+      autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
+        ? P0.autostart_backoff_ms.slice()
+        : DEFAULT_AUTOSTART_BACKOFF.slice(),
+      autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts)
+        ? P0.autostart_max_attempts
+        : DEFAULT_AUTOSTART_ATTEMPTS,
+      show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
+        ? P0.show_tap_to_speak_cta_after_ms
+        : 2000,
+      reopen_asr_on_idle: P0.reopen_asr_on_idle ?? true,
+      policy: {
+        ...P0Policy,
+        input: {
+          ...(P0Policy && typeof P0Policy.input === "object" ? P0Policy.input : {}),
+          require_hotword_to_start: false,
+          require_user_gesture_first_visit: false,
+        },
+      },
+    };
+  } else {
+    const basePolicy = {
+      auto_record_after_greet: P0?.auto_record_after_greet ?? true,
+      require_user_gesture_first_visit: P0?.require_user_gesture_first_visit ?? false,
+      tts_gate_enabled: P0?.tts_gate_enabled ?? true,
+      autostart_retry_on: Array.isArray(P0?.autostart_retry_on)
+        ? P0.autostart_retry_on.filter((item) => typeof item === "string" && item)
+        : DEFAULT_AUTOSTART_RETRY.slice(),
+      autostart_backoff_ms: Array.isArray(P0?.autostart_backoff_ms)
+        ? P0.autostart_backoff_ms
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value) && value >= 0)
+        : DEFAULT_AUTOSTART_BACKOFF.slice(),
+      autostart_max_attempts: Number.isFinite(P0?.autostart_max_attempts)
+        ? Number(P0.autostart_max_attempts)
+        : DEFAULT_AUTOSTART_ATTEMPTS,
+      show_tap_to_speak_cta_after_ms: Number.isFinite(P0?.show_tap_to_speak_cta_after_ms)
+        ? Number(P0.show_tap_to_speak_cta_after_ms)
+        : 2000,
+      reopen_asr_on_idle: P0?.reopen_asr_on_idle ?? true,
+    };
+
+    const sanitizedPolicy = {};
+    if (P0 && typeof P0 === "object") {
+      Object.keys(P0).forEach((key) => {
+        const value = P0[key];
+        if (typeof value === "undefined") {
+          return;
+        }
+        sanitizedPolicy[key] = cloneValue(value);
+      });
+    }
+
+    const vadSource = P0 && typeof P0.vad === "object" ? P0.vad : {};
+    const watchdogSource = P0 && typeof P0.watchdog === "object" ? P0.watchdog : {};
+    const uiSource = P0 && typeof P0.ui === "object" ? P0.ui : {};
+    const statusSource = uiSource && typeof uiSource.status === "object" ? uiSource.status : {};
+
+    sanitizedPolicy.vad = { ...DEFAULT_POLICY_VAD, ...vadSource };
+    sanitizedPolicy.watchdog = { ...DEFAULT_POLICY_WATCHDOG, ...watchdogSource };
+    sanitizedPolicy.ui = { ...uiSource };
+    sanitizedPolicy.ui.status = { ...DEFAULT_POLICY_STATUS, ...statusSource };
+    if (!Number.isFinite(sanitizedPolicy.version)) {
+      sanitizedPolicy.version = 2;
+    }
+    if (typeof sanitizedPolicy._normalized_from !== "string") {
+      sanitizedPolicy._normalized_from = "v2";
+    }
+
+    const normalizedPolicy = { ...basePolicy };
+    Object.keys(sanitizedPolicy).forEach((key) => {
+      const value = sanitizedPolicy[key];
+      if (typeof value === "undefined") {
+        return;
+      }
+      normalizedPolicy[key] = cloneValue(value);
+    });
+
+    AppState.policy = normalizedPolicy;
+  }
+
+  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
+  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
+  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
+  const POLICY_STATUS = POLICY?.ui?.status
+    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
+  const VAD_WARMUP_MS = Number(POLICY_VAD?.warmup_ms ?? DEFAULT_POLICY_VAD.warmup_ms);
+  const WATCHDOG_FIRST_MS = Number(
+    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
+  );
+  const SENDER_GATE_ON_TTS = Boolean(
+    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
+  );
+  const REQUIRE_ACTIVE_TURN = Boolean(
+    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
+  );
 
   function installClientVadPolicySnapshot() {
     const policyRoot = AppState.policy && typeof AppState.policy === "object"
@@ -182,10 +279,12 @@ import { WakeWord } from "./wake_word.js";
       target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
     };
     ensureVadBlock(policyRoot);
-    if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
-      policyRoot.policy = {};
+    if (FEATURE_LEGACY_POLICY) {
+      if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
+        policyRoot.policy = {};
+      }
+      ensureVadBlock(policyRoot.policy);
     }
-    ensureVadBlock(policyRoot.policy);
   }
 
   installClientVadPolicySnapshot();
@@ -234,7 +333,7 @@ import { WakeWord } from "./wake_word.js";
           ? AppState.policy
           : (AppState.policy = {});
         applyPatch(policyRoot);
-        if (policyRoot.policy && typeof policyRoot.policy === "object") {
+        if (FEATURE_LEGACY_POLICY && policyRoot.policy && typeof policyRoot.policy === "object") {
           applyPatch(policyRoot.policy);
         }
       }
@@ -523,11 +622,13 @@ import { WakeWord } from "./wake_word.js";
       if (direct && typeof direct.client === "object") {
         return direct.client;
       }
-      const nestedRoot = policyRoot.policy && typeof policyRoot.policy === "object" ? policyRoot.policy : null;
-      if (nestedRoot) {
-        const nested = nestedRoot.vad && typeof nestedRoot.vad === "object" ? nestedRoot.vad : null;
-        if (nested && typeof nested.client === "object") {
-          return nested.client;
+      if (FEATURE_LEGACY_POLICY) {
+        const nestedRoot = policyRoot.policy && typeof policyRoot.policy === "object" ? policyRoot.policy : null;
+        if (nestedRoot) {
+          const nested = nestedRoot.vad && typeof nestedRoot.vad === "object" ? nestedRoot.vad : null;
+          if (nested && typeof nested.client === "object") {
+            return nested.client;
+          }
         }
       }
     }
@@ -740,19 +841,13 @@ import { WakeWord } from "./wake_word.js";
   function __buildStrictAudioHeader(frameOrPolicy) {
     const base = AUDIO_HEADER_FRAME;
     const source = (frameOrPolicy?.policy || frameOrPolicy) || {};
-    const audioPolicy = source.audio || {};
-    const mediaAudioPolicy = (source.media && source.media.audio) || {};
-    const formatCandidate = audioPolicy.format ?? mediaAudioPolicy.format ?? base.format;
+    const audioPolicy = source && typeof source.audio === "object" ? source.audio : {};
+    const formatCandidate = audioPolicy.format ?? base.format;
     const rateCandidate =
       audioPolicy.sample_rate ??
       audioPolicy.rate ??
-      mediaAudioPolicy.sample_rate ??
-      mediaAudioPolicy.rate ??
       base.sample_rate;
-    const channelsCandidate =
-      audioPolicy.channels ??
-      mediaAudioPolicy.channels ??
-      base.channels;
+    const channelsCandidate = audioPolicy.channels ?? base.channels;
 
     const normalizedRate = Number(rateCandidate);
     const normalizedChannels = Number(channelsCandidate);
@@ -2228,7 +2323,8 @@ import { WakeWord } from "./wake_word.js";
 
   function resolveWsPath() {
     try {
-      const routing = AppState?.policy?.policy?.routing;
+      const routing = AppState?.policy?.routing
+        || (FEATURE_LEGACY_POLICY ? AppState?.policy?.policy?.routing : undefined);
       const candidate = typeof routing?.ws_version === 'string' ? routing.ws_version.trim() : '';
       if (candidate && candidate.toLowerCase() !== 'v2') {
         console.warn('Unsupported ws_version from policy; normalizing to v2', candidate);
@@ -2705,6 +2801,46 @@ import { WakeWord } from "./wake_word.js";
   };
 
   function sanitizePolicySnapshot(source) {
+    if (!FEATURE_LEGACY_POLICY) {
+      const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
+      const sanitized = { ...base };
+      const safeSource = source && typeof source === 'object' ? source : {};
+
+      const safeVad = safeSource && typeof safeSource.vad === 'object' ? safeSource.vad : {};
+      const baseVad = base && typeof base.vad === 'object' ? base.vad : {};
+      sanitized.vad = { ...DEFAULT_POLICY_VAD, ...baseVad, ...safeVad };
+
+      const safeWatchdog = safeSource && typeof safeSource.watchdog === 'object' ? safeSource.watchdog : {};
+      const baseWatchdog = base && typeof base.watchdog === 'object' ? base.watchdog : {};
+      sanitized.watchdog = { ...DEFAULT_POLICY_WATCHDOG, ...baseWatchdog, ...safeWatchdog };
+
+      const baseUi = base && typeof base.ui === 'object' ? base.ui : {};
+      const safeUi = safeSource && typeof safeSource.ui === 'object' ? safeSource.ui : {};
+      const baseStatus = baseUi && typeof baseUi.status === 'object' ? baseUi.status : {};
+      const safeStatus = safeUi && typeof safeUi.status === 'object' ? safeUi.status : {};
+      sanitized.ui = { ...baseUi, ...safeUi };
+      sanitized.ui.status = { ...DEFAULT_POLICY_STATUS, ...baseStatus, ...safeStatus };
+
+      Object.keys(safeSource).forEach((key) => {
+        if (key === 'vad' || key === 'watchdog' || key === 'ui') {
+          return;
+        }
+        const value = safeSource[key];
+        if (typeof value === 'undefined') {
+          return;
+        }
+        sanitized[key] = cloneValue(value);
+      });
+
+      if (!Number.isFinite(sanitized.version)) {
+        sanitized.version = 2;
+      }
+      if (typeof sanitized._normalized_from !== 'string') {
+        sanitized._normalized_from = 'v2';
+      }
+      return sanitized;
+    }
+
     const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
     const policy = { ...base };
 
@@ -3201,14 +3337,23 @@ import { WakeWord } from "./wake_word.js";
       try {
         if (ar?.setPolicy) ar.setPolicy(policy);
         const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
-        const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
-        const asrInput = frame?.policy?.media?.asr_input ?? null;
-        console.info(
-          "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
-          vendor,
-          pipeline,
-          asrInput,
-        );
+        if (FEATURE_LEGACY_POLICY) {
+          const pipeline = frame?.policy?.audio?.pipeline?.mode ?? null;
+          const asrInput = frame?.policy?.media?.asr_input ?? null;
+          console.info(
+            "diag=start_listening_order vendor=%s pipeline=%s asr_input=%s",
+            vendor,
+            pipeline,
+            asrInput,
+          );
+        } else {
+          console.info(
+            "diag=start_listening_order vendor=%s vad_warmup_ms=%s require_active_turn=%s",
+            vendor,
+            Number.isFinite(VAD_WARMUP_MS) ? VAD_WARMUP_MS : null,
+            REQUIRE_ACTIVE_TURN,
+          );
+        }
         if (ar?.start) {
           await ar.start(policy);
           unifiedArmed = true;
