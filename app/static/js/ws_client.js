@@ -4551,6 +4551,34 @@ import { initVAD } from "./audio/vad_client.js";
     } catch {}
     return WSClient.sendJSON(payload);
   };
+
+  // Fast-path for callers that use sendJSON() directly (audio.header, pings, etc.).
+  (function wrapSendJSON() {
+    const __origSendJSON = WSClient.sendJSON;
+    WSClient.sendJSON = function sendJSONFast(frame) {
+      try {
+        const ws = WSClient?._ws || window.ws;
+        const open = ws && ws.readyState === WebSocket.OPEN;
+        const isControl = frame && typeof frame === "object" && (
+          frame.type === "input.start" ||
+          frame.type === "input.stop"  ||
+          frame.type === "audio.header"||
+          frame.type === "ping"        ||
+          frame.type === "pong"
+        );
+        if (open && isControl) {
+          try {
+            ws.send(JSON.stringify(frame));
+            return true;
+          } catch (e) {
+            console.warn("ws.json send failed", e);
+            return false;
+          }
+        }
+      } catch {}
+      return __origSendJSON.call(WSClient, frame);
+    };
+  })();
   WSClient.sendBinary = (payload, opts = {}) => sendBinary(payload, opts);
   WSClient.getBufferedAmount = getBufferedAmount;
   WSClient.requestAsrArm = requestAsrArm;
