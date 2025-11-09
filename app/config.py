@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any, Mapping, MutableMapping, Optional
+from typing import Any, Mapping, MutableMapping, MutableSequence, Optional
 
 from app.ws.policy import normalize_policy
 
@@ -758,6 +758,8 @@ def _merge_mapping(dst: MutableMapping[str, Any], src: Mapping[str, Any]) -> Non
 def build_session_policy(
     admin_overrides: Mapping[str, Any] | None,
     env: Mapping[str, Any] | None,
+    *,
+    legacy_hits: MutableSequence[tuple[tuple[str, ...], tuple[str, ...]]] | None = None,
 ) -> dict[str, Any]:
     """Return a normalized session policy using v2 defaults and legacy mapping."""
 
@@ -773,7 +775,7 @@ def build_session_policy(
     if isinstance(policy_block, Mapping):
         _merge_mapping(merged, policy_block)
 
-    return normalize_policy(dict(merged))
+    return normalize_policy(dict(merged), legacy_hits=legacy_hits)
 
 
 ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(

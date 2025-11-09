@@ -15,7 +15,19 @@ import platform
 import socket
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 import json
 import urllib.request
@@ -433,6 +445,7 @@ class AdapterContext:
     policy_snapshot: Optional[Dict[str, Any]] = None
     policy: Optional[Dict[str, Any]] = None
     policy_warning_logged: bool = False
+    policy_snapshot_fingerprint: Optional[str] = None
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
@@ -559,14 +572,22 @@ class ChatV2Adapter:
                 self._policy_env_warning_logged = True
         return None
 
-    def _build_session_policy(self) -> Dict[str, Any]:
+    def _build_session_policy(
+        self,
+        *,
+        legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] | None = None,
+    ) -> Dict[str, Any]:
         admin_overrides = getattr(config, "POLICY_OVERRIDES", None)
         env_overrides = self._session_policy_env()
         try:
-            policy = config.build_session_policy(admin_overrides, env_overrides)
+            policy = config.build_session_policy(
+                admin_overrides,
+                env_overrides,
+                legacy_hits=legacy_hits,
+            )
         except Exception:
             _log.exception("evt=session_policy_build_failed")
-            policy = normalize_policy({})
+            policy = normalize_policy({}, legacy_hits=legacy_hits)
         return dict(policy)
 
     @staticmethod
@@ -610,7 +631,11 @@ class ChatV2Adapter:
             event["sid"] = event_sid
         bus.publish(event)
 
-    def _emit_policy_snapshot(self, ctx: AdapterContext) -> None:
+    def _emit_policy_snapshot(
+        self,
+        ctx: AdapterContext,
+        legacy_hits: Iterable[tuple[tuple[str, ...], tuple[str, ...]]] | None = None,
+    ) -> None:
         policy = ctx.policy if isinstance(ctx.policy, Mapping) else None
         if not policy:
             return
@@ -621,7 +646,53 @@ class ChatV2Adapter:
             )
             ctx.policy_warning_logged = True
         try:
+            fingerprint: Optional[str]
+            try:
+                fingerprint = json.dumps(policy, sort_keys=True, ensure_ascii=False)
+            except (TypeError, ValueError):
+                fingerprint = repr(policy)
+            if ctx.policy_snapshot_fingerprint == fingerprint:
+                return
+
+            mapped_hits: List[List[List[str]]] = []
+            for hit in legacy_hits or ():
+                if not isinstance(hit, (list, tuple)) or len(hit) != 2:
+                    continue
+                legacy_path, new_path = hit
+                if not isinstance(legacy_path, (list, tuple)) or not isinstance(
+                    new_path, (list, tuple)
+                ):
+                    continue
+                mapped_hits.append(
+                    [list(map(str, legacy_path)), list(map(str, new_path))]
+                )
+
+            asr_candidate = policy.get("asr")
+            asr_block = asr_candidate if isinstance(asr_candidate, Mapping) else {}
+            vad_candidate = policy.get("vad")
+            vad_block = vad_candidate if isinstance(vad_candidate, Mapping) else {}
+            server_starts_input = None
+            cold_start_grace_ms = None
+            warmup_ms = None
+            if isinstance(asr_block, Mapping):
+                server_starts_input = asr_block.get("server_starts_input")
+                cold_start_grace_ms = asr_block.get("cold_start_grace_ms")
+            if isinstance(vad_block, Mapping):
+                warmup_ms = vad_block.get("warmup_ms")
+
             self._bus("policy.snapshot", policy, sid=ctx.sid)
+            self._bus(
+                "policy.deprecation_report",
+                {
+                    "version": version,
+                    "mapped_legacy_keys": mapped_hits,
+                    "server_starts_input": server_starts_input,
+                    "warmup_ms": warmup_ms,
+                    "cold_start_grace_ms": cold_start_grace_ms,
+                },
+                sid=ctx.sid,
+            )
+            ctx.policy_snapshot_fingerprint = fingerprint
         except Exception:  # pragma: no cover - defensive logging
             _log.exception("evt=policy_snapshot_emit_failed sid=%s", ctx.sid)
 
@@ -631,15 +702,16 @@ class ChatV2Adapter:
         return {}
 
     def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
+        legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
         try:
-            normalized = normalize_policy(payload)
+            normalized = normalize_policy(payload, legacy_hits=legacy_hits)
         except Exception:  # pragma: no cover - defensive logging
             _log.exception("evt=policy_normalize_failed sid=%s", ctx.sid)
             return
         ctx.policy = normalized
         ctx.session.policy = normalized
         ctx.policy_warning_logged = False
-        self._emit_policy_snapshot(ctx)
+        self._emit_policy_snapshot(ctx, legacy_hits)
 
     @staticmethod
     def _allowed_asr_vendors() -> List[str]:
@@ -1335,7 +1407,8 @@ class ChatV2Adapter:
         }
         info_frame["meta"] = {"sid": sid}
         policy_snapshot = self._policy_snapshot() if FEATURE_LEGACY_POLICY else None
-        session_policy_v2 = self._build_session_policy()
+        legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        session_policy_v2 = self._build_session_policy(legacy_hits=legacy_hits)
         allowed_asr_vendors = ["speechmatics"]
         snapshot_mapping: Mapping[str, Any] | None
         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, Mapping):
@@ -1430,7 +1503,7 @@ class ChatV2Adapter:
                 )
 
             self._contexts[ctx.sid] = ctx
-            self._emit_policy_snapshot(ctx)
+            self._emit_policy_snapshot(ctx, legacy_hits)
 
             _log.info("evt=ws_open sid=%s", ctx.sid)
             self._start_asr_ready_tracker(ctx, bus)

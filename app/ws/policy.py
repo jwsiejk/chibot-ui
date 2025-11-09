@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Mapping, MutableMapping, Sequence
+from typing import Any, Mapping, MutableMapping, MutableSequence, Sequence, Tuple
 
 POLICY_VERSION = 2
 
@@ -79,7 +79,14 @@ def _set(d: MutableMapping[str, Any], path: Sequence[str], value: Any) -> None:
     cur[path[-1]] = value
 
 
-def normalize_policy(incoming: Mapping[str, Any] | None) -> dict[str, Any]:
+LegacyHit = Tuple[Tuple[str, ...], Tuple[str, ...]]
+
+
+def normalize_policy(
+    incoming: Mapping[str, Any] | None,
+    *,
+    legacy_hits: MutableSequence[LegacyHit] | None = None,
+) -> dict[str, Any]:
     """Merge SAFE_DEFAULTS_V2 ← incoming (mapped), drop deprecated, prefer v2 keys."""
 
     src = deepcopy(dict(incoming or {}))
@@ -100,6 +107,8 @@ def normalize_policy(incoming: Mapping[str, Any] | None) -> dict[str, Any]:
             continue
         if legacy_path == ("ui", "badge_listen_on_asr"):
             val = not bool(val)
+        if legacy_hits is not None:
+            legacy_hits.append((tuple(legacy_path), tuple(new_path)))
         if _get(out, new_path, None) is None:
             _set(out, new_path, val)
 
