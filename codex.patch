@@ -1,64 +1,135 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 7e6c86566ad5ea62a47b8a40e51b79c56be62a61..abb193065f035b6398c1d23c5e104f0f87bbc7d6 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -845,54 +845,58 @@ import { WakeWord } from "./wake_word.js";
-     const formatCandidate = audioPolicy.format ?? base.format;
-     const rateCandidate =
-       audioPolicy.sample_rate ??
-       audioPolicy.rate ??
-       base.sample_rate;
-     const channelsCandidate = audioPolicy.channels ?? base.channels;
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index e5a15f51f8da2fa4f94efda453ac2a675a7b36ac..b0aa0de93c0c9bcd7138e7cd8abd2430567e82ec 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -661,51 +661,63 @@ class ChatV2Adapter:
+             for hit in legacy_hits or ():
+                 if not isinstance(hit, (list, tuple)) or len(hit) != 2:
+                     continue
+                 legacy_path, new_path = hit
+                 if not isinstance(legacy_path, (list, tuple)) or not isinstance(
+                     new_path, (list, tuple)
+                 ):
+                     continue
+                 mapped_hits.append(
+                     [list(map(str, legacy_path)), list(map(str, new_path))]
+                 )
  
-     const normalizedRate = Number(rateCandidate);
-     const normalizedChannels = Number(channelsCandidate);
+             asr_candidate = policy.get("asr")
+             asr_block = asr_candidate if isinstance(asr_candidate, Mapping) else {}
+             vad_candidate = policy.get("vad")
+             vad_block = vad_candidate if isinstance(vad_candidate, Mapping) else {}
+             server_starts_input = None
+             cold_start_grace_ms = None
+             warmup_ms = None
+             if isinstance(asr_block, Mapping):
+                 server_starts_input = asr_block.get("server_starts_input")
+                 cold_start_grace_ms = asr_block.get("cold_start_grace_ms")
+             if isinstance(vad_block, Mapping):
+                 warmup_ms = vad_block.get("warmup_ms")
  
-     if (formatCandidate && formatCandidate !== "pcm16") {
-       try {
-         console.warn(
-           "audio.header format policy overridden",
-           formatCandidate,
-           "→ pcm16"
-         );
-       } catch {}
-     }
+-            self._bus("policy.snapshot", policy, sid=ctx.sid)
++            snapshot_payload = {
++                "version": version,
++                "server_starts_input": bool(asr_block.get("server_starts_input")),
++                "warmup_ms": self._coerce_non_negative_int(
++                    vad_block.get("warmup_ms"),
++                    0,
++                ),
++                "cold_start_grace_ms": self._coerce_non_negative_int(
++                    asr_block.get("cold_start_grace_ms"),
++                    0,
++                ),
++            }
++            self._bus("policy.snapshot", snapshot_payload, sid=ctx.sid)
+             self._bus(
+                 "policy.deprecation_report",
+                 {
+                     "version": version,
+                     "mapped_legacy_keys": mapped_hits,
+                     "server_starts_input": server_starts_input,
+                     "warmup_ms": warmup_ms,
+                     "cold_start_grace_ms": cold_start_grace_ms,
+                 },
+                 sid=ctx.sid,
+             )
+             ctx.policy_snapshot_fingerprint = fingerprint
+         except Exception:  # pragma: no cover - defensive logging
+             _log.exception("evt=policy_snapshot_emit_failed sid=%s", ctx.sid)
  
-     return {
-       type: base.type,
-       format: "pcm16",
-       sample_rate: Number.isFinite(normalizedRate) ? normalizedRate : base.sample_rate,
-       channels: Number.isFinite(normalizedChannels) ? normalizedChannels : base.channels,
-+      codec: "pcm_s16le",
-     };
-   }
-   function __sendAudioHeaderOnce(frameOrPolicy) {
--    if (__audioHeaderSent) { return; }
-+    if (__audioHeaderSent) {
-+      try { console.warn("audio.header already sent; skipping"); } catch {}
-+      return;
-+    }
-     try {
-       const header = __buildStrictAudioHeader(frameOrPolicy);
-       WSClient.sendJSON(header);
-       logStage("client.audio_header_send", header);
-       __audioHeaderSent = true;
-     } catch (err) {
-       console.warn("Failed to send audio header", err);
-     }
-   }
-   function sendAudioHeader(frameOrPolicy) {
-     __sendAudioHeaderOnce(frameOrPolicy);
-   }
-   // --- End: header idempotency + strict schema ---
-   let __lastErrorSig = null, __lastErrorAt = 0;
-   const AUDIO_KEEPALIVE_MS = 20000;
-   const POST_TTS_ARM_DELAY_MS = 300;
+     def _policy(self, ctx: AdapterContext) -> Dict[str, Any]:
+         if isinstance(ctx.policy, Mapping):
+             return dict(ctx.policy)
+         return {}
  
-   let socket = null;
-   let heartbeatTimerId = null;
-   let expectInfoFrame = true;
-   let infoWatchdogTimerId = null;
-   let lastPingAt = null;
-   let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-   let rateLimitRetryTimerId = null;
-   let rateLimitRetryCount = 0;
+     def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
+         legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
+         try:
+             normalized = normalize_policy(payload, legacy_hits=legacy_hits)
+         except Exception:  # pragma: no cover - defensive logging
+@@ -2730,56 +2742,64 @@ class ChatV2Adapter:
+                 reason = "not_ready"
+             elif not mic_open:
+                 reason = "mic_closed"
+             elif not send_open:
+                 reason = "send_closed"
+             else:
+                 reason = "backpressure"
+             _log.info(
+                 "evt=audio_drop sid=%s len=%d reason=%s",
+                 ctx.sid,
+                 byte_count,
+                 reason,
+             )
+             return
+         asr_client = ctx.session.asr
+         if ctx.session.asr_state == "open" and asr_client is not None:
+             try:
+                 await asr_client.send_pcm(chunk)
+             except Exception:
+                 _log.warning("evt=asr_pcm_send_failed sid=%s", ctx.sid, exc_info=True)
+             else:
+                 ctx.asr_bytes_sent += byte_count
+                 if not ctx.session.first_chunk_sent:
+                     ctx.session.first_chunk_sent = True
+                 streamed = getattr(asr_client, "bytes_streamed", 0) or 0
+-                setattr(asr_client, "bytes_streamed", streamed + byte_count)
++                streamed += byte_count
++                setattr(asr_client, "bytes_streamed", streamed)
+                 now_mono = time.monotonic()
+                 first_packet = getattr(asr_client, "first_packet_monotonic", None)
+                 if not isinstance(first_packet, (int, float)):
+                     first_packet = now_mono
+                     setattr(asr_client, "first_packet_monotonic", first_packet)
++                    try:
++                        self._bus(
++                            "asr.first_packet",
++                            {"sid": ctx.sid, "bytes": byte_count},
++                        )
++                    except Exception:
++                        pass
+                 elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
+                 setattr(asr_client, "ms_since_first_packet", elapsed_ms)
+         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
+ 
+     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
+         removed = False
+         for key in list(ctx.audio_buffer):
+             if key < threshold:
+                 ctx.audio_buffer.pop(key, None)
+                 removed = True
+         if removed:
+             if ctx.audio_buffer:
+                 ctx.audio_highest_seq = max(ctx.audio_buffer)
+             else:
+                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+ 
+     def _log_speechmatics_control_summary(
+         self, sid: str, payload: Mapping[str, Any]
+     ) -> None:
+         if not isinstance(payload, Mapping):
+             return
+         vendor = payload.get("vendor")
+         if not (isinstance(vendor, str) and vendor.strip().lower() == "speechmatics"):
+             return
+         command_value = payload.get("command")

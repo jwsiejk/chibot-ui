@@ -683,7 +683,19 @@ class ChatV2Adapter:
             if isinstance(vad_block, Mapping):
                 warmup_ms = vad_block.get("warmup_ms")
 
-            self._bus("policy.snapshot", policy, sid=ctx.sid)
+            snapshot_payload = {
+                "version": version,
+                "server_starts_input": bool(asr_block.get("server_starts_input")),
+                "warmup_ms": self._coerce_non_negative_int(
+                    vad_block.get("warmup_ms"),
+                    0,
+                ),
+                "cold_start_grace_ms": self._coerce_non_negative_int(
+                    asr_block.get("cold_start_grace_ms"),
+                    0,
+                ),
+            }
+            self._bus("policy.snapshot", snapshot_payload, sid=ctx.sid)
             self._bus(
                 "policy.deprecation_report",
                 {
@@ -2752,12 +2764,20 @@ class ChatV2Adapter:
                 if not ctx.session.first_chunk_sent:
                     ctx.session.first_chunk_sent = True
                 streamed = getattr(asr_client, "bytes_streamed", 0) or 0
-                setattr(asr_client, "bytes_streamed", streamed + byte_count)
+                streamed += byte_count
+                setattr(asr_client, "bytes_streamed", streamed)
                 now_mono = time.monotonic()
                 first_packet = getattr(asr_client, "first_packet_monotonic", None)
                 if not isinstance(first_packet, (int, float)):
                     first_packet = now_mono
                     setattr(asr_client, "first_packet_monotonic", first_packet)
+                    try:
+                        self._bus(
+                            "asr.first_packet",
+                            {"sid": ctx.sid, "bytes": byte_count},
+                        )
+                    except Exception:
+                        pass
                 elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
                 setattr(asr_client, "ms_since_first_packet", elapsed_ms)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
