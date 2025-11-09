@@ -446,6 +446,10 @@ class AdapterContext:
     policy: Optional[Dict[str, Any]] = None
     policy_warning_logged: bool = False
     policy_snapshot_fingerprint: Optional[str] = None
+    policy_snapshot_logged: bool = False
+    asr_first_packet_logged: bool = False
+    asr_silence_hold_logged: bool = False
+    asr_silence_eot_logged: bool = False
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
@@ -674,6 +678,22 @@ class ChatV2Adapter:
             asr_block = asr_candidate if isinstance(asr_candidate, Mapping) else {}
             vad_candidate = policy.get("vad")
             vad_block = vad_candidate if isinstance(vad_candidate, Mapping) else {}
+            ui_block_candidate = policy.get("ui")
+            ui_block = ui_block_candidate if isinstance(ui_block_candidate, Mapping) else {}
+            ui_status_candidate = ui_block.get("status")
+            ui_status_block = (
+                ui_status_candidate if isinstance(ui_status_candidate, Mapping) else {}
+            )
+            capture_candidate = policy.get("capture")
+            capture_block = capture_candidate if isinstance(capture_candidate, Mapping) else {}
+            capture_mode_value = capture_block.get("mode")
+            capture_constraints_candidate = capture_block.get("constraints")
+            capture_constraints_block = (
+                capture_constraints_candidate
+                if isinstance(capture_constraints_candidate, Mapping)
+                else {}
+            )
+
             server_starts_input = None
             cold_start_grace_ms = None
             warmup_ms = None
@@ -685,17 +705,32 @@ class ChatV2Adapter:
 
             snapshot_payload = {
                 "version": version,
-                "server_starts_input": bool(asr_block.get("server_starts_input")),
-                "warmup_ms": self._coerce_non_negative_int(
-                    vad_block.get("warmup_ms"),
-                    0,
+                "asr.server_starts_input": bool(asr_block.get("server_starts_input")),
+                "asr.cold_start_grace_ms": self._coerce_non_negative_int(
+                    asr_block.get("cold_start_grace_ms"), 0
                 ),
-                "cold_start_grace_ms": self._coerce_non_negative_int(
-                    asr_block.get("cold_start_grace_ms"),
-                    0,
+                "vad.warmup_ms": self._coerce_non_negative_int(
+                    vad_block.get("warmup_ms"), 0
                 ),
+                "ui.require_active_turn": bool(
+                    ui_status_block.get("require_active_turn", True)
+                ),
+                "capture.mode": (
+                    str(capture_mode_value).strip()
+                    if isinstance(capture_mode_value, str)
+                    else "webrtc_aec"
+                ),
+                "capture.constraints": {
+                    "echoCancellation": capture_constraints_block.get("echoCancellation"),
+                    "noiseSuppression": capture_constraints_block.get("noiseSuppression"),
+                    "autoGainControl": capture_constraints_block.get("autoGainControl"),
+                    "channelCount": capture_constraints_block.get("channelCount"),
+                    "sampleRate": capture_constraints_block.get("sampleRate"),
+                },
             }
-            self._bus("policy.snapshot", snapshot_payload, sid=ctx.sid)
+            if not ctx.policy_snapshot_logged:
+                self._bus("policy.snapshot", snapshot_payload, sid=ctx.sid)
+                ctx.policy_snapshot_logged = True
             self._bus(
                 "policy.deprecation_report",
                 {
@@ -960,6 +995,9 @@ class ChatV2Adapter:
                 if fuse_mode not in {"and", "or", "weighted"}:
                     fuse_mode = "and"
                 should_close = False
+                score: float | None = None
+                weight_client: float | None = None
+                weight_vendor: float | None = None
                 if fuse_mode == "and":
                     should_close = silence_ok and vendor_ok
                 elif fuse_mode == "or":
@@ -979,13 +1017,45 @@ class ChatV2Adapter:
                     if asr_client
                     else min_stream_ms
                 )
+                base_meta: Dict[str, Any] = {
+                    "sid": ctx.sid,
+                    "fuse_mode": fuse_mode,
+                    "client_silence_ms": int(client_silence_ms),
+                    "server_silence_ms": int(server_silence_ms),
+                    "vendor_idle_ms": int(vendor_idle_ms),
+                    "min_silence_ms": int(min_silence_ms),
+                    "eot_silence_ms": int(eot_silence_ms),
+                    "bytes_streamed": int(bytes_streamed),
+                    "ms_since_first_packet": int(stream_age_ms),
+                    "min_stream_ms": int(min_stream_ms),
+                    "silence_ok": bool(silence_ok),
+                    "vendor_ok": bool(vendor_ok),
+                }
+                if score is not None:
+                    base_meta["weighted_score"] = float(score)
+                if weight_client is not None:
+                    base_meta["weight_client"] = float(weight_client)
+                if weight_vendor is not None:
+                    base_meta["weight_vendor"] = float(weight_vendor)
                 if bytes_streamed <= 0 or stream_age_ms < min_stream_ms:
+                    if not ctx.asr_silence_hold_logged:
+                        hold_meta = dict(base_meta)
+                        hold_meta["decision"] = "hold"
+                        hold_meta["hold_reason"] = "insufficient_audio"
+                        self._bus("asr.silence_hold", hold_meta, sid=ctx.sid)
+                        ctx.asr_silence_hold_logged = True
                     continue
                 reason = "silence_final"
                 if silence_ok and not vendor_ok:
                     reason = "silence_only"
                 elif not silence_ok and vendor_ok:
                     reason = "policy_close"
+                if not ctx.asr_silence_eot_logged:
+                    eot_meta = dict(base_meta)
+                    eot_meta["decision"] = "eot"
+                    eot_meta["close_reason"] = reason
+                    self._bus("asr.silence_eot", eot_meta, sid=ctx.sid)
+                    ctx.asr_silence_eot_logged = True
                 await self._handle_vad_eot(
                     ctx,
                     reason,
@@ -2771,6 +2841,7 @@ class ChatV2Adapter:
                 if not isinstance(first_packet, (int, float)):
                     first_packet = now_mono
                     setattr(asr_client, "first_packet_monotonic", first_packet)
+                if not ctx.asr_first_packet_logged:
                     try:
                         self._bus(
                             "asr.first_packet",
@@ -2778,6 +2849,8 @@ class ChatV2Adapter:
                         )
                     except Exception:
                         pass
+                    else:
+                        ctx.asr_first_packet_logged = True
                 elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
                 setattr(asr_client, "ms_since_first_packet", elapsed_ms)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
@@ -5377,6 +5450,9 @@ class ChatV2Adapter:
         ctx.session.first_chunk_sent = False
         ctx.session.queued_arm = False
         ctx.session.closed_at_ms = None
+        ctx.asr_first_packet_logged = False
+        ctx.asr_silence_hold_logged = False
+        ctx.asr_silence_eot_logged = False
         ctx.session.asr = self._create_sm_client(ctx)
         try:
             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
@@ -5503,6 +5579,14 @@ class ChatV2Adapter:
         ctx.asr_turn_active = True
         ctx.asr_turn_begin_sent = True
         ctx.asr_turn_armed_sent = False
+        ctx.asr_first_packet_logged = False
+        ctx.asr_silence_hold_logged = False
+        ctx.asr_silence_eot_logged = False
+        asr_client = ctx.session.asr
+        if asr_client is not None:
+            setattr(asr_client, "bytes_streamed", 0)
+            setattr(asr_client, "first_packet_monotonic", None)
+            setattr(asr_client, "ms_since_first_packet", 0)
         self._bus("asr.turn.begin", {"sid": ctx.sid, "reason": reason})
         return {"type": "asr.turn", "state": "begin"}
 

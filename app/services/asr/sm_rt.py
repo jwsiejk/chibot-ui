@@ -131,6 +131,9 @@ class SMRealtimeClient:
         self._input_start_ms: Optional[int] = None
         self._first_partial_logged = False
         self._first_final_logged = False
+        self._first_pcm_logged = False
+        self._eos_logged = False
+        self._eos_suppress_logged = False
 
     # ------------------------------------------------------------------
     # Public properties
@@ -169,6 +172,9 @@ class SMRealtimeClient:
         self._seq_counter = 0
         self._last_seq_no = None
         self._first_pcm_sent_at = None
+        self._first_pcm_logged = False
+        self._eos_logged = False
+        self._eos_suppress_logged = False
 
         url = endpoint_url.strip()
         if not url:
@@ -303,6 +309,13 @@ class SMRealtimeClient:
                     )
                 queue.task_done()
         await queue.put(data)
+        if not self._first_pcm_logged:
+            try:
+                _log.info("evt=sm_pcm_enqueue_first bytes=%d", len(data))
+            except Exception:  # pragma: no cover - defensive
+                pass
+            else:
+                self._first_pcm_logged = True
         if self._first_pcm_sent_at is None:
             try:
                 self._first_pcm_sent_at = time.monotonic()
@@ -844,13 +857,19 @@ class SMRealtimeClient:
         """Send an EndOfStream message including the last audio sequence number."""
 
         if self._first_pcm_sent_at is None and self._last_seq_no is None:
-            _log.info("evt=sm_send_eos_suppressed reason=no_audio_sent")
+            if not self._eos_suppress_logged:
+                _log.info(
+                    "evt=sm_send_eos_suppressed reason=no_audio_sent last_seq_no=None"
+                )
+                self._eos_suppress_logged = True
             return
 
         payload: Dict[str, Any] = {"message": "EndOfStream"}
         if isinstance(self._last_seq_no, int):
             payload["last_seq_no"] = self._last_seq_no
-        _log.info("evt=sm_send_eos last_seq_no=%s", payload.get("last_seq_no"))
+        if not self._eos_logged:
+            _log.info("evt=sm_send_eos last_seq_no=%s", payload.get("last_seq_no"))
+            self._eos_logged = True
         await self._send_json(payload)
 
     def _now_ms(self) -> int:
