@@ -867,10 +867,14 @@ import { WakeWord } from "./wake_word.js";
       format: "pcm16",
       sample_rate: Number.isFinite(normalizedRate) ? normalizedRate : base.sample_rate,
       channels: Number.isFinite(normalizedChannels) ? normalizedChannels : base.channels,
+      codec: "pcm_s16le",
     };
   }
   function __sendAudioHeaderOnce(frameOrPolicy) {
-    if (__audioHeaderSent) { return; }
+    if (__audioHeaderSent) {
+      try { console.warn("audio.header already sent; skipping"); } catch {}
+      return;
+    }
     try {
       const header = __buildStrictAudioHeader(frameOrPolicy);
       WSClient.sendJSON(header);
