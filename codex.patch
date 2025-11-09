@@ -1,57 +1,66 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 13ae52b708c550f1da9a7a644f4d38d402efcfd7..0a8ff4fc05b2a791bac862eeb451bf105a5e0c13 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1390,51 +1390,51 @@ import { initVAD } from "./audio/vad_client.js";
-     }
-     if (!_canCaptureNow()) {
-       return;
-     }
-     if (seq === 0) {
-       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-     }
-     const frame = new Int16Array(buffer);
-     if (frame.length) {
-       let sumSq = 0;
-       for (let i = 0; i < frame.length; i += 1) {
-         const sample = frame[i] / 32768;
-         sumSq += sample * sample;
-       }
-       const rms = Math.sqrt(sumSq / frame.length);
-       if (AppState && typeof AppState === "object") {
-         AppState.micRms = rms;
-       }
-       window.StatusBar?.updateMeter?.(rms);
-     }
-     enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
-   }
+diff --git a/app/db/admin_settings.py b/app/db/admin_settings.py
+index a0780d04052084baf539ac19480ec36cdc3ba1f3..e1cd1e312be06b8e85b755ff2d0d22b613a5802c 100644
+--- a/app/db/admin_settings.py
++++ b/app/db/admin_settings.py
+@@ -122,50 +122,61 @@ class AdminSettingsStore:
+             """
+             INSERT INTO admin_settings (key, value_jsonb, updated_by)
+             VALUES (%s, %s::jsonb, %s)
+             ON CONFLICT (key) DO UPDATE SET
+                 value_jsonb = EXCLUDED.value_jsonb,
+                 updated_at = NOW(),
+                 updated_by = COALESCE(EXCLUDED.updated_by, admin_settings.updated_by),
+                 version = admin_settings.version + 1
+             """,
+             (key, payload, updated_by),
+         )
  
-   async function startRecorderStreaming(policy, reason) {
-     if (AppState.listening) {
--      AppState.micLive = true;
-+      setAppStateValue("micLive", true);
-       return true;
-     }
-     resetPcmBatchState();
-     clearVadSilenceTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       console.warn("AudioRecorder unavailable; cannot start streaming");
-       return false;
-     }
-     const captureReason = typeof reason === "string" && reason ? reason : "auto";
-     try {
-       await recorder.start({ onChunk: handleRecorderChunk, policy });
-       resetRecorderTelemetry();
-       syncSenderPaused(false);
-       if (vadController && typeof vadController.reset === "function") {
-         try {
-           vadController.reset();
-         } catch (err) {
-           try {
-             console.warn("VAD reset failed", err);
-           } catch {}
-         }
-       }
-       await recorder.startListening(policy);
-       micLastChunkAt = Date.now();
+     def get(self, key: str) -> _SettingsValue:
+         """Return the JSON value for ``key`` or ``None`` when unset."""
+ 
+         conn = self._get_connection()
+         if conn is None:
+             if not self._allow_memory_fallback:
+                 return None
+             with self._lock:
+                 return self._memory.get(key)
+ 
+         try:
+             with conn.cursor() as cursor:
+                 row = self._select(cursor, key)
++        except Exception as exc:  # pragma: no cover - best-effort resilience
++            _log.warning(
++                "evt=admin_settings_query_failed key=%s err=%s",
++                key,
++                exc,
++                extra={"component": "admin.settings"},
++            )
++            if not self._allow_memory_fallback:
++                return None
++            with self._lock:
++                return self._memory.get(key)
+         finally:
+             try:
+                 conn.close()
+             except Exception:  # pragma: no cover - defensive
+                 pass
+ 
+         if not row:
+             return None
+         return _decode_json_value(row[0])
+ 
+     def set(
+         self, key: str, value: object | None, *, updated_by: str | None = None
+     ) -> None:
+         """Persist ``value`` for ``key`` in the admin settings store."""
+ 
+         normalized_value = _prepare_json_value(value)
+ 
+         conn = self._get_connection()
+         if conn is None:
+             if not self._allow_memory_fallback:
+                 raise RuntimeError("AdminSettingsStore has no database connection")
+             with self._lock:
+                 if normalized_value is None:
+                     self._memory.pop(key, None)
+                 else:

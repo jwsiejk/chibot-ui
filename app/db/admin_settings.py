@@ -144,6 +144,17 @@ class AdminSettingsStore:
         try:
             with conn.cursor() as cursor:
                 row = self._select(cursor, key)
+        except Exception as exc:  # pragma: no cover - best-effort resilience
+            _log.warning(
+                "evt=admin_settings_query_failed key=%s err=%s",
+                key,
+                exc,
+                extra={"component": "admin.settings"},
+            )
+            if not self._allow_memory_fallback:
+                return None
+            with self._lock:
+                return self._memory.get(key)
         finally:
             try:
                 conn.close()
