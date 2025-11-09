@@ -1417,6 +1417,7 @@ import { initVAD } from "./audio/vad_client.js";
 
   async function startRecorderStreaming(policy, reason) {
     if (AppState.listening) {
+      AppState.micLive = true;
       return true;
     }
     resetPcmBatchState();
@@ -3731,6 +3732,7 @@ import { initVAD } from "./audio/vad_client.js";
       updateState({ asrReady: false, asrVendor: null });
       stopRecorder("asr_unavailable");
       __resetAudioHeaderSent();
+      resetTurnIntent(frame?.type || "asr.unavailable");
       setAsrArmInFlight(false);
       setArmAfterTtsEnd(false);
       if (typeof AppState.emit === "function") {
@@ -4489,9 +4491,11 @@ import { initVAD } from "./audio/vad_client.js";
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("ws.close", () => {
       __resetAudioHeaderSent();
+      resetTurnIntent("ws.close");
     });
     window.addEventListener("ws.resume_invalid", () => {
       __resetAudioHeaderSent();
+      resetTurnIntent("ws.resume_invalid");
     });
   }
   if (typeof WSClient._linkedProofLogged !== "boolean") {

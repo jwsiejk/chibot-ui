@@ -1191,6 +1191,9 @@
       const previous = runtimeState.isRecording;
       const next = !!active;
       runtimeState.isRecording = next;
+      if (typeof AppState === 'object' && AppState) {
+        AppState.listening = next;
+      }
       if (!next) {
         cancelAsrReadyGuard();
       }

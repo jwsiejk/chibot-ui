@@ -1,355 +1,66 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 2ad90a73d33f920ca2798e51b33a90cb887f71ef..ff64c476e9107cd8d3a37d6c4cd692243b4b3a8f 100644
+index ff64c476e9107cd8d3a37d6c4cd692243b4b3a8f..fb8bd5de24bc1d9479d554c3b5ab747e2a71b2ce 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1456,50 +1456,57 @@
-         return;
+@@ -1169,50 +1169,53 @@
+       if (source) {
+         detail.source = String(source).slice(0, 32);
        }
-       if (!runtimeState.asrReady) {
-         requestAsrPrearm(trigger);
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'asr_ready',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
-       if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {
-         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
-           blockedBy: 'audio_playback',
-           audioIdle: runtimeState.audioPlaybackIdle,
-         });
-         return;
-       }
- 
-       logClient(`evt=mic_arm trigger=${triggerLabel} reason=${reasonLabel}`, {
-         event: 'mic_arm',
-         trigger: triggerLabel,
-         reason: reasonLabel,
-       });
-       startMicCapture()
-         .then((started) => {
-+          const recorderIsActive = window.AudioRecorder?.listening === true || AppState?.listening === true;
-+          if (!started && recorderIsActive) {
-+            logClient('evt=mic_start_ok reason=already_active');
-+            updateRecordingState(true, 'auto_start_already_active');
-+            noteMicOpen('auto_start_already_active');
-+            return;
-+          }
-           if (!started) {
-             logClient('evt=mic_open_failed err=mic_not_started', {
-               event: 'mic_open_failed',
-               error: 'mic_not_started',
-             });
-             return;
-           }
-           updateRecordingState(true, 'auto_start_capture');
-           noteMicOpen('auto_start_capture');
-         })
-         .catch((err) => {
-           const errText = safeErr(err);
-           logClient(`evt=mic_open_failed err=${errText}`, {
-             event: 'mic_open_failed',
-             error: errText,
-           });
-         });
+       logClient('evt=ui_rec_badge_on', detail);
      }
  
-     function maybeLogClientReadyOutcome(outcome, extraMeta) {
-       if (!clientReadyStats) {
-         return;
+     function normalizeStopReason(source) {
+       if (typeof source === 'string' && source) {
+         return source.slice(0, 48);
        }
-       const summary = {
-         outcome: typeof outcome === 'string' && outcome ? outcome.slice(0, 32) : 'unknown',
+       if (source && typeof source === 'object') {
+         if (typeof source.reason === 'string' && source.reason) {
+           return source.reason.slice(0, 48);
+         }
+         if (typeof source.code === 'string' && source.code) {
+           return source.code.slice(0, 48);
+         }
+       }
+       return 'unknown';
+     }
+ 
+     function updateRecordingState(active, source) {
+       const previous = runtimeState.isRecording;
+       const next = !!active;
+       runtimeState.isRecording = next;
++      if (typeof AppState === 'object' && AppState) {
++        AppState.listening = next;
++      }
+       if (!next) {
+         cancelAsrReadyGuard();
+       }
+       let stopReasonLabel = null;
+       if (next) {
+         if (!previous) {
+           runtimeState.finalSeenThisTurn = false;
+           if (AppState && typeof AppState.__no_rearm_until === 'number') {
+             AppState.__no_rearm_until = 0;
+           }
+           beginMicTelemetrySession();
+           resetMicSessionTelemetry();
+           noteRecordingBadgeOn(source);
+           const timeslice = getCaptureTimesliceMs();
+           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
+             ? Math.max(0, Math.round(timeslice))
+             : 'unknown';
+           logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
+         }
+         if (!AppState?.ttsActive) {
+           armAsrPartialWatchdog();
+         } else {
+           cancelAsrPartialWatchdog();
+         }
+       } else if (previous) {
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 81d579e6bb82076ba6b59a076dd53de7dac3e003..c79d74e4bfc6e31a9af866c82b2b238156e49046 100644
+index c79d74e4bfc6e31a9af866c82b2b238156e49046..bab4899d2347eb06ecd8197651ddc356dbd11a7d 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -441,53 +441,50 @@ import { initVAD } from "./audio/vad_client.js";
- 
-     try {
-       patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
-     } catch (err) {
-       try {
-         console.warn("Failed to patch policy VAD after asr.ready", err);
-       } catch {}
-     }
-   }
- 
-   async function startStreamingAfterAsrReady(trigger) {
-     const pending = __pendingAsrReadyStart;
-     if (!pending) {
-       return false;
-     }
-     __pendingAsrReadyStart = null;
-     const reason = typeof trigger === "string" && trigger
-       ? trigger
-       : (typeof pending.reason === "string" && pending.reason ? pending.reason : "asr_ready");
-     const policy = clonePolicySnapshot(pending.policy);
-     try {
-       if (!AppState.listening) {
-         sendAudioHeader(policy);
-       }
-       await startRecorderStreaming(policy, reason);
--      if (AppState && typeof AppState === "object") {
--        AppState.micLive = true;
--      }
-       logMic({ outcome: MIC_OUTCOME.STREAMING, reason });
-       return true;
-     } catch (err) {
-       console.error("Deferred recorder start failed", err);
-       logMic({
-         outcome: MIC_OUTCOME.ERROR_GUM,
-         message: err && err.message ? err.message : String(err || ""),
-         reason,
-       });
-       __pendingAsrReadyStart = pending;
-       return false;
-     }
-   }
- 
-   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
-   let autostartAttempts = 0;
-   let autostartTimer = null;
- 
-   const WSClient = window.WSClient = window.WSClient || {};
-   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
-     window.ws = null;
-   }
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-@@ -498,50 +495,90 @@ import { initVAD } from "./audio/vad_client.js";
-     return ArrayBuffer.isView(value) && !(value instanceof DataView);
-   }
- 
-   function toArrayBuffer(value) {
-     if (value instanceof ArrayBuffer) {
-       return value;
-     }
-     if (isTypedArray(value)) {
-       if (value.byteLength === value.buffer.byteLength && value.byteOffset === 0) {
-         return value.buffer;
-       }
-       try {
-         return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-       } catch {
-         return null;
-       }
-     }
-     return null;
-   }
- 
-   function wsOpen() {
-     const ws = WSClient._ws || window.ws;
-     return ws && ws.readyState === WebSocket.OPEN ? ws : null;
-   }
- 
-+  // ---- Turn opener (idempotent; waits for WS to be ready) ----
-+  let __turnOpen = false, __turnOpenAt = 0;
-+  async function openTurnOnce(reason) {
-+    if (__turnOpen) return true;
-+    const deadline = Date.now() + 800;
-+    while (!(WSClient?.isConnected?.()) && Date.now() < deadline) {
-+      await new Promise((r) => setTimeout(r, 50));
-+    }
-+    if (!(WSClient?.isConnected?.())) {
-+      console.warn("openTurnOnce: WS not ready, skipping input.start");
-+      return false;
-+    }
-+    try {
-+      WSClient.send({ type: "input.start", reason: reason || "auto" });
-+    } catch {}
-+    __turnOpen = true;
-+    __turnOpenAt = Date.now();
-+    try {
-+      hubLog?.("client.turn.intent", { action: "open", reason, wsReady: true, at: __turnOpenAt });
-+    } catch {}
-+    return true;
-+  }
-+
-+  function resetTurnIntent(reason) {
-+    if (!__turnOpen) {
-+      return;
-+    }
-+    const detail = {
-+      action: "close",
-+      reason: reason || "reset",
-+      at: Date.now(),
-+      openedAt: __turnOpenAt,
-+    };
-+    __turnOpen = false;
-+    __turnOpenAt = 0;
-+    try {
-+      hubLog?.("client.turn.intent", detail);
-+    } catch {}
-+  }
-+
-   function canSendInputControl() {
-     let phase = null;
-     try {
-       phase = AppState?.wsPhase || AppState?.connectionState || null;
-     } catch {}
-     let inReadyPhase = true;
-     if (typeof phase === "string" && phase) {
-       inReadyPhase = WS_READY_PHASES.has(phase);
-     }
-     let connected = false;
-     try {
-       if (typeof WSClient?.isConnected === "function") {
-         connected = WSClient.isConnected();
-       } else {
-         const live = wsOpen();
-         connected = !!live;
-       }
-     } catch {}
-     if (!connected && typeof WSClient?._connected === "boolean") {
-       connected = WSClient._connected;
-     }
-     return connected && inReadyPhase;
-   }
- 
-   function logTransportMisuse(kind) {
-@@ -761,51 +798,52 @@ import { initVAD } from "./audio/vad_client.js";
- 
-   function publishVad(event, payload) {
-     if (typeof event !== "string" || !event) {
-       return;
-     }
-     if (event === "client.vad.speech_start") {
-       clearVadSilenceTimer();
-       emitConsoleBusEvent("client.vad.start_speech");
-     } else if (event === "client.vad.speech_end") {
-       const durationValue = Number(payload && payload.duration_ms);
-       const durationMs = Number.isFinite(durationValue) ? Math.max(0, Math.round(durationValue)) : null;
-       const detail = durationMs !== null ? { duration_ms: durationMs } : undefined;
-       emitConsoleBusEvent("client.vad.end_speech", detail);
-       scheduleVadSilenceTimer();
-     }
-     hubLog(event, payload);
-   }
- 
-   function handleVadGateChange(action) {
-     if (action === "pause") {
-       syncSenderPaused(true);
-     } else if (action === "resume") {
-       syncSenderPaused(false);
-     }
-     try {
--      hubLog("client.vad.gate", { action });
-+      const state = action;
-+      hubLog("client.vad.gate", { action, state, senderPaused: AppState?.senderPaused });
-     } catch {}
-   }
- 
-   try {
-     vadController = initVAD({
-       getPolicy: () => getVadPolicySnapshot(),
-       getTtsActive: () => getTtsActiveSnapshot(),
-       onGateChange: handleVadGateChange,
-       setAppState: (patch) => setVadAppState(patch),
-       publish: (event, payload) => publishVad(event, payload),
-     });
-   } catch (err) {
-     try {
-       console.warn("VAD initialization failed", err);
-     } catch {}
-     vadController = null;
-   }
- 
-   function getGateSnapshot() {
-     let snapshot = null;
-     try {
-       snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
-     } catch {}
-     const asrValue = snapshot && typeof snapshot.asrReady === "boolean"
-       ? snapshot.asrReady
-@@ -1269,74 +1307,84 @@ import { initVAD } from "./audio/vad_client.js";
-     if (sendResult && typeof sendResult.then === "function") {
-       sendResult
-         .then(() => {
-           __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-           __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-         })
-         .catch((err) => {
-           console.warn("pcm.send.error", err);
-         });
-       return;
-     }
-     if (!sendResult) {
-       console.warn("pcm.send.error", { reason: "send_audio_chunk_failed" });
-       return;
-     }
-     if ((Math.random() * 50 | 0) === 0) {
-       const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
-       hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
-     }
-     __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-     __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-   }
- 
-   function stopRecorder(reason) {
-     _audioStreaming = false;
-+    const stopReason = normalizeReason(reason);
-+    resetTurnIntent(stopReason);
-     clearAudioKeepaliveTimer();
-     clearVadSilenceTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       setListeningState(false);
-+      AppState.micLive = false;
-+      try {
-+        hubLog("client.pcm.capture_stop", { reason: stopReason });
-+      } catch {}
-       return;
-     }
-     try {
--      recorder.stopListening({ reason: normalizeReason(reason) });
-+      recorder.stopListening({ reason: stopReason });
-     } catch (err) {
-       console.warn("Recorder stopListening failed", err);
-     }
-     syncSenderPaused(false);
-     flushPcmBatch();
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
-     }
-     setListeningState(false);
-+    AppState.micLive = false;
-+    try {
-+      hubLog("client.pcm.capture_stop", { reason: stopReason });
-+    } catch {}
-   }
- 
-   function handleRecorderChunk(event) {
-     if (!event) {
-       return;
-     }
-     const buffer = event.buffer instanceof ArrayBuffer
-       ? event.buffer
-       : (ArrayBuffer.isView(event.buffer)
-         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-         : null);
-     if (!buffer) {
-       return;
-     }
-     const seq = Number(event.seq) || 0;
-     micLastChunkAt = Date.now();
-     scheduleAudioKeepalive();
-     recordRecorderChunk(micLastChunkAt);
-     const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
-       ? performance.now()
-       : Date.now();
-     if (vadController && typeof vadController.onPcmFrame === "function") {
-       try {
-         vadController.onPcmFrame(buffer, frameTimestamp);
-       } catch (err) {
-@@ -1347,88 +1395,90 @@ import { initVAD } from "./audio/vad_client.js";
+@@ -1395,50 +1395,51 @@ import { initVAD } from "./audio/vad_client.js";
      }
      if (!_canCaptureNow()) {
        return;
@@ -375,217 +86,33 @@ index 81d579e6bb82076ba6b59a076dd53de7dac3e003..c79d74e4bfc6e31a9af866c82b2b2381
  
    async function startRecorderStreaming(policy, reason) {
      if (AppState.listening) {
--      return;
-+      return true;
++      AppState.micLive = true;
+       return true;
      }
      resetPcmBatchState();
      clearVadSilenceTimer();
      const recorder = getRecorder();
      if (!recorder) {
        console.warn("AudioRecorder unavailable; cannot start streaming");
--      return;
-+      return false;
+       return false;
      }
--    // The server typically owns the input.start lifecycle; client emits only in
--    // policy-driven autostart paths where we must request capture proactively.
-+    const captureReason = typeof reason === "string" && reason ? reason : "auto";
+     const captureReason = typeof reason === "string" && reason ? reason : "auto";
      try {
        await recorder.start({ onChunk: handleRecorderChunk, policy });
-+      resetRecorderTelemetry();
-+      syncSenderPaused(false);
-+      if (vadController && typeof vadController.reset === "function") {
-+        try {
-+          vadController.reset();
-+        } catch (err) {
-+          try {
-+            console.warn("VAD reset failed", err);
-+          } catch {}
-+        }
-+      }
-+      await recorder.startListening(policy);
-+      micLastChunkAt = Date.now();
-+      scheduleAudioKeepalive();
-+      setListeningState(true);
-+      AppState.micLive = true;
-+      try {
-+        hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
-+      } catch {}
-+      return true;
-     } catch (err) {
--      if (err && err.name === "NotAllowedError") {
-+      if (err?.name === "NotAllowedError") {
-         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
-       }
-+      setListeningState(false);
-+      AppState.micLive = false;
-       throw err;
-     }
--    resetRecorderTelemetry();
--    syncSenderPaused(false);
--    if (vadController && typeof vadController.reset === "function") {
--      try {
--        vadController.reset();
--      } catch (err) {
--        try {
--          console.warn("VAD reset failed", err);
--        } catch {}
--      }
--    }
--    await recorder.startListening(policy);
--    micLastChunkAt = Date.now();
--    scheduleAudioKeepalive();
--    setListeningState(true);
--    try {
--      const captureReason = typeof reason === "string" && reason ? reason : "unknown";
--      hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
--    } catch {}
-   }
- 
-   function schedulePostTtsArm(reason) {
-     clearPostTtsArmTimer();
-     postTtsArmTimerId = setTimeout(() => {
-       postTtsArmTimerId = null;
-       requestAsrArm(reason);
-     }, POST_TTS_ARM_DELAY_MS);
-   }
- 
-   function requestAsrArm(reason) {
-     const label = normalizeReason(reason);
-     clearPostTtsArmTimer();
-     if (AppState.ttsActive) {
-       setArmAfterTtsEnd(true);
-       logStage("client.asr_arm_queued", { reason: label });
-       return;
-     }
-     if (AppState.asrArmInFlight) {
-       logStage("client.asr_rearm_blocked", { reason: label });
-       return;
-     }
-     try {
-       setAsrArmInFlight(true);
-       logStage("client.asr_rearm_request", { reason: label });
-@@ -3549,116 +3599,122 @@ import { initVAD } from "./audio/vad_client.js";
-         }
-         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-       } catch (err) {
-         console.warn("Hub stop_listening handler error", err);
-         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-       }
-       clearPendingAsrReadyStart("stop_listening");
-       __asrReadySeen = false;
-       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+       resetRecorderTelemetry();
+       syncSenderPaused(false);
+       if (vadController && typeof vadController.reset === "function") {
          try {
-           const reason =
-             (typeof frame?.reason === "string" && frame.reason) ||
-             "server_requested";
-           window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
+           vadController.reset();
          } catch (err) {
-           console.warn("stop_listening event dispatch failed", err);
-         }
-       }
-     } else if (frame.type === "input.start") {
-       _audioStreaming = true;
-       setListeningState(true);
-       emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
-       const reason = typeof frame?.reason === "string" && frame.reason
-         ? frame.reason
-         : frame?.type || "input.start";
-+      __turnOpen = true;
-+      __turnOpenAt = Date.now();
-       hubLog("client.stream.on", { reason });
-       await handleInputStartFrame(frame);
-     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
-       __resetAudioHeaderSent();
-       if (frame.type === "asr.closed") {
-         _audioStreaming = false;
-         setListeningState(false);
-+        AppState.micLive = false;
-+        resetTurnIntent(frame?.type || "asr.closed");
-         emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
-       }
-     } else if (frame.type === "input.stop") {
-+      const reason = typeof frame?.reason === "string" && frame.reason
-+        ? frame.reason
-+        : frame?.type || "input.stop";
-       if (_audioStreaming) {
--        const reason = typeof frame?.reason === "string" && frame.reason
--          ? frame.reason
--          : frame?.type || "input.stop";
-         hubLog("client.stream.off", { reason });
-       }
-       _audioStreaming = false;
-       setListeningState(false);
-+      AppState.micLive = false;
-+      resetTurnIntent(reason);
-       emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
-       stopInputCapture({ reason: "input.stop" });
-       clearPendingAsrReadyStart("input.stop");
-       __asrReadySeen = false;
-       __resetAudioHeaderSent();
-     } else if (frame.type === "assistant.await_user") {
-+      const reason = typeof frame?.reason === "string" && frame.reason
-+        ? frame.reason
-+        : frame?.type || "assistant.await_user";
-       if (_audioStreaming) {
--        const reason = typeof frame?.reason === "string" && frame.reason
--          ? frame.reason
--          : frame?.type || "assistant.await_user";
-         hubLog("client.stream.off", { reason });
-       }
-       _audioStreaming = false;
-       setListeningState(false);
-+      AppState.micLive = false;
-+      resetTurnIntent(reason);
-     } else if (frame.type === "asr.ready") {
-       frame = handleAsrReadyFrame(frame) || frame;
-       __asrReadySeen = true;
-       setAsrArmInFlight(false);
-       setArmAfterTtsEnd(false);
-       setWsConnected(true);
-       AppState.asrReady = true;
-       try { // keep nested state in sync so StatusBar sees it
-         const s = (AppState.state = AppState.state || {});
-         s.asrReady = true;
-         if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
-       } catch {}
-       setWsPhase("ready");
-       emitConsoleBusEvent("client.asr.ready", { asrReady: true });
-       // derive and publish auto-start gates from v2 policy
-       const gates = deriveAutoArmFromPolicy(frame?.policy || AppState?.policy);
-       hubLog("client.asr.autostart_gates", gates);
-       publishGates(gates);
-       // If policy says server starts on asr.ready and we don't require a turn, arm now (once).
-       if (gates.start_on_asr_ready && !gates.start_on_turn_ready) {
-         __pendingAutoArm = false;
-         if (!_audioStreaming && !AppState?.micLive) {
-           const startReason = "auto_asr_ready";
--          try {
--            if (canSendInputControl()) {
--              WSClient.send({ type: "input.start", reason: startReason });
--            }
--          } catch {}
-+          const turned = await openTurnOnce(startReason);
-+          void turned;
            try {
-             await startRecorderStreaming(frame?.policy || {}, startReason);
-             _audioStreaming = true;
-             if (AppState && typeof AppState === "object") {
-               AppState.micLive = true;
-             }
-+            // badge flips when startRecorderStreaming succeeds
-           } catch (e) {
-             console.warn("auto-arm on asr.ready failed", e);
-           }
+             console.warn("VAD reset failed", err);
+           } catch {}
          }
-       } else if (gates.start_on_turn_ready) {
-         // Defer until turn begins
-         __pendingAutoArm = true;
        }
-       try {
-         const capturePolicy = AppState?.policy?.capture || {};
-         const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
-           ? capturePolicy.mode
-           : "webrtc_aec";
+       await recorder.startListening(policy);
+       micLastChunkAt = Date.now();
+@@ -3709,50 +3710,51 @@ import { initVAD } from "./audio/vad_client.js";
          const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
            ? window.__audioCtx.sampleRate
            : 48000;
@@ -598,68 +125,79 @@ index 81d579e6bb82076ba6b59a076dd53de7dac3e003..c79d74e4bfc6e31a9af866c82b2b2381
        // No unconditional start here; arming is handled by gates above or by turn.begin below.
      } else if (frame.type === "asr.partial") {
        transcriptFrameAllowed(frame);
-@@ -3702,59 +3758,59 @@ import { initVAD } from "./audio/vad_client.js";
-           { level: "warning", ttlMs: 10000 }
+     } else if (frame.type === "asr.final") {
+       transcriptFrameAllowed(frame);
+     } else if (frame.type === "asr.unavailable") {
+       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+       const details = frame && typeof frame.details === "string"
+         ? frame.details
+         : (frame && typeof frame.detail === "string" ? frame.detail : "");
+       console.warn("asr.unavailable", reason, details);
+       AppState.asrReady = false;
+       AppState.asrVendor = null;
+       updateState({ asrReady: false, asrVendor: null });
+       stopRecorder("asr_unavailable");
+       __resetAudioHeaderSent();
++      resetTurnIntent(frame?.type || "asr.unavailable");
+       setAsrArmInFlight(false);
+       setArmAfterTtsEnd(false);
+       if (typeof AppState.emit === "function") {
+         AppState.emit("asrReady", { ready: false, reason, vendor: null });
+       }
+       clearPendingAsrReadyStart("asr_unavailable");
+       __asrReadySeen = false;
+       try {
+         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
+         hud?.setState?.("Chat");
+       } catch (err) {
+         console.warn("Failed to update HUD state after asr.unavailable", err);
+       }
+       try {
+         const view = window.TranscriptView;
+         view?.showSystemFromChip?.(
+           "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
          );
        } catch (err) {
-         console.warn("Failed to show voice unavailable banner", err);
+         console.warn("Failed to render Chip system message after asr.unavailable", err);
        }
-     } else if (frame.type === "asr.turn") {
-       const begin = frame.state === "begin";
        try {
-         window.UIState = window.UIState || {};
-         window.UIState.asrTurnActive = begin;
-         if (window.StatusBar && typeof window.StatusBar.render === "function") {
-           window.StatusBar.render({
-             ...window.UIState,
-             policy: (window.AppState?.policy || {}),
-           });
-         }
-       } catch (err) {
-         console.warn("asr.turn handling error", err);
-       }
-       // publish turn state for StatusBar
-       try {
-         const s = (AppState.state = AppState.state || {});
-         s.asrTurnActive = begin;
-         if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
-       } catch {}
-+      if (!begin) {
-+        resetTurnIntent(frame?.state || "turn.end");
-+      }
-       if (begin && __pendingAutoArm) {
-         __pendingAutoArm = false;
-         if (!_audioStreaming && !AppState?.micLive) {
-           const startReason = "auto_turn_begin";
--          try {
--            if (canSendInputControl()) {
--              WSClient.send({ type: "input.start", reason: startReason });
--            }
--          } catch {}
-+          const turned = await openTurnOnce(startReason);
-+          void turned;
-           try {
-             await startRecorderStreaming(AppState?.policy || {}, startReason);
-             _audioStreaming = true;
-             if (AppState && typeof AppState === "object") {
-               AppState.micLive = true;
-             }
-           } catch (e) {
-             console.warn("auto-arm on turn.begin failed", e);
-           }
-         }
-       }
-     } else if (frame.type === "chat.message" || frame.type === "message") {
-       if (!transcriptFrameAllowed(frame)) {
-         // Keep frame flowing to other listeners without rendering in transcript.
-       } else {
-         const view = window.TranscriptView;
-         if (view && typeof view.handleChatMessage === "function") {
-           try {
-             view.handleChatMessage(frame);
-           } catch (err) {
-             console.warn("TranscriptView chat handler error", err);
-           }
-         }
-       }
-     } else if (frame.type === "chat.history") {
+         window?.Banner?.show?.(
+           "Voice temporarily unavailable. You can continue via chat.",
+           { level: "warning", ttlMs: 10000 }
+@@ -4467,34 +4469,36 @@ import { initVAD } from "./audio/vad_client.js";
+   WSClient.open = open;
+   WSClient.close = close;
+   WSClient.send = WSClient.sendJSON;
+   WSClient.sendBinary = (payload, opts = {}) => sendBinary(payload, opts);
+   WSClient.getBufferedAmount = getBufferedAmount;
+   WSClient.requestAsrArm = requestAsrArm;
+   WSClient.requestAsrClose = requestAsrClose;
+   Object.defineProperty(WSClient, "socket", {
+     configurable: true,
+     enumerable: true,
+     get() {
+       return socket;
+     }
+   });
+   WSClient.isConnected = function isConnected() {
+     return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
+   };
+   WSClient.__debug = debug;
+   window.WSClient = WSClient;
+   WSClient._ws = WSClient._ws || null;
+   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+     window.addEventListener("ws.close", () => {
+       __resetAudioHeaderSent();
++      resetTurnIntent("ws.close");
+     });
+     window.addEventListener("ws.resume_invalid", () => {
+       __resetAudioHeaderSent();
++      resetTurnIntent("ws.resume_invalid");
+     });
+   }
+   if (typeof WSClient._linkedProofLogged !== "boolean") {
+     WSClient._linkedProofLogged = false;
+   }
+ })();
