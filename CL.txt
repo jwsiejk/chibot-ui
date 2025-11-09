@@ -1,28 +1,312 @@
-app.js?v=5f8d642:2990 diag=asr_ready
-app.js?v=5f8d642:1004 client.mic evt=mic_capture_request_blocked reason=active
-2app.js?v=5f8d642:651 client.appstate.delta
-app.js?v=5f8d642:651 client.vad.meter
-2app.js?v=5f8d642:651 client.appstate.delta
-app.js?v=5f8d642:651 client.vad.meter
-3app.js?v=5f8d642:651 client.appstate.delta
-app.js?v=5f8d642:651 client.vad.meter
-2app.js?v=5f8d642:651 client.appstate.delta
-app.js?v=5f8d642:651 client.vad.meter
-3app.js?v=5f8d642:651 client.appstate.delta
-app.js?v=5f8d642:651 client.pcm.capture_stop
-app.js?v=5f8d642:1004 client.mic evt=mic_stop reason=watchdog
-app.js?v=5f8d642:651 client.appstate.heartbeat
-app.js?v=5f8d642:651 client.ws
-app.js?v=5f8d642:651 client.stream.off
-app.js?v=5f8d642:651 client.vad.state
-ws_client.js?v=5f8d642:4156 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=5f8d642:4156Understand this warning
-app.js?v=5f8d642:651 client.ws
-app.js?v=5f8d642:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=5f8d642:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=5f8d642:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=5f8d642:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=5f8d642:651 client.appstate.delta
-ws_client.js?v=5f8d642:3992 WebSocket closed Object
-ws.onclose @ ws_client.js?v=5f8d642:3992Understand this error
-app.js?v=5f8d642:651 client.ws
+BUILD_ID 7abd231
+app.js?v=7abd231:27 AskChip build: 7abd231
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.vad.state
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:2253 evt=ws_open_attempt Object
+ws_client.js?v=7abd231:3949 evt=ws_client_open_params Object
+ws_client.js?v=7abd231:3953 WS opening Object
+app.js?v=7abd231:651 client.appstate.delta
+ws_client.js?v=7abd231:3971 WebSocket open Object
+app.js?v=7abd231:651 client.ws
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.appstate.heartbeat
+app.js?v=7abd231:651 client.ws
+ws_client.js?v=7abd231:3756 evt=ws_linked AppState true WSClient true
+app.js?v=7abd231:651 client.ws
+ws_client.js?v=7abd231:2794 WS server banner Object
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:1004 client.mic evt=policy_capture asr_input= timeslice_ms=200
+app.js?v=7abd231:651 client.ws
+app.js?v=7abd231:651 client.audio.worklet_load_ok
+2app.js?v=7abd231:1004 client.mic evt=mic_get_user_media_start constraints={"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false,"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16}
+app.js?v=7abd231:1004 client.mic evt=mic_get_user_media_success track_id=22ef319f-64b4-4c0e-ac00-4ff951f2c902
+app.js?v=7abd231:1004 evt=mic_perm_granted
+app.js?v=7abd231:1004 client.mic evt=mic_get_user_media_success track_id=afb107ab-579d-4815-a23b-6e6f4e96178d
+app.js?v=7abd231:651 client.ws
+ws_client.js?v=7abd231:3160 evt=ui_transcript_filter allow=true type=chat.message role=assistant
+app.js?v=7abd231:651 client.ws
+app.js?v=7abd231:651 client.appstate.heartbeat
+app.js?v=7abd231:1004 client.turn: evt=tts_end_logic_start audio_idle=true
+app.js?v=7abd231:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
+app.js?v=7abd231:1004 evt=asr_prearm_requested source=client trigger=turn_ready keep_stream_warm_ms=30000
+app.js?v=7abd231:651 client.asr_rearm_request
+app.js?v=7abd231:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=turn_ready reason=tts_end
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=Ready micPerm=true recording=false}
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.appstate.delta
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.pcm.capture_start
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.vad.params
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.mic
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.asr
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 diag
+app.js?v=7abd231:651 client.asr_arm_clear
+app.js?v=7abd231:651 client.audio_header_send
+app.js?v=7abd231:651 client.vad.state
+app.js?v=7abd231:1004 client.mic evt=guard_arm ts_ms=1762686182669
+app.js?v=7abd231:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
+app.js?v=7abd231:1004 evt=mic_arm trigger=asr_ready reason=policy
+app.js?v=7abd231:1004 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=7abd231:2990 diag=asr_ready
+app.js?v=7abd231:1004 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=7abd231:1004 evt=mic_open_failed err=mic_not_started
+app.js?v=7abd231:651 client.stream.on
+ws_client.js?v=7abd231:379 diag=awaiting_asr_ready reason=input.start
+2app.js?v=7abd231:651 client.mic
+app.js?v=7abd231:1004 evt=ui_rec_badge_on
+app.js?v=7abd231:1004 client.mic evt=mic_start timeslice_ms=200
+2app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+3app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+2app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+3app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+2app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+3app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+2app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+2app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.audio_first_chunk
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_first_chunk
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.vad.preroll_flush
+app.js?v=7abd231:651 client.vad.state
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.flush
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.flush
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+ws_client.js?v=7abd231:3385 diag=start_listening_order vendor=null vad_warmup_ms=1200 require_active_turn=true
+app.js?v=7abd231:651 client.mic
+ws_client.js?v=7abd231:379 diag=awaiting_asr_ready reason=start_listening
+app.js?v=7abd231:651 client.mic
+app.js?v=7abd231:651 client.asr
+app.js?v=7abd231:651 diag
+app.js?v=7abd231:651 client.asr_arm_clear
+app.js?v=7abd231:651 client.audio_header_send
+app.js?v=7abd231:1004 client.mic evt=guard_arm ts_ms=1762686183652
+app.js?v=7abd231:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=true
+app.js?v=7abd231:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":true,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=asr_ready reason=policy
+app.js?v=7abd231:1004 evt=maybe_autostart_blocked gates={asrReady=true turnState=Ready micPerm=true recording=true}
+app.js?v=7abd231:2990 diag=asr_ready
+app.js?v=7abd231:1004 client.mic evt=mic_capture_request_blocked reason=active
+2app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+3app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+2app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.vad.meter
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.vad.speech_start
+app.js?v=7abd231:651 client.vad.state
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+3app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.vad.preroll_flush
+app.js?v=7abd231:651 client.vad.state
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.audio_chunk_send
+app.js?v=7abd231:651 client.appstate.delta
+2app.js?v=7abd231:651 client.pcm.chunk
+app.js?v=7abd231:651 client.appstate.delta
+app.js?v=7abd231:651 client.pcm.capture_stop
+app.js?v=7abd231:1004 client.mic evt=mic_stop reason=watchdog
+app.js?v=7abd231:651 client.audio_chunk_send
+3app.js?v=7abd231:651 client.appstate.heartbeat
+app.js?v=7abd231:651 client.stream.off
+app.js?v=7abd231:651 client.vad.state
+ws_client.js?v=7abd231:4156 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=7abd231:4156Understand this warning
+app.js?v=7abd231:651 client.ws
+app.js?v=7abd231:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=7abd231:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=7abd231:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=7abd231:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=7abd231:651 client.appstate.delta
+ws_client.js?v=7abd231:3992 WebSocket closed Object
+ws.onclose @ ws_client.js?v=7abd231:3992Understand this error
+app.js?v=7abd231:651 client.ws
+app.js?v=7abd231:651 client.appstate.delta

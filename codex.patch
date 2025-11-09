@@ -1,355 +1,290 @@
-diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
-index 3538f10c390e5208674610caf957ddaa344340b0..0853227bb3432fbca81bc97df776c4c0a21cdc8f 100644
---- a/app/static/js/audio/pcm_recorder.js
-+++ b/app/static/js/audio/pcm_recorder.js
-@@ -475,56 +475,65 @@
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index f38aa2f32235e480b7ad12e60f69a0c5c655b0de..5bcb4cd2f62fb23c19f00862f0daa72e213d2af5 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,47 +1,50 @@
+ // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
+ import { initVAD } from "./audio/vad_client.js";
+ import { WakeWord } from "./wake_word.js";
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+   const CLIENT_VAD_POLICY = Object.freeze({
+     enable: true,
+     sensitivity: 0.5,
+     min_speech_ms: 200,
+     min_silence_ms: 400,
+     hold_ms: 250,
+     echo_suppression_db: 10,
+     tts_threshold_boost_db: 12,
+     debounce_ms: 40,
+-    stream_gate: "none",
++    // Enable true gating; preroll remains handled internally by the VAD.
++    stream_gate: "gate",
+     max_gate_silence_ms: 3000,
++    // Optional: per-deployment configurable warmup in ms
++    warmup_ms: 1200,
+   });
+   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
+   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
  
-       this._stream = stream;
-       this._sourceNode = sourceNode;
-       this._workletNode = workletNode;
-       this._active = true;
-       this._muted = false;
-       this._firstChunkSent = false;
-       return context;
+   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
+ 
+   // ---- Golden-path turn trace & mic outcomes (additive) ----
+   // ---- Telemetry (additive) ----
+   const MIC_OUTCOME = {
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+   const DEFAULT_ASR_VENDOR = 'speechmatics';
+   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
+@@ -235,51 +238,50 @@ import { WakeWord } from "./wake_word.js";
+     sanitizedPolicy.ui.status = { ...DEFAULT_POLICY_STATUS, ...statusSource };
+     if (!Number.isFinite(sanitizedPolicy.version)) {
+       sanitizedPolicy.version = 2;
+     }
+     if (typeof sanitizedPolicy._normalized_from !== "string") {
+       sanitizedPolicy._normalized_from = "v2";
      }
  
-     async startListening(policy = {}) {
-       if (policy && typeof policy === 'object' && Object.keys(policy).length) {
-         this.setPolicy(policy);
-       }
-       if (!this._active) {
-         await this.start(policy || {});
-       }
-       if (this._listening) {
+     const normalizedPolicy = { ...basePolicy };
+     Object.keys(sanitizedPolicy).forEach((key) => {
+       const value = sanitizedPolicy[key];
+       if (typeof value === "undefined") {
          return;
        }
-       this._listening = true;
-       this._chunkSeq = 0;
-       this._firstChunkSent = false;
-       this._listeningStartedAt = Date.now();
-       this._resetClientVadState();
-+      const vadConfig = this._getResolvedClientVadConfig();
-       const chunkMs = DEFAULT_CHUNK_MS;
-       emitClientLog('client.pcm.capture_start', {
-         device_rate: this._deviceSampleRate || null,
-         target_rate: TARGET_SAMPLE_RATE,
-         chunk_ms: chunkMs,
-       });
-+      emitClientLog('client.vad.params', {
-+        enable: vadConfig.enable,
-+        threshold_dbfs: vadConfig.thresholdDbfs,
-+        attack_ms: vadConfig.attackMs,
-+        release_ms: vadConfig.releaseMs,
-+        pre_roll_ms: vadConfig.preRollMs,
-+        min_active_ms: vadConfig.minActiveMs,
-+      });
-       emitAppStateRecordingStarted(this._policy);
-     }
+       normalizedPolicy[key] = cloneValue(value);
+     });
  
-     stopListening(reason = {}) {
-       if (!this._listening) {
+     AppState.policy = normalizedPolicy;
+   }
+ 
+   const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
+   const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
+   const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
+   const POLICY_STATUS = POLICY?.ui?.status
+     || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
+-  const VAD_WARMUP_MS = Number(POLICY_VAD?.warmup_ms ?? DEFAULT_POLICY_VAD.warmup_ms);
+   const WATCHDOG_FIRST_MS = Number(
+     POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
+   );
+   const SENDER_GATE_ON_TTS = Boolean(
+     POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
+   );
+   const REQUIRE_ACTIVE_TURN = Boolean(
+     POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
+   );
+ 
+   function installClientVadPolicySnapshot() {
+     const policyRoot = AppState.policy && typeof AppState.policy === "object"
+       ? AppState.policy
+       : (AppState.policy = {});
+     const ensureVadBlock = (target) => {
+       if (!target || typeof target !== "object") {
          return;
        }
-       const reasonLabel = normalizeReason(reason);
-       this._listening = false;
-       this._muted = false;
-       this._resetClientVadState();
-       emitClientLog('client.pcm.capture_stop', { reason: reasonLabel });
-     }
+       const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
+       target.vad = { ...existingVad, client: CLIENT_VAD_POLICY };
+     };
+     ensureVadBlock(policyRoot);
+     if (FEATURE_LEGACY_POLICY) {
+       if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
+         policyRoot.policy = {};
+@@ -521,53 +523,75 @@ import { WakeWord } from "./wake_word.js";
+   let pcmFlushTimerId = null;
  
-     async stop(reason = {}) {
-       this.stopListening(reason);
-       if (!this._active) {
-         return;
-       }
-       if (this._tearDownPromise) {
-         return this._tearDownPromise;
-       }
-       const cleanup = (async () => {
-         const stream = this._stream;
-         const source = this._sourceNode;
-@@ -619,51 +628,51 @@
-         return;
-       }
-       port.onmessage = (event) => {
-         const data = event ? event.data : null;
-         if (!data || data.type !== 'pcm16' || !data.buffer) {
-           return;
-         }
-         const buffer = data.buffer;
-         const byteLength = buffer.byteLength || 0;
-         if (byteLength === 0) {
-           return;
-         }
-         if (!this._listening || this._muted) {
-           return;
-         }
-         this._handleIncomingChunk(buffer);
-       };
-     }
- 
-     _handleIncomingChunk(buffer) {
-       const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
-       if (!byteLength) {
-         return;
-       }
- 
--      const cfg = this._clientVadConfig || this._extractClientVadConfig({});
-+      const cfg = this._getResolvedClientVadConfig();
-       if (!cfg.enable) {
-         this._dispatchChunk(buffer);
-         return;
-       }
- 
-       let state = this._clientVadState;
-       if (!state) {
-         state = this._createClientVadState();
-         this._clientVadState = state;
-       }
- 
-       const now = Date.now();
-       const dbfs = this._clientVadRmsDbfs(buffer);
-       const chunkMs = this._clientVadEstimateChunkMs(buffer);
-       const threshold = cfg.thresholdDbfs;
-       const above = dbfs >= threshold;
-       const normalizedDb = Number.isFinite(dbfs) ? dbfs : null;
-       publishClientVad({ vadActive: Boolean(state.active), vadDbfs: normalizedDb });
-       // meter: log a few samples until first activation
-       if (!state.meterDone) {
-         state.meterSamples = (state.meterSamples || 0) + 1;
-         if (state.meterSamples % 5 === 0) {
-           try {
-             emitClientLog('client.vad.meter', { dbfs, above, threshold });
-           } catch (_) {}
-@@ -755,50 +764,104 @@
-       if (!this._firstChunkSent) {
-         this._firstChunkSent = true;
-         emitClientLog('client.audio_first_chunk', {
-           bytes: byteLength,
-           seq,
-         });
-       }
-       const startedAt = this._listeningStartedAt || Date.now();
-       const msSinceStart = Math.max(0, Date.now() - startedAt);
-       emitClientLog('client.pcm.chunk', {
-         seq,
-         bytes: byteLength,
-         ms_since_start: msSinceStart,
-       });
-       const delivered = this._deliverChunk(buffer, seq);
-       if (!delivered) {
-         emitClientLog('client.pcm.chunk_drop', {
-           seq,
-           bytes: byteLength,
-           reason: 'delivery_failed',
-         });
-       }
-       return delivered;
-     }
- 
-+    _getResolvedClientVadConfig() {
-+      const defaults = {
-+        enable: true,
-+        thresholdDbfs: -60,
-+        attackMs: 80,
-+        releaseMs: 250,
-+        preRollMs: 240,
-+        minActiveMs: 300,
-+      };
-+
-+      let cfg = this._clientVadConfig || this._extractClientVadConfig({}) || {};
-+      if (!cfg || typeof cfg !== 'object') {
-+        cfg = {};
-+      }
-+
-+      const toFiniteNumber = (value) => {
-+        if (Number.isFinite(value)) {
-+          return value;
-+        }
-+        if (typeof value === 'string' && value.trim()) {
-+          const parsed = Number(value);
-+          if (Number.isFinite(parsed)) {
-+            return parsed;
-+          }
-+        }
-+        return null;
-+      };
-+
-+      const pickNumber = (fallback, ...candidates) => {
-+        for (let i = 0; i < candidates.length; i += 1) {
-+          const candidate = toFiniteNumber(candidates[i]);
-+          if (candidate !== null) {
-+            return candidate;
-+          }
-+        }
-+        return fallback;
-+      };
-+
-+      const thresholdDbfs = pickNumber(defaults.thresholdDbfs, cfg.thresholdDbfs, cfg.threshold_dbfs);
-+      const attackMs = Math.max(0, pickNumber(defaults.attackMs, cfg.attackMs, cfg.attack_ms));
-+      const releaseMs = Math.max(0, pickNumber(defaults.releaseMs, cfg.releaseMs, cfg.release_ms));
-+      const preRollMs = Math.max(0, pickNumber(defaults.preRollMs, cfg.preRollMs, cfg.pre_roll_ms));
-+      const minActiveMs = Math.max(0, pickNumber(defaults.minActiveMs, cfg.minActiveMs, cfg.min_active_ms));
-+
-+      return {
-+        enable: cfg.enable !== false,
-+        thresholdDbfs,
-+        attackMs,
-+        releaseMs,
-+        preRollMs,
-+        minActiveMs,
-+      };
-+    }
-+
-     _clientVadEstimateChunkMs(buffer) {
-       if (!buffer || !buffer.byteLength) {
-         return DEFAULT_CHUNK_MS;
-       }
-       const samples = buffer.byteLength / 2;
-       if (!samples || !Number.isFinite(samples)) {
-         return DEFAULT_CHUNK_MS;
-       }
-       return (samples / TARGET_SAMPLE_RATE) * 1000;
-     }
- 
-     _clientVadRmsDbfs(buffer) {
-       if (!buffer || buffer.byteLength < 2) {
-         return -Infinity;
-       }
-       let view;
+   function hubLog(label, detail) {
+     const state = typeof window !== "undefined" ? window.AppState : null;
+     const hub = state && state.hub;
+     if (hub && typeof hub.log === "function") {
        try {
-         view = new Int16Array(buffer);
-       } catch (_) {
-         return -Infinity;
+         hub.log(label, detail);
+         return true;
+       } catch (err) {
+         console.warn("AppState.hub.log failed", err);
        }
-       const length = view.length || 0;
-       if (!length) {
-         return -Infinity;
-       }
-@@ -936,116 +999,70 @@
-       if (recorderPolicy && typeof recorderPolicy === 'object') {
-         this._shouldMuteOnTts = recorderPolicy.mute_send_during_tts !== false;
-         this._stopOnTts = recorderPolicy.stop_on_tts_start === true;
-       } else {
-         this._shouldMuteOnTts = true;
-         this._stopOnTts = false;
-       }
-       this._clientVadConfig = this._extractClientVadConfig(this._policy);
-       this._resetClientVadState();
      }
- 
-     _extractRecorderPolicy(policy) {
-       if (!policy || typeof policy !== 'object') {
-         return null;
+     if (typeof window !== "undefined") {
+       try {
+         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
+         return true;
+       } catch (err) {
+         console.warn("client.log dispatch failed", err);
        }
-       if (policy.recorder && typeof policy.recorder === 'object') {
-         return policy.recorder;
-       }
-       if (policy.policy && typeof policy.policy === 'object' && policy.policy.recorder) {
-         return policy.policy.recorder;
-       }
-       return null;
      }
- 
-     _extractClientVadConfig(policy) {
--      const defaults = {
--        enable: true,
--        thresholdDbfs: -60,
--        attackMs: 80,
--        releaseMs: 250,
--        preRollMs: 240,
--        minActiveMs: 300,
--      };
-       if (!policy || typeof policy !== 'object') {
--        return { ...defaults };
-+        return {};
-       }
-       let vadPolicy = null;
-       if (policy.vad && typeof policy.vad === 'object') {
-         vadPolicy = policy.vad;
-       } else if (policy.policy && typeof policy.policy === 'object' && policy.policy.vad && typeof policy.policy.vad === 'object') {
-         vadPolicy = policy.policy.vad;
-       }
-       const clientCfg = vadPolicy && typeof vadPolicy.client === 'object' ? vadPolicy.client : null;
-       if (!clientCfg || typeof clientCfg !== 'object') {
--        return { ...defaults };
-+        return {};
-       }
--
--      const normalized = { ...defaults };
--      const coerceNumber = (value) => {
--        if (typeof value === 'number' && Number.isFinite(value)) {
--          return value;
--        }
--        if (typeof value === 'string' && value.trim()) {
--          const parsed = Number(value);
--          if (Number.isFinite(parsed)) {
--            return parsed;
--          }
--        }
--        return null;
--      };
--
--      if (clientCfg.enable === false) {
--        normalized.enable = false;
--      } else if (clientCfg.enable === true) {
--        normalized.enable = true;
--      }
--
--      const threshold = coerceNumber(clientCfg.threshold_dbfs);
--      if (threshold !== null) {
--        normalized.thresholdDbfs = threshold;
--      }
--
--      const attack = coerceNumber(clientCfg.attack_ms);
--      if (attack !== null && attack >= 0) {
--        normalized.attackMs = attack;
--      }
--
--      const release = coerceNumber(clientCfg.release_ms);
--      if (release !== null && release >= 0) {
--        normalized.releaseMs = release;
--      }
--
--      const preRoll = coerceNumber(clientCfg.pre_roll_ms);
--      if (preRoll !== null) {
--        normalized.preRollMs = Math.max(0, preRoll);
--      }
--
--      const minActive = coerceNumber(clientCfg.min_active_ms);
--      if (minActive !== null) {
--        normalized.minActiveMs = Math.max(0, minActive);
-+      try {
-+        return { ...clientCfg };
-+      } catch (_) {
-+        const clone = {};
-+        Object.keys(clientCfg).forEach((key) => {
-+          clone[key] = clientCfg[key];
-+        });
-+        return clone;
-       }
--
--      return normalized;
-     }
- 
-     _extractPolicyFromConfig(config) {
-       if (!config || typeof config !== 'object') {
-         return null;
-       }
-       if (config.policy && typeof config.policy === 'object') {
-         return config.policy;
-       }
-       const knownKeys = new Set(['onChunk']);
-       const hasOnlyPolicyKeys = Object.keys(config).every((key) => knownKeys.has(key));
-       if (!hasOnlyPolicyKeys) {
-         return config;
-       }
-       return null;
-     }
+     return false;
    }
  
-   const recorder = new PcmRecorder();
-   if (typeof window !== 'undefined') {
-     window.AudioRecorder = recorder;
+   function getVadPolicySnapshot() {
++    try {
++      const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
++        ? AppState.policy
++        : null;
++      const client = root?.vad?.client;
++      if (client && typeof client === "object") {
++        // Shallow merge: runtime overrides hard-coded safe defaults
++        return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
++      }
++    } catch {}
+     return CLIENT_VAD_POLICY_ROOT;
    }
- })();
+ 
++  // Resolve warmup once per session start (policy or default)
++  function getWarmupMs() {
++    try {
++      const snap = getVadPolicySnapshot();
++      const ms = snap?.vad?.client?.warmup_ms;
++      if (Number.isFinite(ms) && ms >= 0 && ms <= 10000) return ms;
++    } catch {}
++    return CLIENT_VAD_POLICY.warmup_ms; // 1200 fallback
++  }
++
++  const VAD_WARMUP_MS = getWarmupMs();
++
+   function getTtsActiveSnapshot() {
+     try {
+       if (typeof AppState.getState === "function") {
+         const snapshot = AppState.getState();
+         if (snapshot && typeof snapshot.ttsActive === "boolean") {
+           return snapshot.ttsActive;
+         }
+       }
+     } catch {}
+     return Boolean(AppState?.ttsActive);
+   }
+ 
+   function setVadAppState(patch) {
+     if (!patch || typeof patch !== "object") {
+       return;
+     }
+     const sanitized = {};
+     for (const key of VAD_APPSTATE_KEYS) {
+       if (Object.prototype.hasOwnProperty.call(patch, key)) {
+         sanitized[key] = patch[key];
+         AppState[key] = patch[key];
+       }
+     }
+     const keys = Object.keys(sanitized);
+     if (!keys.length) {
+@@ -2777,51 +2801,51 @@ import { WakeWord } from "./wake_word.js";
+           hasInputField = true;
+           break;
+         }
+       }
+     }
+ 
+     if (!hasInputField) {
+       return safe;
+     }
+ 
+     safe.input = input;
+     return safe;
+   }
+ 
+   function handleServerBannerFrame(frame) {
+     const sanitized = sanitizeServerBannerFrame(frame);
+     updateState({ serverBanner: sanitized });
+     console.log("WS server banner", sanitized);
+     dispatchFrame(sanitized);
+   }
+ 
+   function handleAsrReadyFrame(frame) {
+     const sanitized = sanitizeAsrReadyFrame(frame);
+     AppState.asrReady = true;
+     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
+-    beginWarmup(1200);
++    beginWarmup(VAD_WARMUP_MS);
+     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
+     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+     if (typeof AppState.emit === "function") {
+       AppState.emit("asrReady", {
+         ready: true,
+         vendor: AppState.asrVendor,
+         input: sanitized.input ?? null,
+       });
+     }
+     logStage('client.asr', {
+       stage: 'ready',
+       vendor: AppState.asrVendor,
+       input: sanitized.input ?? null,
+     });
+     return sanitized;
+   }
+ 
+   const ASR_VENDOR_OPTIONS = ['speechmatics'];
+   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
+ 
+   const DEFAULT_POLICY_FLAGS = {
+     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
+     input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
+     asr: {
+       prearm_on_tts_end: false,
+@@ -3316,51 +3340,51 @@ import { WakeWord } from "./wake_word.js";
+       handlePongFrame(frame);
+     } else if (frame.type === "error") {
+       handleErrorFrame(frame);
+     } else if (frame.type === "tts.start") {
+       try {
+         AppState?.hub?.stopListening?.("tts");
+       } catch {}
+       stopRecorder("tts_start");
+       setAppStateValue("ttsActive", true);
+       AppState.tts = true;
+       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: true });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+         audioPlayer.handleTtsStart(frame);
+       }
+       const uttIdStart = frame?.utt_id || 'utt-00001';
+       logStage('client.tts_start', { utt_id: uttIdStart });
+       logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
+     } else if (frame.type === "tts.end") {
+       setAppStateValue("ttsActive", false);
+       AppState.tts = false;
+-      beginWarmup(1200);
++      beginWarmup(VAD_WARMUP_MS);
+       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+       if (typeof AppState.emit === "function") {
+         AppState.emit("ttsActive", { active: false });
+       }
+       const audioPlayer = getAudioPlayer();
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+       const uttIdEnd = frame?.utt_id || 'utt-00001';
+       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+       if (AppState.armAfterTtsEnd) {
+         schedulePostTtsArm("post_greet");
+         setArmAfterTtsEnd(false);
+       }
+     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+       const uttId = frame?.utt_id || 'utt-00001';
+       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+       setAppStateValue("ttsActive", false);
+       logStage('client.tts', {
+         outcome: 'ended',
+         utt_id: uttId,
+         dur_ms: frame?.dur_ms,
+         reason,
+       });

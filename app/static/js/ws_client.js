@@ -18,8 +18,11 @@ import { WakeWord } from "./wake_word.js";
     echo_suppression_db: 10,
     tts_threshold_boost_db: 12,
     debounce_ms: 40,
-    stream_gate: "none",
+    // Enable true gating; preroll remains handled internally by the VAD.
+    stream_gate: "gate",
     max_gate_silence_ms: 3000,
+    // Optional: per-deployment configurable warmup in ms
+    warmup_ms: 1200,
   });
   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
@@ -257,7 +260,6 @@ import { WakeWord } from "./wake_word.js";
   const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
   const POLICY_STATUS = POLICY?.ui?.status
     || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
-  const VAD_WARMUP_MS = Number(POLICY_VAD?.warmup_ms ?? DEFAULT_POLICY_VAD.warmup_ms);
   const WATCHDOG_FIRST_MS = Number(
     POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
   );
@@ -543,8 +545,30 @@ import { WakeWord } from "./wake_word.js";
   }
 
   function getVadPolicySnapshot() {
+    try {
+      const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
+        ? AppState.policy
+        : null;
+      const client = root?.vad?.client;
+      if (client && typeof client === "object") {
+        // Shallow merge: runtime overrides hard-coded safe defaults
+        return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
+      }
+    } catch {}
     return CLIENT_VAD_POLICY_ROOT;
   }
+
+  // Resolve warmup once per session start (policy or default)
+  function getWarmupMs() {
+    try {
+      const snap = getVadPolicySnapshot();
+      const ms = snap?.vad?.client?.warmup_ms;
+      if (Number.isFinite(ms) && ms >= 0 && ms <= 10000) return ms;
+    } catch {}
+    return CLIENT_VAD_POLICY.warmup_ms; // 1200 fallback
+  }
+
+  const VAD_WARMUP_MS = getWarmupMs();
 
   function getTtsActiveSnapshot() {
     try {
@@ -2799,7 +2823,7 @@ import { WakeWord } from "./wake_word.js";
     const sanitized = sanitizeAsrReadyFrame(frame);
     AppState.asrReady = true;
     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
-    beginWarmup(1200);
+    beginWarmup(VAD_WARMUP_MS);
     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
     if (typeof AppState.emit === "function") {
@@ -3338,7 +3362,7 @@ import { WakeWord } from "./wake_word.js";
     } else if (frame.type === "tts.end") {
       setAppStateValue("ttsActive", false);
       AppState.tts = false;
-      beginWarmup(1200);
+      beginWarmup(VAD_WARMUP_MS);
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
       if (typeof AppState.emit === "function") {
         AppState.emit("ttsActive", { active: false });
