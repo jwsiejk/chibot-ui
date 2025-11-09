@@ -1,71 +1,470 @@
-diff --git a/app/voice_v2/engine.py b/app/voice_v2/engine.py
-index b3d6b68d413d6412e7cefb8a597942d16efb08ce..7e33badabd683fac040b232428660bd0f0fc57b3 100644
---- a/app/voice_v2/engine.py
-+++ b/app/voice_v2/engine.py
-@@ -371,62 +371,62 @@ class EngineV2:
-             )
-             session = self._ensure_session(sid)
-             previous_state = session.state
+diff --git a/app/static/css/statusbar.css b/app/static/css/statusbar.css
+index 022258fa4068e7c276009643743070c1177e7799..9d795e80cfe7add3a522bf88afb0879b62f9fd86 100644
+--- a/app/static/css/statusbar.css
++++ b/app/static/css/statusbar.css
+@@ -1,22 +1,20 @@
+ .statusbar-host { display:flex; align-items:center; justify-content:flex-start; padding:.25rem 0; }
+ .statusbar {
+   display:flex; align-items:center; gap:.6rem;
+   padding:.5rem .75rem; border-radius:999px;
+   background:#0e1116; color:#fff; border:1px solid rgba(255,255,255,.06);
+   box-shadow: 0 1px 2px rgba(0,0,0,.25);
+ }
+ .status-dot { width:.6rem; height:.6rem; border-radius:999px; background:#9ca3af; }
+ .status-text { display:flex; flex-direction:column; line-height:1.1; }
+ .status-label { font-weight:600; }
+ .status-sub { font-size:.85rem; opacity:.8; white-space:nowrap; }
+ .status-meter { margin-left:auto; width:96px; height:6px; background:#1b2230; border-radius:6px; overflow:hidden; }
+ .status-meter-fill { height:100%; width:0%; background:#67e8f9; transition:width .08s linear; }
  
-         if previous_state != READY:
-             _log.warning(
-                 "evt=text_input_ignored state=%s", previous_state, extra={"sid": sid}
-             )
-             return
+ /* tones */
+ .status-blue  .status-dot { background:#60a5fa; }
+ .status-amber .status-dot { background:#f59e0b; }
+ .status-green .status-dot { background:#34d399; }
+ .status-gray  .status-dot { background:#9ca3af; }
  
-         listen_reason = "text_barge" if (was_responding and barge_enabled) else "text_input"
-         self._set_state(sid, LISTENING, reason=listen_reason)
-         session = self._ensure_session(sid)
-         if session.state != LISTENING:
-             return
+-/* Safety net: hide old UI badge + chips if any remain in DOM */
+-#diagBadge, #modeChip, #vadChip, #bargeChip { display:none !important; }
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index b97ad75d56fa4dd1e4e3158fc087c962accc5262..db9664707aa16b45db55ebef282aa631386eb276 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -526,53 +526,50 @@
+     const message = isListening ? 'Recorder active' : 'Recorder idle';
+     setBadge(badge);
+     sendDiagHudEvent(
+       'EVT_CLIENT_HUD_STATE',
+       detail,
+       { level: 'info', badge, message }
+     );
+   }
  
-         self._commit_turn_start(sid, "text_input")
-         session = self._ensure_session(sid)
+   handleHudStateChange({ state: 'Idle', meta: { state: 'Idle', source: 'init' } });
  
-         session = self._ensure_session(sid)
-         turn_id = session.turn_id or str(uuid.uuid4())
-         req_id = session.req_id or f"req-{uuid.uuid4().hex}"
-         session.turn_id = turn_id
-         session.req_id = req_id
+   async function ensureRuntimeModules() {
+     if (!window.AppState) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio/pcm_recorder.js");
+     }
+     await loadScript("audio/vad_client.js");
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+-    if (!window.PolicyBadges) {
+-      await loadScript("policy_badges.js");
+-    }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
  
--self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
-+        self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
+   async function init() {
+     await bootstrapClientConfig();
+     await ensureRuntimeModules();
  
-         # --- OMNI-CHANNEL FIX START: Trigger NLU/LLM pipeline for text input ---
-         nlu_result = self._nlu.extract(req_id, text)
-         nlu_payload = {"req_id": req_id, "turn_id": turn_id, **nlu_result}
--        
-+
-         nlu_event = self._envelope(sid, EVT_NLU, nlu_payload)
-         self._publish(nlu_event)
--        
-+
-         session.nlu_emitted = True
-         session.nlu_req_id = req_id
--        
-+
-         self._emit_dialog_plan(sid, session, req_id, turn_id, text)
-         self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
-         # --- OMNI-CHANNEL FIX END ---
-         
-         self._set_state(sid, THINKING, reason="text_input")
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     const audioRecorder = window.AudioRecorder || null;
  
-     def on_audio(self, sid: str, chunk: bytes, seq: int) -> None:
-         """Capture an incoming audio chunk."""
-         session = self._ensure_session(sid)
-         if session.tts_mask_phase != "off":
-             self._publish_tts_mask(sid, "off")
-         if session.state == READY:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-             session = self._ensure_session(sid)
-         elif session.state == RESPONDING:
-             self._set_state(sid, LISTENING, reason="audio_rx")
-             session = self._ensure_session(sid)
-         if session.state != LISTENING:
-             _log.warning(
-                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
-             )
-         else:
-             self._commit_turn_start(sid, "audio_rx")
+     const deferredClientLogs = [];
+     let deferredClientLogFlushTimer = null;
  
-         if not isinstance(chunk, (bytes, bytearray)):
+     function installHubInterface() {
+       const hub = AppState && AppState.hub;
+       if (!hub || typeof hub._install !== "function") {
+         return;
+       }
+@@ -1599,58 +1596,50 @@
+       if (clientReadyTimerId !== null) {
+         clearTimeout(clientReadyTimerId);
+         clientReadyTimerId = null;
+       }
+       runtimeState.asrReady = false;
+       runtimeState.turnState = null;
+       updateRecordingState(false, 'ws.close');
+       setMicPermissionGranted(false, 'ws.close');
+       runtimeState.policy = null;
+       window.AppUI?.refresh?.();
+     });
+ 
+     window.addEventListener('ws.open', () => {
+       runtimeState.asrReady = false;
+       runtimeState.turnState = null;
+       updateRecordingState(false, 'ws.open');
+       runtimeState.policy = null;
+       if (getLiveSocket()) {
+         try {
+           flushDeferredClientLogs();
+         } catch {}
+       }
+       window.AppUI?.refresh?.();
+     });
+     
+-    if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
+-      try {
+-        window.PolicyBadges.init();
+-      } catch (err) {
+-        console.warn("Failed to initialize PolicyBadges", err);
+-      }
+-    }
+-
+     // --- App context (server-injected) ---
+     function readAppContext() {
+       const node = document.getElementById('appContext');
+       if (!node) return {};
+       try {
+         const raw = node.textContent || node.innerText || '{}';
+         return JSON.parse(raw);
+       } catch (err) {
+         console.warn('Failed to parse app context', err);
+         return {};
+       }
+     }
+ 
+     const serverContext = readAppContext();
+     const currentUserEmail = typeof serverContext.userEmail === 'string' && serverContext.userEmail
+       ? serverContext.userEmail
+       : 'user@example.com';
+     const isAdmin = Boolean(serverContext.isAdmin);
+     window.__ASKCHIP_CTX__ = Object.freeze({
+       isAdmin,
+       userEmail: currentUserEmail,
+     });
+ 
+     // --- Top-right brand dropdown ---
+     const brandBtn = document.getElementById('brandBtn');
+diff --git a/app/static/js/policy_badges.js b/app/static/js/policy_badges.js
+deleted file mode 100644
+index a011b2ea4778300e0ab3c0723e3dc18e7e50ada8..0000000000000000000000000000000000000000
+--- a/app/static/js/policy_badges.js
++++ /dev/null
+@@ -1,279 +0,0 @@
+-(() => {
+-  const KEY_CONFIG = [
+-    {
+-      key: "mode",
+-      label: "Mode",
+-      format(value) {
+-        if (typeof value === "string" && value.trim()) {
+-          return value;
+-        }
+-        return "—";
+-      }
+-    },
+-    {
+-      key: "allow_auto_vad",
+-      label: "Auto VAD",
+-      format(value) {
+-        if (typeof value === "boolean") {
+-          return value ? "On" : "Off";
+-        }
+-        return "—";
+-      }
+-    },
+-    {
+-      key: "barge_in_enabled",
+-      label: "Barge",
+-      format(value) {
+-        if (typeof value === "boolean") {
+-          return value ? "On" : "Off";
+-        }
+-        return "—";
+-      }
+-    }
+-  ];
+-
+-  const CLASS_HIDDEN = "hidden";
+-
+-  const currentPolicy = Object.create(null);
+-  const badgeRefs = new Map();
+-
+-  let initialized = false;
+-  let host = null;
+-  let micGateBadge = null;
+-  let micGateActive = false;
+-  let micGateTimerId = null;
+-  let micGateHoldMs = 0;
+-  let bargeInEnabled = true;
+-
+-  function ensureHost() {
+-    if (host && document.body.contains(host)) {
+-      return host;
+-    }
+-    const existing = document.querySelector("[data-policy-badges]");
+-    if (existing) {
+-      host = existing;
+-      return host;
+-    }
+-    const topbarLeft = document.querySelector(".topbar-left");
+-    if (!topbarLeft) {
+-      return null;
+-    }
+-    const container = document.createElement("div");
+-    container.dataset.policyBadges = "true";
+-    container.style.display = "flex";
+-    container.style.alignItems = "center";
+-    container.style.gap = "8px";
+-    container.style.flexWrap = "wrap";
+-    container.style.fontSize = "11px";
+-    container.style.fontWeight = "600";
+-    topbarLeft.appendChild(container);
+-    host = container;
+-    return host;
+-  }
+-
+-  function styleBadge(el) {
+-    el.style.display = "inline-flex";
+-    el.style.alignItems = "center";
+-    el.style.gap = "4px";
+-    el.style.padding = "4px 10px";
+-    el.style.borderRadius = "999px";
+-    el.style.background = "rgba(255,255,255,0.08)";
+-    el.style.border = "1px solid rgba(255,255,255,0.12)";
+-    el.style.color = "var(--muted)";
+-    el.style.letterSpacing = "0.2px";
+-  }
+-
+-  function ensureBadgeElements() {
+-    const container = ensureHost();
+-    if (!container) {
+-      return;
+-    }
+-    KEY_CONFIG.forEach(({ key }) => {
+-      if (badgeRefs.has(key)) {
+-        return;
+-      }
+-      const el = document.createElement("span");
+-      el.dataset.policyBadge = key;
+-      el.setAttribute("role", "status");
+-      styleBadge(el);
+-      container.appendChild(el);
+-      badgeRefs.set(key, el);
+-    });
+-  }
+-
+-  function ensureMicGateBadge() {
+-    if (micGateBadge && document.body.contains(micGateBadge)) {
+-      return micGateBadge;
+-    }
+-    const statusContainer = document.querySelector(".chip-status");
+-    if (!statusContainer) {
+-      return null;
+-    }
+-    const badge = document.createElement("span");
+-    badge.dataset.micGate = "true";
+-    badge.textContent = "Mic gated (TTS active)";
+-    badge.setAttribute("role", "status");
+-    badge.classList.add(CLASS_HIDDEN);
+-    badge.style.marginLeft = "8px";
+-    badge.style.padding = "4px 10px";
+-    badge.style.borderRadius = "999px";
+-    badge.style.background = "rgba(255,91,110,0.16)";
+-    badge.style.border = "1px solid rgba(255,91,110,0.35)";
+-    badge.style.color = "var(--danger)";
+-    badge.style.fontSize = "12px";
+-    badge.style.fontWeight = "600";
+-    badge.style.letterSpacing = "0.2px";
+-    statusContainer.appendChild(badge);
+-    micGateBadge = badge;
+-    return micGateBadge;
+-  }
+-
+-  function formatValue(key, value) {
+-    const config = KEY_CONFIG.find((item) => item.key === key);
+-    if (!config) {
+-      return "";
+-    }
+-    try {
+-      return config.format(value);
+-    } catch (err) {
+-      console.warn("PolicyBadges: failed to format value", key, err);
+-      return "—";
+-    }
+-  }
+-
+-  function renderBadges() {
+-    ensureBadgeElements();
+-    KEY_CONFIG.forEach(({ key, label }) => {
+-      const el = badgeRefs.get(key);
+-      if (!el) {
+-        return;
+-      }
+-      const hasValue = Object.prototype.hasOwnProperty.call(currentPolicy, key);
+-      const value = hasValue ? currentPolicy[key] : undefined;
+-      el.textContent = `${label}: ${formatValue(key, value)}`;
+-    });
+-  }
+-
+-  function clearMicGateTimer() {
+-    if (micGateTimerId) {
+-      clearTimeout(micGateTimerId);
+-      micGateTimerId = null;
+-    }
+-  }
+-
+-  function hideMicGate() {
+-    const badge = ensureMicGateBadge();
+-    if (!badge) {
+-      return;
+-    }
+-    badge.classList.add(CLASS_HIDDEN);
+-    badge.setAttribute("aria-hidden", "true");
+-    micGateActive = false;
+-  }
+-
+-  function showMicGate() {
+-    const badge = ensureMicGateBadge();
+-    if (!badge) {
+-      return;
+-    }
+-    clearMicGateTimer();
+-    badge.classList.remove(CLASS_HIDDEN);
+-    badge.removeAttribute("aria-hidden");
+-    micGateActive = true;
+-  }
+-
+-  function scheduleMicGateRelease(delayMs) {
+-    clearMicGateTimer();
+-    if (!micGateActive) {
+-      return;
+-    }
+-    if (delayMs > 0) {
+-      micGateTimerId = setTimeout(() => {
+-        micGateTimerId = null;
+-        hideMicGate();
+-      }, delayMs);
+-    } else {
+-      hideMicGate();
+-    }
+-  }
+-
+-  function handlePolicyInteraction(event) {
+-    const detail = event && event.detail;
+-    const policy = detail && detail.policy;
+-    if (!policy || typeof policy !== "object") {
+-      return;
+-    }
+-    let updated = false;
+-    KEY_CONFIG.forEach(({ key }) => {
+-      if (!Object.prototype.hasOwnProperty.call(policy, key)) {
+-        return;
+-      }
+-      currentPolicy[key] = policy[key];
+-      if (key === "barge_in_enabled" && typeof policy[key] === "boolean") {
+-        bargeInEnabled = policy[key];
+-      }
+-      updated = true;
+-    });
+-    if (updated) {
+-      renderBadges();
+-    }
+-    if (Object.prototype.hasOwnProperty.call(policy, "barge_in_enabled") && policy.barge_in_enabled !== false && micGateActive) {
+-      hideMicGate();
+-    }
+-  }
+-
+-  function parseHoldMs(detail) {
+-    const hold = Number(detail && detail.post_hold_ms);
+-    if (Number.isFinite(hold) && hold > 0) {
+-      return hold;
+-    }
+-    return 0;
+-  }
+-
+-  function handleTtsStart(event) {
+-    const detail = event && event.detail;
+-    micGateHoldMs = parseHoldMs(detail);
+-    if (bargeInEnabled === false) {
+-      showMicGate();
+-    }
+-  }
+-
+-  function handleTtsEnd(event) {
+-    if (!micGateActive) {
+-      return;
+-    }
+-    const hold = parseHoldMs(event && event.detail);
+-    const delay = hold > 0 ? hold : micGateHoldMs;
+-    micGateHoldMs = 0;
+-    scheduleMicGateRelease(delay);
+-  }
+-
+-  function reset() {
+-    clearMicGateTimer();
+-    hideMicGate();
+-    micGateHoldMs = 0;
+-    KEY_CONFIG.forEach(({ key }) => {
+-      delete currentPolicy[key];
+-    });
+-    bargeInEnabled = true;
+-    renderBadges();
+-  }
+-
+-  const PolicyBadges = {
+-    init() {
+-      if (initialized) {
+-        return;
+-      }
+-      initialized = true;
+-      ensureBadgeElements();
+-      ensureMicGateBadge();
+-      renderBadges();
+-      window.addEventListener("policy.interaction", handlePolicyInteraction);
+-      window.addEventListener("tts.start", handleTtsStart);
+-      window.addEventListener("tts.end", handleTtsEnd);
+-      window.addEventListener("ws.close", reset);
+-    }
+-  };
+-
+-  window.PolicyBadges = PolicyBadges;
+-})();
+diff --git a/app/static/sw.js b/app/static/sw.js
+index 51eabf12c62bd5981c4880d709048d6cd7e3cd02..221811322605184f970b0f65732cde877893c997 100644
+--- a/app/static/sw.js
++++ b/app/static/sw.js
+@@ -1,36 +1,35 @@
+ const CACHE_VERSION = "{{ BUILD_ID }}";
+ const CACHE_NAME = "app-cache-" + CACHE_VERSION;
+ const CORE = [
+   "/version.json",
+   "/static/js/app.js?v={{ BUILD_ID }}",
+   "/static/js/auth_ui.js?v={{ BUILD_ID }}",
+   "/static/js/version.js?v={{ BUILD_ID }}",
+   "/static/js/state.js?v={{ BUILD_ID }}",
+   "/static/js/audio_player.js?v={{ BUILD_ID }}",
+   "/static/js/ws_client.js?v={{ BUILD_ID }}",
+-  "/static/js/policy_badges.js?v={{ BUILD_ID }}",
+   "/static/js/transcript_view.js?v={{ BUILD_ID }}",
+   "/static/js/errors.js?v={{ BUILD_ID }}",
+   "/static/js/wake_word.js?v={{ BUILD_ID }}",
+   "/static/js/admin_logs.js?v={{ BUILD_ID }}",
+   "/admin/ui/config_panel.js?v={{ BUILD_ID }}",
+   "/static/css/styles.css?v={{ BUILD_ID }}",
+   "/static/chip/chip.png?v={{ BUILD_ID }}"
+ ];
+ 
+ self.addEventListener("install", (event) => {
+   self.skipWaiting();
+   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE)));
+ });
+ 
+ self.addEventListener("activate", (event) => {
+   event.waitUntil(
+     caches
+       .keys()
+       .then((keys) =>
+         Promise.all(keys.map((key) => (key !== CACHE_NAME ? caches.delete(key) : null)))
+       )
+       .then(() => self.clients.claim())
+   );
+ });
+ 

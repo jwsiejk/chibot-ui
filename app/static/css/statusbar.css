@@ -18,5 +18,3 @@
 .status-green .status-dot { background:#34d399; }
 .status-gray  .status-dot { background:#9ca3af; }
 
-/* Safety net: hide old UI badge + chips if any remain in DOM */
-#diagBadge, #modeChip, #vadChip, #bargeChip { display:none !important; }

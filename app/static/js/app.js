@@ -548,9 +548,6 @@
     if (!window.WSClient) {
       await loadScript("ws_client.js");
     }
-    if (!window.PolicyBadges) {
-      await loadScript("policy_badges.js");
-    }
     if (!window.TranscriptView) {
       await loadScript("transcript_view.js");
     }
@@ -1621,14 +1618,6 @@
       window.AppUI?.refresh?.();
     });
     
-    if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
-      try {
-        window.PolicyBadges.init();
-      } catch (err) {
-        console.warn("Failed to initialize PolicyBadges", err);
-      }
-    }
-
     // --- App context (server-injected) ---
     function readAppContext() {
       const node = document.getElementById('appContext');

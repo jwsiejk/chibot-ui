@@ -8,7 +8,6 @@ const CORE = [
   "/static/js/state.js?v={{ BUILD_ID }}",
   "/static/js/audio_player.js?v={{ BUILD_ID }}",
   "/static/js/ws_client.js?v={{ BUILD_ID }}",
-  "/static/js/policy_badges.js?v={{ BUILD_ID }}",
   "/static/js/transcript_view.js?v={{ BUILD_ID }}",
   "/static/js/errors.js?v={{ BUILD_ID }}",
   "/static/js/wake_word.js?v={{ BUILD_ID }}",
