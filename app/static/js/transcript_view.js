@@ -287,7 +287,13 @@
         payload.client_msg_id = clientMsgId;
       }
       const WSClient = window.WSClient;
-      if (WSClient && typeof WSClient.send === "function") {
+      if (WSClient && typeof WSClient.sendJSON === "function") {
+        try {
+          WSClient.sendJSON(payload);
+        } catch (err) {
+          console.error("TranscriptView: failed to send chat.user", err);
+        }
+      } else if (WSClient && typeof WSClient.send === "function") {
         try {
           WSClient.send(payload);
         } catch (err) {

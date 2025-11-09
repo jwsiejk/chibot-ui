@@ -16,16 +16,26 @@
   (function wrapDiag() {
     const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });
     function maybeWrap() {
-      if (!window.WSClient || typeof WSClient.send !== 'function' || WSClient.__wrapped_send__) return;
-      const orig = WSClient.send.bind(WSClient);
-      WSClient.send = function (frame) {
+      if (!window.WSClient) return;
+      const method = typeof WSClient.sendJSON === 'function' ? 'sendJSON' : (typeof WSClient.send === 'function' ? 'send' : null);
+      if (!method) return;
+      const flag = method === 'sendJSON' ? '__wrapped_sendJSON__' : '__wrapped_send__';
+      if (WSClient[flag]) return;
+      const orig = WSClient[method].bind(WSClient);
+      WSClient[method] = function (frame) {
         try {
           const t = frame && frame.type;
           if (t) ctr.types[t] = (ctr.types[t] || 0) + 1;
         } catch {}
         return orig(frame);
       };
-      WSClient.__wrapped_send__ = true;
+      WSClient[flag] = true;
+      if (method === 'sendJSON') {
+        WSClient.__wrapped_send__ = true;
+        if (typeof WSClient.send !== 'function' || WSClient.send === orig) {
+          WSClient.send = WSClient.sendJSON;
+        }
+      }
     }
 
     maybeWrap();
@@ -1724,7 +1734,11 @@
         const text = (textChatInput && textChatInput.value || '').trim();
         if (!text) return;
         try {
-          WSClient && WSClient.send && WSClient.send({ type: 'chat.user', text });
+          if (WSClient && typeof WSClient.sendJSON === 'function') {
+            WSClient.sendJSON({ type: 'chat.user', text });
+          } else if (WSClient && typeof WSClient.send === 'function') {
+            WSClient.send({ type: 'chat.user', text });
+          }
           textChatInput.value = '';
         } catch (err) {
           console.error('chat.user send failed', err);
@@ -2959,7 +2973,13 @@ window.addEventListener('ws.open', () => {
       });
   }
   try {
-    if (WSClient && typeof WSClient.send === 'function') {
+    if (WSClient && typeof WSClient.sendJSON === 'function') {
+      WSClient.sendJSON({
+        type: 'client.banner',
+        event: { label: 'ws.open', ts_ms: Date.now() },
+        info: { build: window.__BUILD_SHA__ ?? null }
+      });
+    } else if (WSClient && typeof WSClient.send === 'function') {
       WSClient.send({
         type: 'client.banner',
         event: { label: 'ws.open', ts_ms: Date.now() },

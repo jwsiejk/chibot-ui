@@ -487,7 +487,29 @@
         return true;
       }
       const wsClient = typeof window !== 'undefined' ? window.WSClient : null;
-      if (wsClient && typeof wsClient.send === 'function') {
+      if (wsClient && typeof wsClient.sendAudioChunk === 'function') {
+        try {
+          wsClient.sendAudioChunk(buffer);
+          return true;
+        } catch (err) {
+          emitClientLog('client.pcm.send_error', {
+            seq,
+            message: err && err.message ? err.message : String(err),
+            path: 'wsclient.sendAudioChunk',
+          });
+        }
+      } else if (wsClient && typeof wsClient.sendBinary === 'function') {
+        try {
+          wsClient.sendBinary(buffer, { lane: 'mic' });
+          return true;
+        } catch (err) {
+          emitClientLog('client.pcm.send_error', {
+            seq,
+            message: err && err.message ? err.message : String(err),
+            path: 'wsclient.sendBinary',
+          });
+        }
+      } else if (wsClient && typeof wsClient.send === 'function') {
         try {
           wsClient.send(buffer, { binary: true });
           return true;

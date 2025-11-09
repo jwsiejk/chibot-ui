@@ -348,6 +348,41 @@ import { WakeWord } from "./wake_word.js";
   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
   const getAudioPlayer = () => window.AudioPlayer;
 
+  // ---- Type guards / helpers ----
+  function isTypedArray(value) {
+    return ArrayBuffer.isView(value) && !(value instanceof DataView);
+  }
+
+  function toArrayBuffer(value) {
+    if (value instanceof ArrayBuffer) {
+      return value;
+    }
+    if (isTypedArray(value)) {
+      if (value.byteLength === value.buffer.byteLength && value.byteOffset === 0) {
+        return value.buffer;
+      }
+      try {
+        return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function wsOpen() {
+    const ws = WSClient._ws || window.ws;
+    return ws && ws.readyState === WebSocket.OPEN ? ws : null;
+  }
+
+  function logTransportMisuse(kind) {
+    try {
+      const hub = window.AppState?.hub;
+      hub?.log?.("client.ws.misuse", { kind });
+      console.warn("WS misuse:", kind);
+    } catch {}
+  }
+
   const VAD_APPSTATE_KEYS = [
     "vadActive",
     "vadSpeech",
@@ -743,7 +778,7 @@ import { WakeWord } from "./wake_word.js";
     if (__audioHeaderSent) { return; }
     try {
       const header = __buildStrictAudioHeader(frameOrPolicy);
-      WSClient.send(header);
+      WSClient.sendJSON(header);
       logStage("client.audio_header_send", header);
       __audioHeaderSent = true;
     } catch (err) {
@@ -919,7 +954,7 @@ import { WakeWord } from "./wake_word.js";
       }
       if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
         try {
-          WSClient.send({ type: "client.ping" });
+          WSClient.sendJSON({ type: "client.ping" });
           logStage("client.ping", { lane: "mic" });
         } catch (err) {
           console.warn("client.ping send failed", err);
@@ -1002,22 +1037,34 @@ import { WakeWord } from "./wake_word.js";
     }
     const bytes = out.byteLength;
     logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
-    const ws = socket || (WSClient && WSClient._ws) || null;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn("pcm.send.skipped", { readyState: ws ? ws.readyState : undefined });
+    const liveSocket = socket || (WSClient && WSClient._ws) || null;
+    const ws = wsOpen();
+    if (!ws) {
+      console.warn("pcm.send.skipped", { readyState: liveSocket ? liveSocket.readyState : undefined });
       return;
     }
-    try {
-      ws.send(out.buffer);
-      if ((Math.random() * 50 | 0) === 0) {
-        const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
-        hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
-      }
-      __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-      __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-    } catch (err) {
-      console.warn("pcm.send.error", err);
+    const sendResult = WSClient.sendAudioChunk(out, { lane: "mic" });
+    if (sendResult && typeof sendResult.then === "function") {
+      sendResult
+        .then(() => {
+          __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
+          __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
+        })
+        .catch((err) => {
+          console.warn("pcm.send.error", err);
+        });
+      return;
     }
+    if (!sendResult) {
+      console.warn("pcm.send.error", { reason: "send_audio_chunk_failed" });
+      return;
+    }
+    if ((Math.random() * 50 | 0) === 0) {
+      const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
+      hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
+    }
+    __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
+    __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
   }
 
   function stopRecorder(reason) {
@@ -1158,7 +1205,7 @@ import { WakeWord } from "./wake_word.js";
     try {
       setAsrArmInFlight(true);
       logStage("client.asr_rearm_request", { reason: label });
-      WSClient.send({ type: "asr.open" }); // send first so it's not phase-blocked
+      WSClient.sendJSON({ type: "asr.open" }); // send first so it's not phase-blocked
       setWsPhase("arming");
     } catch (err) {
       setAsrArmInFlight(false);
@@ -1174,7 +1221,7 @@ import { WakeWord } from "./wake_word.js";
     setArmAfterTtsEnd(false);
     setAsrArmInFlight(false);
     try {
-      WSClient.send({ type: "asr.close", reason: label });
+      WSClient.sendJSON({ type: "asr.close", reason: label });
       setWsPhase("closing");
       logStage("client.asr_close_request", { reason: label });
     } catch (err) {
@@ -2288,38 +2335,40 @@ import { WakeWord } from "./wake_word.js";
     }
     const dropIfBusy = Boolean(options.dropIfBusy);
     const client = WSClient;
-    const state = typeof AppState !== "undefined" && typeof AppState.getState === "function"
-      ? AppState.getState()
-      : null;
+    let state = null;
+    if (typeof AppState !== "undefined" && AppState) {
+      if (typeof AppState.getState === "function") {
+        try {
+          state = AppState.getState();
+        } catch {}
+      } else {
+        state = AppState;
+      }
+    }
     const live = client && client._ws
       ? client._ws
       : (state && state.websocket ? state.websocket : null);
     if (dropIfBusy && live && live.readyState === WebSocket.OPEN && live.bufferedAmount > 512 * 1024) {
       return false;
     }
-    if (client && typeof client.send === "function") {
-      const result = client.send(payload, { binary: true });
-      if (result && typeof result.then === "function") {
-        return result;
-      }
-      return true;
+    if (!(payload instanceof Blob) && !(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) {
+      logTransportMisuse("sendBinary_non_buffer_payload");
+      console.error("WSClient.sendBinary: expected ArrayBuffer, TypedArray, or Blob");
+      return false;
     }
-    try {
-      if (live && live.readyState === WebSocket.OPEN) {
-        live.send(payload);
-        return true;
-      }
-    } catch (err) {
-      console.error("WSClient sendBinary error", err);
+    const result = send.call(client, payload, { binary: true });
+    if (result && typeof result.then === "function") {
+      return result;
     }
-    return false;
+    return result !== false;
   }
 
   function sendJson(frame) {
     try {
-      send(frame);
+      return WSClient.sendJSON(frame);
     } catch (err) {
       console.error("WSClient sendJson error", err);
+      return false;
     }
   }
 
@@ -3488,7 +3537,7 @@ import { WakeWord } from "./wake_word.js";
           }
           if (WSClient._queue.length) {
             for (const { data, isBinary } of WSClient._queue) {
-              WSClient.send(data, { binary: isBinary });
+              send.call(WSClient, data, { binary: isBinary });
             }
             WSClient._queue.length = 0;
           }
@@ -3852,27 +3901,27 @@ import { WakeWord } from "./wake_word.js";
 
     if (!binary && (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload))) {
       console.debug("WSClient.send: binary payload ignored by JSON helper");
-      return;
+      return false;
     }
 
     if (!binary) {
       if (!validatePayloadForSend(data)) {
-        return;
+        return false;
       }
       if (!data || typeof data !== "object") {
         console.warn("WSClient.send blocked: missing or invalid type", payload);
-        return;
+        return false;
       }
       if (typeof data.type !== "string") {
         console.warn("WSClient.send blocked: missing or invalid type", payload);
-        return;
+        return false;
       }
       if (data.type === "audio.header") {
         if (data.format !== "pcm16" ||
             typeof data.sample_rate !== "number" ||
             typeof data.channels !== "number") {
           console.warn("WSClient.send blocked: invalid audio.header schema", payload);
-          return;
+          return false;
         }
         data = {
           type: "audio.header",
@@ -3897,13 +3946,13 @@ import { WakeWord } from "./wake_word.js";
       const phase = AppState?.wsPhase || AppState?.connectionState;
       if (!binary && (phase !== "connected" && phase !== "ready" && phase !== "resuming")) {
         console.warn("WSClient.send skipped (phase not ready)", { phase });
-        return;
+        return false;
       }
     } catch {}
     if (!live || live.readyState !== WebSocket.OPEN) {
       client._queue.push({ data, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");
-      return;
+      return true;
     }
     client._ws = live;
     client._connected = true;
@@ -3913,8 +3962,10 @@ import { WakeWord } from "./wake_word.js";
         return payload.arrayBuffer().then((buf) => {
           try {
             live.send(buf);
+            return true;
           } catch (err) {
             console.error("WSClient binary send error", err);
+            throw err;
           }
         });
       }
@@ -3924,17 +3975,22 @@ import { WakeWord } from "./wake_word.js";
           : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
         try {
           live.send(buffer);
+          return true;
         } catch (err) {
           console.error("WSClient binary send error", err);
+          return false;
         }
-        return;
       }
+      logTransportMisuse("send_binary_invalid_payload");
+      return false;
     }
     const text = typeof data === "string" ? data : JSON.stringify(data);
     try {
       live.send(text);
+      return true;
     } catch (err) {
       console.error("WSClient send error", err);
+      return false;
     }
   }
 
@@ -3959,10 +4015,57 @@ import { WakeWord } from "./wake_word.js";
     }
   };
 
+  WSClient.sendJSON = function sendJSONPayload(obj) {
+    if (obj instanceof ArrayBuffer || ArrayBuffer.isView(obj)) {
+      logTransportMisuse("binary_sent_to_sendJSON");
+      console.error("WSClient.sendJSON: binary payload; use sendAudioChunk()");
+      return false;
+    }
+    if (!obj || typeof obj !== "object") {
+      return false;
+    }
+    const result = send.call(WSClient, obj, { binary: false });
+    if (result && typeof result.then === "function") {
+      return result.then(() => true).catch((err) => {
+        console.warn("sendJSON failed", err);
+        return false;
+      });
+    }
+    return result !== false;
+  };
+
+  WSClient.sendAudioChunk = function sendAudioChunk(buf, opts = {}) {
+    if (buf instanceof Blob) {
+      const blobResult = sendBinary(buf, { ...opts, lane: opts && typeof opts === "object" && typeof opts.lane !== "undefined" ? opts.lane : "mic" });
+      if (blobResult && typeof blobResult.then === "function") {
+        return blobResult;
+      }
+      return blobResult !== false;
+    }
+    if (!(buf instanceof ArrayBuffer) && !isTypedArray(buf)) {
+      const coerced = toArrayBuffer(buf);
+      if (!coerced) {
+        logTransportMisuse("sendAudioChunk_invalid_payload");
+        console.error("sendAudioChunk: expected ArrayBuffer or TypedArray");
+        return false;
+      }
+      buf = coerced;
+    }
+    const options = opts && typeof opts === "object" ? { ...opts } : {};
+    if (typeof options.lane === "undefined") {
+      options.lane = "mic";
+    }
+    const result = sendBinary(buf, options);
+    if (result && typeof result.then === "function") {
+      return result;
+    }
+    return result !== false;
+  };
+
   WSClient.open = open;
   WSClient.close = close;
-  WSClient.send = send;
-  WSClient.sendBinary = sendBinary;
+  WSClient.send = WSClient.sendJSON;
+  WSClient.sendBinary = (payload, opts = {}) => sendBinary(payload, opts);
   WSClient.getBufferedAmount = getBufferedAmount;
   WSClient.requestAsrArm = requestAsrArm;
   WSClient.requestAsrClose = requestAsrClose;
