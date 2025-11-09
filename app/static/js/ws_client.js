@@ -463,6 +463,9 @@ import { initVAD } from "./audio/vad_client.js";
         sendAudioHeader(policy);
       }
       await startRecorderStreaming(policy);
+      if (AppState && typeof AppState === "object") {
+        AppState.micLive = true;
+      }
       logMic({ outcome: MIC_OUTCOME.STREAMING, reason });
       return true;
     } catch (err) {
@@ -3583,6 +3586,7 @@ import { initVAD } from "./audio/vad_client.js";
       emitConsoleBusEvent("client.asr.ready", { asrReady: true });
       // derive and publish auto-start gates from v2 policy
       const gates = deriveAutoArmFromPolicy(frame?.policy || AppState?.policy);
+      hubLog("client.asr.autostart_gates", gates);
       publishGates(gates);
       // If policy says server starts on asr.ready and we don't require a turn, arm now (once).
       if (gates.start_on_asr_ready && !gates.start_on_turn_ready) {
@@ -3591,6 +3595,9 @@ import { initVAD } from "./audio/vad_client.js";
           try {
             await startRecorderStreaming(frame?.policy || {});
             _audioStreaming = true;
+            if (AppState && typeof AppState === "object") {
+              AppState.micLive = true;
+            }
           } catch (e) {
             console.warn("auto-arm on asr.ready failed", e);
           }
@@ -3684,6 +3691,9 @@ import { initVAD } from "./audio/vad_client.js";
           try {
             await startRecorderStreaming(AppState?.policy || {});
             _audioStreaming = true;
+            if (AppState && typeof AppState === "object") {
+              AppState.micLive = true;
+            }
           } catch (e) {
             console.warn("auto-arm on turn.begin failed", e);
           }

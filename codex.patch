@@ -1,112 +1,175 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index c8c8a6813b379408d4e7d9afebb57366547158db..df04b12e105a11dc501c9804fbcf6d2115556853 100644
+index 1d0ae42ffd0192b7dde110131fe2968c7301da44..c218397187d0fda0e91ff8cd2eef2913d33e6ad2 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -233,91 +233,92 @@ import { WakeWord } from "./wake_word.js";
-     const statusSource = uiSource && typeof uiSource.status === "object" ? uiSource.status : {};
+@@ -441,50 +441,53 @@ import { initVAD } from "./audio/vad_client.js";
  
-     sanitizedPolicy.vad = { ...DEFAULT_POLICY_VAD, ...vadSource };
-     sanitizedPolicy.watchdog = { ...DEFAULT_POLICY_WATCHDOG, ...watchdogSource };
-     sanitizedPolicy.ui = { ...uiSource };
-     sanitizedPolicy.ui.status = { ...DEFAULT_POLICY_STATUS, ...statusSource };
-     if (!Number.isFinite(sanitizedPolicy.version)) {
-       sanitizedPolicy.version = 2;
+     try {
+       patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
+     } catch (err) {
+       try {
+         console.warn("Failed to patch policy VAD after asr.ready", err);
+       } catch {}
      }
-     if (typeof sanitizedPolicy._normalized_from !== "string") {
-       sanitizedPolicy._normalized_from = "v2";
-     }
+   }
  
-     const normalizedPolicy = { ...basePolicy };
-     Object.keys(sanitizedPolicy).forEach((key) => {
-       const value = sanitizedPolicy[key];
-       if (typeof value === "undefined") {
-         return;
+   async function startStreamingAfterAsrReady(trigger) {
+     const pending = __pendingAsrReadyStart;
+     if (!pending) {
+       return false;
+     }
+     __pendingAsrReadyStart = null;
+     const reason = typeof trigger === "string" && trigger
+       ? trigger
+       : (typeof pending.reason === "string" && pending.reason ? pending.reason : "asr_ready");
+     const policy = clonePolicySnapshot(pending.policy);
+     try {
+       if (!AppState.listening) {
+         sendAudioHeader(policy);
        }
-       normalizedPolicy[key] = cloneValue(value);
-     });
- 
-     AppState.policy = normalizedPolicy;
-   }
- 
--  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
--  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
--  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
--  const POLICY_STATUS = POLICY?.ui?.status
--    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
--  const WATCHDOG_FIRST_MS = Number(
--    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
--  );
--  const SENDER_GATE_ON_TTS = Boolean(
--    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
--  );
--  const REQUIRE_ACTIVE_TURN = Boolean(
--    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
--  );
--
-   function installClientVadPolicySnapshot() {
-     const policyRoot = AppState.policy && typeof AppState.policy === "object"
-       ? AppState.policy
-       : (AppState.policy = {});
-     const ensureVadBlock = (target) => {
-       if (!target || typeof target !== "object") {
-         return;
-       }
-       const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
-       const existingClient = existingVad.client && typeof existingVad.client === "object"
-         ? existingVad.client
-         : {};
-       // Merge: runtime/client overrides survive; our defaults fill gaps.
-       target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
-     };
-     ensureVadBlock(policyRoot);
-     if (FEATURE_LEGACY_POLICY) {
-       if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
-         policyRoot.policy = {};
-       }
-       ensureVadBlock(policyRoot.policy);
+       await startRecorderStreaming(policy);
++      if (AppState && typeof AppState === "object") {
++        AppState.micLive = true;
++      }
+       logMic({ outcome: MIC_OUTCOME.STREAMING, reason });
+       return true;
+     } catch (err) {
+       console.error("Deferred recorder start failed", err);
+       logMic({
+         outcome: MIC_OUTCOME.ERROR_GUM,
+         message: err && err.message ? err.message : String(err || ""),
+         reason,
+       });
+       __pendingAsrReadyStart = pending;
+       return false;
      }
    }
  
-   installClientVadPolicySnapshot();
+   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+   let autostartAttempts = 0;
+   let autostartTimer = null;
  
-+  // Derive POLICY *after* defaults are merged in
-+  const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-+  const POLICY_VAD = POLICY?.vad || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.vad : {});
-+  const POLICY_WATCHDOG = POLICY?.watchdog || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.watchdog : {});
-+  const POLICY_STATUS = POLICY?.ui?.status
-+    || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
-+  const WATCHDOG_FIRST_MS = Number(
-+    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn,
-+  );
-+  const SENDER_GATE_ON_TTS = Boolean(
-+    POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
-+  );
-+  const REQUIRE_ACTIVE_TURN = Boolean(
-+    POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
-+  );
-+
-   const appStateEventEmitter = createEventEmitter();
-   if (typeof AppState.on !== "function") {
-     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
+   const WSClient = window.WSClient = window.WSClient || {};
+   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
+     window.ws = null;
    }
-   if (typeof AppState.emit !== "function") {
-     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
-   }
-   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
-     AppState.__pcmBreadcrumbHandlersInstalled = true;
-     AppState.on("recordingStarted", () => {
-       __micRecordingStartAt = Date.now();
-       __micFirstChunkBreadcrumbSent = false;
-       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
-     });
-   }
- 
-   function clonePolicySnapshot(source) {
-     if (!source || typeof source !== "object") {
-       return {};
+   WSClient._ws = WSClient._ws || null;
+   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
+   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+@@ -3561,58 +3564,62 @@ import { initVAD } from "./audio/vad_client.js";
+       __resetAudioHeaderSent();
+     } else if (frame.type === "assistant.await_user") {
+       if (_audioStreaming) {
+         const reason = typeof frame?.reason === "string" && frame.reason
+           ? frame.reason
+           : frame?.type || "assistant.await_user";
+         hubLog("client.stream.off", { reason });
+       }
+       _audioStreaming = false;
+     } else if (frame.type === "asr.ready") {
+       frame = handleAsrReadyFrame(frame) || frame;
+       __asrReadySeen = true;
+       setAsrArmInFlight(false);
+       setArmAfterTtsEnd(false);
+       setWsConnected(true);
+       AppState.asrReady = true;
+       try { // keep nested state in sync so StatusBar sees it
+         const s = (AppState.state = AppState.state || {});
+         s.asrReady = true;
+         if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
+       } catch {}
+       setWsPhase("ready");
+       emitConsoleBusEvent("client.asr.ready", { asrReady: true });
+       // derive and publish auto-start gates from v2 policy
+       const gates = deriveAutoArmFromPolicy(frame?.policy || AppState?.policy);
++      hubLog("client.asr.autostart_gates", gates);
+       publishGates(gates);
+       // If policy says server starts on asr.ready and we don't require a turn, arm now (once).
+       if (gates.start_on_asr_ready && !gates.start_on_turn_ready) {
+         __pendingAutoArm = false;
+         if (!_audioStreaming && !AppState?.micLive) {
+           try {
+             await startRecorderStreaming(frame?.policy || {});
+             _audioStreaming = true;
++            if (AppState && typeof AppState === "object") {
++              AppState.micLive = true;
++            }
+           } catch (e) {
+             console.warn("auto-arm on asr.ready failed", e);
+           }
+         }
+       } else if (gates.start_on_turn_ready) {
+         // Defer until turn begins
+         __pendingAutoArm = true;
+       }
+       try {
+         const capturePolicy = AppState?.policy?.capture || {};
+         const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
+           ? capturePolicy.mode
+           : "webrtc_aec";
+         const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
+           ? window.__audioCtx.sampleRate
+           : 48000;
+         emitConsoleBusEvent("client.capture.mode", { mode, ctxSampleRate: ctxRate });
+       } catch {}
+       logStage("diag", { label: "asr.ready" });
+       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
+       __resetAudioHeaderSent();
+       sendAudioHeader(frame);
+       // No unconditional start here; arming is handled by gates above or by turn.begin below.
+     } else if (frame.type === "asr.partial") {
+       transcriptFrameAllowed(frame);
+@@ -3662,50 +3669,53 @@ import { initVAD } from "./audio/vad_client.js";
+       const begin = frame.state === "begin";
+       try {
+         window.UIState = window.UIState || {};
+         window.UIState.asrTurnActive = begin;
+         if (window.StatusBar && typeof window.StatusBar.render === "function") {
+           window.StatusBar.render({
+             ...window.UIState,
+             policy: (window.AppState?.policy || {}),
+           });
+         }
+       } catch (err) {
+         console.warn("asr.turn handling error", err);
+       }
+       // publish turn state for StatusBar
+       try {
+         const s = (AppState.state = AppState.state || {});
+         s.asrTurnActive = begin;
+         if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
+       } catch {}
+       if (begin && __pendingAutoArm) {
+         __pendingAutoArm = false;
+         if (!_audioStreaming && !AppState?.micLive) {
+           try {
+             await startRecorderStreaming(AppState?.policy || {});
+             _audioStreaming = true;
++            if (AppState && typeof AppState === "object") {
++              AppState.micLive = true;
++            }
+           } catch (e) {
+             console.warn("auto-arm on turn.begin failed", e);
+           }
+         }
+       }
+     } else if (frame.type === "chat.message" || frame.type === "message") {
+       if (!transcriptFrameAllowed(frame)) {
+         // Keep frame flowing to other listeners without rendering in transcript.
+       } else {
+         const view = window.TranscriptView;
+         if (view && typeof view.handleChatMessage === "function") {
+           try {
+             view.handleChatMessage(frame);
+           } catch (err) {
+             console.warn("TranscriptView chat handler error", err);
+           }
+         }
+       }
+     } else if (frame.type === "chat.history") {
+       handleChatHistoryFrame(frame);
      }
-     return { ...source };
+     dispatchFrame(frame);
    }
  
-   function patchPolicyVad(patch) {
-     if (!patch || typeof patch !== "object") {
+   function normalizeIncomingFrame(frame) {
