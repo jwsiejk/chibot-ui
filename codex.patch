@@ -1,475 +1,60 @@
-diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
-index bb0a86ea582d6984c4b951cd287a48e43524d1c6..3538f10c390e5208674610caf957ddaa344340b0 100644
---- a/app/static/js/audio/pcm_recorder.js
-+++ b/app/static/js/audio/pcm_recorder.js
-@@ -66,81 +66,92 @@
-   }
- 
-   function logClientMicEventText(text) {
-     if (typeof text !== 'string' || !text) {
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 3efd965c2b788458d2bc905139de0761fc85a69c..2ad90a73d33f920ca2798e51b33a90cb887f71ef 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -543,51 +543,54 @@
+     let stateLabel = typeof meta?.state === 'string' ? meta.state : null;
+     if (!stateLabel && detail && typeof detail === 'object' && typeof detail.state === 'string') {
+       stateLabel = detail.state;
+     }
+     if (!stateLabel) {
        return;
      }
-     const win = typeof window !== 'undefined' ? window : null;
-     if (win && typeof win.__logClientMicString === 'function') {
-       try {
-         win.__logClientMicString(text);
-         return;
-       } catch (_) {}
-     }
-     emitClientLog('client.mic', { message: text });
-   }
- 
-   function publishClientVad(next = {}) {
-     if (typeof window === 'undefined') {
+     if (stateLabel === lastHudState) {
        return;
      }
-     try {
-       const win = window;
-       const appState = win.AppState = win.AppState || {};
-       const storeState = appState.state = appState.state || {};
-       const patch = {};
-+      const nestedStatePatch = {};
+     lastHudState = stateLabel;
+     const isListening = stateLabel.toLowerCase() === 'listening';
+     const badge = isListening ? 'mic:live' : 'mic:idle';
+     const message = isListening ? 'Recorder active' : 'Recorder idle';
+     setBadge(badge);
+     sendDiagHudEvent(
+       'EVT_CLIENT_HUD_STATE',
+       detail,
+       { level: 'info', badge, message }
+     );
+   }
  
-       if (typeof next.vadActive === 'boolean') {
-         if (storeState.vadActive !== next.vadActive) {
-           patch.vadActive = next.vadActive;
-+          nestedStatePatch.vadActive = next.vadActive;
-         }
-         storeState.vadActive = next.vadActive;
-       }
+   handleHudStateChange({ state: 'Idle', meta: { state: 'Idle', source: 'init' } });
  
-       if (Object.prototype.hasOwnProperty.call(next, 'vadDbfs')) {
-         const normalizedDb = Number.isFinite(next.vadDbfs) ? next.vadDbfs : null;
-         if (!Object.is(storeState.vadDbfs, normalizedDb)) {
-           patch.vadEnergyDb = normalizedDb;
-+          nestedStatePatch.vadDbfs = normalizedDb;
-         }
-         storeState.vadDbfs = normalizedDb;
-       }
- 
-       if (Object.prototype.hasOwnProperty.call(next, 'lastSpeechAt')) {
-         const normalizedLastSpeech = Number.isFinite(next.lastSpeechAt) ? next.lastSpeechAt : null;
-         if (!Object.is(storeState.lastSpeechAt, normalizedLastSpeech)) {
-           patch.clientVadLastSpeechAt = normalizedLastSpeech;
-+          nestedStatePatch.lastSpeechAt = normalizedLastSpeech;
-         }
-         storeState.lastSpeechAt = normalizedLastSpeech;
-       }
- 
-       if (appState && typeof appState.setState === 'function') {
-         const keys = Object.keys(patch);
--        if (keys.length) {
-+        const nestedStateKeys = Object.keys(nestedStatePatch);
-+        if (keys.length || nestedStateKeys.length) {
-           const payload = {};
-           for (const key of keys) {
-             payload[key] = patch[key];
-           }
-+          if (nestedStateKeys.length) {
-+            payload.state = {};
-+            for (const key of nestedStateKeys) {
-+              payload.state[key] = nestedStatePatch[key];
-+            }
-+          }
-           appState.setState(payload);
-         }
-       }
-     } catch (err) {
-       try {
-         console.warn('publishClientVad failed', err);
-       } catch (_) {}
+   async function ensureRuntimeModules() {
+-    if (!window.AppState) {
++    const needsAppStateStore = !window.AppState
++      || typeof window.AppState.setState !== "function"
++      || typeof window.AppState.getState !== "function";
++    if (needsAppStateStore) {
+       await loadScript("state.js");
+     }
+     if (!window.AudioPlayer) {
+       await loadScript("audio_player.js");
+     }
+     if (!window.AudioRecorder) {
+       await loadScript("audio/pcm_recorder.js");
+     }
+     await loadScript("audio/vad_client.js");
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
      }
    }
  
-   function sanitizeLogText(value, fallback = 'unknown', maxLength = 160) {
-     if (typeof value === 'string') {
-       const trimmed = value.trim();
-       if (trimmed) {
-         if (trimmed.length > maxLength) {
-           return `${trimmed.slice(0, maxLength - 1)}…`;
-         }
-         return trimmed;
-       }
-     }
-     if (value == null) {
-       return fallback;
-     }
-     if (typeof value === 'number' || typeof value === 'boolean') {
-       return String(value);
-diff --git a/app/static/js/state.js b/app/static/js/state.js
-index 3b7cdecd571f62ae84bbb65bc61dcc2ef586045f..9c10ec11282a1d004a888d8c46ded3e2df78c5a0 100644
---- a/app/static/js/state.js
-+++ b/app/static/js/state.js
-@@ -1,143 +1,194 @@
- (() => {
-+  function isPlainObject(value) {
-+    return value !== null && typeof value === "object" && !Array.isArray(value);
-+  }
-+
-+  function mergePlainObjects(base, patch) {
-+    const result = { ...base };
-+    if (!isPlainObject(patch)) {
-+      return result;
-+    }
-+    for (const [key, value] of Object.entries(patch)) {
-+      if (isPlainObject(value)) {
-+        const nextBase = isPlainObject(result[key]) ? result[key] : {};
-+        result[key] = mergePlainObjects(nextBase, value);
-+      } else {
-+        result[key] = value;
-+      }
-+    }
-+    return result;
-+  }
-+
-+  function cloneState(source) {
-+    const next = { ...source };
-+    if (isPlainObject(source.state)) {
-+      next.state = mergePlainObjects({}, source.state);
-+    } else {
-+      next.state = {};
-+    }
-+    return next;
-+  }
-+
-+  function getStateBag(source) {
-+    if (!source || typeof source !== "object") {
-+      return {};
-+    }
-+    const bag = source.state;
-+    return isPlainObject(bag) ? bag : {};
-+  }
-+
-   const initialState = {
-     connectionState: "disconnected",
-     sid: null,
-     resume: null,
-     resumeError: null,
-     latencyMs: null,
-     lastPingAt: null,
-     heartbeatTimerId: null,
-     websocket: null,
-     infoFrame: null,
-     serverBanner: null,
-     clientBanner: {
-       info: null,
-       events: []
-     },
-     wsConnected: false,
-     wsPhase: "disconnected",
-     ttsActive: false,
-     asrArmInFlight: false,
-     armAfterTtsEnd: false,
-     listening: false,
-     recorderActive: false,
-     lastChunkTs: null,
-     chunkCount: 0,
-     lastErrorCode: null,
-     lastErrorDetail: null,
-     vadActive: false,
-     vadSpeech: false,
-     vadConfidence: 0,
-     vadEnergyDb: null,
-     vadNoiseDb: null,
-+    vadDbfs: null,
-+    lastSpeechAt: null,
-+    state: {
-+      vadActive: false,
-+      vadDbfs: null,
-+      lastSpeechAt: null,
-+    },
-   };
+   async function init() {
+     await bootstrapClientConfig();
+     await ensureRuntimeModules();
  
--  let state = { ...initialState };
-+  let state = cloneState(initialState);
-   const listeners = new Set();
- 
-   const TELEMETRY_KEYS = [
-     "wsConnected",
-     "wsPhase",
-     "ttsActive",
-     "asrArmInFlight",
-     "armAfterTtsEnd",
-     "listening",
-     "recorderActive",
-     "lastChunkTs",
-     "chunkCount",
-     "lastErrorCode",
-     "lastErrorDetail",
-     "vadActive",
-     "vadSpeech",
-     "vadConfidence",
-     "vadEnergyDb",
-     "vadNoiseDb",
-   ];
-   const DELTA_COALESCE_MS = 12;
-   const HEARTBEAT_INTERVAL_MS = 5000;
- 
-   let telemetryPrev = null;
-   let pendingDelta = null;
-   let pendingDeltaTimerId = null;
-   let telemetryHeartbeatTimerId = null;
-   let lastHeartbeatPayload = null;
- 
-   function computeTelemetrySnapshot(sourceState = state) {
-     const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
-+    const nestedState = getStateBag(snapshot);
-     const recorderActive = typeof snapshot.recorderActive === "boolean"
-       ? snapshot.recorderActive
-       : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
-+    const vadActiveSource = Object.prototype.hasOwnProperty.call(snapshot, "vadActive")
-+      ? snapshot.vadActive
-+      : nestedState.vadActive;
-     return {
-       wsConnected: Boolean(snapshot.wsConnected),
-       wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
-       ttsActive: Boolean(snapshot.ttsActive),
-       asrArmInFlight: Boolean(snapshot.asrArmInFlight),
-       armAfterTtsEnd: Boolean(snapshot.armAfterTtsEnd),
-       listening: Boolean(snapshot.listening),
-       recorderActive,
-       lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
-       chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
-       lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
-       lastErrorDetail: snapshot.lastErrorDetail ?? null,
--      vadActive: Boolean(snapshot.vadActive),
-+      vadActive: Boolean(vadActiveSource),
-       vadSpeech: Boolean(snapshot.vadSpeech),
-       vadConfidence: Number.isFinite(snapshot.vadConfidence) ? snapshot.vadConfidence : 0,
-       vadEnergyDb: Number.isFinite(snapshot.vadEnergyDb) ? snapshot.vadEnergyDb : null,
-       vadNoiseDb: Number.isFinite(snapshot.vadNoiseDb) ? snapshot.vadNoiseDb : null,
-     };
-   }
- 
-   function publishTelemetry(label, payload) {
-     try {
-       const hub = window.AppState && window.AppState.hub;
-       if (hub && typeof hub.log === "function") {
-         hub.log(label, payload);
-       }
-     } catch (err) {
-       try {
-         console.warn("AppState telemetry publish failed", label, err);
-       } catch {}
-     }
-   }
- 
-   function normalizeTelemetryValue(value) {
-     return value === undefined ? null : value;
-   }
- 
-   function syncTrackedProperties(snapshot) {
-     const target = window.AppState;
-     if (!target || typeof target !== "object") {
-       return;
-     }
-     for (const key of TELEMETRY_KEYS) {
-       if (key === "recorderActive") {
-         target.recorderActive = snapshot.recorderActive;
-       } else {
-         target[key] = snapshot[key];
-       }
-     }
-+    const nestedState = getStateBag(state);
-+    target.state = mergePlainObjects({}, nestedState);
-   }
- 
-   function scheduleDeltaFlush() {
-     if (pendingDeltaTimerId) {
-       return;
-     }
-     pendingDeltaTimerId = setTimeout(() => {
-       pendingDeltaTimerId = null;
-       if (!pendingDelta) {
-         return;
-       }
-       const snapshot = pendingDelta.snapshot || telemetryPrev || computeTelemetrySnapshot();
-         const detail = {
-           changed: pendingDelta.changed,
-           now_ms: Date.now(),
-           wsPhase: snapshot.wsPhase,
-           recorderActive: snapshot.recorderActive,
-           listening: snapshot.listening,
-           ttsActive: snapshot.ttsActive,
-           asrArmInFlight: snapshot.asrArmInFlight,
-           armAfterTtsEnd: snapshot.armAfterTtsEnd,
-           chunkCount: snapshot.chunkCount,
-           vadActive: snapshot.vadActive,
-           vadSpeech: snapshot.vadSpeech,
-           vadConfidence: snapshot.vadConfidence,
-@@ -247,143 +298,171 @@
-       }
-       return;
-     }
-     stopTelemetryHeartbeat();
-   }
- 
-   function processTelemetry(nextState) {
-     const nextSnapshot = computeTelemetrySnapshot(nextState);
-     if (!telemetryPrev) {
-       telemetryPrev = nextSnapshot;
-       syncTrackedProperties(nextSnapshot);
-       ensureTelemetryHeartbeat(nextSnapshot);
-       return;
-     }
-     const prevSnapshot = telemetryPrev;
-     telemetryPrev = nextSnapshot;
-     syncTrackedProperties(nextSnapshot);
-     recordTelemetryChange(prevSnapshot, nextSnapshot);
-     ensureTelemetryHeartbeat(nextSnapshot);
-   }
- 
-   telemetryPrev = computeTelemetrySnapshot(state);
-   syncTrackedProperties(telemetryPrev);
- 
-   function snapshot() {
--    return { ...state };
-+    return cloneState(state);
-   }
- 
-   function notify() {
-     const current = snapshot();
-     listeners.forEach((listener) => {
-       try {
-         listener(current);
-       } catch (err) {
-         console.error("AppState subscriber error", err);
-       }
-     });
-   }
- 
-   function setState(patch) {
-     if (!patch || typeof patch !== "object") return;
-     const sanitized = { ...patch };
-+    const nestedPatch = sanitized.state;
-+    if (Object.prototype.hasOwnProperty.call(sanitized, "state")) {
-+      delete sanitized.state;
-+    }
-     if ("resume" in sanitized) {
-       delete sanitized.resume;
-     }
-     if ("resumeError" in sanitized) {
-       delete sanitized.resumeError;
-     }
-     const preservedResume = state.resume;
-     const preservedResumeError = state.resumeError;
--    state = {
-+    let nextState = {
-       ...state,
-       ...sanitized,
-       resume: preservedResume,
-       resumeError: preservedResumeError
-     };
-+    if (isPlainObject(nestedPatch)) {
-+      const mergedState = mergePlainObjects(getStateBag(state), nestedPatch);
-+      nextState = {
-+        ...nextState,
-+        state: mergedState,
-+      };
-+      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadActive")) {
-+        nextState.vadActive = Boolean(mergedState.vadActive);
-+      }
-+      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadDbfs")) {
-+        const normalizedDbfs = Number.isFinite(mergedState.vadDbfs) ? mergedState.vadDbfs : null;
-+        nextState.vadDbfs = normalizedDbfs;
-+      }
-+      if (Object.prototype.hasOwnProperty.call(nestedPatch, "lastSpeechAt")) {
-+        const normalizedLastSpeech = Number.isFinite(mergedState.lastSpeechAt) ? mergedState.lastSpeechAt : null;
-+        nextState.lastSpeechAt = normalizedLastSpeech;
-+      }
-+    } else if (!isPlainObject(nextState.state)) {
-+      nextState = {
-+        ...nextState,
-+        state: mergePlainObjects({}, getStateBag(state)),
-+      };
-+    }
-+    state = nextState;
-     processTelemetry(state);
-     notify();
-   }
- 
-   function setResume(token, ttlMs) {
-     const candidate = typeof token === "string" ? token.trim() : "";
-     const ttl = Number(ttlMs);
-     if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
-       clearResume();
-       return null;
-     }
-     const expiresAt = Date.now() + ttl;
-     const resumeState = {
-       token: candidate,
-       ttlMs: ttl,
-       expiresAt
-     };
-     state = {
-       ...state,
-       resume: resumeState,
-       resumeError: null
-     };
-     processTelemetry(state);
-     notify();
-     return resumeState;
-   }
- 
-   function clearResume() {
-     if (state.resume !== null || state.resumeError !== null) {
-       state = { ...state, resume: null, resumeError: null };
-       processTelemetry(state);
-       notify();
-     }
-   }
- 
-   function reset() {
--    state = { ...initialState };
-+    state = cloneState(initialState);
-     processTelemetry(state);
-     notify();
-   }
- 
-   function subscribe(listener) {
-     if (typeof listener !== "function") {
-       throw new TypeError("listener must be a function");
-     }
-     listeners.add(listener);
-     listener(snapshot());
-     return () => {
-       listeners.delete(listener);
-     };
-   }
- 
-   const AppState = window.AppState = {
-     get: snapshot,
-     getState: snapshot,
-     setState,
-     reset,
-     subscribe,
-     setResume,
-     clearResume,
-     get initialState() {
--      return { ...initialState };
-+      return cloneState(initialState);
-     }
-   };
- 
-   syncTrackedProperties(telemetryPrev);
- 
-   const hubLogs = [];
-   const hubStartQueue = [];
-   const hubStopQueue = [];
-   let hubPendingSocket = { hasValue: false, value: null };
-   let hubImpl = null;
- 
-   function enqueueLog(label, detail) {
-     if (hubLogs.length >= 40) {
-       hubLogs.shift();
-     }
-     hubLogs.push({ label, detail });
-   }
- 
-   function enqueueStart(policy) {
-     if (hubStartQueue.length >= 10) {
-       hubStartQueue.shift();
-     }
-     hubStartQueue.push(policy);
-   }
- 
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');

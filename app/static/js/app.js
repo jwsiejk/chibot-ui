@@ -565,7 +565,10 @@
   handleHudStateChange({ state: 'Idle', meta: { state: 'Idle', source: 'init' } });
 
   async function ensureRuntimeModules() {
-    if (!window.AppState) {
+    const needsAppStateStore = !window.AppState
+      || typeof window.AppState.setState !== "function"
+      || typeof window.AppState.getState !== "function";
+    if (needsAppStateStore) {
       await loadScript("state.js");
     }
     if (!window.AudioPlayer) {
