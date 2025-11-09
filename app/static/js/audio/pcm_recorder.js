@@ -497,11 +497,20 @@
       this._firstChunkSent = false;
       this._listeningStartedAt = Date.now();
       this._resetClientVadState();
+      const vadConfig = this._getResolvedClientVadConfig();
       const chunkMs = DEFAULT_CHUNK_MS;
       emitClientLog('client.pcm.capture_start', {
         device_rate: this._deviceSampleRate || null,
         target_rate: TARGET_SAMPLE_RATE,
         chunk_ms: chunkMs,
+      });
+      emitClientLog('client.vad.params', {
+        enable: vadConfig.enable,
+        threshold_dbfs: vadConfig.thresholdDbfs,
+        attack_ms: vadConfig.attackMs,
+        release_ms: vadConfig.releaseMs,
+        pre_roll_ms: vadConfig.preRollMs,
+        min_active_ms: vadConfig.minActiveMs,
       });
       emitAppStateRecordingStarted(this._policy);
     }
@@ -641,7 +650,7 @@
         return;
       }
 
-      const cfg = this._clientVadConfig || this._extractClientVadConfig({});
+      const cfg = this._getResolvedClientVadConfig();
       if (!cfg.enable) {
         this._dispatchChunk(buffer);
         return;
@@ -775,6 +784,60 @@
         });
       }
       return delivered;
+    }
+
+    _getResolvedClientVadConfig() {
+      const defaults = {
+        enable: true,
+        thresholdDbfs: -60,
+        attackMs: 80,
+        releaseMs: 250,
+        preRollMs: 240,
+        minActiveMs: 300,
+      };
+
+      let cfg = this._clientVadConfig || this._extractClientVadConfig({}) || {};
+      if (!cfg || typeof cfg !== 'object') {
+        cfg = {};
+      }
+
+      const toFiniteNumber = (value) => {
+        if (Number.isFinite(value)) {
+          return value;
+        }
+        if (typeof value === 'string' && value.trim()) {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed)) {
+            return parsed;
+          }
+        }
+        return null;
+      };
+
+      const pickNumber = (fallback, ...candidates) => {
+        for (let i = 0; i < candidates.length; i += 1) {
+          const candidate = toFiniteNumber(candidates[i]);
+          if (candidate !== null) {
+            return candidate;
+          }
+        }
+        return fallback;
+      };
+
+      const thresholdDbfs = pickNumber(defaults.thresholdDbfs, cfg.thresholdDbfs, cfg.threshold_dbfs);
+      const attackMs = Math.max(0, pickNumber(defaults.attackMs, cfg.attackMs, cfg.attack_ms));
+      const releaseMs = Math.max(0, pickNumber(defaults.releaseMs, cfg.releaseMs, cfg.release_ms));
+      const preRollMs = Math.max(0, pickNumber(defaults.preRollMs, cfg.preRollMs, cfg.pre_roll_ms));
+      const minActiveMs = Math.max(0, pickNumber(defaults.minActiveMs, cfg.minActiveMs, cfg.min_active_ms));
+
+      return {
+        enable: cfg.enable !== false,
+        thresholdDbfs,
+        attackMs,
+        releaseMs,
+        preRollMs,
+        minActiveMs,
+      };
     }
 
     _clientVadEstimateChunkMs(buffer) {
@@ -958,16 +1021,8 @@
     }
 
     _extractClientVadConfig(policy) {
-      const defaults = {
-        enable: true,
-        thresholdDbfs: -60,
-        attackMs: 80,
-        releaseMs: 250,
-        preRollMs: 240,
-        minActiveMs: 300,
-      };
       if (!policy || typeof policy !== 'object') {
-        return { ...defaults };
+        return {};
       }
       let vadPolicy = null;
       if (policy.vad && typeof policy.vad === 'object') {
@@ -977,55 +1032,17 @@
       }
       const clientCfg = vadPolicy && typeof vadPolicy.client === 'object' ? vadPolicy.client : null;
       if (!clientCfg || typeof clientCfg !== 'object') {
-        return { ...defaults };
+        return {};
       }
-
-      const normalized = { ...defaults };
-      const coerceNumber = (value) => {
-        if (typeof value === 'number' && Number.isFinite(value)) {
-          return value;
-        }
-        if (typeof value === 'string' && value.trim()) {
-          const parsed = Number(value);
-          if (Number.isFinite(parsed)) {
-            return parsed;
-          }
-        }
-        return null;
-      };
-
-      if (clientCfg.enable === false) {
-        normalized.enable = false;
-      } else if (clientCfg.enable === true) {
-        normalized.enable = true;
+      try {
+        return { ...clientCfg };
+      } catch (_) {
+        const clone = {};
+        Object.keys(clientCfg).forEach((key) => {
+          clone[key] = clientCfg[key];
+        });
+        return clone;
       }
-
-      const threshold = coerceNumber(clientCfg.threshold_dbfs);
-      if (threshold !== null) {
-        normalized.thresholdDbfs = threshold;
-      }
-
-      const attack = coerceNumber(clientCfg.attack_ms);
-      if (attack !== null && attack >= 0) {
-        normalized.attackMs = attack;
-      }
-
-      const release = coerceNumber(clientCfg.release_ms);
-      if (release !== null && release >= 0) {
-        normalized.releaseMs = release;
-      }
-
-      const preRoll = coerceNumber(clientCfg.pre_roll_ms);
-      if (preRoll !== null) {
-        normalized.preRollMs = Math.max(0, preRoll);
-      }
-
-      const minActive = coerceNumber(clientCfg.min_active_ms);
-      if (minActive !== null) {
-        normalized.minActiveMs = Math.max(0, minActive);
-      }
-
-      return normalized;
     }
 
     _extractPolicyFromConfig(config) {
