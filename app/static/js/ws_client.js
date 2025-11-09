@@ -358,6 +358,25 @@ import { WakeWord } from "./wake_word.js";
   let vadController = null;
   let vadSilenceTimerId = null;
   let senderPaused = false;
+  let warmupUntil = 0;
+  function beginWarmup(ms = 1200) {
+    warmupUntil = Date.now() + ms;
+  }
+  function _warming() {
+    return Date.now() < warmupUntil;
+  }
+  function _canCaptureNow() {
+    const s = window.AppState || {};
+    return _warming() || (s.asrReady && s.micLive && !s.tts && !senderPaused);
+  }
+  function syncSenderPaused(value) {
+    senderPaused = Boolean(value);
+    if (AppState && typeof AppState === "object") {
+      AppState.senderPaused = senderPaused;
+    }
+    updateState({ senderPaused });
+    window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+  }
   const PCM_TARGET_BATCH_MS = 60;
   const PCM_FLUSH_TIMER_MS = 50;
   const PCM_SAMPLE_RATE = 16000;
@@ -533,11 +552,9 @@ import { WakeWord } from "./wake_word.js";
 
   function handleVadGateChange(action) {
     if (action === "pause") {
-      senderPaused = true;
-      return;
-    }
-    if (action === "resume") {
-      senderPaused = false;
+      syncSenderPaused(true);
+    } else if (action === "resume") {
+      syncSenderPaused(false);
     }
   }
 
@@ -799,9 +816,10 @@ import { WakeWord } from "./wake_word.js";
   function setListeningState(active) {
     const listening = Boolean(active);
     setAppStateValue("listening", listening);
+    AppState.micLive = listening;
     const recorderState = { active: listening };
     AppState.recorderActive = listening;
-    updateState({ recorder: recorderState, recorderActive: listening });
+    updateState({ recorder: recorderState, recorderActive: listening, micLive: listening });
     if (AppState.recorder && typeof AppState.recorder === "object") {
       AppState.recorder = { ...AppState.recorder, active: listening };
     } else {
@@ -1016,7 +1034,7 @@ import { WakeWord } from "./wake_word.js";
     } catch (err) {
       console.warn("Recorder stopListening failed", err);
     }
-    senderPaused = false;
+    syncSenderPaused(false);
     flushPcmBatch();
     if (vadController && typeof vadController.reset === "function") {
       try {
@@ -1058,25 +1076,25 @@ import { WakeWord } from "./wake_word.js";
         } catch {}
       }
     }
-    let asrReady = false;
-    try {
-      if (typeof AppState.getState === "function") {
-        const snapshot = AppState.getState();
-        if (snapshot && typeof snapshot.asrReady === "boolean") {
-          asrReady = snapshot.asrReady;
-        }
-      }
-    } catch {}
-    if (!asrReady) {
-      asrReady = Boolean(AppState?.asrReady);
-    }
-    if (senderPaused || !asrReady) {
+    if (!_canCaptureNow()) {
       return;
     }
     if (seq === 0) {
       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
     }
     const frame = new Int16Array(buffer);
+    if (frame.length) {
+      let sumSq = 0;
+      for (let i = 0; i < frame.length; i += 1) {
+        const sample = frame[i] / 32768;
+        sumSq += sample * sample;
+      }
+      const rms = Math.sqrt(sumSq / frame.length);
+      if (AppState && typeof AppState === "object") {
+        AppState.micRms = rms;
+      }
+      window.StatusBar?.updateMeter?.(rms);
+    }
     enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
   }
 
@@ -1101,7 +1119,7 @@ import { WakeWord } from "./wake_word.js";
       throw err;
     }
     resetRecorderTelemetry();
-    senderPaused = false;
+    syncSenderPaused(false);
     if (vadController && typeof vadController.reset === "function") {
       try {
         vadController.reset();
@@ -2598,7 +2616,9 @@ import { WakeWord } from "./wake_word.js";
     const sanitized = sanitizeAsrReadyFrame(frame);
     AppState.asrReady = true;
     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
+    beginWarmup(1200);
     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
+    window.requestAnimationFrame(() => window.AppUI?.refresh?.());
     if (typeof AppState.emit === "function") {
       AppState.emit("asrReady", {
         ready: true,
@@ -3079,6 +3099,8 @@ import { WakeWord } from "./wake_word.js";
       } catch {}
       stopRecorder("tts_start");
       setAppStateValue("ttsActive", true);
+      AppState.tts = true;
+      window.requestAnimationFrame(() => window.AppUI?.refresh?.());
       if (typeof AppState.emit === "function") {
         AppState.emit("ttsActive", { active: true });
       }
@@ -3092,6 +3114,9 @@ import { WakeWord } from "./wake_word.js";
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
     } else if (frame.type === "tts.end") {
       setAppStateValue("ttsActive", false);
+      AppState.tts = false;
+      beginWarmup(1200);
+      window.requestAnimationFrame(() => window.AppUI?.refresh?.());
       if (typeof AppState.emit === "function") {
         AppState.emit("ttsActive", { active: false });
       }

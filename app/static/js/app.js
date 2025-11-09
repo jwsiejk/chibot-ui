@@ -141,6 +141,35 @@
     return appendVersionQuery(joined);
   }
 
+  function renderStatusBarFromState() {
+    try {
+      const appState = window.AppState || {};
+      const snapshot = typeof appState.getState === "function" ? appState.getState() : appState;
+      const recorder = snapshot.recorder && typeof snapshot.recorder === "object" ? snapshot.recorder : {};
+      const merged = {
+        ...snapshot,
+        wsConn: snapshot.wsConn ?? snapshot.wsConnected ?? appState.wsConnected,
+        wsConning: snapshot.wsConning ?? snapshot.wsConnecting ?? appState.wsConnecting,
+        asrReady: snapshot.asrReady ?? appState.asrReady,
+        micLive: snapshot.micLive ?? recorder.active ?? appState.micLive ?? window.AudioRecorder?.listening,
+        tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts,
+        senderPaused: snapshot.senderPaused ?? appState.senderPaused,
+      };
+      window.StatusBar?.render(merged);
+    } catch {}
+  }
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("DOMContentLoaded", () => {
+      renderStatusBarFromState();
+    });
+  }
+
+  window.AppUI = window.AppUI || {};
+  window.AppUI.refresh = function () {
+    renderStatusBarFromState();
+  };
+
   if (typeof window !== "undefined") {
     window.addEventListener("client.log", (event) => {
       try {
@@ -470,77 +499,8 @@
     return true;
   }
 
-  let diagBadgeEl = null;
-  let diagBadgePendingText = null;
-  let diagBadgeAwaitingDom = false;
-
-  function ensureDiagBadge() {
-    if (!diagHudEnabled()) {
-      return null;
-    }
-    if (typeof document === "undefined") {
-      return null;
-    }
-    if (diagBadgeEl && diagBadgeEl.isConnected) {
-      return diagBadgeEl;
-    }
-    const existing = document.getElementById("diagBadge");
-    if (existing) {
-      diagBadgeEl = existing;
-      if (diagBadgePendingText != null) {
-        existing.textContent = diagBadgePendingText;
-        diagBadgePendingText = null;
-      }
-      return existing;
-    }
-    if (!document.body) {
-      if (!diagBadgeAwaitingDom) {
-        diagBadgeAwaitingDom = true;
-        document.addEventListener("DOMContentLoaded", () => {
-          diagBadgeAwaitingDom = false;
-          const badge = ensureDiagBadge();
-          if (badge && diagBadgePendingText != null) {
-            badge.textContent = diagBadgePendingText;
-            diagBadgePendingText = null;
-          }
-        }, { once: true });
-      }
-      return null;
-    }
-    const badge = document.createElement("div");
-    badge.id = "diagBadge";
-    badge.setAttribute("role", "status");
-    const style = badge.style;
-    style.position = "fixed";
-    style.right = "12px";
-    style.bottom = "12px";
-    style.padding = "6px 10px";
-    style.borderRadius = "10px";
-    style.background = "rgba(17,24,39,0.78)";
-    style.color = "#f8fafc";
-    style.font = "12px/1.4 system-ui, -apple-system, \"Segoe UI\", sans-serif";
-    style.zIndex = "5000";
-    style.pointerEvents = "none";
-    style.boxShadow = "0 6px 24px rgba(15, 23, 42, 0.25)";
-    badge.textContent = diagBadgePendingText != null ? diagBadgePendingText : "diag";
-    diagBadgePendingText = null;
-    document.body.appendChild(badge);
-    diagBadgeEl = badge;
-    return badge;
-  }
-
-  function setBadge(text) {
-    if (!diagHudEnabled()) {
-      return;
-    }
-    const value = text == null ? "" : String(text);
-    const badge = ensureDiagBadge();
-    if (badge) {
-      badge.textContent = value;
-      diagBadgePendingText = null;
-    } else {
-      diagBadgePendingText = value;
-    }
+  function setBadge() {
+    window.AppUI?.refresh?.();
   }
 
   let lastHudState = null;
@@ -734,305 +694,10 @@
       finalSeenThisTurn: false,
     };
 
-    let __lastBadgeLabel = null;
-    let __fsmPrev = 'Disconnected';
-    const scheduleBadgeMicrotask =
-      typeof queueMicrotask === 'function'
-        ? queueMicrotask
-        : (cb) => Promise.resolve().then(cb);
-    let __badgeUpdateScheduled = false;
-    let __badgePendingState = undefined;
-
-    function getMicLiveFlag(state) {
-      const snapshot = state && typeof state === 'object' ? state : {};
-      const recorderState = snapshot.recorder && typeof snapshot.recorder === 'object'
-        ? snapshot.recorder
-        : (AppState?.recorder && typeof AppState.recorder === 'object' ? AppState.recorder : null);
-      if (typeof recorderState?.active === 'boolean') {
-        return recorderState.active;
-      }
-      if (window.AudioRecorder && typeof window.AudioRecorder === 'object') {
-        if (typeof window.AudioRecorder.listening === 'boolean') {
-          return window.AudioRecorder.listening;
-        }
-        if (typeof window.AudioRecorder._active === 'boolean') {
-          return window.AudioRecorder._active;
-        }
-      }
-      return false;
-    }
-
-    function normalizeUiStateSnapshot(state) {
-      const snapshot = state && typeof state === 'object' ? state : {};
-      const connectionState = typeof snapshot.connectionState === 'string'
-        ? snapshot.connectionState
-        : (typeof AppState?.getState === 'function'
-          ? AppState.getState().connectionState
-          : null);
-
-      const wsConnectedFlag = typeof snapshot.wsConnected === 'boolean'
-        ? snapshot.wsConnected
-        : (typeof AppState?.wsConnected === 'boolean' ? AppState.wsConnected : undefined);
-      const wsConnectingFlag = typeof snapshot.wsConnecting === 'boolean'
-        ? snapshot.wsConnecting
-        : (typeof AppState?.wsConnecting === 'boolean' ? AppState.wsConnecting : undefined);
-
-      const wsConn = typeof wsConnectedFlag === 'boolean'
-        ? wsConnectedFlag
-        : connectionState === 'connected';
-      const wsConning = typeof wsConnectingFlag === 'boolean'
-        ? wsConnectingFlag
-        : connectionState === 'connecting' || connectionState === 'resuming';
-
-      const tts = typeof snapshot.ttsActive === 'boolean'
-        ? snapshot.ttsActive
-        : Boolean(AppState?.ttsActive);
-
-      const turnState = typeof snapshot.turnState === 'string' && snapshot.turnState
-        ? snapshot.turnState
-        : (typeof AppState?.turnState === 'string' && AppState.turnState
-          ? AppState.turnState
-          : (typeof runtimeState.turnState === 'string' ? runtimeState.turnState : null));
-
-      const listen = turnState === 'Listening';
-      const think = turnState === 'Thinking';
-
-      const micLive = getMicLiveFlag(snapshot);
-
-      const asrReady = typeof snapshot.asrReady === 'boolean'
-        ? snapshot.asrReady
-        : (typeof AppState?.asrReady === 'boolean'
-          ? AppState.asrReady
-          : Boolean(runtimeState.asrReady));
-
-      const recorderState = snapshot.recorder && typeof snapshot.recorder === 'object'
-        ? snapshot.recorder
-        : (AppState?.recorder && typeof AppState.recorder === 'object' ? AppState.recorder : null);
-
-      const err = (() => {
-        if (snapshot.lastError) return snapshot.lastError;
-        if (recorderState && typeof recorderState.error !== 'undefined' && recorderState.error !== null) {
-          return recorderState.error;
-        }
-        if (AppState?.lastError) return AppState.lastError;
-        return null;
-      })();
-
-      return {
-        snapshot,
-        connectionState,
-        wsConn,
-        wsConning,
-        tts,
-        turnState,
-        listen,
-        think,
-        micLive,
-        asrReady,
-        recorderState,
-        err,
-      };
-    }
-
-    function computeStatusBadge(state, normalized) {
-      const ui = normalized || normalizeUiStateSnapshot(state);
-      const {
-        wsConn,
-        wsConning,
-        tts,
-        listen,
-        think,
-        micLive,
-        asrReady,
-        err,
-      } = ui || {};
-
-      const micLiveValue = typeof micLive === 'boolean' ? micLive : false;
-
-      if (!wsConn && !wsConning) {
-        return { label: 'Disconnected', sub: 'Press Start to begin.', tone: 'tone-gray', dot: 'bg-zinc-400', micLive: micLiveValue };
-      }
-      if (wsConning && !wsConn) {
-        return { label: 'Connecting…', sub: 'One sec—bringing Chip online.', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
-      }
-      if (err) {
-        return { label: 'Audio issue', sub: 'Check input or try again.', tone: 'tone-red', dot: 'bg-rose-200', micLive: micLiveValue };
-      }
-      if (wsConn && !tts && !listen && !think) {
-        return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
-      }
-      if (tts) {
-        return { label: 'Responding…', sub: 'Speaking — say “Hold on” to interrupt.', tone: 'tone-blue', dot: 'bg-blue-200', micLive: micLiveValue };
-      }
-      if (think) {
-        return { label: 'Thinking…', sub: 'Thinking… one sec.', tone: 'tone-purple', dot: 'bg-violet-200', micLive: micLiveValue };
-      }
-      if (listen && !asrReady) {
-        return { label: 'Getting ready to listen…', sub: 'Arming mic…', tone: 'tone-gray', dot: 'bg-zinc-200', micLive: micLiveValue };
-      }
-      if (listen && asrReady && micLive) {
-        return { label: 'Listening', sub: 'I’m listening — talk to me.', tone: 'tone-green', dot: 'bg-emerald-200', micLive };
-      }
-      return { label: 'Connected', sub: '', tone: 'tone-gray', dot: 'bg-zinc-300', micLive: micLiveValue };
-    }
-
-    function deriveCanonicalUiState(normalized) {
-      const ui = normalized || {};
-      const wsConn = !!ui.wsConn;
-      const wsConning = !!ui.wsConning;
-      const tts = !!ui.tts;
-      const think = !!ui.think;
-      const listen = !!ui.listen;
-      const err = !!ui.err;
-
-      if (!wsConn && !wsConning) {
-        return 'Disconnected';
-      }
-      if (wsConning && !wsConn) {
-        return 'Connecting';
-      }
-      if (err) {
-        return 'Error';
-      }
-      if (tts) {
-        return 'Responding';
-      }
-      if (think) {
-        return 'Thinking';
-      }
-      if (listen) {
-        return 'Listening';
-      }
-      return 'Greeting';
-    }
-
-    function renderStatusBadge(snapshot) {
-      const el =
-        document.getElementById('status-badge') ||
-        document.querySelector('[data-role="status-badge"]') ||
-        document.querySelector('.chip-status');
-      if (!el) {
-        return;
-      }
-
-      if (!el.id) {
-        el.id = 'status-badge';
-      }
-      if (!el.getAttribute('data-role')) {
-        el.setAttribute('data-role', 'status-badge');
-      }
-      el.setAttribute('role', 'status');
-      el.setAttribute('aria-live', 'polite');
-
-      const normalized = normalizeUiStateSnapshot(snapshot);
-      const st = computeStatusBadge(snapshot, normalized);
-      const canonical = deriveCanonicalUiState(normalized);
-      if (typeof canonical === 'string' && canonical) {
-        const prev = typeof __fsmPrev === 'string' && __fsmPrev ? __fsmPrev : 'Disconnected';
-        if (canonical !== prev) {
-          console.log(`fsm.transition prev=${prev} next=${canonical}`);
-        }
-        __fsmPrev = canonical;
-      }
-
-      const dot = el.querySelector('.status-dot, span[class*="w-2"], .dot, .badge-dot');
-      let labelEl = el.querySelector('#connLabel');
-      if (!labelEl) {
-        const spanCandidates = el.querySelectorAll('span');
-        for (const node of spanCandidates) {
-          if (!node.classList.contains('status-dot')) {
-            labelEl = node;
-            break;
-          }
-        }
-      }
-      if (!labelEl) {
-        labelEl = el.querySelector('.sb-title, .badge-title, .text');
-      }
-      if (!labelEl) {
-        labelEl = el.querySelector('*');
-      }
-
-      let sub = el.querySelector('.sb-sub');
-      if (!sub) {
-        sub = document.createElement('div');
-        sub.className = 'sb-sub hidden';
-        el.appendChild(sub);
-      }
-
-      Array.from(el.classList)
-        .filter((cls) => cls.startsWith('tone-'))
-        .forEach((cls) => el.classList.remove(cls));
-      el.classList.add(st.tone);
-
-      if (dot) {
-        if (!dot.classList.contains('status-dot')) {
-          dot.classList.add('status-dot');
-        }
-        Array.from(dot.classList)
-          .filter((cls) => cls.startsWith('bg-') && cls !== st.dot)
-          .forEach((cls) => dot.classList.remove(cls));
-        if (!dot.classList.contains(st.dot)) {
-          dot.classList.add(st.dot);
-        }
-      }
-
-      if (labelEl) {
-        labelEl.textContent = st.label;
-        labelEl.classList.add('sb-title');
-      }
-
-      if (sub) {
-        sub.textContent = st.sub || '';
-        sub.classList.toggle('hidden', !st.sub);
-      }
-
-      el.setAttribute('aria-label', st.sub ? `${st.label}. ${st.sub}` : st.label);
-
-      const recorderListening = typeof window.AudioRecorder?.listening === 'boolean'
-        ? window.AudioRecorder.listening
-        : !!st.micLive;
-      if (__lastBadgeLabel !== st.label) {
-        if (st.label === 'Listening' && recorderListening) {
-          console.log('ui.badge label="Listening"');
-        }
-        __lastBadgeLabel = st.label;
-      }
-
-      if (dot) {
-        dot.classList.toggle('pulsing', st.label === 'Listening' && recorderListening);
-      }
-    }
-
-    // Acceptance tests:
-    // - After greet → asr.ready and mic arms, badge shows Listening, dot pulses, and logs ui.badge label="Listening" once.
-    // - During TTS playback, badge reads Responding… with “Hold on” guidance.
-    // - When ASR errors trigger asr.unavailable, badge switches to Audio issue state.
-
-    function updateStatusBadge(stateOverride) {
-      if (stateOverride !== undefined) {
-        __badgePendingState = stateOverride;
-      }
-      if (__badgeUpdateScheduled) {
-        return;
-      }
-      __badgeUpdateScheduled = true;
-      scheduleBadgeMicrotask(() => {
-        __badgeUpdateScheduled = false;
-        const pending = __badgePendingState;
-        __badgePendingState = undefined;
-        const snapshot = pending && typeof pending === 'object'
-          ? pending
-          : (typeof AppState?.getState === 'function' ? AppState.getState() : (AppState || {}));
-        renderStatusBadge(snapshot);
-      });
-    }
-
-    updateStatusBadge(typeof AppState?.getState === 'function' ? AppState.getState() : null);
+    renderStatusBarFromState();
     if (typeof AppState?.on === 'function') {
-      AppState.on('change', () => updateStatusBadge());
-      ['wsConnected', 'wsConnecting', 'ttsActive', 'turnState', 'asrReady']
-        .forEach((eventName) => AppState.on(eventName, () => updateStatusBadge()));
+      const events = ['change', 'wsConnected', 'wsConnecting', 'ttsActive', 'turnState', 'asrReady'];
+      events.forEach((eventName) => AppState.on(eventName, () => window.AppUI?.refresh?.()));
     }
 
     if (AppState && typeof AppState.__no_rearm_until !== 'number') {
@@ -1539,7 +1204,7 @@
         }
         handleHudStateChange({ state: hudState, meta: hudMeta });
       }
-      updateStatusBadge();
+      window.AppUI?.refresh?.();
       return next;
     }
 
@@ -1940,7 +1605,7 @@
       updateRecordingState(false, 'ws.close');
       setMicPermissionGranted(false, 'ws.close');
       runtimeState.policy = null;
-      updateStatusBadge();
+      window.AppUI?.refresh?.();
     });
 
     window.addEventListener('ws.open', () => {
@@ -1953,7 +1618,7 @@
           flushDeferredClientLogs();
         } catch {}
       }
-      updateStatusBadge();
+      window.AppUI?.refresh?.();
     });
     
     if (window.PolicyBadges && typeof window.PolicyBadges.init === "function") {
@@ -2794,7 +2459,7 @@
 
     let previousConnectionState = AppState.getState().connectionState;
     AppState.subscribe((state) => {
-      updateStatusBadge(state);
+      window.AppUI?.refresh?.();
       sidText.textContent = state.sid || '—';
       const active = state.connectionState !== 'disconnected';
       startBtn.disabled = active;
@@ -3070,7 +2735,7 @@ window.addEventListener('tts.start', (event) => {
   }
   patchPolicyVad({ auto_vad_active: false });
   vadListeningLogged = false;
-  updateStatusBadge();
+  window.AppUI?.refresh?.();
 });
 
 window.addEventListener('policy.snapshot', (event) => {
@@ -3093,7 +2758,7 @@ window.addEventListener('turn.state', (event) => {
     ? frame.state
     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
-  updateStatusBadge();
+  window.AppUI?.refresh?.();
   if (runtimeState.turnState !== 'Ready') return;
 
   // Optional: why we became ready (e.g., 'tts')
@@ -3124,7 +2789,7 @@ window.addEventListener('tts.end', () => {
         console.warn('requestAsrPrearm failed after tts.end', err);
       }
     }
-    updateStatusBadge();
+    window.AppUI?.refresh?.();
   };
 
   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
@@ -3199,7 +2864,7 @@ window.addEventListener('assistant.await_user', (event) => {
     logClient('client.mic', 'diag=vad_active state=Listening');
     vadListeningLogged = true;
   }
-  updateStatusBadge();
+  window.AppUI?.refresh?.();
 });
 
 window.addEventListener('asr.unavailable', (event) => {
@@ -3243,7 +2908,7 @@ window.addEventListener('asr.unavailable', (event) => {
   } catch (err) {
     console.warn('scheduleAsrRearm failed after asr.unavailable', err);
   }
-  updateStatusBadge();
+  window.AppUI?.refresh?.();
 });
 
 window.addEventListener('asr.ready', (event) => {
@@ -3283,7 +2948,7 @@ window.addEventListener('asr.ready', (event) => {
       console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
     }
   }
-  updateStatusBadge();
+  window.AppUI?.refresh?.();
 });
 
 window.addEventListener('assistant.suggestions', (event) => {

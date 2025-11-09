@@ -1,0 +1,22 @@
+.statusbar-host { display:flex; align-items:center; justify-content:flex-start; padding:.25rem 0; }
+.statusbar {
+  display:flex; align-items:center; gap:.6rem;
+  padding:.5rem .75rem; border-radius:999px;
+  background:#0e1116; color:#fff; border:1px solid rgba(255,255,255,.06);
+  box-shadow: 0 1px 2px rgba(0,0,0,.25);
+}
+.status-dot { width:.6rem; height:.6rem; border-radius:999px; background:#9ca3af; }
+.status-text { display:flex; flex-direction:column; line-height:1.1; }
+.status-label { font-weight:600; }
+.status-sub { font-size:.85rem; opacity:.8; white-space:nowrap; }
+.status-meter { margin-left:auto; width:96px; height:6px; background:#1b2230; border-radius:6px; overflow:hidden; }
+.status-meter-fill { height:100%; width:0%; background:#67e8f9; transition:width .08s linear; }
+
+/* tones */
+.status-blue  .status-dot { background:#60a5fa; }
+.status-amber .status-dot { background:#f59e0b; }
+.status-green .status-dot { background:#34d399; }
+.status-gray  .status-dot { background:#9ca3af; }
+
+/* Safety net: hide old UI badge + chips if any remain in DOM */
+#diagBadge, #modeChip, #vadChip, #bargeChip { display:none !important; }
