@@ -562,10 +562,7 @@ import { initVAD } from "./audio/vad_client.js";
     try {
       phase = AppState?.wsPhase || AppState?.connectionState || null;
     } catch {}
-    let inReadyPhase = true;
-    if (typeof phase === "string" && phase) {
-      inReadyPhase = WS_READY_PHASES.has(phase);
-    }
+    const inReadyPhase = (typeof phase === "string" && phase) ? WS_READY_PHASES.has(phase) : true;
     let connected = false;
     try {
       if (typeof WSClient?.isConnected === "function") {
@@ -575,9 +572,7 @@ import { initVAD } from "./audio/vad_client.js";
         connected = !!live;
       }
     } catch {}
-    if (!connected && typeof WSClient?._connected === "boolean") {
-      connected = WSClient._connected;
-    }
+    if (!connected && typeof WSClient?._connected === "boolean") connected = WSClient._connected;
     return connected && inReadyPhase;
   }
 
@@ -3685,6 +3680,10 @@ import { initVAD } from "./audio/vad_client.js";
         __pendingAutoArm = false;
         if (!_audioStreaming && !AppState?.micLive) {
           const startReason = "auto_asr_ready";
+          hubLog("client.ws_ready_check", {
+            socketOpen: !!(WSClient?._ws) && WSClient._ws.readyState === WebSocket.OPEN,
+            phase: (AppState?.wsPhase || AppState?.connectionState || null),
+          });
           const turned = await openTurnOnce(startReason);
           void turned;
           try {
@@ -3789,6 +3788,10 @@ import { initVAD } from "./audio/vad_client.js";
         __pendingAutoArm = false;
         if (!_audioStreaming && !AppState?.micLive) {
           const startReason = "auto_turn_begin";
+          hubLog("client.ws_ready_check", {
+            socketOpen: !!(WSClient?._ws) && WSClient._ws.readyState === WebSocket.OPEN,
+            phase: (AppState?.wsPhase || AppState?.connectionState || null),
+          });
           const turned = await openTurnOnce(startReason);
           void turned;
           try {
@@ -4481,7 +4484,14 @@ import { initVAD } from "./audio/vad_client.js";
     }
   });
   WSClient.isConnected = function isConnected() {
-    return !!socket && socket.readyState === WebSocket.OPEN && AppState.getState().connectionState === "connected";
+    try {
+      const s = typeof AppState?.getState === "function" ? AppState.getState() : AppState || {};
+      const phase = s.wsPhase || s.connectionState || null;
+      const phaseOk = typeof phase === "string" ? WS_READY_PHASES.has(phase) : true;
+      return !!socket && socket.readyState === WebSocket.OPEN && phaseOk;
+    } catch {
+      return !!socket && socket.readyState === WebSocket.OPEN;
+    }
   };
   WSClient.__debug = debug;
   window.WSClient = WSClient;

@@ -1,27 +1,29 @@
-app.js?v=5c81cbe:651 client.asr
-app.js?v=5c81cbe:651 client.asr.autostart_gates
-app.js?v=5c81cbe:651 diag
-app.js?v=5c81cbe:651 client.asr_arm_clear
-app.js?v=5c81cbe:651 client.audio_header_send
-app.js?v=5c81cbe:1004 client.mic evt=guard_arm ts_ms=1762692142364
-app.js?v=5c81cbe:1004 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
-app.js?v=5c81cbe:1004 evt=mic_arm trigger=asr_ready reason=policy
-app.js?v=5c81cbe:1004 client.mic evt=mic_capture_request_blocked reason=active
-app.js?v=5c81cbe:2990 diag=asr_ready
-app.js?v=5c81cbe:1004 client.mic evt=mic_capture_request_blocked reason=active
-app.js?v=5c81cbe:1004 evt=mic_open_failed err=mic_not_started
-app.js?v=5c81cbe:651 client.ws
-app.js?v=5c81cbe:651 client.stream.off
-app.js?v=5c81cbe:651 client.vad.state
-ws_client.js?v=5c81cbe:4293 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=5c81cbe:4293Understand this warning
-app.js?v=5c81cbe:651 client.ws
-app.js?v=5c81cbe:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=5c81cbe:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=5c81cbe:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=5c81cbe:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=5c81cbe:651 client.appstate.delta
-ws_client.js?v=5c81cbe:4129 WebSocket closed Object
-ws.onclose @ ws_client.js?v=5c81cbe:4129Understand this error
-app.js?v=5c81cbe:651 client.ws
-app.js?v=5c81cbe:651 client.appstate.delta
+3app.js?v=6a6c168:651 client.appstate.delta
+app.js?v=6a6c168:651 client.vad.meter
+2app.js?v=6a6c168:651 client.appstate.delta
+app.js?v=6a6c168:651 client.vad.meter
+2app.js?v=6a6c168:651 client.appstate.delta
+app.js?v=6a6c168:651 client.vad.meter
+3app.js?v=6a6c168:651 client.appstate.delta
+app.js?v=6a6c168:651 client.vad.meter
+2app.js?v=6a6c168:651 client.appstate.delta
+app.js?v=6a6c168:651 client.pcm.capture_stop
+app.js?v=6a6c168:1004 client.mic evt=mic_stop reason=watchdog
+app.js?v=6a6c168:651 client.appstate.heartbeat
+app.js?v=6a6c168:651 client.ws
+app.js?v=6a6c168:651 client.stream.off
+app.js?v=6a6c168:651 client.turn.intent
+app.js?v=6a6c168:651 client.vad.state
+app.js?v=6a6c168:651 client.pcm.capture_stop
+ws_client.js?v=6a6c168:4351 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=6a6c168:4351Understand this warning
+app.js?v=6a6c168:651 client.ws
+app.js?v=6a6c168:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=6a6c168:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=6a6c168:1004 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
+app.js?v=6a6c168:1004 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
+app.js?v=6a6c168:651 client.appstate.delta
+ws_client.js?v=6a6c168:4187 WebSocket closed Object
+ws.onclose @ ws_client.js?v=6a6c168:4187Understand this error
+app.js?v=6a6c168:651 client.ws
+app.js?v=6a6c168:651 client.appstate.delta

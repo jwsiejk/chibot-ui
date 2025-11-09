@@ -1458,7 +1458,8 @@
         });
         return;
       }
-      if (!runtimeState.asrReady) {
+      const asrReadyNow = !!(AppState?.asrReady || AppState?.getState?.()?.asrReady);
+      if (!asrReadyNow) {
         requestAsrPrearm(trigger);
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
           blockedBy: 'asr_ready',
