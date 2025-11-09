@@ -2950,6 +2950,9 @@ import { initVAD } from "./audio/vad_client.js";
   function handleAsrReadyFrame(frame) {
     const sanitized = sanitizeAsrReadyFrame(frame);
     AppState.asrReady = true;
+    try {
+      window.dispatchEvent(new CustomEvent("asr.ready"));
+    } catch {}
     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
     beginWarmup(getWarmupMs());
     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
@@ -3487,6 +3490,9 @@ import { initVAD } from "./audio/vad_client.js";
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
     } else if (frame.type === "tts.end") {
       setAppStateValue("ttsActive", false);
+      try {
+        window.dispatchEvent(new CustomEvent("tts.end", { detail: frame }));
+      } catch {}
       AppState.tts = false;
       beginWarmup(getWarmupMs());
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
