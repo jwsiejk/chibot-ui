@@ -462,7 +462,7 @@ import { initVAD } from "./audio/vad_client.js";
       if (!AppState.listening) {
         sendAudioHeader(policy);
       }
-      await startRecorderStreaming(policy);
+      await startRecorderStreaming(policy, reason);
       if (AppState && typeof AppState === "object") {
         AppState.micLive = true;
       }
@@ -518,6 +518,30 @@ import { initVAD } from "./audio/vad_client.js";
   function wsOpen() {
     const ws = WSClient._ws || window.ws;
     return ws && ws.readyState === WebSocket.OPEN ? ws : null;
+  }
+
+  function canSendInputControl() {
+    let phase = null;
+    try {
+      phase = AppState?.wsPhase || AppState?.connectionState || null;
+    } catch {}
+    let inReadyPhase = true;
+    if (typeof phase === "string" && phase) {
+      inReadyPhase = WS_READY_PHASES.has(phase);
+    }
+    let connected = false;
+    try {
+      if (typeof WSClient?.isConnected === "function") {
+        connected = WSClient.isConnected();
+      } else {
+        const live = wsOpen();
+        connected = !!live;
+      }
+    } catch {}
+    if (!connected && typeof WSClient?._connected === "boolean") {
+      connected = WSClient._connected;
+    }
+    return connected && inReadyPhase;
   }
 
   function logTransportMisuse(kind) {
@@ -758,6 +782,9 @@ import { initVAD } from "./audio/vad_client.js";
     } else if (action === "resume") {
       syncSenderPaused(false);
     }
+    try {
+      hubLog("client.vad.gate", { action });
+    } catch {}
   }
 
   try {
@@ -1340,7 +1367,7 @@ import { initVAD } from "./audio/vad_client.js";
     enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
   }
 
-  async function startRecorderStreaming(policy) {
+  async function startRecorderStreaming(policy, reason) {
     if (AppState.listening) {
       return;
     }
@@ -1376,6 +1403,10 @@ import { initVAD } from "./audio/vad_client.js";
     micLastChunkAt = Date.now();
     scheduleAudioKeepalive();
     setListeningState(true);
+    try {
+      const captureReason = typeof reason === "string" && reason ? reason : "unknown";
+      hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
+    } catch {}
   }
 
   function schedulePostTtsArm(reason) {
@@ -3571,6 +3602,7 @@ import { initVAD } from "./audio/vad_client.js";
         hubLog("client.stream.off", { reason });
       }
       _audioStreaming = false;
+      setListeningState(false);
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
       __asrReadySeen = true;
@@ -3593,11 +3625,14 @@ import { initVAD } from "./audio/vad_client.js";
       if (gates.start_on_asr_ready && !gates.start_on_turn_ready) {
         __pendingAutoArm = false;
         if (!_audioStreaming && !AppState?.micLive) {
+          const startReason = "auto_asr_ready";
           try {
-            WSClient.send({ type: "input.start", reason: "auto_asr_ready" });
+            if (canSendInputControl()) {
+              WSClient.send({ type: "input.start", reason: startReason });
+            }
           } catch {}
           try {
-            await startRecorderStreaming(frame?.policy || {});
+            await startRecorderStreaming(frame?.policy || {}, startReason);
             _audioStreaming = true;
             if (AppState && typeof AppState === "object") {
               AppState.micLive = true;
@@ -3692,11 +3727,14 @@ import { initVAD } from "./audio/vad_client.js";
       if (begin && __pendingAutoArm) {
         __pendingAutoArm = false;
         if (!_audioStreaming && !AppState?.micLive) {
+          const startReason = "auto_turn_begin";
           try {
-            WSClient.send({ type: "input.start", reason: "auto_turn_begin" });
+            if (canSendInputControl()) {
+              WSClient.send({ type: "input.start", reason: startReason });
+            }
           } catch {}
           try {
-            await startRecorderStreaming(AppState?.policy || {});
+            await startRecorderStreaming(AppState?.policy || {}, startReason);
             _audioStreaming = true;
             if (AppState && typeof AppState === "object") {
               AppState.micLive = true;
