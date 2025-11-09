@@ -781,6 +781,8 @@ def build_session_policy(
 
     if not FEATURE_WEBRTC_AEC:
         capture_policy = policy_v2.setdefault("capture", {})
+        if capture_policy.get("mode") != "pcm":
+            _log.info("capture_mode_override reason=webrtc_aec_disabled original=%r", capture_policy.get("mode"))
         capture_policy["mode"] = "pcm"
 
     return policy_v2
