@@ -3694,16 +3694,17 @@ import { initVAD } from "./audio/vad_client.js";
         }
       }
       frame = handleAsrReadyFrame(frame) || frame;
-      __asrReadySeen = true;
-      setAsrArmInFlight(false);
-      setArmAfterTtsEnd(false);
-      setWsConnected(true);
+      // HARD SYNC before gates:
       AppState.asrReady = true;
-      try { // keep nested state in sync so StatusBar sees it
+      try {
         const s = (AppState.state = AppState.state || {});
         s.asrReady = true;
         if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
       } catch {}
+      __asrReadySeen = true;
+      setAsrArmInFlight(false);
+      setArmAfterTtsEnd(false);
+      setWsConnected(true);
       setWsPhase("ready");
       emitConsoleBusEvent("client.asr.ready", { asrReady: true });
       // derive and publish auto-start gates from v2 policy
@@ -4521,7 +4522,29 @@ import { initVAD } from "./audio/vad_client.js";
 
   WSClient.open = open;
   WSClient.close = close;
-  WSClient.send = WSClient.sendJSON;
+  WSClient.send = function sendJSON(payload) {
+    try {
+      const ws = WSClient?._ws || window.ws;
+      const open = ws && ws.readyState === WebSocket.OPEN;
+      const isControl = payload && typeof payload === "object" && (
+        payload.type === "input.start" ||
+        payload.type === "input.stop"  ||
+        payload.type === "audio.header"||
+        payload.type === "ping"        ||
+        payload.type === "pong"
+      );
+      if (open && isControl) {
+        try {
+          ws.send(JSON.stringify(payload));
+          return true;
+        } catch (e) {
+          console.warn("ws.json send failed", e);
+          return false;
+        }
+      }
+    } catch {}
+    return WSClient.sendJSON(payload);
+  };
   WSClient.sendBinary = (payload, opts = {}) => sendBinary(payload, opts);
   WSClient.getBufferedAmount = getBufferedAmount;
   WSClient.requestAsrArm = requestAsrArm;

@@ -1111,6 +1111,16 @@
       logClientMicEventText(`evt=guard_arm ts_ms=${Date.now()}`);
     }
 
+    let __firstTurnGraceUntil = 0;
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('asr.ready', () => {
+        __firstTurnGraceUntil = Date.now() + 5000;
+      });
+      window.addEventListener('tts.end', () => {
+        __firstTurnGraceUntil = Date.now() + 3000;
+      });
+    }
+
     function armAsrPartialWatchdog() {
       if (typeof window === 'undefined') {
         return;
@@ -1125,6 +1135,14 @@
       asrPartialWatchdogTimerId = window.setTimeout(() => {
         asrPartialWatchdogTimerId = null;
         if (!isRecorderListening() || AppState?.ttsActive) {
+          return;
+        }
+        const now = Date.now();
+        const inGraceWindow = now < __firstTurnGraceUntil;
+        const recorderLive = isRecorderListening() || AppState?.listening || window.AudioRecorder?.listening;
+        if (inGraceWindow && !recorderLive) {
+          const graceMs = Math.max(0, __firstTurnGraceUntil - now);
+          logClient('watchdog_suppressed_during_grace', { reason: 'partial_watchdog', grace_ms: graceMs });
           return;
         }
         let stopAttempted = false;
