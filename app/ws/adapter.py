@@ -65,6 +65,7 @@ from app.voice_v2 import (
 from app.services.asr.sm_rt import SMRealtimeClient
 from app.ws.validator import validate_audio_header_against_policy, validate_frame
 from app.ws.state import SessionCtx, can_open, mark
+from app.ws.policy import normalize_policy
 
 try:  # pragma: no cover - uvicorn is an optional dependency in tests
     from uvicorn.protocols.utils import ClientDisconnected
@@ -429,6 +430,8 @@ class AdapterContext:
     server_keepalive_task: asyncio.Task[None] | None = None
     last_policy_interaction: Optional[Dict[str, Any]] = None
     policy_snapshot: Optional[Dict[str, Any]] = None
+    policy: Optional[Dict[str, Any]] = None
+    policy_warning_logged: bool = False
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
@@ -515,12 +518,127 @@ class ChatV2Adapter:
             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
         )
         self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
+        self._policy_env_warning_logged = False
 
     @staticmethod
     def _turn_key(ctx: AdapterContext, req_id: Optional[str]) -> Optional[str]:
         if isinstance(req_id, str) and req_id:
             return f"{ctx.sid}:{req_id}"
         return None
+
+    def _session_policy_env(self) -> Mapping[str, Any] | None:
+        candidates: List[tuple[str, str]] = []
+        for name in ("SESSION_POLICY", "SESSION_POLICY_JSON", "CHAT_V2_POLICY"):
+            raw_value = config.get_env(name, None)
+            if not isinstance(raw_value, str):
+                continue
+            value = raw_value.strip()
+            if not value:
+                continue
+            candidates.append((name, value))
+
+        for source, raw in candidates:
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                if not self._policy_env_warning_logged:
+                    _log.warning(
+                        "evt=session_policy_env_invalid source=%s", source
+                    )
+                    self._policy_env_warning_logged = True
+                continue
+            if isinstance(parsed, Mapping):
+                return parsed
+            if not self._policy_env_warning_logged:
+                _log.warning(
+                    "evt=session_policy_env_not_mapping source=%s type=%s",
+                    source,
+                    type(parsed).__name__,
+                )
+                self._policy_env_warning_logged = True
+        return None
+
+    def _build_session_policy(self) -> Dict[str, Any]:
+        admin_overrides = getattr(config, "POLICY_OVERRIDES", None)
+        env_overrides = self._session_policy_env()
+        try:
+            policy = config.build_session_policy(admin_overrides, env_overrides)
+        except Exception:
+            _log.exception("evt=session_policy_build_failed")
+            policy = normalize_policy({})
+        return dict(policy)
+
+    @staticmethod
+    def _policy_for_client(policy: Mapping[str, Any] | None) -> Dict[str, Any]:
+        if not isinstance(policy, Mapping):
+            return {}
+        allowed_keys = {
+            "version",
+            "asr",
+            "vad",
+            "watchdog",
+            "server",
+            "capture",
+            "ui",
+            "_normalized_from",
+        }
+        filtered = {key: policy[key] for key in allowed_keys if key in policy}
+        try:
+            return json.loads(json.dumps(filtered, ensure_ascii=False))
+        except (TypeError, ValueError):
+            return dict(filtered)
+
+    def _bus(
+        self, event_type: str, payload: Mapping[str, Any], *, sid: Optional[str] = None
+    ) -> None:
+        event_payload: Dict[str, Any]
+        try:
+            event_payload = json.loads(json.dumps(payload, ensure_ascii=False))
+        except (TypeError, ValueError):
+            event_payload = dict(payload)
+
+        event: Dict[str, Any] = {
+            "schema_version": "1",
+            "type": event_type,
+            "who": "server",
+            "source": "ws_server",
+            "payload": event_payload,
+        }
+        event_sid = sid if isinstance(sid, str) and sid else current_sid.get(None)
+        if isinstance(event_sid, str) and event_sid:
+            event["sid"] = event_sid
+        bus.publish(event)
+
+    def _emit_policy_snapshot(self, ctx: AdapterContext) -> None:
+        policy = ctx.policy if isinstance(ctx.policy, Mapping) else None
+        if not policy:
+            return
+        version = policy.get("version")
+        if version != 2 and not ctx.policy_warning_logged:
+            _log.warning(
+                "warn=policy_legacy_only; using_v2_defaults sid=%s", ctx.sid
+            )
+            ctx.policy_warning_logged = True
+        try:
+            self._bus("policy.snapshot", policy, sid=ctx.sid)
+        except Exception:  # pragma: no cover - defensive logging
+            _log.exception("evt=policy_snapshot_emit_failed sid=%s", ctx.sid)
+
+    def _policy(self, ctx: AdapterContext) -> Dict[str, Any]:
+        if isinstance(ctx.policy, Mapping):
+            return dict(ctx.policy)
+        return {}
+
+    def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
+        try:
+            normalized = normalize_policy(payload)
+        except Exception:  # pragma: no cover - defensive logging
+            _log.exception("evt=policy_normalize_failed sid=%s", ctx.sid)
+            return
+        ctx.policy = normalized
+        ctx.session.policy = normalized
+        ctx.policy_warning_logged = False
+        self._emit_policy_snapshot(ctx)
 
     @staticmethod
     def _allowed_asr_vendors() -> List[str]:
@@ -1211,6 +1329,7 @@ class ChatV2Adapter:
         }
         info_frame["meta"] = {"sid": sid}
         policy_snapshot = self._policy_snapshot()
+        session_policy_v2 = self._build_session_policy()
         allowed_asr_vendors = ["speechmatics"]
         snapshot_mapping: Mapping[str, Any] | None
         if isinstance(policy_snapshot, Mapping):
@@ -1225,13 +1344,17 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
-        provisional_ctx.session.policy = policy_snapshot
+        provisional_ctx.policy_snapshot = (
+            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+        )
+        provisional_ctx.policy = dict(session_policy_v2)
+        provisional_ctx.session.policy = provisional_ctx.policy
         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
         selected_vendor = "speechmatics"
         selection_reason = "pcm16_only"
         if policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
-            info_frame["policy"] = policy_snapshot
+        info_frame["policy"] = self._policy_for_client(session_policy_v2)
         await self._send_json(send, sid, info_frame)
         _log.info("evt=ws_info_sent sid=%s", sid)
         self._emit_session_step(
@@ -1248,8 +1371,11 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
-        ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
-        ctx.session.policy = ctx.policy_snapshot
+        ctx.policy_snapshot = (
+            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+        )
+        ctx.policy = dict(session_policy_v2)
+        ctx.session.policy = ctx.policy
         ctx.last_client_activity_ms = now_ms
         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
         snapshot_mapping = (
@@ -1291,6 +1417,7 @@ class ChatV2Adapter:
                 )
 
             self._contexts[ctx.sid] = ctx
+            self._emit_policy_snapshot(ctx)
 
             _log.info("evt=ws_open sid=%s", ctx.sid)
             self._start_asr_ready_tracker(ctx, bus)
@@ -2811,7 +2938,11 @@ class ChatV2Adapter:
                         ctx.await_user_req_id = req_value
                     elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
                         ctx.last_tts_end_req_id = ctx.await_user_req_id
-                    policy = self._policy_snapshot()
+                    policy = (
+                        ctx.policy_snapshot
+                        if isinstance(ctx.policy_snapshot, Mapping)
+                        else {}
+                    )
                     self._maybe_emit_await_user(ctx, policy)
                     _schedule_listen_handoff(req_value)
                     ctx.session.tts_active = False
@@ -3118,7 +3249,9 @@ class ChatV2Adapter:
                     ctx.await_user_req_id = req_value
                 elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
                     ctx.last_tts_end_req_id = ctx.await_user_req_id
-                policy = self._policy_snapshot()
+                policy = (
+                    ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
+                )
                 self._maybe_emit_await_user(ctx, policy)
                 _schedule_listen_handoff(req_value)
 
@@ -3186,7 +3319,11 @@ class ChatV2Adapter:
                 }
                 _enqueue(frame)
                 if state_text == "Ready" and reason_text == "tts_end":
-                    policy = self._policy_snapshot()
+                    policy = (
+                        ctx.policy_snapshot
+                        if isinstance(ctx.policy_snapshot, Mapping)
+                        else {}
+                    )
                     self._maybe_emit_await_user(ctx, policy)
 
             try:
@@ -3560,7 +3697,7 @@ class ChatV2Adapter:
             policy_payload = normalized.get("policy")
             if isinstance(policy_payload, dict):
                 ctx.policy_snapshot = policy_payload
-                ctx.session.policy = ctx.policy_snapshot
+                self._replace_policy(ctx, policy_payload)
                 ctx.allowed_asr_vendors = ["speechmatics"]
                 snapshot_mapping = policy_payload
                 ctx.asr_vendor = "speechmatics"

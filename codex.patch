@@ -1,347 +1,648 @@
-diff --git a/app/config.py b/app/config.py
-index 7d69662748b476aa11c7f69dbf1dcc684140e62a..f371f3f73a85c401887eb16e7cb8d3836aeae118 100644
---- a/app/config.py
-+++ b/app/config.py
-@@ -1,35 +1,38 @@
- """Application configuration helpers."""
- 
- from __future__ import annotations
- 
-+from copy import deepcopy
- import json
- import logging
- import os
- import threading
- from typing import Any, Mapping, MutableMapping, Optional
- 
-+from app.ws.policy import normalize_policy
-+
- try:
-     from dotenv import load_dotenv  # type: ignore
- except ImportError:  # pragma: no cover - optional dependency
-     load_dotenv = None
- else:  # pragma: no branch
-     load_dotenv(dotenv_path=".env", override=False)
- 
- 
- def env_bool(name: str, default: bool = False) -> bool:
-     """Return an environment variable parsed as a boolean."""
- 
-     value = os.getenv(name)
-     if value is None:
-         return bool(default)
-     value = value.strip().lower()
-     if value in {"1", "true", "t", "yes", "y", "on"}:
-         return True
-     if value in {"0", "false", "f", "no", "n", "off"}:
-         return False
-     return bool(default)
- 
- 
- # DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
- # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
- DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
-@@ -132,51 +135,51 @@ _DEFAULT_POLICY_MEDIA = {
-     "fallbacks_allowed": False,
- }
- 
- _DEFAULT_POLICY_CAPTURE = {
-     "start_on_asr_ready": True,
-     "start_on_turn_ready": True,
-     "timeslice_ms": 200,
-     "mask_during_tts": True,
- }
- 
- _DEFAULT_POLICY_RECORDER = {
-     "stop_on_tts_start": False,
-     "mute_send_during_tts": True,
- }
- 
- _DEFAULT_POLICY_INPUT = {
-     "require_hotword_to_start": False,
- }
- 
- _DEFAULT_POLICY_ASR = {
-     "prearm_on_tts_end": False,
-     "keep_stream_warm_ms": 30000,
-     "vendor": {"primary": "speechmatics", "secondary": None},
-     "commit_on_vad_silence": True,
-     # Make VAD slightly more patient so we do not clip trailing speech.
--    "commit_silence_ms": 1400,
-+    "commit_silence_ms": 900,
-     "max_utterance_ms": 8000,
-     "dup_final_suppress_ms": 150,
-     "dedupe_normalize": True,
-     # Give the utterance end detector a wider buffer to avoid premature stops.
-     "utterance_end_ms": 2100,
-     "min_segment_ms": 800,
-     "final_guard_ms": 250,
-     "allow_word_finals": False,
- }
- 
- _DEFAULT_POLICY_ROUTING = {
-     "ws_version": "v2",
- }
- 
- _DEFAULT_POLICY_AUDIO = {
-     "pipeline": {"mode": "pcm16"},
- }
- 
- POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
- POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
- POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
- POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
- POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
- POLICY_AUDIO: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_AUDIO)
- POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
-@@ -712,50 +715,89 @@ def _resolve_mapping_setting(
-     return dict(base_default), "default", None
- 
- 
- def _resolve_int_setting(
-     name: str, default: int, *, minimum: Optional[int] = None
- ) -> tuple[int, str, Any]:
-     env_value = os.getenv(_env_name(name))
-     if env_value is not None:
-         return _coerce_int(env_value, default, minimum=minimum), "env", env_value
-     stored = _get_cached_admin_setting(name)
-     if stored is not None:
-         return _coerce_db_int(stored, default, minimum=minimum), "db", stored
-     fallback = int(default)
-     if minimum is not None and fallback < minimum:
-         fallback = minimum
-     return fallback, "default", None
- 
- 
- def int_env_or_db(name: str, *, default: int = 0, minimum: Optional[int] = None) -> int:
-     """Resolve an integer config value from env, admin settings, or default."""
- 
-     value, _source, _raw = _resolve_int_setting(name, default, minimum=minimum)
-     return value
- 
- 
-+def _merge_mapping(dst: MutableMapping[str, Any], src: Mapping[str, Any]) -> None:
-+    """Recursively merge ``src`` into ``dst`` while copying nested mappings."""
-+
-+    for key, value in src.items():
-+        if not isinstance(key, str):
-+            continue
-+        if isinstance(value, Mapping):
-+            existing = dst.get(key)
-+            if isinstance(existing, Mapping):
-+                merged_child: MutableMapping[str, Any] = dict(existing)
-+            else:
-+                merged_child = {}
-+            _merge_mapping(merged_child, value)
-+            dst[key] = merged_child
-+        else:
-+            dst[key] = deepcopy(value)
-+
-+
-+def build_session_policy(
-+    admin_overrides: Mapping[str, Any] | None,
-+    env: Mapping[str, Any] | None,
-+) -> dict[str, Any]:
-+    """Return a normalized session policy using v2 defaults and legacy mapping."""
-+
-+    merged: MutableMapping[str, Any] = {}
-+
-+    if isinstance(env, Mapping):
-+        _merge_mapping(merged, env)
-+
-+    if isinstance(admin_overrides, Mapping):
-+        _merge_mapping(merged, admin_overrides)
-+
-+    policy_block = merged.pop("policy", None)
-+    if isinstance(policy_block, Mapping):
-+        _merge_mapping(merged, policy_block)
-+
-+    return normalize_policy(dict(merged))
-+
-+
- ASR_DUP_FINAL_SUPPRESS_MS = int_env_or_db(
-     "ASR_DUP_FINAL_SUPPRESS_MS", default=150, minimum=0
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 987f059430995a8ec67289c645d1d146637e1583..d24a80f5e23a7b9c78d68cb62c935532bc7381a0 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -43,50 +43,51 @@ from app.telemetry.events import (
+     WS_AUDIO_HEADER_ACCEPT,
  )
- ASR_DEDUPE_NORMALIZE = bool_env_or_db("ASR_DEDUPE_NORMALIZE", default=True)
+ from app.telemetry.exporter import FileExporter
+ from app.voice_v2 import (
+     EVT_ASR_CLOSED,
+     EVT_ASR_FINAL,
+     EVT_ASR_PARTIAL,
+     EVT_ASR_READY,
+     EVT_CHAT_USER,
+     EVT_CLIENT_BANNER,
+     EVT_CLIENT_AUTOSTART,
+     EVT_CLIENT_MIC_OPEN,
+     EVT_HUD_STATE,
+     EVT_SESSION_STEP,
+     EVT_TTS_END,
+     EVT_TTS_MASK,
+     EVT_CLIENT_LOG,
+     EVT_WS_AUDIO_RECV,
+     EVT_WS_AUDIO_SEND,
+     EVT_WS_JSON_RECV,
+     EVT_WS_JSON_SEND,
+ )
+ from app.services.asr.sm_rt import SMRealtimeClient
+ from app.ws.validator import validate_audio_header_against_policy, validate_frame
+ from app.ws.state import SessionCtx, can_open, mark
++from app.ws.policy import normalize_policy
+ 
+ try:  # pragma: no cover - uvicorn is an optional dependency in tests
+     from uvicorn.protocols.utils import ClientDisconnected
+ except Exception:  # pragma: no cover - fallback when uvicorn missing
+     class ClientDisconnected(Exception):  # type: ignore[no-redef]
+         """Fallback placeholder when uvicorn is unavailable."""
  
  
- def reload_runtime_flags() -> None:
-     """Refresh runtime configuration flags from env and admin settings."""
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
  
-     diag_client_hud, hud_source, _hud_raw = _resolve_bool_setting(
-         "diag_client_hud", default=False
-     )
-     audio_guardrails_default = {"enabled": True}
-     audio_guardrails, guardrails_source, _guardrails_raw = _resolve_mapping_setting(
-         "audio_guardrails", default=audio_guardrails_default
-     )
-     diag_audio_guard, audio_source, _audio_raw = _resolve_bool_setting(
-         "diag_audio_guard", default=True
-     )
-     diag_chunk_sample_n, chunk_source, _chunk_raw = _resolve_int_setting(
-         "diag_chunk_sample_n", default=10, minimum=1
-     )
+ AUDIO_SEQ_WINDOW = 8
  
-     policy_media_raw, media_source, media_raw = _resolve_mapping_setting(
-         "policy_media", default=_DEFAULT_POLICY_MEDIA
-@@ -941,34 +983,35 @@ reload_runtime_flags()
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
  
- __all__ = [
-     "ASR_BACKPRESSURE_THRESHOLD_BYTES",
-     "ASR_IDLE_CLOSE_MS",
-     "ASR_TRACE",
-     "ASR_DUP_FINAL_SUPPRESS_MS",
-     "ASR_DEDUPE_NORMALIZE",
-     "ASR_DEEPGRAM_ENABLED",
-     "ASR_SPEECHMATICS_ENABLED",
-     "AUDIO_GUARDRAILS",
-     "DEEPGRAM_API_KEY",
-     "SPEECHMATICS_API_KEY",
-     "SPEECHMATICS_REALTIME_URL",
-     "DIAG_AUDIO_GUARD",
-     "DIAG_CHUNK_SAMPLE_N",
-     "DIAG_CLIENT_HUD",
-     "POLICY_MEDIA",
-     "POLICY_CAPTURE",
-     "POLICY_RECORDER",
-     "POLICY_INPUT",
-     "POLICY_ASR",
-     "POLICY_AUDIO",
-     "POLICY_ROUTING",
-     "POLICY_OVERRIDES",
-     "bool_env_or_db",
-+    "build_session_policy",
-     "get_admin_setting_raw",
-     "get_client_config_snapshot",
-     "get_env",
-     "int_env_or_db",
-     "reload_runtime_flags",
-     "set_admin_setting_raw",
-     "set_admin_settings",
-     "update_admin_settings_cache",
- ]
-diff --git a/app/ws/policy.py b/app/ws/policy.py
-new file mode 100644
-index 0000000000000000000000000000000000000000..b1d708ea9ff94412dc7e5e2e5d733485fc154548
---- /dev/null
-+++ b/app/ws/policy.py
-@@ -0,0 +1,119 @@
-+from __future__ import annotations
+ _DEFAULT_WS_PING_INTERVAL_MS = 20_000
+ _HEARTBEAT_TIMEOUT_MS = 30_000
+@@ -407,50 +408,52 @@ class AdapterContext:
+     audio_violation_count: int = 0
+     awaiting_asr_ready: bool = False
+     client_capture_armed: bool = False
+     outbound_queue_depth: int = 0
+     backpressure_state: Literal["off", "on"] = "off"
+     outbox: asyncio.Queue[Dict[str, Any]] | None = None
+     outbound_task: asyncio.Task[None] | None = None
+     subscription_token: Optional[str] = None
+     audio_subscription_token: Optional[str] = None
+     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+     audio_send_closed: bool = False
+     asr_ready: bool = False
+     asr_subscription_token: Optional[str] = None
+     asr_subscription_bus: Optional[Any] = None
+     asr_open_subscription_token: Optional[str] = None
+     asr_unavailable_subscription_token: Optional[str] = None
+     asr_partial_subscription_token: Optional[str] = None
+     asr_final_subscription_token: Optional[str] = None
+     asr_closed_subscription_token: Optional[str] = None
+     asr_recovering_until: float = 0.0
+     asr_recovering_reason: Optional[str] = None
+     asr_recovering_audio_logged: bool = False
+     server_keepalive_task: asyncio.Task[None] | None = None
+     last_policy_interaction: Optional[Dict[str, Any]] = None
+     policy_snapshot: Optional[Dict[str, Any]] = None
++    policy: Optional[Dict[str, Any]] = None
++    policy_warning_logged: bool = False
+     partial_seq: int = 0
+     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+     send_lock: asyncio.Lock | None = None
+     ws_send: Callable[[dict], Awaitable[None]] | None = None
+     asr_open_task: asyncio.Task[None] | None = None
+     asr_bytes_sent: int = 0
+     asr_opened_ms: Optional[int] = None
+     asr_close_reason: Optional[str] = None
+     tts_end_ts: Optional[float] = None
+     diag_audio_seen: bool = False
+     diag_timer: asyncio.TimerHandle | None = None
+     diag_timer_key: Optional[str] = None
+     await_user_expected: bool = False
+     await_user_pending: bool = False
+     await_user_pending_key: Optional[str] = None
+     await_user_after_mask: bool = False
+     await_user_after_mask_key: Optional[str] = None
+     tts_mask_phase: str = "off"
+     mask_subscription_token: Optional[str] = None
+     pending_start_listening: Optional[Dict[str, Any]] = None
+     pending_start_listening_sent: bool = False
+     tts_end_subscription_token: Optional[str] = None
+     turn_state_subscription_token: Optional[str] = None
+     hud_state: Optional[str] = None
+     client_mic_open: bool = False
+@@ -493,57 +496,172 @@ class AdapterContext:
+         self.session = SessionCtx(sid=self.sid, policy=None)
+ 
+ 
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+ 
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+         )
+         self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
++        self._policy_env_warning_logged = False
+ 
+     @staticmethod
+     def _turn_key(ctx: AdapterContext, req_id: Optional[str]) -> Optional[str]:
+         if isinstance(req_id, str) and req_id:
+             return f"{ctx.sid}:{req_id}"
+         return None
+ 
++    def _session_policy_env(self) -> Mapping[str, Any] | None:
++        candidates: List[tuple[str, str]] = []
++        for name in ("SESSION_POLICY", "SESSION_POLICY_JSON", "CHAT_V2_POLICY"):
++            raw_value = config.get_env(name, None)
++            if not isinstance(raw_value, str):
++                continue
++            value = raw_value.strip()
++            if not value:
++                continue
++            candidates.append((name, value))
 +
-+from copy import deepcopy
-+from typing import Any, Mapping, MutableMapping, Sequence
-+
-+POLICY_VERSION = 2
-+
-+# map legacy → new; omit keys to drop
-+LEGACY_MAP: Mapping[Sequence[str], Sequence[str] | None] = {
-+    # legacy ASR
-+    ("asr", "prearm_on_tts_end"): ("asr", "prearm_on_tts_end"),
-+    ("asr", "start_on_ready"): ("asr", "server_starts_input"),  # legacy name
-+    # legacy VAD/gating
-+    ("vad", "auto_vad_active"): None,  # runtime state, not a policy knob
-+    ("vad", "allow_auto_vad"): ("vad", "sender_gate_on_tts"),  # best fit
-+    # legacy UI badge behavior
-+    ("ui", "badge_listen_on_asr"): ("ui", "status", "require_active_turn"),
-+}
-+
-+DEPRECATED_KEYS = {
-+    ("input", "require_hotword_to_start"),
-+    ("input", "require_user_gesture_first_visit"),  # keep only if UX requires
-+    ("audio", "pipeline", "mode"),
-+    ("media", "asr_input"),
-+}
-+
-+SAFE_DEFAULTS_V2: dict[str, Any] = {
-+    "version": POLICY_VERSION,
-+    "asr": {
-+        "server_starts_input": True,
-+        "prearm_on_tts_end": True,
-+        "cold_start_grace_ms": 2500,
-+    },
-+    "vad": {
-+        "warmup_ms": 1200,
-+        "sender_gate_on_tts": True,
-+    },
-+    "watchdog": {
-+        "partial_wait_ms_first_turn": 2500,
-+    },
-+    "server": {
-+        "buffer_prestart_audio_ms": 300,
-+    },
-+    "capture": {
-+        "constraints": {
-+            "echoCancellation": True,
-+            "noiseSuppression": True,
-+            "autoGainControl": False,
-+            "channelCount": 1,
-+            "sampleRate": 48000,
-+        }
-+    },
-+    "ui": {
-+        "status": {
-+            "require_active_turn": True,
-+            "enable_meter": True,
-+        }
-+    },
-+}
-+
-+
-+def _get(d: Mapping[str, Any], path: Sequence[str], default: Any = None) -> Any:
-+    cur: Any = d
-+    for key in path:
-+        if not isinstance(cur, Mapping) or key not in cur:
-+            return default
-+        cur = cur[key]
-+    return cur
-+
-+
-+def _set(d: MutableMapping[str, Any], path: Sequence[str], value: Any) -> None:
-+    cur: MutableMapping[str, Any] = d
-+    for key in path[:-1]:
-+        next_val = cur.get(key)
-+        if not isinstance(next_val, MutableMapping):
-+            next_val = {}
-+            cur[key] = next_val  # type: ignore[assignment]
-+        cur = next_val  # type: ignore[assignment]
-+    cur[path[-1]] = value
-+
-+
-+def normalize_policy(incoming: Mapping[str, Any] | None) -> dict[str, Any]:
-+    """Merge SAFE_DEFAULTS_V2 ← incoming (mapped), drop deprecated, prefer v2 keys."""
-+
-+    src = deepcopy(dict(incoming or {}))
-+    out = deepcopy(SAFE_DEFAULTS_V2)
-+
-+    def deep_merge(dst: MutableMapping[str, Any], src_: Mapping[str, Any] | None) -> None:
-+        for key, value in (src_ or {}).items():
-+            if isinstance(value, Mapping) and isinstance(dst.get(key), MutableMapping):
-+                deep_merge(dst[key], value)  # type: ignore[index]
-+            else:
-+                dst[key] = deepcopy(value)
-+
-+    deep_merge(out, {key: value for key, value in src.items() if key in out})
-+
-+    for legacy_path, new_path in LEGACY_MAP.items():
-+        val = _get(src, legacy_path, None)
-+        if val is None or new_path is None:
-+            continue
-+        if legacy_path == ("ui", "badge_listen_on_asr"):
-+            val = not bool(val)
-+        if _get(out, new_path, None) is None:
-+            _set(out, new_path, val)
-+
-+    for path in DEPRECATED_KEYS:
-+        parent = _get(src, path[:-1], None)
-+        if isinstance(parent, MutableMapping) and path[-1] in parent:
++        for source, raw in candidates:
 +            try:
-+                del parent[path[-1]]
-+            except Exception:
-+                pass
++                parsed = json.loads(raw)
++            except json.JSONDecodeError:
++                if not self._policy_env_warning_logged:
++                    _log.warning(
++                        "evt=session_policy_env_invalid source=%s", source
++                    )
++                    self._policy_env_warning_logged = True
++                continue
++            if isinstance(parsed, Mapping):
++                return parsed
++            if not self._policy_env_warning_logged:
++                _log.warning(
++                    "evt=session_policy_env_not_mapping source=%s type=%s",
++                    source,
++                    type(parsed).__name__,
++                )
++                self._policy_env_warning_logged = True
++        return None
 +
-+    out["version"] = POLICY_VERSION
-+    out["_normalized_from"] = "v2"
-+    return out
++    def _build_session_policy(self) -> Dict[str, Any]:
++        admin_overrides = getattr(config, "POLICY_OVERRIDES", None)
++        env_overrides = self._session_policy_env()
++        try:
++            policy = config.build_session_policy(admin_overrides, env_overrides)
++        except Exception:
++            _log.exception("evt=session_policy_build_failed")
++            policy = normalize_policy({})
++        return dict(policy)
 +
++    @staticmethod
++    def _policy_for_client(policy: Mapping[str, Any] | None) -> Dict[str, Any]:
++        if not isinstance(policy, Mapping):
++            return {}
++        allowed_keys = {
++            "version",
++            "asr",
++            "vad",
++            "watchdog",
++            "server",
++            "capture",
++            "ui",
++            "_normalized_from",
++        }
++        filtered = {key: policy[key] for key in allowed_keys if key in policy}
++        try:
++            return json.loads(json.dumps(filtered, ensure_ascii=False))
++        except (TypeError, ValueError):
++            return dict(filtered)
 +
-+__all__ = ["POLICY_VERSION", "normalize_policy"]
++    def _bus(
++        self, event_type: str, payload: Mapping[str, Any], *, sid: Optional[str] = None
++    ) -> None:
++        event_payload: Dict[str, Any]
++        try:
++            event_payload = json.loads(json.dumps(payload, ensure_ascii=False))
++        except (TypeError, ValueError):
++            event_payload = dict(payload)
++
++        event: Dict[str, Any] = {
++            "schema_version": "1",
++            "type": event_type,
++            "who": "server",
++            "source": "ws_server",
++            "payload": event_payload,
++        }
++        event_sid = sid if isinstance(sid, str) and sid else current_sid.get(None)
++        if isinstance(event_sid, str) and event_sid:
++            event["sid"] = event_sid
++        bus.publish(event)
++
++    def _emit_policy_snapshot(self, ctx: AdapterContext) -> None:
++        policy = ctx.policy if isinstance(ctx.policy, Mapping) else None
++        if not policy:
++            return
++        version = policy.get("version")
++        if version != 2 and not ctx.policy_warning_logged:
++            _log.warning(
++                "warn=policy_legacy_only; using_v2_defaults sid=%s", ctx.sid
++            )
++            ctx.policy_warning_logged = True
++        try:
++            self._bus("policy.snapshot", policy, sid=ctx.sid)
++        except Exception:  # pragma: no cover - defensive logging
++            _log.exception("evt=policy_snapshot_emit_failed sid=%s", ctx.sid)
++
++    def _policy(self, ctx: AdapterContext) -> Dict[str, Any]:
++        if isinstance(ctx.policy, Mapping):
++            return dict(ctx.policy)
++        return {}
++
++    def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
++        try:
++            normalized = normalize_policy(payload)
++        except Exception:  # pragma: no cover - defensive logging
++            _log.exception("evt=policy_normalize_failed sid=%s", ctx.sid)
++            return
++        ctx.policy = normalized
++        ctx.session.policy = normalized
++        ctx.policy_warning_logged = False
++        self._emit_policy_snapshot(ctx)
++
+     @staticmethod
+     def _allowed_asr_vendors() -> List[str]:
+         return ["speechmatics"]
+ 
+     @staticmethod
+     def _coerce_non_negative_int(value: Any, default: int) -> int:
+         try:
+             candidate = int(value)
+         except (TypeError, ValueError):
+             return default
+         if candidate < 0:
+             return default
+         return candidate
+ 
+     @staticmethod
+     def _coerce_float(value: Any, default: float | None) -> float | None:
+         try:
+             candidate = float(value)
+         except (TypeError, ValueError):
+             return default
+         if math.isnan(candidate) or math.isinf(candidate):
+             return default
+         return candidate
+ 
+     @staticmethod
+@@ -1189,130 +1307,139 @@ class ChatV2Adapter:
+             self._emit_session_step(
+                 sid,
+                 "ws.banner_sent",
+                 summary="Sent server banner",
+                 meta={
+                     "build_id": build_id,
+                     "host": host,
+                     "pid": pid,
+                     "subprotocol": selected,
+                 },
+             )
+         except Exception:
+             _log.exception("evt=server_banner_emit_failed")
+         # ---- END RUNTIME BANNER ----
+ 
+         now_ms = int(time.time() * 1000)
+         info_frame: Dict[str, Any] = {
+             "type": "info",
+             "protocol": CHAT_V2_SUBPROTOCOL,
+             "sid": sid,
+             "ts_ms": now_ms,
+             "build_id": current_build_id(),
+         }
+         info_frame["meta"] = {"sid": sid}
+         policy_snapshot = self._policy_snapshot()
++        session_policy_v2 = self._build_session_policy()
+         allowed_asr_vendors = ["speechmatics"]
+         snapshot_mapping: Mapping[str, Any] | None
+         if isinstance(policy_snapshot, Mapping):
+             snapshot_mapping = policy_snapshot
+         else:
+             snapshot_mapping = None
+ 
+         provisional_ctx = AdapterContext(
+             sid=sid,
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
+         )
+-        provisional_ctx.session.policy = policy_snapshot
++        provisional_ctx.policy_snapshot = (
++            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
++        )
++        provisional_ctx.policy = dict(session_policy_v2)
++        provisional_ctx.session.policy = provisional_ctx.policy
+         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
+         selected_vendor = "speechmatics"
+         selection_reason = "pcm16_only"
+         if policy_snapshot:
+             self._log_policy_flags(sid, policy_snapshot)
+-            info_frame["policy"] = policy_snapshot
++        info_frame["policy"] = self._policy_for_client(session_policy_v2)
+         await self._send_json(send, sid, info_frame)
+         _log.info("evt=ws_info_sent sid=%s", sid)
+         self._emit_session_step(
+             sid,
+             "ws.info_sent",
+             summary="Sent info frame",
+             meta={"has_policy": bool(policy_snapshot)},
+         )
+ 
+         ctx = AdapterContext(
+             sid=sid,
+             headers=dict(headers),
+             principal=principal,
+             user_id=sub,
+             is_admin=is_admin,
+         )
+-        ctx.policy_snapshot = dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
+-        ctx.session.policy = ctx.policy_snapshot
++        ctx.policy_snapshot = (
++            dict(policy_snapshot) if isinstance(policy_snapshot, dict) else policy_snapshot
++        )
++        ctx.policy = dict(session_policy_v2)
++        ctx.session.policy = ctx.policy
+         ctx.last_client_activity_ms = now_ms
+         ctx.allowed_asr_vendors = list(allowed_asr_vendors)
+         snapshot_mapping = (
+             ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else None
+         )
+         ctx.asr_vendor = selected_vendor
+         allowed_display = ",".join(ctx.allowed_asr_vendors)
+         _log.info(
+             "asr_vendor_selected primary=%s allowed=%s reason=%s",
+             ctx.asr_vendor,
+             allowed_display,
+             selection_reason,
+         )
+         ctx.asr_vendor_logged = True
+         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
+         if ctx.asr_vendor == "speechmatics":
+             ctx.audio_pipeline_mode = "pcm16"
+         mode = ctx.audio_pipeline_mode or "pcm16"
+         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
+         ctx.ws_send = send
+         self._ensure_ingress_tick_timer(ctx)
+ 
+         token = current_sid.set(ctx.sid)
+         try:
+             if not (
+                 inspect.iscoroutinefunction(self._on_open_and_greet)
+                 and inspect.iscoroutinefunction(self._invoke_engine)
+             ):
+                 _log.error("evt=ws_async_contract_violation sid=%s", ctx.sid)
+                 raise RuntimeError("WebSocket async contract violation")
+ 
+             ctx.sid_bucket = TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS)
+             client = scope.get("client")
+             ctx.ip = client[0] if isinstance(client, tuple) and client else None
+             if ctx.ip:
+                 ctx.ip_bucket = self._ip_buckets.setdefault(
+                     ctx.ip,
+                     TokenBucket(RATE_LIMIT_CAPACITY, RATE_LIMIT_WINDOW_SECONDS),
+                 )
+ 
+             self._contexts[ctx.sid] = ctx
++            self._emit_policy_snapshot(ctx)
+ 
+             _log.info("evt=ws_open sid=%s", ctx.sid)
+             self._start_asr_ready_tracker(ctx, bus)
+             self._start_outbound_bridge(ctx, send)
+             self._start_server_keepalive(ctx, send)
+ 
+             if self.exporter:
+                 self.exporter.begin(ctx.sid)
+                 self._emit_session_step(
+                     ctx.sid,
+                     "session.export_started",
+                     summary="Started session export",
+                     source="ws.exporter",
+                 )
+ 
+             await self._on_open_and_greet(ctx)
+ 
+             close_code = 1000
+             close_reason: Optional[str] = None
+ 
+             try:
+                 while True:
+                     message = await receive()
+                     msg_type = message.get("type")
+ 
+@@ -2789,51 +2916,55 @@ class ChatV2Adapter:
+             _queue_payload(payload)
+ 
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             meta_obj = event.get("meta")
+             if isinstance(meta_obj, Mapping):
+                 ws_meta = meta_obj.get("ws")
+                 if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
+                     return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 frame_type = payload.get("type")
+                 if frame_type == "tts.end":
+                     self._handle_tts_end_diag(ctx, loop, payload)
+                     req_val = payload.get("req_id") if isinstance(payload, dict) else None
+                     req_value = req_val if isinstance(req_val, str) and req_val else None
+                     if req_value:
+                         ctx.last_tts_end_req_id = req_value
+                         ctx.await_user_req_id = req_value
+                     elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
+                         ctx.last_tts_end_req_id = ctx.await_user_req_id
+-                    policy = self._policy_snapshot()
++                    policy = (
++                        ctx.policy_snapshot
++                        if isinstance(ctx.policy_snapshot, Mapping)
++                        else {}
++                    )
+                     self._maybe_emit_await_user(ctx, policy)
+                     _schedule_listen_handoff(req_value)
+                     ctx.session.tts_active = False
+                     if ctx.session.queued_arm and can_open(ctx.session):
+                         ctx.session.queued_arm = False
+                         try:
+                             self._schedule_asr_open(ctx)
+                         except Exception:
+                             _log.exception("evt=asr_open_after_tts_failed sid=%s", ctx.sid)
+                         else:
+                             try:
+                                 loop.create_task(
+                                     self._publish(
+                                         ASR_OPEN_AFTER_TTS,
+                                         ctx.sid,
+                                         {
+                                             "reason": "tts_end",
+                                             "state": ctx.session.asr_state,
+                                         },
+                                     )
+                                 )
+                             except RuntimeError:
+                                 pass
+                 elif frame_type == "tts.start":
+                     ctx.session.tts_active = True
+@@ -3096,51 +3227,53 @@ class ChatV2Adapter:
+                 return
+ 
+             def _on_loop() -> None:
+                 if ctx.await_user_pending:
+                     _schedule_listen_handoff(None)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.asr_open_subscription_token = bus.subscribe(EVT_ASR_OPEN, _handle_asr_open_event)
+ 
+         def _handle_tts_end_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             req_id = event.get("req_id")
+             req_value = req_id if isinstance(req_id, str) and req_id else None
+ 
+             def _on_loop() -> None:
+                 if req_value:
+                     ctx.last_tts_end_req_id = req_value
+                     ctx.await_user_req_id = req_value
+                 elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
+                     ctx.last_tts_end_req_id = ctx.await_user_req_id
+-                policy = self._policy_snapshot()
++                policy = (
++                    ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else {}
++                )
+                 self._maybe_emit_await_user(ctx, policy)
+                 _schedule_listen_handoff(req_value)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.tts_end_subscription_token = bus.subscribe(EVT_TTS_END, _handle_tts_end_event)
+ 
+         def _handle_tts_mask_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+ 
+             raw_phase = event.get("phase")
+             if not isinstance(raw_phase, str):
+                 return
+ 
+             stripped = raw_phase.strip()
+             normalized = stripped.lower()
+             phase_value = normalized or stripped or raw_phase
+ 
+             def _on_loop() -> None:
+                 ctx.tts_mask_phase = phase_value
+                 if ctx.tts_mask_phase != "off":
+@@ -3164,51 +3297,55 @@ class ChatV2Adapter:
+             if event.get("type") != "EVT_TURN_STATE":
+                 return
+             if event.get("sid") != ctx.sid:
+                 return
+ 
+             raw_meta = event.get("meta")
+             if isinstance(raw_meta, Mapping):
+                 meta = {key: value for key, value in dict(raw_meta).items() if key}
+             else:
+                 meta = {}
+ 
+             state = meta.get("state", event.get("state"))
+             reason = meta.get("reason", event.get("reason"))
+             state_text = state if isinstance(state, str) else None
+             reason_text = reason if isinstance(reason, str) else None
+ 
+             def _on_loop() -> None:
+                 frame: Dict[str, Any] = {
+                     "type": "turn.state",
+                     "state": state,
+                     "reason": reason,
+                     "meta": meta,
+                 }
+                 _enqueue(frame)
+                 if state_text == "Ready" and reason_text == "tts_end":
+-                    policy = self._policy_snapshot()
++                    policy = (
++                        ctx.policy_snapshot
++                        if isinstance(ctx.policy_snapshot, Mapping)
++                        else {}
++                    )
+                     self._maybe_emit_await_user(ctx, policy)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 _on_loop()
+ 
+         ctx.turn_state_subscription_token = bus.subscribe(
+             "EVT_TURN_STATE", _handle_turn_state_event
+         )
+ 
+         def _handle_audio_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             if ctx.audio_send_closed:
+                 return
+             source = event.get("source")
+             if source == "ws_server":
+                 meta = event.get("meta")
+                 audio_meta = meta.get("audio") if isinstance(meta, Mapping) else None
+                 if not isinstance(audio_meta, Mapping):
+                     _log.debug(
+                         "evt=audio_event_ignored sid=%s source=%s", ctx.sid, source
+                     )
+                     return
+@@ -3538,51 +3675,51 @@ class ChatV2Adapter:
+                 ctx.last_tts_end_req_id = None
+                 ctx.mic_nudge_sent = False
+                 self._cancel_mic_open_timer(ctx)
+                 ctx.await_user_cue_emitted = False
+         if not isinstance(frame_type, str) or frame_type not in _OUTBOUND_ALLOWED_TYPES:
+             return None
+         normalized = dict(payload)
+         if frame_type == "policy.interaction":
+             normalized = self._sanitize_policy_interaction(normalized)
+             last_policy = ctx.last_policy_interaction
+             if last_policy is not None and last_policy == normalized:
+                 return None
+             ctx.last_policy_interaction = json.loads(
+                 json.dumps(normalized, separators=(",", ":"))
+             )
+         if frame_type == "info":
+             meta = {}
+             source_meta = normalized.get("meta")
+             if isinstance(source_meta, dict):
+                 meta = dict(source_meta)
+             meta["sid"] = ctx.sid
+             normalized["meta"] = meta
+             policy_payload = normalized.get("policy")
+             if isinstance(policy_payload, dict):
+                 ctx.policy_snapshot = policy_payload
+-                ctx.session.policy = ctx.policy_snapshot
++                self._replace_policy(ctx, policy_payload)
+                 ctx.allowed_asr_vendors = ["speechmatics"]
+                 snapshot_mapping = policy_payload
+                 ctx.asr_vendor = "speechmatics"
+                 if not ctx.asr_vendor_logged:
+                     allowed_display = ",".join(ctx.allowed_asr_vendors)
+                     _log.info(
+                         "asr_vendor_selected primary=%s allowed=%s reason=%s",
+                         ctx.asr_vendor,
+                         allowed_display,
+                         "pcm16_only",
+                     )
+                     ctx.asr_vendor_logged = True
+                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
+                     snapshot_mapping
+                 )
+                 ctx.audio_pipeline_mode = "pcm16"
+                 mode = ctx.audio_pipeline_mode or "pcm16"
+                 ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
+         return normalized
+ 
+     @staticmethod
+     def _truncate_banner_string(value: str, limit: int = 240) -> str:
+         if not isinstance(value, str):
+             return ""
+         if limit <= 0:
