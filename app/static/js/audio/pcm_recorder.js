@@ -79,6 +79,56 @@
     emitClientLog('client.mic', { message: text });
   }
 
+  function publishClientVad(next = {}) {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      const win = window;
+      const appState = win.AppState = win.AppState || {};
+      const storeState = appState.state = appState.state || {};
+      const patch = {};
+
+      if (typeof next.vadActive === 'boolean') {
+        if (storeState.vadActive !== next.vadActive) {
+          patch.vadActive = next.vadActive;
+        }
+        storeState.vadActive = next.vadActive;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(next, 'vadDbfs')) {
+        const normalizedDb = Number.isFinite(next.vadDbfs) ? next.vadDbfs : null;
+        if (!Object.is(storeState.vadDbfs, normalizedDb)) {
+          patch.vadEnergyDb = normalizedDb;
+        }
+        storeState.vadDbfs = normalizedDb;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(next, 'lastSpeechAt')) {
+        const normalizedLastSpeech = Number.isFinite(next.lastSpeechAt) ? next.lastSpeechAt : null;
+        if (!Object.is(storeState.lastSpeechAt, normalizedLastSpeech)) {
+          patch.clientVadLastSpeechAt = normalizedLastSpeech;
+        }
+        storeState.lastSpeechAt = normalizedLastSpeech;
+      }
+
+      if (appState && typeof appState.setState === 'function') {
+        const keys = Object.keys(patch);
+        if (keys.length) {
+          const payload = {};
+          for (const key of keys) {
+            payload[key] = patch[key];
+          }
+          appState.setState(payload);
+        }
+      }
+    } catch (err) {
+      try {
+        console.warn('publishClientVad failed', err);
+      } catch (_) {}
+    }
+  }
+
   function sanitizeLogText(value, fallback = 'unknown', maxLength = 160) {
     if (typeof value === 'string') {
       const trimmed = value.trim();
@@ -597,6 +647,8 @@
       const chunkMs = this._clientVadEstimateChunkMs(buffer);
       const threshold = cfg.thresholdDbfs;
       const above = dbfs >= threshold;
+      const normalizedDb = Number.isFinite(dbfs) ? dbfs : null;
+      publishClientVad({ vadActive: Boolean(state.active), vadDbfs: normalizedDb });
       // meter: log a few samples until first activation
       if (!state.meterDone) {
         state.meterSamples = (state.meterSamples || 0) + 1;
@@ -641,6 +693,7 @@
           try {
             emitClientLog('client.vad.state', { state: 'active', dbfs });
           } catch (_) {}
+          publishClientVad({ vadActive: true, vadDbfs: normalizedDb, lastSpeechAt: now });
           this._dispatchChunk(buffer);
           return;
         }
@@ -657,6 +710,7 @@
       }
 
       this._dispatchChunk(buffer);
+      publishClientVad({ vadActive: true, vadDbfs: normalizedDb, ...(above ? { lastSpeechAt: now } : {}) });
       if (above) {
         state.belowSince = 0;
         return;
@@ -676,6 +730,7 @@
         try {
           emitClientLog('client.vad.state', { state: 'paused', dbfs });
         } catch (_) {}
+        publishClientVad({ vadActive: false, vadDbfs: normalizedDb });
       }
     }
 
