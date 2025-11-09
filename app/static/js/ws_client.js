@@ -1412,7 +1412,7 @@ import { initVAD } from "./audio/vad_client.js";
 
   async function startRecorderStreaming(policy, reason) {
     if (AppState.listening) {
-      AppState.micLive = true;
+      setAppStateValue("micLive", true);
       return true;
     }
     resetPcmBatchState();
