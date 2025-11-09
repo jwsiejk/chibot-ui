@@ -1,243 +1,175 @@
-diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
-index d9292db2a76df1f330def1e75016571e6dac4ab1..7eec50f7c6ac2224a2cee598011ca598b97136c9 100644
---- a/app/static/js/audio/pcm_recorder.js
-+++ b/app/static/js/audio/pcm_recorder.js
-@@ -43,50 +43,112 @@
- 
-   function emitClientLog(label, detail = {}) {
-     const payload = detail && typeof detail === 'object' ? detail : { value: detail };
-     const AppState = typeof window !== 'undefined' ? window.AppState : null;
-     if (AppState && AppState.hub && typeof AppState.hub.log === 'function') {
-       try {
-         AppState.hub.log(label, payload);
-         return;
-       } catch (err) {
-         try {
-           console.warn('client.log hub emit failed', err);
-         } catch (_) {}
-       }
-     }
-     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-       try {
-         window.dispatchEvent(new CustomEvent('client.log', { detail: { label, detail: payload } }));
-       } catch (err) {
-         try {
-           console.warn('client.log dispatch failed', err);
-         } catch (_) {}
-       }
-     }
-   }
- 
-+  function logClientMicEventText(text) {
-+    if (typeof text !== 'string' || !text) {
-+      return;
-+    }
-+    const win = typeof window !== 'undefined' ? window : null;
-+    if (win && typeof win.__logClientMicString === 'function') {
-+      try {
-+        win.__logClientMicString(text);
-+        return;
-+      } catch (_) {}
-+    }
-+    emitClientLog('client.mic', { message: text });
-+  }
-+
-+  function sanitizeLogText(value, fallback = 'unknown', maxLength = 160) {
-+    if (typeof value === 'string') {
-+      const trimmed = value.trim();
-+      if (trimmed) {
-+        if (trimmed.length > maxLength) {
-+          return `${trimmed.slice(0, maxLength - 1)}…`;
-+        }
-+        return trimmed;
-+      }
-+    }
-+    if (value == null) {
-+      return fallback;
-+    }
-+    if (typeof value === 'number' || typeof value === 'boolean') {
-+      return String(value);
-+    }
-+    try {
-+      const serialized = JSON.stringify(value);
-+      if (typeof serialized === 'string' && serialized) {
-+        if (serialized.length > maxLength) {
-+          return `${serialized.slice(0, maxLength - 1)}…`;
-+        }
-+        return serialized;
-+      }
-+    } catch (_) {}
-+    try {
-+      const text = String(value);
-+      if (text.length > maxLength) {
-+        return `${text.slice(0, maxLength - 1)}…`;
-+      }
-+      return text;
-+    } catch (_) {}
-+    return fallback;
-+  }
-+
-+  function serializeConstraintsForLog(constraints) {
-+    try {
-+      const json = JSON.stringify(constraints);
-+      if (typeof json === 'string' && json) {
-+        if (json.length > 512) {
-+          return `${json.slice(0, 511)}…`;
-+        }
-+        return json;
-+      }
-+    } catch (_) {}
-+    return '"unserializable"';
-+  }
-+
-   function normalizeReason(reason) {
-     if (typeof reason === 'string' && reason) {
-       return reason;
-     }
-     if (reason && typeof reason === 'object') {
-       if (typeof reason.reason === 'string' && reason.reason) {
-         return reason.reason;
-       }
-       if (typeof reason.code === 'string' && reason.code) {
-         return reason.code;
-       }
-       if (typeof reason.message === 'string' && reason.message) {
-         return reason.message;
-       }
-     }
-     return 'unknown';
-   }
- 
-   function emitAppStateRecordingStarted(policy) {
-     const AppState = typeof window !== 'undefined' ? window.AppState : null;
-     if (!AppState || typeof AppState.emit !== 'function') {
-       return;
-     }
-     try {
-       AppState.emit('recordingStarted', { policy: policy || null, source: 'pcm_recorder' });
-@@ -262,55 +324,72 @@
-         audioConstraints.sampleSize = 16;
-       } else if (Number.isFinite(audioConstraints.sampleSize)) {
-         audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
-       }
- 
-       if (typeof audioConstraints.echoCancellation === 'undefined') {
-         audioConstraints.echoCancellation = true;
-       } else {
-         audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
-       }
- 
-       if (typeof audioConstraints.noiseSuppression === 'undefined') {
-         audioConstraints.noiseSuppression = true;
-       } else {
-         audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
-       }
- 
-       if (typeof audioConstraints.autoGainControl === 'undefined') {
-         audioConstraints.autoGainControl = false;
-       } else {
-         audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
-       }
- 
-       let stream;
-       try {
-+        const constraintsLog = serializeConstraintsForLog(audioConstraints);
-+        logClientMicEventText(`evt=mic_get_user_media_start constraints=${constraintsLog}`);
-         stream = await navigator.mediaDevices.getUserMedia({
-           audio: audioConstraints,
-           video: false,
-         });
-+        const audioTracks = stream && typeof stream.getAudioTracks === 'function'
-+          ? stream.getAudioTracks()
-+          : [];
-+        const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
-+        const trackId = primaryTrack && typeof primaryTrack.id === 'string' && primaryTrack.id
-+          ? primaryTrack.id
-+          : 'unknown';
-+        const safeTrackId = sanitizeLogText(trackId, 'unknown', 80);
-+        logClientMicEventText(`evt=mic_get_user_media_success track_id=${safeTrackId}`);
-       } catch (err) {
-+        const errorName = sanitizeLogText(err && err.name ? err.name : null, 'unknown', 64);
-+        const errorMessageSource = err && typeof err.message === 'string' && err.message
-+          ? err.message
-+          : err;
-+        const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
-+        logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
-         emitClientLog('client.pcm.capture_error', {
-           stage: 'getUserMedia',
-           message: err && err.message ? err.message : String(err),
-         });
-         throw err;
-       }
- 
-       const sourceNode = context.createMediaStreamSource(stream);
-       let workletNode;
-       try {
-         workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
-           numberOfOutputs: 0,
-           processorOptions: {
-             targetSampleRate: TARGET_SAMPLE_RATE,
-             minFrameSamples: MIN_FRAME_SAMPLES,
-             maxFrameSamples: MAX_FRAME_SAMPLES,
-           },
-         });
-       } catch (err) {
-         emitClientLog('client.pcm.capture_error', {
-           stage: 'createWorkletNode',
-           message: err && err.message ? err.message : String(err),
-         });
-         stream.getTracks().forEach((track) => {
-           try { track.stop(); } catch (_) {}
-@@ -445,50 +524,52 @@
-       if (!policy || typeof policy !== 'object') {
-         this._policy = {};
-         this._applyPolicyDefaults();
-         return;
-       }
-       this._policy = { ...policy };
-       this._applyPolicyDefaults();
-     }
- 
-     handleTtsStart() {
-       if (this._stopOnTts) {
-         this.stopListening({ reason: 'tts_start_policy' });
-         return;
-       }
-       if (this._shouldMuteOnTts) {
-         this._muted = true;
-       }
-     }
- 
-     handleTtsEnd() {
-       this._muted = false;
-     }
- 
-     startMicCaptureIfIdle() {
-       if (this._active || this._initializing) {
-+        const reason = this._initializing ? 'initializing' : 'active';
-+        logClientMicEventText(`evt=mic_capture_request_blocked reason=${reason}`);
-         return this._initializing || Promise.resolve(null);
-       }
-       return this.start();
-     }
- 
-     _attachPort(port) {
-       if (!port) {
-         return;
-       }
-       port.onmessage = (event) => {
-         const data = event ? event.data : null;
-         if (!data || data.type !== 'pcm16' || !data.buffer) {
-           return;
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 2e48b3715597d6fd694c63973e74f7604c777117..3f5c3484051a033d72a38015527825998dbcd472 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1297,103 +1297,148 @@
+         event: 'maybe_autostart_blocked',
+         trigger: triggerLabel,
+         reason: reasonLabel,
+         gates: {
+           asrReady: gates.asrReady,
+           turnState: gates.turnState,
+           micPerm: gates.micPerm,
+           recording: gates.recording,
+         },
+       };
+       if (extra && typeof extra === 'object') {
+         const keys = Object.keys(extra);
+         if (keys.length) {
+           detail.extra = {};
+           for (let i = 0; i < keys.length && i < 8; i += 1) {
+             const key = keys[i];
+             if (!key) continue;
+             detail.extra[key.slice(0, 32)] = extra[key];
+           }
          }
-         const buffer = data.buffer;
-         const byteLength = buffer.byteLength || 0;
-         if (byteLength === 0) {
-           return;
-         }
-         if (!this._listening || this._muted) {
-           return;
-         }
-         const seq = this._chunkSeq;
-         this._chunkSeq += 1;
-         if (!this._firstChunkSent) {
+       }
+       logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
+     }
+ 
+     function maybeAutoStartCapture(trigger, reason) {
++      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
++      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
++      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
++        ? runtimeState.turnState.slice(0, 32)
++        : null;
++      const gates = {
++        asrReady: Boolean(runtimeState.asrReady),
++        turnState: rawTurnState,
++        micPerm: Boolean(runtimeState.micPermissionGranted),
++        recording: Boolean(runtimeState.isRecording),
++      };
++
+       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
+       let wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
+       let wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
+ 
+       const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
+ 
+       if (bypassTriggers.has(trigger)) {
+         wantsAsrReady = true;
+         wantsTurnReady = true;
+       }
+ 
+       if (!(wantsAsrReady || wantsTurnReady)) {
+-        const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+-        const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+-        const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+-          ? runtimeState.turnState.slice(0, 32)
+-          : null;
+-        const gates = {
+-          asrReady: Boolean(runtimeState.asrReady),
+-          turnState: rawTurnState,
+-          micPerm: Boolean(runtimeState.micPermissionGranted),
+-          recording: Boolean(runtimeState.isRecording),
+-        };
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
+         return;
+       }
+ 
+-      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+-      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+-      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+-        ? runtimeState.turnState.slice(0, 32)
+-        : null;
+-      const gates = {
+-        asrReady: Boolean(runtimeState.asrReady),
+-        turnState: rawTurnState,
+-        micPerm: Boolean(runtimeState.micPermissionGranted),
+-        recording: Boolean(runtimeState.isRecording),
+-      };
++      if (reason === 'tts_end') {
++        const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
++        logClient(`client.turn: evt=tts_end_logic_start audio_idle=${audioIdle}`, {
++          event: 'client.turn',
++          type: 'tts_end_logic_start',
++          trigger: triggerLabel,
++          reason: reasonLabel,
++          audioIdle,
++        });
++      }
+ 
+       const noRearmUntil = AppState && Number.isFinite(Number(AppState.__no_rearm_until))
+         ? Number(AppState.__no_rearm_until)
+         : 0;
+       const now = Date.now();
+       if (noRearmUntil && now < noRearmUntil) {
+         const msRemaining = Math.max(0, Math.ceil(noRearmUntil - now));
+         logClientMicEventText('evt=rearm_blocked reason=cooldown');
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'cooldown',
+           msRemaining,
+         });
+         return;
+       }
+ 
++      const policyCaptureEntries = [];
++      if (capturePolicy && typeof capturePolicy === 'object') {
++        const captureKeys = Object.keys(capturePolicy).slice(0, 6);
++        for (let i = 0; i < captureKeys.length; i += 1) {
++          const key = captureKeys[i];
++          if (!key) continue;
++          const safeKey = String(key).slice(0, 32);
++          let safeValue;
++          const value = capturePolicy[key];
++          if (typeof value === 'boolean') {
++            safeValue = value ? 'true' : 'false';
++          } else if (value == null) {
++            safeValue = 'null';
++          } else {
++            safeValue = String(value).slice(0, 32);
++          }
++          policyCaptureEntries.push(`${safeKey}=${safeValue}`);
++        }
++      }
++      const policyCaptureLabel = `{${policyCaptureEntries.join(' ')}}`;
++      const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
++      const policyDetail = {};
++      if (capturePolicy && typeof capturePolicy === 'object') {
++        const keys = Object.keys(capturePolicy).slice(0, 8);
++        for (let i = 0; i < keys.length; i += 1) {
++          const key = keys[i];
++          if (!key) continue;
++          policyDetail[key] = capturePolicy[key];
++        }
++      }
++      logClient(`client.turn: evt=gates_snapshot policy=${policyCaptureLabel} is_recording=${gates.recording}`, {
++        event: 'client.turn',
++        type: 'gates_snapshot',
++        trigger: triggerLabel,
++        reason: reasonLabel,
++        policy: policyDetail,
++        gates: {
++          asrReady: gates.asrReady,
++          turnState: gates.turnState,
++          micPerm: gates.micPerm,
++          recording: gates.recording,
++          audioIdle,
++        },
++      });
++
+       // wake-word path removed; VAD barge-in is the only gate.
+ 
+       if (runtimeState.isRecording) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'recording',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
+       }
+       if (!runtimeState.micPermissionGranted) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'mic_permission',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
+       }
+       if (!runtimeState.asrReady) {
+         requestAsrPrearm(trigger);
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'asr_ready',
+           audioIdle: runtimeState.audioPlaybackIdle,
+         });
+         return;
+       }
+       if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {

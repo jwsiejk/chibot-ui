@@ -1319,6 +1319,18 @@
     }
 
     function maybeAutoStartCapture(trigger, reason) {
+      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+        ? runtimeState.turnState.slice(0, 32)
+        : null;
+      const gates = {
+        asrReady: Boolean(runtimeState.asrReady),
+        turnState: rawTurnState,
+        micPerm: Boolean(runtimeState.micPermissionGranted),
+        recording: Boolean(runtimeState.isRecording),
+      };
+
       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
       let wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
       let wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
@@ -1331,32 +1343,20 @@
       }
 
       if (!(wantsAsrReady || wantsTurnReady)) {
-        const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
-        const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
-        const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
-          ? runtimeState.turnState.slice(0, 32)
-          : null;
-        const gates = {
-          asrReady: Boolean(runtimeState.asrReady),
-          turnState: rawTurnState,
-          micPerm: Boolean(runtimeState.micPermissionGranted),
-          recording: Boolean(runtimeState.isRecording),
-        };
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
         return;
       }
 
-      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
-      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
-      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
-        ? runtimeState.turnState.slice(0, 32)
-        : null;
-      const gates = {
-        asrReady: Boolean(runtimeState.asrReady),
-        turnState: rawTurnState,
-        micPerm: Boolean(runtimeState.micPermissionGranted),
-        recording: Boolean(runtimeState.isRecording),
-      };
+      if (reason === 'tts_end') {
+        const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
+        logClient(`client.turn: evt=tts_end_logic_start audio_idle=${audioIdle}`, {
+          event: 'client.turn',
+          type: 'tts_end_logic_start',
+          trigger: triggerLabel,
+          reason: reasonLabel,
+          audioIdle,
+        });
+      }
 
       const noRearmUntil = AppState && Number.isFinite(Number(AppState.__no_rearm_until))
         ? Number(AppState.__no_rearm_until)
@@ -1371,6 +1371,51 @@
         });
         return;
       }
+
+      const policyCaptureEntries = [];
+      if (capturePolicy && typeof capturePolicy === 'object') {
+        const captureKeys = Object.keys(capturePolicy).slice(0, 6);
+        for (let i = 0; i < captureKeys.length; i += 1) {
+          const key = captureKeys[i];
+          if (!key) continue;
+          const safeKey = String(key).slice(0, 32);
+          let safeValue;
+          const value = capturePolicy[key];
+          if (typeof value === 'boolean') {
+            safeValue = value ? 'true' : 'false';
+          } else if (value == null) {
+            safeValue = 'null';
+          } else {
+            safeValue = String(value).slice(0, 32);
+          }
+          policyCaptureEntries.push(`${safeKey}=${safeValue}`);
+        }
+      }
+      const policyCaptureLabel = `{${policyCaptureEntries.join(' ')}}`;
+      const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
+      const policyDetail = {};
+      if (capturePolicy && typeof capturePolicy === 'object') {
+        const keys = Object.keys(capturePolicy).slice(0, 8);
+        for (let i = 0; i < keys.length; i += 1) {
+          const key = keys[i];
+          if (!key) continue;
+          policyDetail[key] = capturePolicy[key];
+        }
+      }
+      logClient(`client.turn: evt=gates_snapshot policy=${policyCaptureLabel} is_recording=${gates.recording}`, {
+        event: 'client.turn',
+        type: 'gates_snapshot',
+        trigger: triggerLabel,
+        reason: reasonLabel,
+        policy: policyDetail,
+        gates: {
+          asrReady: gates.asrReady,
+          turnState: gates.turnState,
+          micPerm: gates.micPerm,
+          recording: gates.recording,
+          audioIdle,
+        },
+      });
 
       // wake-word path removed; VAD barge-in is the only gate.
 
