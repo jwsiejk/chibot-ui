@@ -6,10 +6,7 @@
       const host = document.getElementById(this.mountId);
       if (!host) return;
 
-      const policy = ui && typeof ui.policy === "object" ? ui.policy : {};
-      const policyUi = policy && typeof policy.ui === "object" ? policy.ui : {};
-      const policyStatus = policyUi && typeof policyUi.status === "object" ? policyUi.status : {};
-      const REQUIRE_ACTIVE_TURN = Boolean(policyStatus?.require_active_turn ?? true);
+      const REQUIRE_ACTIVE_TURN = Boolean((ui?.policy?.ui?.status?.require_active_turn) ?? true);
 
       const f = {
         connected:    !!(ui.wsConn || ui.wsConning),
@@ -18,8 +15,8 @@
         ttsActive:    !!ui.tts,
         senderPaused: !!ui.senderPaused,
       };
-      const activeTurn = !!ui.asrTurnActive;
       let canCapture = f.asrReady && f.micOpen && !f.ttsActive && !f.senderPaused;
+      const activeTurn = !!ui.asrTurnActive;
       if (REQUIRE_ACTIVE_TURN) {
         canCapture = canCapture && activeTurn;
       }
