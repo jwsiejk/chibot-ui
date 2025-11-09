@@ -61,6 +61,30 @@ import { initVAD } from "./audio/vad_client.js";
 
   // Per-turn readiness/start tokens to prevent re-arm loops
   let __asrReadySeen = false;
+  let __pendingAutoArm = false;
+
+  function deriveAutoArmFromPolicy(p) {
+    const pol = p || (window.AppState?.policy) || {};
+    const asr = pol.asr || {};
+    const ui  = (pol.ui && pol.ui.status) || {};
+    // v2 semantics:
+    const start_on_asr_ready  = (asr.server_starts_input !== false);          // default true
+    const require_active_turn = (ui.require_active_turn !== false);           // default true
+    const start_on_turn_ready = !!require_active_turn;                        // if we require a turn, wait for it
+    return { start_on_asr_ready, start_on_turn_ready, require_active_turn };
+  }
+
+  function publishGates(g) {
+    try {
+      emitConsoleBusEvent("client.asr.autostart_gates", g);
+    } catch {}
+    try {
+      const s = (window.AppState.state = window.AppState.state || {});
+      s.start_on_asr_ready  = g.start_on_asr_ready;
+      s.start_on_turn_ready = g.start_on_turn_ready;
+      if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
+    } catch {}
+  }
 
   let _audioStreaming = false;
 
@@ -3543,15 +3567,31 @@ import { initVAD } from "./audio/vad_client.js";
         hubLog("client.stream.off", { reason });
       }
       _audioStreaming = false;
-    } else if (frame.type === "asr.ready") {
-      frame = handleAsrReadyFrame(frame) || frame;
-      __asrReadySeen = true;
-      setAsrArmInFlight(false);
-      setArmAfterTtsEnd(false);
-      setWsConnected(true);
-      AppState.asrReady = true;
-      setWsPhase("ready");
-      emitConsoleBusEvent("client.asr.ready", { asrReady: true });
+  } else if (frame.type === "asr.ready") {
+    frame = handleAsrReadyFrame(frame) || frame;
+    __asrReadySeen = true;
+    setAsrArmInFlight(false);
+    setArmAfterTtsEnd(false);
+    setWsConnected(true);
+    AppState.asrReady = true;
+    try { // keep nested state in sync so StatusBar sees it
+      const s = (AppState.state = AppState.state || {});
+      s.asrReady = true;
+      if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
+    } catch {}
+    setWsPhase("ready");
+    emitConsoleBusEvent("client.asr.ready", { asrReady: true });
+    // derive and publish auto-start gates from v2 policy
+    const gates = deriveAutoArmFromPolicy(frame?.policy || AppState?.policy);
+    publishGates(gates);
+    // if policy says server starts on asr.ready and we don't require a turn, arm now
+    if (gates.start_on_asr_ready && !gates.start_on_turn_ready) {
+      __pendingAutoArm = false;
+      try { await startRecorderStreaming(frame?.policy || {}); } catch (e) { console.warn("auto-arm on asr.ready failed", e); }
+    } else if (gates.start_on_turn_ready) {
+      // defer until turn begins
+      __pendingAutoArm = true;
+    }
       try {
         const capturePolicy = AppState?.policy?.capture || {};
         const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
@@ -4331,3 +4371,15 @@ import { initVAD } from "./audio/vad_client.js";
     WSClient._linkedProofLogged = false;
   }
 })();
+  } else if (frame.type === "asr.turn") {
+    const begin = frame.state === "begin";
+    // publish turn state for StatusBar
+    try {
+      const s = (AppState.state = AppState.state || {});
+      s.asrTurnActive = begin;
+      if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
+    } catch {}
+    if (begin && __pendingAutoArm) {
+      __pendingAutoArm = false;
+      try { await startRecorderStreaming(AppState?.policy || {}); } catch (e) { console.warn("auto-arm on turn.begin failed", e); }
+    }
