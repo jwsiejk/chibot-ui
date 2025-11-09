@@ -3549,6 +3549,19 @@ import { WakeWord } from "./wake_word.js";
       } catch (err) {
         console.warn("Failed to show voice unavailable banner", err);
       }
+    } else if (frame.type === "asr.turn") {
+      try {
+        window.UIState = window.UIState || {};
+        window.UIState.asrTurnActive = frame?.state === "begin";
+        if (window.StatusBar && typeof window.StatusBar.render === "function") {
+          window.StatusBar.render({
+            ...window.UIState,
+            policy: (window.AppState?.policy || {}),
+          });
+        }
+      } catch (err) {
+        console.warn("asr.turn handling error", err);
+      }
     } else if (frame.type === "chat.message" || frame.type === "message") {
       if (!transcriptFrameAllowed(frame)) {
         // Keep frame flowing to other listeners without rendering in transcript.
