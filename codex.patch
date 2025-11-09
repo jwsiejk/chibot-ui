@@ -1,112 +1,113 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 6b3135b63ea486cb75632d3b6205d90930a4aa6b..28b39bf80e46fb524ab4c76d241f0c5cc1b2593b 100644
+index 763b62211c3dc68168f6b64f0d0e286d610d3121..238ad1681aadbd0c25b955d59a17b369876b9b85 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -2928,50 +2928,53 @@ import { initVAD } from "./audio/vad_client.js";
-           input.timeslice_ms = parsedSlice;
-           hasInputField = true;
-           break;
+@@ -2574,98 +2574,64 @@ import { initVAD } from "./audio/vad_client.js";
+       if (callbacks && typeof callbacks.onRetryStart === "function") {
+         try {
+           callbacks.onRetryStart();
+         } catch (err) {
+           console.warn("Auto-retry callback failed", err);
          }
        }
-     }
- 
-     if (!hasInputField) {
-       return safe;
-     }
- 
-     safe.input = input;
-     return safe;
-   }
- 
-   function handleServerBannerFrame(frame) {
-     const sanitized = sanitizeServerBannerFrame(frame);
-     updateState({ serverBanner: sanitized });
-     console.log("WS server banner", sanitized);
-     dispatchFrame(sanitized);
-   }
- 
-   function handleAsrReadyFrame(frame) {
-     const sanitized = sanitizeAsrReadyFrame(frame);
-     AppState.asrReady = true;
-+    try {
-+      window.dispatchEvent(new CustomEvent("asr.ready"));
-+    } catch {}
-     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
-     beginWarmup(getWarmupMs());
-     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
-     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-     if (typeof AppState.emit === "function") {
-       AppState.emit("asrReady", {
-         ready: true,
-         vendor: AppState.asrVendor,
-         input: sanitized.input ?? null,
-       });
-     }
-     logStage('client.asr', {
-       stage: 'ready',
-       vendor: AppState.asrVendor,
-       input: sanitized.input ?? null,
-     });
-     return sanitized;
-   }
- 
-   const ASR_VENDOR_OPTIONS = ['speechmatics'];
-   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
- 
-   const DEFAULT_POLICY_FLAGS = {
-     recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
-     input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
-@@ -3465,50 +3468,53 @@ import { initVAD } from "./audio/vad_client.js";
-     } else if (frame.type === "pong") {
-       handlePongFrame(frame);
-     } else if (frame.type === "error") {
-       handleErrorFrame(frame);
-     } else if (frame.type === "tts.start") {
+       const state = AppState.getState();
+       const resumeState = state && typeof state.resume === "object" ? state.resume : null;
+       let resumeToken = null;
+       if (resumeState && typeof resumeState.token === "string" && Number.isFinite(resumeState.expiresAt) && Date.now() < resumeState.expiresAt) {
+         resumeToken = resumeState.token;
+       }
        try {
-         AppState?.hub?.stopListening?.("tts");
-       } catch {}
-       stopRecorder("tts_start");
-       setAppStateValue("ttsActive", true);
-       AppState.tts = true;
-       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: true });
+         recordClientBannerEvent("ws.retry.begin", { resume_token_present: Boolean(resumeToken) });
+         open({ resumeToken, skipRateLimitCancel: true });
+       } catch (err) {
+         console.error("Auto-retry open failed", err);
+         recordClientBannerEvent("ws.retry.failed", { message: getErrorMessage(err) });
        }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-         audioPlayer.handleTtsStart(frame);
+     }, delay);
+     return true;
+   }
+ 
+   function sendBinary(payload, opts = {}) {
+-    if (dbg("audio_safe_mode")) {
+-      const ws = WSClient?._ws || window.ws;
+-      if (!ws || ws.readyState !== WebSocket.OPEN) {
+-        console.warn("ws.binary queued (socket not open) [safe_mode]");
+-        WSClient._queue = WSClient._queue || [];
+-        WSClient._queue.push({ type: "binary", payload, options: opts, data: payload, isBinary: true });
+-        return false;
+-      }
+-      try {
+-        ws.send(payload);
+-      } catch (e) {
+-        console.warn("ws.binary send failed [safe_mode]", e);
+-        return false;
+-      }
+-      return true;
+-    }
+-    const options = opts && typeof opts === "object" ? { ...opts } : {};
+-    if (options.lane === "mic") {
+-      options.dropIfBusy = false;
+-    }
+-    const dropIfBusy = Boolean(options.dropIfBusy);
+-    const client = WSClient;
+-    let state = null;
+-    if (typeof AppState !== "undefined" && AppState) {
+-      if (typeof AppState.getState === "function") {
+-        try {
+-          state = AppState.getState();
+-        } catch {}
+-      } else {
+-        state = AppState;
+-      }
+-    }
+-    const live = client && client._ws
+-      ? client._ws
+-      : (state && state.websocket ? state.websocket : null);
+-    if (dropIfBusy && live && live.readyState === WebSocket.OPEN && live.bufferedAmount > 512 * 1024) {
++    // Always send PCM when the socket is OPEN. Do not phase-gate audio.
++    const ws = WSClient?._ws || window.ws;
++    if (!ws || ws.readyState !== WebSocket.OPEN) {
++      WSClient._queue = WSClient._queue || [];
++      WSClient._queue.push({ type: "binary", payload, options: opts, data: payload, isBinary: true });
+       return false;
+     }
+-    if (!(payload instanceof Blob) && !(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) {
+-      logTransportMisuse("sendBinary_non_buffer_payload");
+-      console.error("WSClient.sendBinary: expected ArrayBuffer, TypedArray, or Blob");
++    try {
++      ws.send(payload);
++    } catch (e) {
++      console.warn("ws.binary send failed", e);
+       return false;
+     }
+-    const result = send.call(client, payload, { binary: true });
+-    if (result && typeof result.then === "function") {
+-      return result;
+-    }
+-    return result !== false;
++    return true;
+   }
+ 
+   function sendJson(frame) {
+     try {
+       if (WSClient && typeof WSClient.sendJSON === "function") {
+         return WSClient.sendJSON(frame);
        }
-       const uttIdStart = frame?.utt_id || 'utt-00001';
-       logStage('client.tts_start', { utt_id: uttIdStart });
-       logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
-       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
-     } else if (frame.type === "tts.end") {
-       setAppStateValue("ttsActive", false);
-+      try {
-+        window.dispatchEvent(new CustomEvent("tts.end", { detail: frame }));
-+      } catch {}
-       AppState.tts = false;
-       beginWarmup(getWarmupMs());
-       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-       if (typeof AppState.emit === "function") {
-         AppState.emit("ttsActive", { active: false });
-       }
-       const audioPlayer = getAudioPlayer();
-       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-         audioPlayer.handleTtsEnd(frame);
-       }
-       const uttIdEnd = frame?.utt_id || 'utt-00001';
-       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-       if (AppState.armAfterTtsEnd) {
-         schedulePostTtsArm("post_greet");
-         setArmAfterTtsEnd(false);
-       }
-     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
-       const uttId = frame?.utt_id || 'utt-00001';
-       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
-       setAppStateValue("ttsActive", false);
-       logStage('client.tts', {
-         outcome: 'ended',
-         utt_id: uttId,
-         dur_ms: frame?.dur_ms,
+       return send(frame, { binary: false });
+     } catch (err) {
+       console.error("WSClient sendJson error", err);
+       return false;
+     }
+   }
+ 
+   function canSendHeartbeat() {
+     if (!socket || socket.readyState !== WebSocket.OPEN) {
+       return false;
+     }
+     const client = WSClient;
+     if (client && typeof client.isConnected === "function") {
+       try {
+         if (!client.isConnected()) {
+           return false;
+         }
+       } catch (err) {

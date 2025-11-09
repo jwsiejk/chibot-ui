@@ -2596,54 +2596,20 @@ import { initVAD } from "./audio/vad_client.js";
   }
 
   function sendBinary(payload, opts = {}) {
-    if (dbg("audio_safe_mode")) {
-      const ws = WSClient?._ws || window.ws;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        console.warn("ws.binary queued (socket not open) [safe_mode]");
-        WSClient._queue = WSClient._queue || [];
-        WSClient._queue.push({ type: "binary", payload, options: opts, data: payload, isBinary: true });
-        return false;
-      }
-      try {
-        ws.send(payload);
-      } catch (e) {
-        console.warn("ws.binary send failed [safe_mode]", e);
-        return false;
-      }
-      return true;
-    }
-    const options = opts && typeof opts === "object" ? { ...opts } : {};
-    if (options.lane === "mic") {
-      options.dropIfBusy = false;
-    }
-    const dropIfBusy = Boolean(options.dropIfBusy);
-    const client = WSClient;
-    let state = null;
-    if (typeof AppState !== "undefined" && AppState) {
-      if (typeof AppState.getState === "function") {
-        try {
-          state = AppState.getState();
-        } catch {}
-      } else {
-        state = AppState;
-      }
-    }
-    const live = client && client._ws
-      ? client._ws
-      : (state && state.websocket ? state.websocket : null);
-    if (dropIfBusy && live && live.readyState === WebSocket.OPEN && live.bufferedAmount > 512 * 1024) {
+    // Always send PCM when the socket is OPEN. Do not phase-gate audio.
+    const ws = WSClient?._ws || window.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      WSClient._queue = WSClient._queue || [];
+      WSClient._queue.push({ type: "binary", payload, options: opts, data: payload, isBinary: true });
       return false;
     }
-    if (!(payload instanceof Blob) && !(payload instanceof ArrayBuffer) && !ArrayBuffer.isView(payload)) {
-      logTransportMisuse("sendBinary_non_buffer_payload");
-      console.error("WSClient.sendBinary: expected ArrayBuffer, TypedArray, or Blob");
+    try {
+      ws.send(payload);
+    } catch (e) {
+      console.warn("ws.binary send failed", e);
       return false;
     }
-    const result = send.call(client, payload, { binary: true });
-    if (result && typeof result.then === "function") {
-      return result;
-    }
-    return result !== false;
+    return true;
   }
 
   function sendJson(frame) {
