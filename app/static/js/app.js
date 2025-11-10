@@ -16,6 +16,10 @@
       };
   } catch {}
 
+  function hubLog(label, detail) {
+    try { window.AppState?.hub?.log?.(label, detail); } catch {}
+  }
+
   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
   try {
     const el =

@@ -1,196 +1,84 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 40cab766f4eb5057852dd14997a475c5d31ef540..366919e5865bc31a620c9d341cf6331d3c5fb21a 100644
+index 366919e5865bc31a620c9d341cf6331d3c5fb21a..140f21673745c76a5ba5f8e8584ef1717687af68 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1123,110 +1123,127 @@
-       });
-     }
+@@ -1,43 +1,47 @@
+ (() => {
+   // Ensure single-store shape (idempotent)
+   try {
+     window.AppState = window.AppState || {};
+     window.AppState.policy = window.AppState.policy || {};
+     window.AppState.state =
+       window.AppState.state || {
+         asrReady: false,
+         micLive: false,
+         tts: false,
+         senderPaused: false,
+         asrTurnActive: false,
+         vadActive: false,
+         vadDbfs: null,
+         lastSpeechAt: null,
+       };
+   } catch {}
  
-     function armAsrPartialWatchdog() {
-       if (typeof window === 'undefined') {
-         return;
-       }
-       const snapshot = (() => {
-         try {
-           if (typeof AppState?.getState === 'function') {
-             return AppState.getState() || {};
-           }
-         } catch {}
-         return AppState || {};
-       })();
-       const nested = snapshot && typeof snapshot.state === 'object' ? snapshot.state : {};
-       const turnActive = Boolean(snapshot.asrTurnActive ?? nested.asrTurnActive);
-       const firstFrame = (typeof WSClient?.__firstChunkSeen === 'function') ? WSClient.__firstChunkSeen() : false;
-       const speechActive = (() => {
-         if (typeof snapshot.vadSpeech !== 'undefined') return !!snapshot.vadSpeech;
-         if (typeof nested.vadSpeech !== 'undefined') return !!nested.vadSpeech;
-         if (snapshot.lastSpeechAt != null) return true;
-         if (nested.lastSpeechAt != null) return true;
-         return false;
-       })();
--      const bytesSent = (() => {
-+      const chunksSent = (() => {
-         if (Number.isFinite(snapshot.chunkCount)) return snapshot.chunkCount;
-         if (Number.isFinite(AppState?.chunkCount)) return AppState.chunkCount;
-         return 0;
-       })();
--      if (!isRecorderListening() || AppState?.ttsActive || !turnActive || !firstFrame || (!speechActive && bytesSent < 12)) {
-+      if (!isRecorderListening() || AppState?.ttsActive || !turnActive || !firstFrame || (!speechActive && chunksSent < 12)) {
-         cancelAsrPartialWatchdog();
-         return;
-       }
-       if (asrPartialWatchdogTimerId !== null) {
-         clearTimeout(asrPartialWatchdogTimerId);
-       }
-       asrPartialWatchdogTimerId = window.setTimeout(() => {
-         asrPartialWatchdogTimerId = null;
-         const latestSnapshot = (() => {
-           try {
-             if (typeof AppState?.getState === 'function') {
-               return AppState.getState() || {};
-             }
-           } catch {}
-           return AppState || {};
-         })();
-         const latestNested = latestSnapshot && typeof latestSnapshot.state === 'object' ? latestSnapshot.state : {};
-         const latestTurnActive = Boolean(latestSnapshot.asrTurnActive ?? latestNested.asrTurnActive);
-         const latestFirstFrame = (typeof WSClient?.__firstChunkSeen === 'function') ? WSClient.__firstChunkSeen() : false;
-         const latestSpeechActive = (() => {
-           if (typeof latestSnapshot.vadSpeech !== 'undefined') return !!latestSnapshot.vadSpeech;
-           if (typeof latestNested.vadSpeech !== 'undefined') return !!latestNested.vadSpeech;
-           if (latestSnapshot.lastSpeechAt != null) return true;
-           if (latestNested.lastSpeechAt != null) return true;
-           return false;
-         })();
--        const latestBytesSent = (() => {
-+        const latestChunksSent = (() => {
-           if (Number.isFinite(latestSnapshot.chunkCount)) return latestSnapshot.chunkCount;
-           if (Number.isFinite(AppState?.chunkCount)) return AppState.chunkCount;
-           return 0;
-         })();
-         const recorderLive = isRecorderListening() || AppState?.listening || window.AudioRecorder?.listening;
--        if (!isRecorderListening() || AppState?.ttsActive || !latestTurnActive || !latestFirstFrame || (!latestSpeechActive && latestBytesSent < 12)) {
-+        if (!isRecorderListening() || AppState?.ttsActive || !latestTurnActive || !latestFirstFrame || (!latestSpeechActive && latestChunksSent < 12)) {
-           cancelAsrPartialWatchdog();
-           return;
-         }
-         const now = Date.now();
-         const inGraceWindow = now < __firstTurnGraceUntil;
-         const asrReadyNow = (() => {
-           if (typeof latestSnapshot.asrReady !== 'undefined') return !!latestSnapshot.asrReady;
-           if (typeof latestNested.asrReady !== 'undefined') return !!latestNested.asrReady;
-           if (typeof AppState?.asrReady !== 'undefined') return !!AppState.asrReady;
-           return false;
-         })();
--        if ((runtimeState.isArming || inGraceWindow || !latestFirstFrame || !asrReadyNow || (!latestSpeechActive && latestBytesSent < 12)) && !recorderLive) {
-+        if (consumeMicTelemetryBudget('hub')) {
-+          try {
-+            const hubDetail = { chunks: latestChunksSent };
-+            if (typeof hubLog === 'function') {
-+              hubLog('client.bytes_progress', hubDetail);
-+            } else if (typeof window !== 'undefined') {
-+              const hub = window.AppState?.hub;
-+              if (hub && typeof hub.log === 'function') {
-+                hub.log('client.bytes_progress', hubDetail);
-+              } else if (typeof window.dispatchEvent === 'function') {
-+                window.dispatchEvent(new CustomEvent('client.log', { detail: { label: 'client.bytes_progress', detail: hubDetail } }));
-+              }
-+            }
-+          } catch (err) {
-+            console.warn('client.bytes_progress hubLog failed', err);
-+          }
-+        }
-+        if ((runtimeState.isArming || inGraceWindow || !latestFirstFrame || !asrReadyNow || (!latestSpeechActive && latestChunksSent < 12)) && !recorderLive) {
-           const graceMs = Math.max(0, __firstTurnGraceUntil - now);
-           logClient('watchdog_suppressed_during_grace', {
-             reason: 'partial_watchdog',
-             grace_ms: graceMs,
-             isArming: !!runtimeState.isArming,
-             firstFrame: latestFirstFrame,
-             asrReady: asrReadyNow,
-             speechActive: latestSpeechActive,
--            bytesSent: latestBytesSent,
-+            chunks: latestChunksSent,
-           });
-           armAsrPartialWatchdog();
-           return;
-         }
-         let stopAttempted = false;
-         let stopped = false;
-         try {
-           if (AppState?.hub && typeof AppState.hub.stopListening === 'function') {
-             stopAttempted = true;
-             AppState.hub.stopListening({ reason: 'watchdog' });
-             stopped = true;
-           }
-         } catch (err) {
-           console.warn('Hub stopListening watchdog failed', err);
-         }
-         if (!stopped) {
-           try {
-             if (window.AudioRecorder && typeof window.AudioRecorder.stopListening === 'function') {
-               stopAttempted = true;
-               window.AudioRecorder.stopListening({ reason: 'watchdog' });
-               stopped = true;
-             }
-           } catch (err) {
-             console.warn('AudioRecorder stopListening watchdog failed', err);
-           }
-@@ -2956,50 +2973,57 @@ window.addEventListener('policy.snapshot', (event) => {
-     console.warn('AudioRecorder setPolicy failed', err);
-   }
- });
- 
- // Turn becomes Ready → hand control to user
- window.addEventListener('turn.state', (event) => {
-   const frame = (event && event.detail) || {};
-   const nextState = typeof frame.state === 'string'
-     ? frame.state
-     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
-   runtimeState.turnState = typeof nextState === 'string' ? nextState : null;
-   window.AppUI?.refresh?.();
-   if (runtimeState.turnState !== 'Ready') return;
- 
-   // Optional: why we became ready (e.g., 'tts')
-   const reason = typeof frame.reason === 'string'
-     ? frame.reason
-     : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
-   void reason; // not strictly needed, but kept for clarity
- 
-   runtimeState.audioPlaybackIdle = true;
-   maybeAutoStartCapture('turn_ready', 'tts_end');
- 
- });
- 
-+window.addEventListener('asr.turn', (event) => {
-+  const frame = event && event.detail;
-+  if (frame && frame.state === 'begin') {
-+    maybeAutoStartCapture('turn_begin', 'asr.turn');
++  function hubLog(label, detail) {
++    try { window.AppState?.hub?.log?.(label, detail); } catch {}
 +  }
-+});
 +
- // Assistant TTS finished → open mic after optional delay
- window.addEventListener('tts.end', () => {
-   const release = () => {
-     if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
-       try {
-         window.AudioRecorder.handleTtsEnd();
-       } catch (err) {
-         console.warn('AudioRecorder handleTtsEnd failed', err);
-       }
+   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
+   try {
+     const el =
+       document.currentScript ||
+       document.querySelector('script[src*="/static/js/app.js"]');
+     const build = el ? new URL(el.src, location.href).searchParams.get('v') : null;
+     if (build) {
+       window.__BUILD_SHA__ = build;
+       console.log('AskChip build:', build);
+     } else {
+       console.log('AskChip build: (no v param on app.js)');
      }
-     if (shouldPrearmOnTtsEnd()) {
-       try {
-         requestAsrPrearm('tts_end');
-       } catch (err) {
-         console.warn('requestAsrPrearm failed after tts.end', err);
-       }
-     }
-     window.AppUI?.refresh?.();
-   };
+   } catch (_) {}
  
-   if (typeof POST_TTS_RELEASE_MS === 'number' && POST_TTS_RELEASE_MS > 0) {
-     setTimeout(release, POST_TTS_RELEASE_MS);
-   } else {
-     release();
-   }
+   // Mic capture is centralized in pcm_recorder.js and follows policy.capture.constraints.
+ 
+   (function wrapDiag() {
+     const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });
+     function maybeWrap() {
+       if (!window.WSClient) return;
+       const method = typeof WSClient.sendJSON === 'function' ? 'sendJSON' : (typeof WSClient.send === 'function' ? 'send' : null);
+       if (!method) return;
+       const flag = method === 'sendJSON' ? '__wrapped_sendJSON__' : '__wrapped_send__';
+       if (WSClient[flag]) return;
+       const orig = WSClient[method].bind(WSClient);
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 57b51a172c473ed9b2f67482c313a2049e1abbb8..2faa1290d24e9ea80ce3bab3e1d5ff6144686ff8 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,26 +1,27 @@
+ // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
++/* __BUILD_MARKER__: FULL_DUPLEX_01 */
+ import { initVAD } from "./audio/vad_client.js";
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+   const CLIENT_VAD_POLICY = Object.freeze({
+     enable: true,
+     sensitivity: 0.5,
+     min_speech_ms: 200,
+     min_silence_ms: 400,
+     hold_ms: 250,
+     echo_suppression_db: 10,
+     tts_threshold_boost_db: 12,
+     debounce_ms: 40,
+     // Enable true gating; preroll remains handled internally by the VAD.
+     stream_gate: "gate",
+     max_gate_silence_ms: 3000,
+     // Optional: per-deployment configurable warmup in ms
+     warmup_ms: 1200,
+   });
+   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
