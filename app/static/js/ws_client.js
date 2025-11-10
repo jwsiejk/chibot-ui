@@ -64,6 +64,7 @@ import { initVAD } from "./audio/vad_client.js";
   let __micPermissionGranted = false;
   let __micRecordingStartAt = null;
   let __micFirstChunkBreadcrumbSent = false;
+  let __firstChunkSeen = false;
   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
   let __pendingAsrReadyStart = null;
   let __autoVadPatchedForPendingStart = false;
@@ -497,6 +498,7 @@ import { initVAD } from "./audio/vad_client.js";
   WSClient._ws = WSClient._ws || null;
   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
+  WSClient.__firstChunkSeen = () => __firstChunkSeen === true;
   const getAudioPlayer = () => window.AudioPlayer;
 
   // ---- Type guards / helpers ----
@@ -1146,6 +1148,7 @@ import { initVAD } from "./audio/vad_client.js";
   function resetRecorderTelemetry() {
     setAppStateValue("chunkCount", 0);
     setAppStateValue("lastChunkTs", null);
+    __firstChunkSeen = false;
   }
 
   function recordRecorderChunk(timestampMs) {
@@ -1328,6 +1331,7 @@ import { initVAD } from "./audio/vad_client.js";
 
   function stopRecorder(reason) {
     _audioStreaming = false;
+    __firstChunkSeen = false;
     const stopReason = normalizeReason(reason);
     resetTurnIntent(stopReason);
     clearAudioKeepaliveTimer();
@@ -1376,6 +1380,9 @@ import { initVAD } from "./audio/vad_client.js";
     if (!buffer) {
       return;
     }
+    if (!__firstChunkSeen) {
+      __firstChunkSeen = true;
+    }
     const seq = Number(event.seq) || 0;
     micLastChunkAt = Date.now();
     scheduleAudioKeepalive();
@@ -1419,6 +1426,7 @@ import { initVAD } from "./audio/vad_client.js";
       AppState.micLive = true;
       return true;
     }
+    __firstChunkSeen = false;
     resetPcmBatchState();
     clearVadSilenceTimer();
     const recorder = getRecorder();

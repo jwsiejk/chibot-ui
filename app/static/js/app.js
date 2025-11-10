@@ -718,6 +718,7 @@
       turnState: null,
       asrReady: false,
       isRecording: false,
+      isArming: false,
       micPermissionGranted: false,
       audioPlaybackIdle: true,
       policyCaptureLogged: false,
@@ -1105,6 +1106,7 @@
           }
           cancelAsrPartialWatchdog();
           updateRecordingState(false, 'guard_stop');
+          runtimeState.isArming = false;
         }
         logClientMicEventText('evt=guard_stop reason=no_partials_for_7s');
       }, ASR_READY_GUARD_MS);
@@ -1140,9 +1142,15 @@
         const now = Date.now();
         const inGraceWindow = now < __firstTurnGraceUntil;
         const recorderLive = isRecorderListening() || AppState?.listening || window.AudioRecorder?.listening;
-        if (inGraceWindow && !recorderLive) {
+        const firstFrame = (typeof WSClient?.__firstChunkSeen === 'function') ? WSClient.__firstChunkSeen() : false;
+        if ((runtimeState.isArming || inGraceWindow || !firstFrame) && !recorderLive) {
           const graceMs = Math.max(0, __firstTurnGraceUntil - now);
-          logClient('watchdog_suppressed_during_grace', { reason: 'partial_watchdog', grace_ms: graceMs });
+          logClient('watchdog_suppressed_during_grace', {
+            reason: 'partial_watchdog',
+            grace_ms: graceMs,
+            isArming: !!runtimeState.isArming,
+            firstFrame,
+          });
           return;
         }
         let stopAttempted = false;
@@ -1169,6 +1177,7 @@
         }
         if (stopAttempted) {
           updateRecordingState(false, 'watchdog');
+          runtimeState.isArming = false;
         }
       }, ASR_PARTIAL_WATCHDOG_MS);
     }
@@ -1257,6 +1266,24 @@
       }
       window.AppUI?.refresh?.();
       return next;
+    }
+
+    function markRecordingLive(reason) {
+      // If recorder is already listening or the client saw its first PCM, we can flip recording
+      const firstFrameSeen = typeof WSClient?.__firstChunkSeen === 'function' ? WSClient.__firstChunkSeen() : false;
+      const liveNow = (window.AudioRecorder?.listening === true)
+        || (AppState?.listening === true)
+        || firstFrameSeen;
+      if (!liveNow) {
+        if (!runtimeState.isArming) {
+          return;
+        }
+        // give it a quick tick to deliver the first chunk before we present "Listening"
+        setTimeout(() => markRecordingLive(reason), 50);
+        return;
+      }
+      updateRecordingState(true, reason);
+      runtimeState.isArming = false;
     }
 
     function noteMicOpen(source) {
@@ -1462,7 +1489,7 @@
 
       // wake-word path removed; VAD barge-in is the only gate.
 
-      if (runtimeState.isRecording) {
+      if (runtimeState.isRecording && !runtimeState.isArming) {
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
           blockedBy: 'recording',
           audioIdle: runtimeState.audioPlaybackIdle,
@@ -1498,12 +1525,15 @@
         trigger: triggerLabel,
         reason: reasonLabel,
       });
+      // entering arming phase; prevent re-entrant self-blocks
+      runtimeState.isArming = true;
       startMicCapture()
         .then((started) => {
           const recorderIsActive = window.AudioRecorder?.listening === true || AppState?.listening === true;
           if (!started && recorderIsActive) {
             logClient('evt=mic_start_ok reason=already_active');
-            updateRecordingState(true, 'auto_start_already_active');
+            // Defer setting isRecording until we're truly live
+            markRecordingLive('auto_start_already_active');
             noteMicOpen('auto_start_already_active');
             return;
           }
@@ -1512,9 +1542,11 @@
               event: 'mic_open_failed',
               error: 'mic_not_started',
             });
+            runtimeState.isArming = false;
             return;
           }
-          updateRecordingState(true, 'auto_start_capture');
+          // Recorder claim succeeded; mark live truthfully
+          markRecordingLive('auto_start_capture');
           noteMicOpen('auto_start_capture');
         })
         .catch((err) => {
@@ -1523,6 +1555,7 @@
             event: 'mic_open_failed',
             error: errText,
           });
+          runtimeState.isArming = false;
         });
     }
 
@@ -1684,6 +1717,7 @@
     window.addEventListener('input.stop', () => {
       cancelAsrReadyGuard();
       updateRecordingState(false, 'input.stop');
+      runtimeState.isArming = false;
     });
 
     window.addEventListener('stop_listening', (event) => {
@@ -1692,6 +1726,7 @@
         (event && event.detail && typeof event.detail.reason === 'string' && event.detail.reason) ||
         'stop_listening';
       updateRecordingState(false, reason);
+      runtimeState.isArming = false;
     });
 
     window.addEventListener('ws.close', () => {
@@ -1707,6 +1742,7 @@
       runtimeState.asrReady = false;
       runtimeState.turnState = null;
       updateRecordingState(false, 'ws.close');
+      runtimeState.isArming = false;
       setMicPermissionGranted(false, 'ws.close');
       runtimeState.policy = null;
       window.AppUI?.refresh?.();
@@ -1716,6 +1752,7 @@
       runtimeState.asrReady = false;
       runtimeState.turnState = null;
       updateRecordingState(false, 'ws.open');
+      runtimeState.isArming = false;
       runtimeState.policy = null;
       if (getLiveSocket()) {
         try {
@@ -2314,6 +2351,7 @@
         }
       }
       updateRecordingState(false, 'end_button');
+      runtimeState.isArming = false;
       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
         window.AudioPlayer.interrupt();
       }
@@ -2573,6 +2611,7 @@
         resetVoiceState();
         resetSuggestions();
         updateRecordingState(false, 'appstate.disconnect');
+        runtimeState.isArming = false;
         runtimeState.turnState = null;
         runtimeState.asrReady = false;
         runtimeState.policy = null;
@@ -2653,6 +2692,7 @@
           console.warn('AppState.hub.bindSocket disconnect failed', err);
         }
         updateRecordingState(false, 'appstate.disconnect');
+        runtimeState.isArming = false;
         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
           window.AudioPlayer.interrupt();
         }
@@ -2944,6 +2984,7 @@ window.addEventListener('asr.final', () => {
   }
   if (runtimeState.isRecording) {
     updateRecordingState(false, 'final');
+    runtimeState.isArming = false;
   }
 });
 
