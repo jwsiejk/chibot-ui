@@ -1,181 +1,415 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 434e573c5b50ee6a3eb1f69df11c2ffdc7b8235a..cc64d3efff2a3b0dafc1e6e75b8b8412b5e040fd 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1,50 +1,51 @@
- // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
- /* __BUILD_MARKER__: FULL_DUPLEX_01 */
- import { initVAD } from "./audio/vad_client.js";
- (() => {
-   const HEARTBEAT_INTERVAL_MS = 20000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const SUBPROTOCOL = "chat.v2";
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
-   const CLIENT_VAD_POLICY = Object.freeze({
-     enable: true,
--    sensitivity: 0.5,
--    min_speech_ms: 200,
--    min_silence_ms: 400,
-+    sensitivity: 0.60,
-+    min_speech_ms: 160,
-+    min_silence_ms: 300,
-     hold_ms: 250,
-     echo_suppression_db: 10,
-     tts_threshold_boost_db: 12,
-     debounce_ms: 40,
-     // Enable true gating; preroll remains handled internally by the VAD.
--    stream_gate: "gate",
-+    stream_gate: "gate",          // keep gating if you want to save bandwidth
-     max_gate_silence_ms: 3000,
-     // Optional: per-deployment configurable warmup in ms
-     warmup_ms: 1200,
-+    // If your input is very quiet, allow threshold override via policy
-   });
-   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
-   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
- 
-   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
- 
-   // ---- Golden-path turn trace & mic outcomes (additive) ----
-   // ---- Telemetry (additive) ----
-   const MIC_OUTCOME = {
-     PERM_GRANTED: 'perm_granted',
-     ARMED: 'armed',
-     STREAMING: 'streaming',
-     STREAMING_HEARTBEAT: 'streaming_heartbeat',
-     STOPPED: 'stopped',
-     ERROR_DENIED: 'error_denied',
-     ERROR_NO_DEVICE: 'error_no_device',
-     ERROR_GUM: 'error_getuser_media',
-     ERROR_SILENT: 'error_silent_stream',
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
-   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-   const DEFAULT_ASR_VENDOR = 'speechmatics';
-   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
-@@ -597,51 +598,59 @@ import { initVAD } from "./audio/vad_client.js";
-     } catch {}
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index 9c10ec11282a1d004a888d8c46ded3e2df78c5a0..6b619103a1ea7d7d2e52fef9e707144c7553c2c1 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -35,64 +35,69 @@
+     }
+     const bag = source.state;
+     return isPlainObject(bag) ? bag : {};
    }
  
-   const VAD_APPSTATE_KEYS = [
+   const initialState = {
+     connectionState: "disconnected",
+     sid: null,
+     resume: null,
+     resumeError: null,
+     latencyMs: null,
+     lastPingAt: null,
+     heartbeatTimerId: null,
+     websocket: null,
+     infoFrame: null,
+     serverBanner: null,
+     clientBanner: {
+       info: null,
+       events: []
+     },
+     wsConnected: false,
+     wsPhase: "disconnected",
+     ttsActive: false,
+     asrArmInFlight: false,
+     armAfterTtsEnd: false,
++    asrReady: false,
++    micLive: false,
+     listening: false,
+     recorderActive: false,
+     lastChunkTs: null,
+     chunkCount: 0,
+     lastErrorCode: null,
+     lastErrorDetail: null,
+     vadActive: false,
+     vadSpeech: false,
+     vadConfidence: 0,
+     vadEnergyDb: null,
+     vadNoiseDb: null,
+     vadDbfs: null,
+     lastSpeechAt: null,
+     state: {
++      asrReady: false,
++      micLive: false,
++      listening: false,
+       vadActive: false,
+       vadDbfs: null,
+       lastSpeechAt: null,
+     },
+   };
+ 
+   let state = cloneState(initialState);
+   const listeners = new Set();
+ 
+   const TELEMETRY_KEYS = [
+     "wsConnected",
+     "wsPhase",
+     "ttsActive",
+     "asrArmInFlight",
+     "armAfterTtsEnd",
+     "listening",
+     "recorderActive",
+     "lastChunkTs",
+     "chunkCount",
+     "lastErrorCode",
+     "lastErrorDetail",
      "vadActive",
      "vadSpeech",
      "vadConfidence",
      "vadEnergyDb",
-     "vadNoiseDb",
-   ];
-   let vadController = null;
-   let vadSilenceTimerId = null;
-   let senderPaused = false;
-   let warmupUntil = 0;
-   function beginWarmup(ms = 1200) {
-     warmupUntil = Date.now() + ms;
-   }
-   function _warming() {
-     return Date.now() < warmupUntil;
-   }
-   function _canCaptureNow() {
-     if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
-     // During arming (or until first chunk), don’t block the stream
-     if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
-     const s = window.AppState || {};
--    return _warming() || (s.asrReady && s.micLive && !s.tts && !senderPaused);
-+    const ws = WSClient?._ws || window.ws;
-+    const throttled = s._throttleUntil && Date.now() < s._throttleUntil;
-+    if (!(!!ws && ws.readyState === WebSocket.OPEN)) {
-+      return false;
-+    }
-+    if (s.tts || throttled) {
-+      return false;
-+    }
-+    return _warming() || (s.asrReady && s.micLive && !senderPaused);
-   }
-   function syncSenderPaused(value) {
-     senderPaused = Boolean(value);
-     if (AppState && typeof AppState === "object") {
-       AppState.senderPaused = senderPaused;
-     }
-     updateState({ senderPaused });
-     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-   }
-   const PCM_TARGET_BATCH_MS = 60;
-   const PCM_FLUSH_TIMER_MS = 50;
-   const PCM_SAMPLE_RATE = 16000;
-   const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
-   let pcmBatchQueue = [];
-   let pcmBatchSampleCount = 0;
-   let pcmFlushTimerId = null;
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index d183115f02b3597f1e7e88b955cf9d56b8d12884..65325f04f2ca4874dcc750c1942e5c5a71fc99b2 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -80,50 +80,55 @@ from app.ws.state import SessionCtx, can_open, mark
+ from app.ws.policy import normalize_policy
  
-   function hubLog(label, detail) {
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-       try {
-         hub.log(label, detail);
-         return true;
-       } catch (err) {
-@@ -3383,50 +3392,59 @@ import { initVAD } from "./audio/vad_client.js";
-   }
+ try:  # pragma: no cover - uvicorn is an optional dependency in tests
+     from uvicorn.protocols.utils import ClientDisconnected
+ except Exception:  # pragma: no cover - fallback when uvicorn missing
+     class ClientDisconnected(Exception):  # type: ignore[no-redef]
+         """Fallback placeholder when uvicorn is unavailable."""
  
-   async function handleMessageFrame(frame) {
-     if (!frame || typeof frame.type !== "string") {
-       console.warn("Ignoring WS frame without type", frame);
-       return;
-     }
-     if (frame.type === "keepalive") {
-       return;
-     }
  
-     if (frame.type === "server.ping") {
-       const response = { type: "client.pong", ts: Date.now() };
-       if (typeof frame.ts === "number") {
-         response.echo = frame.ts;
-       }
-       sendJson(response);
-       return;
-     }
+ CHAT_V2_SUBPROTOCOL = "chat.v2"
+ TEXT_FRAME_LIMIT_BYTES = 64 * 1024
+ BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
+ FEATURE_LEGACY_POLICY = os.getenv("FEATURE_LEGACY_POLICY", "false").lower() == "true"
+ ALLOW_AUDIO_WITHOUT_ASR = os.getenv("ALLOW_AUDIO_WITHOUT_ASR", "0") == "1"
+ PING_MIN_INTERVAL_MS = 500
+ RATE_LIMIT_CAPACITY = 25
+ RATE_LIMIT_WINDOW_SECONDS = 2.0
+ RATE_LIMIT_CLOSE_CODE = 1013
+ _AUDIO_VIOLATION_LIMIT = 3
  
-     if (frame.type === "ping") {
-       sendJson({ type: "pong", t: Date.now() });
-       return;
-     }
+ AUDIO_SEQ_WINDOW = 8
  
-+    if (frame.type === "audio.throttle") {
-+      try {
-+        const ms = Math.max(50, Math.min(1000, Number(frame.ms) || 200));
-+        window.AppState._throttleUntil = Date.now() + ms;
-+        hubLog("client.audio.throttle", { ms });
-+      } catch {}
-+      return;
-+    }
+ QUEUE_ON_THRESHOLD = 12
+ QUEUE_OFF_THRESHOLD = 6
+ 
++_AUDIO_THROTTLE_HINT_MS = 250
++_AUDIO_THROTTLE_COOLDOWN_MS = 600
++_AUDIO_THROTTLE_QUEUE_THRESHOLD = QUEUE_ON_THRESHOLD
++_AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD = 4
 +
-     if (frame.type === "config.updated" || frame.type === "config_updated") {
-       const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
-       const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
-       const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
-       if (incomingType !== 'config.updated') {
-         dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
-       }
-       return;
-     }
+ _DEFAULT_WS_PING_INTERVAL_MS = 20_000
+ _HEARTBEAT_TIMEOUT_MS = 30_000
  
-     if (frame.type === "policy.interaction") {
-       const sanitized = sanitizePolicyFrame(frame);
-       const appliedPolicy = applyPolicySnapshotFromSource(
-         sanitized && sanitized.policy ? sanitized.policy : null,
-         'policy.interaction'
-       );
-       sanitized.policy = appliedPolicy;
-       if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
-         markUserGestureSatisfied('policy_update');
-       }
-       attachUserGestureListeners();
-       dispatchFrame(sanitized);
-       maybeAutoStart("policy");
-       return;
-     }
+ EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
+ EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
+ 
+ EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
+ 
+ EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
+ 
+ EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
+ EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
+ ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
+ 
+ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
+ _MIC_OPEN_TIMEOUT_SECONDS = 2.5
+ 
+ _OUTBOUND_ALLOWED_TYPES = {
+     "policy.interaction",
+     "info",
+     "tts.start",
+     "tts.end",
+     "asr.ready",
+     "asr.input.start",
+     "asr.input.stop",
+@@ -490,50 +495,52 @@ class AdapterContext:
+     allowed_asr_vendors: List[str] = field(default_factory=list)
+     asr_vendor: Optional[str] = None
+     audio_pipeline_mode: Optional[str] = None
+     asr_vendor_logged: bool = False
+     session_capture_policy: Optional[Dict[str, Any]] = None
+     client_vad_speech: bool = False
+     client_vad_since_ms: Optional[int] = None
+     client_vad_last_event_ms: Optional[int] = None
+     client_vad_last_speech_end_ms: Optional[int] = None
+     client_vad_confidence: float = 0.0
+     client_vad_energy_db: Optional[float] = None
+     client_vad_noise_db: Optional[float] = None
+     server_vad_candidate_start_ms: Optional[int] = None
+     server_vad_silence_candidate_ms: Optional[int] = None
+     server_vad_energy_db: Optional[float] = None
+     vad_fusion_task: asyncio.Task[None] | None = None
+     input_start_ms: Optional[int] = None
+     first_partial_logged: bool = False
+     first_final_logged: bool = False
+     active_asr_config: Optional[Dict[str, Any]] = None
+     hub_log_last_turn: Optional[str] = None
+     hub_log_seq: int = 0
+     asr_turn_active: bool = False
+     asr_turn_begin_sent: bool = False
+     asr_turn_armed_sent: bool = False
++    last_audio_throttle_ms: int = 0
++    audio_throttle_cooldown_ms: int = _AUDIO_THROTTLE_COOLDOWN_MS
+ 
+     def __post_init__(self) -> None:
+         self.session = SessionCtx(sid=self.sid, policy=None)
+ 
+ 
+ class ChatV2Adapter:
+     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+ 
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+@@ -3107,50 +3114,63 @@ class ChatV2Adapter:
+ 
+     def _start_outbound_bridge(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         loop = asyncio.get_running_loop()
+         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
+ 
+         def _queue_payload(payload: Dict[str, Any], *, clone: bool = True) -> None:
+             if ctx.outbox is None:
+                 return
+             item = dict(payload) if clone else payload
+             try:
+                 ctx.outbox.put_nowait(item)
+             except asyncio.QueueFull:
+                 now = ctx.outbox.qsize()
+                 try:
+                     asyncio.create_task(
+                         self._publish(
+                             EVT_WS_OUTBOX_DROP,
+                             ctx.sid,
+                             {"sid": ctx.sid, "dropped": 1, "now": now},
+                         )
+                     )
+                 except RuntimeError:
+                     pass
++                self._maybe_emit_audio_throttle(
++                    ctx,
++                    hint_ms=_AUDIO_THROTTLE_HINT_MS,
++                    reason="outbox_full",
++                )
++                return
++            now = ctx.outbox.qsize()
++            if now >= _AUDIO_THROTTLE_QUEUE_THRESHOLD:
++                self._maybe_emit_audio_throttle(
++                    ctx,
++                    hint_ms=_AUDIO_THROTTLE_HINT_MS,
++                    reason="outbox_depth",
++                )
+ 
+         def _enqueue(payload: Dict[str, Any]) -> None:
+             frame_type = payload.get("type")
+             if frame_type == "input.start":
+                 self._mark_input_start(ctx)
+             if frame_type == "asr.partial":
+                 self._offer_partial_frame(
+                     ctx,
+                     loop,
+                     payload,
+                     lambda frame: _queue_payload(frame, clone=False),
+                 )
+                 return
+             _queue_payload(payload)
+ 
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             meta_obj = event.get("meta")
+             if isinstance(meta_obj, Mapping):
+                 ws_meta = meta_obj.get("ws")
+                 if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
+                     return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+@@ -3597,50 +3617,56 @@ class ChatV2Adapter:
+                 return
+ 
+             def _deliver() -> None:
+                 async def _run_audio_task() -> None:
+                     start = time.perf_counter()
+                     try:
+                         await self._send_audio_frame(ctx, send, chunk_bytes)
+                     except asyncio.CancelledError:
+                         return
+                     except ClientDisconnected:
+                         self._disable_audio_send(ctx, "client_disconnected")
+                     except Exception:  # pragma: no cover - defensive logging
+                         self._disable_audio_send(ctx, "send_failed")
+                         _log.exception("evt=ws_audio_chunk_failed sid=%s", ctx.sid)
+                     finally:
+                         duration_ms = max(0, int((time.perf_counter() - start) * 1000))
+                         current = asyncio.current_task()
+                         if current is not None:
+                             ctx.audio_tasks.discard(current)
+                         _log.info(
+                             "evt=audio_task_complete sid=%s duration_ms=%d",
+                             ctx.sid,
+                             duration_ms,
+                         )
+ 
++                if len(ctx.audio_tasks) >= _AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD:
++                    self._maybe_emit_audio_throttle(
++                        ctx,
++                        hint_ms=_AUDIO_THROTTLE_HINT_MS,
++                        reason="audio_backlog",
++                    )
+                 task = asyncio.create_task(_run_audio_task())
+                 ctx.audio_tasks.add(task)
+ 
+             try:
+                 loop.call_soon_threadsafe(_deliver)
+             except RuntimeError:
+                 pass
+ 
+         _handle_audio_event._telemetry_accepts_binary = True  # type: ignore[attr-defined]
+         ctx.audio_subscription_token = bus.subscribe(EVT_WS_AUDIO_SEND, _handle_audio_event)
+         ctx.outbound_task = asyncio.create_task(self._run_outbound_sender(ctx, send))
+ 
+     def _offer_partial_frame(
+         self,
+         ctx: AdapterContext,
+         loop: asyncio.AbstractEventLoop,
+         payload: Dict[str, Any],
+         enqueue: Callable[[Dict[str, Any]], None],
+     ) -> None:
+         def _emit(frame: Dict[str, Any]) -> None:
+             prepared = self._prepare_partial_frame(ctx, frame)
+             enqueue(prepared)
+ 
+         ctx.partial_coalescer.offer(
+             payload,
+@@ -5675,54 +5701,106 @@ class ChatV2Adapter:
+             timeslice_ms,
+             vendor,
+         )
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
+ 
++    def _maybe_emit_audio_throttle(
++        self,
++        ctx: AdapterContext,
++        *,
++        hint_ms: int = _AUDIO_THROTTLE_HINT_MS,
++        reason: str,
++    ) -> None:
++        send = ctx.ws_send
++        if send is None:
++            return
++        now_ms = self._now_ms()
++        cooldown_ms = max(0, getattr(ctx, "audio_throttle_cooldown_ms", 0) or 0)
++        if cooldown_ms <= 0:
++            cooldown_ms = _AUDIO_THROTTLE_COOLDOWN_MS
++        last_sent = getattr(ctx, "last_audio_throttle_ms", 0)
++        if last_sent and now_ms - last_sent < cooldown_ms:
++            return
++        ctx.last_audio_throttle_ms = now_ms
++        ms_value = max(50, min(1000, int(hint_ms)))
++
++        async def _send() -> None:
++            try:
++                await self._send_json(send, ctx.sid, {"type": "audio.throttle", "ms": ms_value})
++            except Exception:  # pragma: no cover - defensive logging
++                _log.debug(
++                    "evt=audio_throttle_emit_failed sid=%s reason=%s", ctx.sid, reason, exc_info=True
++                )
++
++        try:
++            loop = asyncio.get_running_loop()
++        except RuntimeError:
++            loop = None
++
++        if loop is not None:
++            loop.create_task(_send())
++        else:  # pragma: no cover - fallback when not in an event loop
++            try:
++                asyncio.create_task(_send())
++            except RuntimeError:
++                _log.debug(
++                    "evt=audio_throttle_emit_skipped sid=%s reason=%s", ctx.sid, reason,
++                    exc_info=True,
++                )
++                return
++
++        _log.info("evt=audio_throttle_emit sid=%s reason=%s ms=%d", ctx.sid, reason, ms_value)
++
+     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
+         ctx.outbound_queue_depth = queued
+         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
+             ctx.backpressure_state = "on"
++            self._maybe_emit_audio_throttle(
++                ctx,
++                hint_ms=_AUDIO_THROTTLE_HINT_MS,
++                reason="backpressure_on",
++            )
+             await self._publish(
+                 EVT_BACKPRESSURE_ON,
+                 ctx.sid,
+                 {"queue_depth": queued, "state": "on"},
+             )
+         elif ctx.backpressure_state == "on" and queued < QUEUE_OFF_THRESHOLD:
+             ctx.backpressure_state = "off"
+             await self._publish(
+                 EVT_BACKPRESSURE_OFF,
+                 ctx.sid,
+                 {"queue_depth": queued, "state": "off"},
+             )
+ 
+     @staticmethod
+     def _ensure_send_lock(ctx: AdapterContext) -> asyncio.Lock:
+         lock = ctx.send_lock
+         if lock is None:
+             lock = asyncio.Lock()
+             ctx.send_lock = lock
+         return lock
+ 
+ 
+ __all__ = [
+     "ChatV2Adapter",
+     "CHAT_V2_SUBPROTOCOL",

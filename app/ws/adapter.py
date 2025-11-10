@@ -102,6 +102,11 @@ AUDIO_SEQ_WINDOW = 8
 QUEUE_ON_THRESHOLD = 12
 QUEUE_OFF_THRESHOLD = 6
 
+_AUDIO_THROTTLE_HINT_MS = 250
+_AUDIO_THROTTLE_COOLDOWN_MS = 600
+_AUDIO_THROTTLE_QUEUE_THRESHOLD = QUEUE_ON_THRESHOLD
+_AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD = 4
+
 _DEFAULT_WS_PING_INTERVAL_MS = 20_000
 _HEARTBEAT_TIMEOUT_MS = 30_000
 
@@ -512,6 +517,8 @@ class AdapterContext:
     asr_turn_active: bool = False
     asr_turn_begin_sent: bool = False
     asr_turn_armed_sent: bool = False
+    last_audio_throttle_ms: int = 0
+    audio_throttle_cooldown_ms: int = _AUDIO_THROTTLE_COOLDOWN_MS
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -3129,6 +3136,19 @@ class ChatV2Adapter:
                     )
                 except RuntimeError:
                     pass
+                self._maybe_emit_audio_throttle(
+                    ctx,
+                    hint_ms=_AUDIO_THROTTLE_HINT_MS,
+                    reason="outbox_full",
+                )
+                return
+            now = ctx.outbox.qsize()
+            if now >= _AUDIO_THROTTLE_QUEUE_THRESHOLD:
+                self._maybe_emit_audio_throttle(
+                    ctx,
+                    hint_ms=_AUDIO_THROTTLE_HINT_MS,
+                    reason="outbox_depth",
+                )
 
         def _enqueue(payload: Dict[str, Any]) -> None:
             frame_type = payload.get("type")
@@ -3619,6 +3639,12 @@ class ChatV2Adapter:
                             duration_ms,
                         )
 
+                if len(ctx.audio_tasks) >= _AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD:
+                    self._maybe_emit_audio_throttle(
+                        ctx,
+                        hint_ms=_AUDIO_THROTTLE_HINT_MS,
+                        reason="audio_backlog",
+                    )
                 task = asyncio.create_task(_run_audio_task())
                 ctx.audio_tasks.add(task)
 
@@ -5697,10 +5723,62 @@ class ChatV2Adapter:
             return f"{preview[: limit - 1]}…"
         return preview
 
+    def _maybe_emit_audio_throttle(
+        self,
+        ctx: AdapterContext,
+        *,
+        hint_ms: int = _AUDIO_THROTTLE_HINT_MS,
+        reason: str,
+    ) -> None:
+        send = ctx.ws_send
+        if send is None:
+            return
+        now_ms = self._now_ms()
+        cooldown_ms = max(0, getattr(ctx, "audio_throttle_cooldown_ms", 0) or 0)
+        if cooldown_ms <= 0:
+            cooldown_ms = _AUDIO_THROTTLE_COOLDOWN_MS
+        last_sent = getattr(ctx, "last_audio_throttle_ms", 0)
+        if last_sent and now_ms - last_sent < cooldown_ms:
+            return
+        ctx.last_audio_throttle_ms = now_ms
+        ms_value = max(50, min(1000, int(hint_ms)))
+
+        async def _send() -> None:
+            try:
+                await self._send_json(send, ctx.sid, {"type": "audio.throttle", "ms": ms_value})
+            except Exception:  # pragma: no cover - defensive logging
+                _log.debug(
+                    "evt=audio_throttle_emit_failed sid=%s reason=%s", ctx.sid, reason, exc_info=True
+                )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            loop.create_task(_send())
+        else:  # pragma: no cover - fallback when not in an event loop
+            try:
+                asyncio.create_task(_send())
+            except RuntimeError:
+                _log.debug(
+                    "evt=audio_throttle_emit_skipped sid=%s reason=%s", ctx.sid, reason,
+                    exc_info=True,
+                )
+                return
+
+        _log.info("evt=audio_throttle_emit sid=%s reason=%s ms=%d", ctx.sid, reason, ms_value)
+
     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
         ctx.outbound_queue_depth = queued
         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
             ctx.backpressure_state = "on"
+            self._maybe_emit_audio_throttle(
+                ctx,
+                hint_ms=_AUDIO_THROTTLE_HINT_MS,
+                reason="backpressure_on",
+            )
             await self._publish(
                 EVT_BACKPRESSURE_ON,
                 ctx.sid,

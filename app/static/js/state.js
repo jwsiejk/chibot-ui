@@ -57,6 +57,8 @@
     ttsActive: false,
     asrArmInFlight: false,
     armAfterTtsEnd: false,
+    asrReady: false,
+    micLive: false,
     listening: false,
     recorderActive: false,
     lastChunkTs: null,
@@ -71,6 +73,9 @@
     vadDbfs: null,
     lastSpeechAt: null,
     state: {
+      asrReady: false,
+      micLive: false,
+      listening: false,
       vadActive: false,
       vadDbfs: null,
       lastSpeechAt: null,
