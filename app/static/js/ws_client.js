@@ -1023,22 +1023,60 @@ import { initVAD } from "./audio/vad_client.js";
       codec: "pcm_s16le",
     };
   }
-  function __sendAudioHeaderOnce(frameOrPolicy) {
+  function __sendAudioHeaderOnce(frameOrPolicy = AppState?.policy) {
     if (__audioHeaderSent) {
       try { console.warn("audio.header already sent; skipping"); } catch {}
-      return;
+      return true;
     }
+
+    let header;
     try {
-      const header = __buildStrictAudioHeader(frameOrPolicy);
-      WSClient.sendJSON(header);
-      logStage("client.audio_header_send", header);
+      header = __buildStrictAudioHeader(frameOrPolicy);
+    } catch (err) {
+      console.warn("Failed to build audio header", err);
+      return false;
+    }
+
+    const sendJSON = (WSClient && typeof WSClient.sendJSON === "function")
+      ? WSClient.sendJSON.bind(WSClient)
+      : null;
+    if (!sendJSON) {
+      console.warn("Failed to send audio header: WSClient.sendJSON unavailable");
+      return false;
+    }
+
+    const markSent = () => {
+      try { logStage("client.audio_header_send", header); } catch {}
       __audioHeaderSent = true;
+      return true;
+    };
+
+    try {
+      const result = sendJSON(header);
+      if (result && typeof result.then === "function") {
+        return result.then((ok) => {
+          if (ok !== false) {
+            return markSent();
+          }
+          return false;
+        }).catch((err) => {
+          console.warn("Failed to send audio header", err);
+          return false;
+        });
+      }
+      if (result !== false) {
+        return markSent();
+      }
     } catch (err) {
       console.warn("Failed to send audio header", err);
+      return false;
     }
+
+    console.warn("Failed to send audio header: transport returned false");
+    return false;
   }
-  function sendAudioHeader(frameOrPolicy) {
-    __sendAudioHeaderOnce(frameOrPolicy);
+  function sendAudioHeader(frameOrPolicy = AppState?.policy) {
+    return __sendAudioHeaderOnce(frameOrPolicy);
   }
   // --- End: header idempotency + strict schema ---
   let __lastErrorSig = null, __lastErrorAt = 0;
