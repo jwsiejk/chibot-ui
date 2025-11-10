@@ -65,6 +65,7 @@ import { initVAD } from "./audio/vad_client.js";
   let __micRecordingStartAt = null;
   let __micFirstChunkBreadcrumbSent = false;
   let __firstChunkSeen = false;
+  let __armingGraceUntil = 0; // ms epoch; brief window after capture start
   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
   let __pendingAsrReadyStart = null;
   let __autoVadPatchedForPendingStart = false;
@@ -608,6 +609,8 @@ import { initVAD } from "./audio/vad_client.js";
   }
   function _canCaptureNow() {
     if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
+    // During arming (or until first chunk), don’t block the stream
+    if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
     const s = window.AppState || {};
     return _warming() || (s.asrReady && s.micLive && !s.tts && !senderPaused);
   }
@@ -1149,6 +1152,7 @@ import { initVAD } from "./audio/vad_client.js";
     setAppStateValue("chunkCount", 0);
     setAppStateValue("lastChunkTs", null);
     __firstChunkSeen = false;
+    __armingGraceUntil = 0;
   }
 
   function recordRecorderChunk(timestampMs) {
@@ -1332,6 +1336,7 @@ import { initVAD } from "./audio/vad_client.js";
   function stopRecorder(reason) {
     _audioStreaming = false;
     __firstChunkSeen = false;
+    __armingGraceUntil = 0;
     const stopReason = normalizeReason(reason);
     resetTurnIntent(stopReason);
     clearAudioKeepaliveTimer();
@@ -1382,6 +1387,7 @@ import { initVAD } from "./audio/vad_client.js";
     }
     if (!__firstChunkSeen) {
       __firstChunkSeen = true;
+      try { hubLog("client.pcm.first_frame", {}); } catch {}
     }
     const seq = Number(event.seq) || 0;
     micLastChunkAt = Date.now();
@@ -1453,6 +1459,8 @@ import { initVAD } from "./audio/vad_client.js";
       scheduleAudioKeepalive();
       setListeningState(true);
       AppState.micLive = true;
+      // allow the *first* PCM to pass even if VAD pauses immediately
+      __armingGraceUntil = Date.now() + 1200; // ~1.2s
       try {
         hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
       } catch {}
