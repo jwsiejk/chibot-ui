@@ -1,208 +1,358 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 017604bc7595cb521561a51b1e55ba17bedc400c..2bfa112089a629ca1224cae62da225d6b20e7995 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -608,50 +608,109 @@
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index 062ad6313479268cf534a49a91e83382cde835a2..79a29c7a78f2aa0a9ad686979ebe4f0955666a39 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -1,80 +1,105 @@
+ (() => {
+   function isPlainObject(value) {
+     return value !== null && typeof value === "object" && !Array.isArray(value);
+   }
+ 
+   function mergePlainObjects(base, patch) {
+     // Only shallow merge is strictly necessary for the final state properties
+-    return { ...base, ...patch }; 
++    return { ...base, ...patch };
+   }
+ 
+   function cloneState(source) {
+-    // Clone only the top-level properties.
++    if (!source || typeof source !== "object") {
++      return {};
++    }
+     const next = { ...source };
+-    // The previous nested 'state' object is REMOVED.
++    if (source.state && typeof source.state === "object") {
++      next.state = { ...source.state };
++    }
+     return next;
+   }
+-  
+-  // Cleaned up initialState: Removed the nested 'state' object entirely.
+-  // Mic state is consolidated to 'listening'.
++
++  const legacyAppState = typeof window !== "undefined" && window.AppState && typeof window.AppState === "object"
++    ? window.AppState
++    : null;
++  const legacyNestedState = legacyAppState && legacyAppState.state && typeof legacyAppState.state === "object"
++    ? legacyAppState.state
++    : null;
++  const defaultNestedState = {
++    asrReady: false,
++    micLive: false,
++    tts: false,
++    senderPaused: false,
++    asrTurnActive: false,
++    vadActive: false,
++    vadDbfs: null,
++    lastSpeechAt: null,
++    processing: false,
++  };
++  const initialNestedState = legacyNestedState
++    ? { ...defaultNestedState, ...legacyNestedState }
++    : { ...defaultNestedState };
++
++  // Cleaned up initialState while preserving the legacy nested `state` object for callers
++  // that still rely on it.
+   const initialState = {
+     connectionState: "disconnected",
+     sid: null,
+     resume: null,
+     resumeError: null,
+     latencyMs: null,
+     lastPingAt: null,
+     heartbeatTimerId: null,
+     websocket: null,
+     infoFrame: null,
+     serverBanner: null,
+     clientBanner: {
+       info: null,
+       events: []
+     },
+     // Consolidating mic/ASR state:
+     wsConnected: false,
+     wsPhase: "disconnected",
+     ttsActive: false,
+     asrArmInFlight: false, // KEPT, as it's a critical in-flight flag
+     asrReady: false,
+     // Unified Mic Control Flag (replaces micLive, recorderActive, and old nested listening)
+     listening: false, 
+     lastChunkTs: null,
+     chunkCount: 0,
+     lastErrorCode: null,
+     lastErrorDetail: null,
+     // VAD state remains flat
+     vadActive: false,
+     vadSpeech: false,
+     vadConfidence: 0,
+     vadEnergyDb: null,
+     vadNoiseDb: null,
+     vadDbfs: null,
+     lastSpeechAt: null,
+-    // Removed old nested 'state' object
++    state: initialNestedState,
+   };
+ 
+   let state = cloneState(initialState);
+   const listeners = new Set();
+   
+   // Only track the necessary flat keys for telemetry
+   const TELEMETRY_KEYS = [
+     "wsConnected",
+     "wsPhase",
+     "ttsActive",
+     "asrArmInFlight",
+     "asrReady",
+     "listening", // Consolidated flag
+     "lastChunkTs",
+     "chunkCount",
+     "lastErrorCode",
+     "lastErrorDetail",
+     "vadActive",
+     "vadSpeech",
+     "vadConfidence",
+     "vadEnergyDb",
+     "vadNoiseDb",
+   ];
+   const DELTA_COALESCE_MS = 12;
+   const HEARTBEAT_INTERVAL_MS = 5000;
+@@ -278,165 +303,202 @@
+     const prevSnapshot = telemetryPrev;
+     telemetryPrev = nextSnapshot;
+     syncTrackedProperties(nextSnapshot);
+     recordTelemetryChange(prevSnapshot, nextSnapshot);
+     ensureTelemetryHeartbeat(nextSnapshot);
+   }
+ 
+   telemetryPrev = computeTelemetrySnapshot(state);
+   syncTrackedProperties(telemetryPrev);
+ 
+   function snapshot() {
+     return cloneState(state);
+   }
+ 
+   function notify() {
+     const current = snapshot();
+     listeners.forEach((listener) => {
+       try {
+         listener(current);
+       } catch (err) {
+         console.error("AppState subscriber error", err);
+       }
+     });
+   }
+ 
++  function syncLegacyStateShape() {
++    if (typeof AppState !== "object" || !AppState) {
++      return;
++    }
++    AppState.state = state.state && typeof state.state === "object"
++      ? { ...state.state }
++      : { ...initialNestedState };
++  }
++
+   function setState(patch) {
+     if (!patch || typeof patch !== "object") return;
++
+     const sanitized = { ...patch };
+-    // Explicitly REMOVE any nested state updates from the patch
++    let nestedPatch = null;
+     if (Object.prototype.hasOwnProperty.call(sanitized, "state")) {
++      const candidate = sanitized.state;
++      if (candidate && typeof candidate === "object") {
++        nestedPatch = { ...candidate };
++      }
+       delete sanitized.state;
      }
-     await loadScript("audio/vad_client.js");
-     if (!window.WSClient) {
-       await loadScript("ws_client.js");
+-    // Remove micLive, recorderActive if 'listening' is present to enforce one source of truth
++
++    if (nestedPatch) {
++      for (const key of Object.keys(nestedPatch)) {
++        if (key === "listening" && Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
++          continue;
++        }
++        if (!Object.prototype.hasOwnProperty.call(sanitized, key)) {
++          sanitized[key] = nestedPatch[key];
++        }
++      }
++    }
++
++    const listeningFromNested =
++      nestedPatch && Object.prototype.hasOwnProperty.call(nestedPatch, "listening")
++        ? nestedPatch.listening
++        : undefined;
++
+     if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
+       delete sanitized.micLive;
+       delete sanitized.recorderActive;
++      if (nestedPatch) {
++        delete nestedPatch.micLive;
++        delete nestedPatch.recorderActive;
++      }
++    } else if (typeof listeningFromNested !== "undefined") {
++      sanitized.listening = listeningFromNested;
++      delete nestedPatch.micLive;
++      delete nestedPatch.recorderActive;
++    }
++
++    let nextState = cloneState(state);
++    nextState = { ...nextState, ...sanitized };
++
++    if (nestedPatch) {
++      const previousNested = state.state && typeof state.state === "object" ? state.state : {};
++      const mergedNested = { ...previousNested, ...nestedPatch };
++      nextState.state = mergedNested;
++    } else if (state.state && typeof state.state === "object") {
++      nextState.state = { ...state.state };
++    }
++
++    if (
++      Object.prototype.hasOwnProperty.call(sanitized, "listening") ||
++      (nestedPatch && Object.prototype.hasOwnProperty.call(nestedPatch, "listening"))
++    ) {
++      const listeningValue = Boolean(nextState.listening);
++      nextState.listening = listeningValue;
++      nextState.micLive = listeningValue;
++      nextState.recorderActive = listeningValue;
++      if (nextState.state && typeof nextState.state === "object") {
++        nextState.state = {
++          ...nextState.state,
++          listening: listeningValue,
++          micLive: listeningValue,
++          recorderActive: listeningValue,
++        };
++      }
      }
-     if (!window.TranscriptView) {
-       await loadScript("transcript_view.js");
+ 
+-    if ("resume" in sanitized) {
+-      delete sanitized.resume;
+-    }
+-    if ("resumeError" in sanitized) {
+-      delete sanitized.resumeError;
+-    }
+-    const preservedResume = state.resume;
+-    const preservedResumeError = state.resumeError;
+-    let nextState = {
+-      ...state,
+-      ...sanitized,
+-      resume: preservedResume,
+-      resumeError: preservedResumeError
+-    };
+-    // Re-introduce derived properties (micLive, recorderActive are now always derived from listening)
+-    if (Object.prototype.hasOwnProperty.call(nextState, "listening")) {
+-        nextState.micLive = nextState.listening;
+-        nextState.recorderActive = nextState.listening;
+-    }
+-
+-    // Clean up VAD state properties that were previously part of the nested state
+-    const vadPatch = {};
+-    if (Object.prototype.hasOwnProperty.call(patch, "vadActive")) {
+-        vadPatch.vadActive = patch.vadActive;
+-    }
+-    if (Object.prototype.hasOwnProperty.call(patch, "vadDbfs")) {
+-        vadPatch.vadDbfs = patch.vadDbfs;
+-    }
+-    if (Object.prototype.hasOwnProperty.call(patch, "lastSpeechAt")) {
+-        vadPatch.lastSpeechAt = patch.lastSpeechAt;
+-    }
+-    nextState = { ...nextState, ...vadPatch };
+-    
+-    // Ensure the old nested state object is null/gone
+-    nextState.state = null;
+-    
+     state = nextState;
++    syncLegacyStateShape();
+     processTelemetry(state);
+     notify();
+   }
+ 
+   function setResume(token, ttlMs) {
+     const candidate = typeof token === "string" ? token.trim() : "";
+     const ttl = Number(ttlMs);
+     if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
+       clearResume();
+       return null;
      }
-     if (!window.WSErrorUI) {
-       await loadScript("errors.js");
+     const expiresAt = Date.now() + ttl;
+     const resumeState = {
+       token: candidate,
+       ttlMs: ttl,
+       expiresAt
+     };
+     state = {
+       ...state,
+       resume: resumeState,
+       resumeError: null
+     };
++    syncLegacyStateShape();
+     processTelemetry(state);
+     notify();
+     return resumeState;
+   }
+ 
+   function clearResume() {
+     if (state.resume !== null || state.resumeError !== null) {
+       state = { ...state, resume: null, resumeError: null };
++      syncLegacyStateShape();
+       processTelemetry(state);
+       notify();
      }
    }
  
-   async function init() {
-     await bootstrapClientConfig();
-     await ensureRuntimeModules();
+   function reset() {
+     state = cloneState(initialState);
++    syncLegacyStateShape();
+     processTelemetry(state);
+     notify();
+   }
  
-     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
-     const AppState = window.AppState;
-     const WSClient = window.WSClient;
-     const audioRecorder = window.AudioRecorder || null;
- 
-     const deferredClientLogs = [];
-     let deferredClientLogFlushTimer = null;
- 
-+    const MAX_DEFERRED_CLIENT_LOGS = 64;
-+    const DEFERRED_CLIENT_LOG_FLUSH_DELAY_MS = 500;
-+
-+    function scheduleDeferredClientLogFlush() {
-+      if (deferredClientLogFlushTimer || typeof setTimeout !== "function") {
-+        return;
-+      }
-+      deferredClientLogFlushTimer = setTimeout(() => {
-+        deferredClientLogFlushTimer = null;
-+        try {
-+          flushDeferredClientLogs();
-+        } catch (err) {
-+          try {
-+            console.warn("flushDeferredClientLogs failed", err);
-+          } catch (_) {}
-+        }
-+      }, DEFERRED_CLIENT_LOG_FLUSH_DELAY_MS);
-+    }
-+
-+    function enqueueDeferredClientLog(label, detail) {
-+      if (!Array.isArray(deferredClientLogs)) {
-+        return;
-+      }
-+      const normalizedLabel = typeof label === "string" && label ? label : "event";
-+      const normalizedDetail = cloneDiagDetail(detail);
-+      if (deferredClientLogs.length >= MAX_DEFERRED_CLIENT_LOGS) {
-+        deferredClientLogs.shift();
-+      }
-+      deferredClientLogs.push({ label: normalizedLabel, detail: normalizedDetail });
-+      scheduleDeferredClientLogFlush();
-+    }
-+
-+    function flushDeferredClientLogs() {
-+      if (!Array.isArray(deferredClientLogs) || !deferredClientLogs.length) {
-+        if (deferredClientLogFlushTimer) {
-+          clearTimeout(deferredClientLogFlushTimer);
-+          deferredClientLogFlushTimer = null;
-+        }
-+        return;
-+      }
-+      const wsClient = getWsClient();
-+      if (!wsClientIsConnected(wsClient)) {
-+        scheduleDeferredClientLogFlush();
-+        return;
-+      }
-+      while (deferredClientLogs.length) {
-+        const entry = deferredClientLogs[0];
-+        if (!sendClientLog(entry.label, entry.detail)) {
-+          scheduleDeferredClientLogFlush();
-+          return;
-+        }
-+        deferredClientLogs.shift();
-+      }
-+      if (deferredClientLogFlushTimer) {
-+        clearTimeout(deferredClientLogFlushTimer);
-+        deferredClientLogFlushTimer = null;
-+      }
-+    }
-+
-     function installHubInterface() {
-       const hub = AppState && AppState.hub;
-       if (!hub || typeof hub._install !== "function") {
-         return;
-       }
- 
-       const sendThroughPipe = (label, detail) => {
-         if (!sendClientLog(label, detail)) {
-           enqueueDeferredClientLog(label, detail);
-         }
-       };
- 
-       const buildMirrorDetail = (detail, stageLabel) => {
-         let payload;
-         if (detail && typeof detail === "object") {
-           payload = cloneDiagDetail(detail);
-           if (!payload || typeof payload !== "object") {
-             payload = { value: payload };
-           }
-         } else if (detail === undefined) {
-           payload = {};
-         } else if (typeof detail === "string") {
-           payload = { message: detail };
-         } else {
-           payload = { value: detail };
-@@ -889,50 +948,93 @@
-         return;
-       }
-       micSessionTelemetry.recBadgeLogged = true;
-       const detail = { event: 'ui_rec_badge_on' };
-       if (source) {
-         detail.source = String(source).slice(0, 32);
-       }
-       logClient('evt=ui_rec_badge_on', detail);
+   function subscribe(listener) {
+     if (typeof listener !== "function") {
+       throw new TypeError("listener must be a function");
      }
+     listeners.add(listener);
+     listener(snapshot());
+     return () => {
+       listeners.delete(listener);
+     };
+   }
  
-     function normalizeStopReason(source) {
-       if (typeof source === 'string' && source) {
-         return source.slice(0, 48);
-       }
-       if (source && typeof source === 'object') {
-         if (typeof source.reason === 'string' && source.reason) {
-           return source.reason.slice(0, 48);
-         }
-         if (typeof source.code === 'string' && source.code) {
-           return source.code.slice(0, 48);
-         }
-       }
-       return 'unknown';
+   const AppState = window.AppState = {
+     get: snapshot,
+     getState: snapshot,
+     setState,
+     reset,
+     subscribe,
+     setResume,
+     clearResume,
+     get initialState() {
+       return cloneState(initialState);
      }
+   };
  
-+    function isRecorderListening() {
-+      try {
-+        if (audioRecorder && typeof audioRecorder.isListening === "function") {
-+          return !!audioRecorder.isListening();
-+        }
-+      } catch (_) {}
-+      if (audioRecorder && typeof audioRecorder.listening === "boolean") {
-+        return audioRecorder.listening;
-+      }
-+      const winRecorder = typeof window !== "undefined" ? window.AudioRecorder : null;
-+      try {
-+        if (winRecorder && typeof winRecorder.isListening === "function") {
-+          return !!winRecorder.isListening();
-+        }
-+      } catch (_) {}
-+      if (winRecorder && typeof winRecorder.listening === "boolean") {
-+        return winRecorder.listening;
-+      }
-+      let stateSnapshot = null;
-+      try {
-+        stateSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
-+      } catch (_) {
-+        stateSnapshot = AppState;
-+      }
-+      if (stateSnapshot && typeof stateSnapshot === "object") {
-+        if (typeof stateSnapshot.listening === "boolean") {
-+          return stateSnapshot.listening;
-+        }
-+        if (typeof stateSnapshot.micLive === "boolean") {
-+          return stateSnapshot.micLive;
-+        }
-+        if (stateSnapshot.state && typeof stateSnapshot.state === "object") {
-+          if (typeof stateSnapshot.state.listening === "boolean") {
-+            return stateSnapshot.state.listening;
-+          }
-+          if (typeof stateSnapshot.state.micLive === "boolean") {
-+            return stateSnapshot.state.micLive;
-+          }
-+        }
-+      }
-+      return false;
-+    }
++  syncLegacyStateShape();
 +
-     function updateRecordingState(active, source) {
-       const previous = isRecorderListening();
-       const next = !!active;
+   syncTrackedProperties(telemetryPrev);
  
-       if (typeof AppState?.setState === 'function') {
-         AppState.setState({ listening: next });
-       } else if (typeof AppState === 'object' && AppState) {
-         AppState.listening = next;
-       }
+   // Hub logging/queueing logic remains the same
+   const hubLogs = [];
+   const hubStartQueue = [];
+   const hubStopQueue = [];
+   let hubPendingSocket = { hasValue: false, value: null };
+   let hubImpl = null;
  
-       let stopReasonLabel = null;
-       if (next) {
-         if (!previous) {
-           finalSeenThisTurn = false;
-           if (typeof AppState?.__no_rearm_until === 'number') {
-             AppState.__no_rearm_until = 0;
-           }
-           beginMicTelemetrySession();
-           resetMicSessionTelemetry();
-           noteRecordingBadgeOn(source);
-           const timeslice = getCaptureTimesliceMs();
-           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
-             ? Math.max(0, Math.round(timeslice))
-             : 'unknown';
-           logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
+   function enqueueLog(label, detail) {
+     if (hubLogs.length >= 40) {
+       hubLogs.shift();
+     }
+     hubLogs.push({ label, detail });
+   }
+ 
+   function enqueueStart(policy) {
+     if (hubStartQueue.length >= 10) {
+       hubStartQueue.shift();
+     }
+     hubStartQueue.push(policy);
+   }
+ 
+   function enqueueStop(reason) {
+     if (hubStopQueue.length >= 10) {

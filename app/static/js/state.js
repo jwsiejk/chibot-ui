@@ -5,18 +5,43 @@
 
   function mergePlainObjects(base, patch) {
     // Only shallow merge is strictly necessary for the final state properties
-    return { ...base, ...patch }; 
+    return { ...base, ...patch };
   }
 
   function cloneState(source) {
-    // Clone only the top-level properties.
+    if (!source || typeof source !== "object") {
+      return {};
+    }
     const next = { ...source };
-    // The previous nested 'state' object is REMOVED.
+    if (source.state && typeof source.state === "object") {
+      next.state = { ...source.state };
+    }
     return next;
   }
-  
-  // Cleaned up initialState: Removed the nested 'state' object entirely.
-  // Mic state is consolidated to 'listening'.
+
+  const legacyAppState = typeof window !== "undefined" && window.AppState && typeof window.AppState === "object"
+    ? window.AppState
+    : null;
+  const legacyNestedState = legacyAppState && legacyAppState.state && typeof legacyAppState.state === "object"
+    ? legacyAppState.state
+    : null;
+  const defaultNestedState = {
+    asrReady: false,
+    micLive: false,
+    tts: false,
+    senderPaused: false,
+    asrTurnActive: false,
+    vadActive: false,
+    vadDbfs: null,
+    lastSpeechAt: null,
+    processing: false,
+  };
+  const initialNestedState = legacyNestedState
+    ? { ...defaultNestedState, ...legacyNestedState }
+    : { ...defaultNestedState };
+
+  // Cleaned up initialState while preserving the legacy nested `state` object for callers
+  // that still rely on it.
   const initialState = {
     connectionState: "disconnected",
     sid: null,
@@ -52,7 +77,7 @@
     vadNoiseDb: null,
     vadDbfs: null,
     lastSpeechAt: null,
-    // Removed old nested 'state' object
+    state: initialNestedState,
   };
 
   let state = cloneState(initialState);
@@ -300,56 +325,88 @@
     });
   }
 
+  function syncLegacyStateShape() {
+    if (typeof AppState !== "object" || !AppState) {
+      return;
+    }
+    AppState.state = state.state && typeof state.state === "object"
+      ? { ...state.state }
+      : { ...initialNestedState };
+  }
+
   function setState(patch) {
     if (!patch || typeof patch !== "object") return;
+
     const sanitized = { ...patch };
-    // Explicitly REMOVE any nested state updates from the patch
+    let nestedPatch = null;
     if (Object.prototype.hasOwnProperty.call(sanitized, "state")) {
+      const candidate = sanitized.state;
+      if (candidate && typeof candidate === "object") {
+        nestedPatch = { ...candidate };
+      }
       delete sanitized.state;
     }
-    // Remove micLive, recorderActive if 'listening' is present to enforce one source of truth
+
+    if (nestedPatch) {
+      for (const key of Object.keys(nestedPatch)) {
+        if (key === "listening" && Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
+          continue;
+        }
+        if (!Object.prototype.hasOwnProperty.call(sanitized, key)) {
+          sanitized[key] = nestedPatch[key];
+        }
+      }
+    }
+
+    const listeningFromNested =
+      nestedPatch && Object.prototype.hasOwnProperty.call(nestedPatch, "listening")
+        ? nestedPatch.listening
+        : undefined;
+
     if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
       delete sanitized.micLive;
       delete sanitized.recorderActive;
+      if (nestedPatch) {
+        delete nestedPatch.micLive;
+        delete nestedPatch.recorderActive;
+      }
+    } else if (typeof listeningFromNested !== "undefined") {
+      sanitized.listening = listeningFromNested;
+      delete nestedPatch.micLive;
+      delete nestedPatch.recorderActive;
     }
 
-    if ("resume" in sanitized) {
-      delete sanitized.resume;
-    }
-    if ("resumeError" in sanitized) {
-      delete sanitized.resumeError;
-    }
-    const preservedResume = state.resume;
-    const preservedResumeError = state.resumeError;
-    let nextState = {
-      ...state,
-      ...sanitized,
-      resume: preservedResume,
-      resumeError: preservedResumeError
-    };
-    // Re-introduce derived properties (micLive, recorderActive are now always derived from listening)
-    if (Object.prototype.hasOwnProperty.call(nextState, "listening")) {
-        nextState.micLive = nextState.listening;
-        nextState.recorderActive = nextState.listening;
+    let nextState = cloneState(state);
+    nextState = { ...nextState, ...sanitized };
+
+    if (nestedPatch) {
+      const previousNested = state.state && typeof state.state === "object" ? state.state : {};
+      const mergedNested = { ...previousNested, ...nestedPatch };
+      nextState.state = mergedNested;
+    } else if (state.state && typeof state.state === "object") {
+      nextState.state = { ...state.state };
     }
 
-    // Clean up VAD state properties that were previously part of the nested state
-    const vadPatch = {};
-    if (Object.prototype.hasOwnProperty.call(patch, "vadActive")) {
-        vadPatch.vadActive = patch.vadActive;
+    if (
+      Object.prototype.hasOwnProperty.call(sanitized, "listening") ||
+      (nestedPatch && Object.prototype.hasOwnProperty.call(nestedPatch, "listening"))
+    ) {
+      const listeningValue = Boolean(nextState.listening);
+      nextState.listening = listeningValue;
+      nextState.micLive = listeningValue;
+      nextState.recorderActive = listeningValue;
+      if (nextState.state && typeof nextState.state === "object") {
+        nextState.state = {
+          ...nextState.state,
+          listening: listeningValue,
+          micLive: listeningValue,
+          recorderActive: listeningValue,
+        };
+      }
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "vadDbfs")) {
-        vadPatch.vadDbfs = patch.vadDbfs;
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, "lastSpeechAt")) {
-        vadPatch.lastSpeechAt = patch.lastSpeechAt;
-    }
-    nextState = { ...nextState, ...vadPatch };
-    
-    // Ensure the old nested state object is null/gone
-    nextState.state = null;
-    
+
     state = nextState;
+    syncLegacyStateShape();
     processTelemetry(state);
     notify();
   }
@@ -372,6 +429,7 @@
       resume: resumeState,
       resumeError: null
     };
+    syncLegacyStateShape();
     processTelemetry(state);
     notify();
     return resumeState;
@@ -380,6 +438,7 @@
   function clearResume() {
     if (state.resume !== null || state.resumeError !== null) {
       state = { ...state, resume: null, resumeError: null };
+      syncLegacyStateShape();
       processTelemetry(state);
       notify();
     }
@@ -387,6 +446,7 @@
 
   function reset() {
     state = cloneState(initialState);
+    syncLegacyStateShape();
     processTelemetry(state);
     notify();
   }
@@ -414,6 +474,8 @@
       return cloneState(initialState);
     }
   };
+
+  syncLegacyStateShape();
 
   syncTrackedProperties(telemetryPrev);
 
