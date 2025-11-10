@@ -1402,8 +1402,9 @@
       };
 
       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
-      let wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
-      let wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
+      // Default to true unless explicitly false
+      let wantsAsrReady = capturePolicy.start_on_asr_ready !== false;
+      let wantsTurnReady = capturePolicy.start_on_turn_ready !== false;
 
       const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
 
@@ -1412,7 +1413,8 @@
         wantsTurnReady = true;
       }
 
-      if (!(wantsAsrReady || wantsTurnReady)) {
+      const trustedTrigger = trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin';
+      if (!(wantsAsrReady || wantsTurnReady) && !trustedTrigger) {
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
         return;
       }

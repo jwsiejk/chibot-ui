@@ -1,317 +1,71 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 83d66b358ca984107479293519dfa91e4f1e9980..b3403f17cb1217c1ec47186424a31671bf9d88e9 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -43,50 +43,51 @@ import { initVAD } from "./audio/vad_client.js";
-     ERROR_WS_SEND: 'error_ws_send',
-     ERROR_STATE_GUARD: 'error_state_guard',
-     ERROR_UNKNOWN: 'error_unknown',
-   };
-   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-   const DEFAULT_ASR_VENDOR = 'speechmatics';
-   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
- 
-   // ---- Debug toggles (runtime-settable) ----
-   function dbg(key, fallback = false) {
-     try {
-       return !!(window.AppState?.debug && window.AppState.debug[key]);
-     } catch {
-       return fallback;
-     }
-   }
- 
-   let __micAttempts = 0;
-   let __micChunks = 0;
-   let __micBytes = 0;
-   let __micArmedAt = 0;     // ms since epoch
-   let __micPermissionGranted = false;
-   let __micRecordingStartAt = null;
-   let __micFirstChunkBreadcrumbSent = false;
-   let __firstChunkSeen = false;
-+  let __armingGraceUntil = 0; // ms epoch; brief window after capture start
-   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
-   let __pendingAsrReadyStart = null;
-   let __autoVadPatchedForPendingStart = false;
- 
-   // Per-turn readiness/start tokens to prevent re-arm loops
-   let __asrReadySeen = false;
-   let __pendingAutoArm = false;
- 
-   function deriveAutoArmFromPolicy(p) {
-     const pol = p || (window.AppState?.policy) || {};
-     const asr = pol.asr || {};
-     const ui  = (pol.ui && pol.ui.status) || {};
-     // v2 semantics:
-     const start_on_asr_ready  = (asr.server_starts_input !== false);          // default true
-     const require_active_turn = (ui.require_active_turn !== false);           // default true
-     const start_on_turn_ready = !!require_active_turn;                        // if we require a turn, wait for it
-     return { start_on_asr_ready, start_on_turn_ready, require_active_turn };
-   }
- 
-   function publishGates(g) {
-     try {
-       emitConsoleBusEvent("client.asr.autostart_gates", g);
-     } catch {}
-     try {
-       const s = (window.AppState.state = window.AppState.state || {});
-@@ -586,50 +587,52 @@ import { initVAD } from "./audio/vad_client.js";
-       const hub = window.AppState?.hub;
-       hub?.log?.("client.ws.misuse", { kind });
-       console.warn("WS misuse:", kind);
-     } catch {}
-   }
- 
-   const VAD_APPSTATE_KEYS = [
-     "vadActive",
-     "vadSpeech",
-     "vadConfidence",
-     "vadEnergyDb",
-     "vadNoiseDb",
-   ];
-   let vadController = null;
-   let vadSilenceTimerId = null;
-   let senderPaused = false;
-   let warmupUntil = 0;
-   function beginWarmup(ms = 1200) {
-     warmupUntil = Date.now() + ms;
-   }
-   function _warming() {
-     return Date.now() < warmupUntil;
-   }
-   function _canCaptureNow() {
-     if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
-+    // During arming (or until first chunk), don’t block the stream
-+    if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
-     const s = window.AppState || {};
-     return _warming() || (s.asrReady && s.micLive && !s.tts && !senderPaused);
-   }
-   function syncSenderPaused(value) {
-     senderPaused = Boolean(value);
-     if (AppState && typeof AppState === "object") {
-       AppState.senderPaused = senderPaused;
-     }
-     updateState({ senderPaused });
-     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-   }
-   const PCM_TARGET_BATCH_MS = 60;
-   const PCM_FLUSH_TIMER_MS = 50;
-   const PCM_SAMPLE_RATE = 16000;
-   const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
-   let pcmBatchQueue = [];
-   let pcmBatchSampleCount = 0;
-   let pcmFlushTimerId = null;
- 
-   function hubLog(label, detail) {
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-       try {
-         hub.log(label, detail);
-@@ -1127,50 +1130,51 @@ import { initVAD } from "./audio/vad_client.js";
-     if (!liveSocket || liveSocket.readyState !== WebSocket.OPEN) {
-       return;
-     }
-     const phase = AppState?.wsPhase || AppState?.connectionState;
-     if (!WS_READY_PHASES.has(phase)) {
-       return;
-     }
-     const pending = target._queue.splice(0, target._queue.length);
-     for (const entry of pending) {
-       if (!entry || typeof entry !== "object") {
-         continue;
-       }
-       const { data, isBinary } = entry;
-       try {
-         send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
-       } catch (err) {
-         console.warn("WSClient queue flush send failed", err);
-       }
-     }
-   }
- 
-   function resetRecorderTelemetry() {
-     setAppStateValue("chunkCount", 0);
-     setAppStateValue("lastChunkTs", null);
-     __firstChunkSeen = false;
-+    __armingGraceUntil = 0;
-   }
- 
-   function recordRecorderChunk(timestampMs) {
-     const now = Number.isFinite(timestampMs) ? timestampMs : Date.now();
-     const currentCount = typeof AppState.chunkCount === "number"
-       ? AppState.chunkCount
-       : (typeof AppState.getState === "function" ? (AppState.getState().chunkCount || 0) : 0);
-     const nextCount = currentCount + 1;
-     AppState.chunkCount = nextCount;
-     AppState.lastChunkTs = now;
-     updateState({ chunkCount: nextCount, lastChunkTs: now });
-   }
- 
-   function normalizeErrorDetail(detail) {
-     if (detail === null || detail === undefined) {
-       return null;
-     }
-     if (typeof detail === "string") {
-       return truncateBannerString(detail, 240);
-     }
-     if (typeof detail === "number" || typeof detail === "boolean") {
-       return truncateBannerString(String(detail), 240);
-     }
-     try {
-       const serialized = JSON.stringify(detail);
-@@ -1310,100 +1314,102 @@ import { initVAD } from "./audio/vad_client.js";
-       sendResult
-         .then(() => {
-           __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-           __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-         })
-         .catch((err) => {
-           console.warn("pcm.send.error", err);
-         });
-       return;
-     }
-     if (!sendResult) {
-       console.warn("pcm.send.error", { reason: "send_audio_chunk_failed" });
-       return;
-     }
-     if ((Math.random() * 50 | 0) === 0) {
-       const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
-       hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
-     }
-     __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-     __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-   }
- 
-   function stopRecorder(reason) {
-     _audioStreaming = false;
-     __firstChunkSeen = false;
-+    __armingGraceUntil = 0;
-     const stopReason = normalizeReason(reason);
-     resetTurnIntent(stopReason);
-     clearAudioKeepaliveTimer();
-     clearVadSilenceTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       setListeningState(false);
-       AppState.micLive = false;
-       try {
-         hubLog("client.pcm.capture_stop", { reason: stopReason });
-       } catch {}
-       return;
-     }
-     try {
-       recorder.stopListening({ reason: stopReason });
-     } catch (err) {
-       console.warn("Recorder stopListening failed", err);
-     }
-     syncSenderPaused(false);
-     flushPcmBatch();
-     if (vadController && typeof vadController.reset === "function") {
-       try {
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
-     }
-     setListeningState(false);
-     AppState.micLive = false;
-     try {
-       hubLog("client.pcm.capture_stop", { reason: stopReason });
-     } catch {}
-   }
- 
-   function handleRecorderChunk(event) {
-     if (!event) {
-       return;
-     }
-     const buffer = event.buffer instanceof ArrayBuffer
-       ? event.buffer
-       : (ArrayBuffer.isView(event.buffer)
-         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-         : null);
-     if (!buffer) {
-       return;
-     }
-     if (!__firstChunkSeen) {
-       __firstChunkSeen = true;
-+      try { hubLog("client.pcm.first_frame", {}); } catch {}
-     }
-     const seq = Number(event.seq) || 0;
-     micLastChunkAt = Date.now();
-     scheduleAudioKeepalive();
-     recordRecorderChunk(micLastChunkAt);
-     const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
-       ? performance.now()
-       : Date.now();
-     if (vadController && typeof vadController.onPcmFrame === "function") {
-       try {
-         vadController.onPcmFrame(buffer, frameTimestamp);
-       } catch (err) {
-         try {
-           console.warn("VAD frame processing failed", err);
-         } catch {}
-       }
-     }
-     if (!_canCaptureNow()) {
-       return;
-     }
-     if (seq === 0) {
-       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-     }
-     const frame = new Int16Array(buffer);
-     if (frame.length) {
-@@ -1431,50 +1437,52 @@ import { initVAD } from "./audio/vad_client.js";
-     clearVadSilenceTimer();
-     const recorder = getRecorder();
-     if (!recorder) {
-       console.warn("AudioRecorder unavailable; cannot start streaming");
-       return false;
-     }
-     const captureReason = typeof reason === "string" && reason ? reason : "auto";
-     try {
-       await recorder.start({ onChunk: handleRecorderChunk, policy });
-       resetRecorderTelemetry();
-       syncSenderPaused(false);
-       if (vadController && typeof vadController.reset === "function") {
-         try {
-           vadController.reset();
-         } catch (err) {
-           try {
-             console.warn("VAD reset failed", err);
-           } catch {}
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index b11db10f197da369e1757bb0f83001ebbed691b4..0aaf0c008447c46bac8b84ece00bbeae60444159 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1380,61 +1380,63 @@
+           detail.extra = {};
+           for (let i = 0; i < keys.length && i < 8; i += 1) {
+             const key = keys[i];
+             if (!key) continue;
+             detail.extra[key.slice(0, 32)] = extra[key];
+           }
          }
        }
-       await recorder.startListening(policy);
-       micLastChunkAt = Date.now();
-       scheduleAudioKeepalive();
-       setListeningState(true);
-       AppState.micLive = true;
-+      // allow the *first* PCM to pass even if VAD pauses immediately
-+      __armingGraceUntil = Date.now() + 1200; // ~1.2s
-       try {
-         hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
-       } catch {}
-       return true;
-     } catch (err) {
-       if (err?.name === "NotAllowedError") {
-         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
-       }
-       setListeningState(false);
-       AppState.micLive = false;
-       throw err;
+       logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
      }
-   }
  
-   function schedulePostTtsArm(reason) {
-     clearPostTtsArmTimer();
-     postTtsArmTimerId = setTimeout(() => {
-       postTtsArmTimerId = null;
-       requestAsrArm(reason);
-     }, POST_TTS_ARM_DELAY_MS);
-   }
+     function maybeAutoStartCapture(trigger, reason) {
+       const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+       const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+       const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+         ? runtimeState.turnState.slice(0, 32)
+         : null;
+       const gates = {
+         asrReady: Boolean(runtimeState.asrReady),
+         turnState: rawTurnState,
+         micPerm: Boolean(runtimeState.micPermissionGranted),
+         recording: Boolean(runtimeState.isRecording),
+       };
  
-   function requestAsrArm(reason) {
-     const label = normalizeReason(reason);
-     clearPostTtsArmTimer();
+       const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
+-      let wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
+-      let wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
++      // Default to true unless explicitly false
++      let wantsAsrReady = capturePolicy.start_on_asr_ready !== false;
++      let wantsTurnReady = capturePolicy.start_on_turn_ready !== false;
+ 
+       const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
+ 
+       if (bypassTriggers.has(trigger)) {
+         wantsAsrReady = true;
+         wantsTurnReady = true;
+       }
+ 
+-      if (!(wantsAsrReady || wantsTurnReady)) {
++      const trustedTrigger = trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin';
++      if (!(wantsAsrReady || wantsTurnReady) && !trustedTrigger) {
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
+         return;
+       }
+ 
+       if (reason === 'tts_end') {
+         const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
+         logClient(`client.turn: evt=tts_end_logic_start audio_idle=${audioIdle}`, {
+           event: 'client.turn',
+           type: 'tts_end_logic_start',
+           trigger: triggerLabel,
+           reason: reasonLabel,
+           audioIdle,
+         });
+       }
+ 
+       const noRearmUntil = AppState && Number.isFinite(Number(AppState.__no_rearm_until))
+         ? Number(AppState.__no_rearm_until)
+         : 0;
+       const now = Date.now();
+       if (noRearmUntil && now < noRearmUntil) {
+         const msRemaining = Math.max(0, Math.ceil(noRearmUntil - now));
+         logClientMicEventText('evt=rearm_blocked reason=cooldown');
+         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+           blockedBy: 'cooldown',
+           msRemaining,
