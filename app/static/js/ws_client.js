@@ -72,6 +72,9 @@ import { initVAD } from "./audio/vad_client.js";
   let __pendingAsrReadyStart = null;
   let __autoVadPatchedForPendingStart = false;
 
+  let __pauseSendUntil = 0;
+  let __throttleTimer = null;
+
   // Per-turn readiness/start tokens to prevent re-arm loops
   let __asrReadySeen = false;
   let __pendingAutoArm = false;
@@ -621,11 +624,10 @@ import { initVAD } from "./audio/vad_client.js";
     if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
     const s = window.AppState || {};
     const ws = WSClient?._ws || window.ws;
-    const throttled = s._throttleUntil && Date.now() < s._throttleUntil;
     if (!(!!ws && ws.readyState === WebSocket.OPEN)) {
       return false;
     }
-    if (s.tts || throttled) {
+    if (s.tts) {
       return false;
     }
     return _warming() || (s.asrReady && s.micLive && !senderPaused);
@@ -1325,7 +1327,7 @@ import { initVAD } from "./audio/vad_client.js";
       console.warn("pcm.send.skipped", { readyState: liveSocket ? liveSocket.readyState : undefined });
       return;
     }
-    const sendResult = WSClient.sendAudioChunk(out, { lane: "mic" });
+    const sendResult = WSClient.sendAudioChunk(out, { lane: "mic", ts: Date.now() });
     if (sendResult && typeof sendResult.then === "function") {
       sendResult
         .then(() => {
@@ -1444,6 +1446,7 @@ import { initVAD } from "./audio/vad_client.js";
   }
 
   async function startRecorderStreaming(policy, reason) {
+    // Ensure we never stop the mic due to throttle/phase; sender loop will drop/skip while paused
     if (AppState.listening) {
       AppState.micLive = true;
       return true;
@@ -3415,11 +3418,36 @@ import { initVAD } from "./audio/vad_client.js";
     }
 
     if (frame.type === "audio.throttle") {
+      const rawMs = Number(frame?.ms);
+      const ms = Number.isFinite(rawMs) ? Math.max(0, rawMs) : 0;
+      const now = Date.now();
+      const until = ms > 0 ? now + ms : now;
+      __pauseSendUntil = ms > 0 ? Math.max(__pauseSendUntil, until) : now;
+      if (AppState && typeof AppState === "object") {
+        AppState._throttleUntil = __pauseSendUntil;
+      }
       try {
-        const ms = Math.max(50, Math.min(1000, Number(frame.ms) || 200));
-        window.AppState._throttleUntil = Date.now() + ms;
-        hubLog("client.audio.throttle", { ms });
+        hubLog("client.audio.throttle", { ms, until: __pauseSendUntil });
       } catch {}
+      if (__throttleTimer) {
+        clearTimeout(__throttleTimer);
+        __throttleTimer = null;
+      }
+      if (ms > 0) {
+        const delay = Math.max(0, __pauseSendUntil - Date.now());
+        __throttleTimer = setTimeout(() => {
+          __throttleTimer = null;
+          if (AppState && typeof AppState === "object") {
+            AppState._throttleUntil = 0;
+          }
+          try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
+        }, delay);
+      } else {
+        try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
+        if (AppState && typeof AppState === "object") {
+          AppState._throttleUntil = 0;
+        }
+      }
       return;
     }
 
@@ -4541,6 +4569,16 @@ import { initVAD } from "./audio/vad_client.js";
     const options = opts && typeof opts === "object" ? { ...opts } : {};
     if (typeof options.lane === "undefined") {
       options.lane = "mic";
+    }
+    const lane = typeof options.lane === "string" ? options.lane : "mic";
+    if (lane === "mic") {
+      const now = Date.now();
+      if (now < __pauseSendUntil) {
+        const pauseMs = __pauseSendUntil - now;
+        const ts = Number.isFinite(options.ts) ? Number(options.ts) : now;
+        try { AppState?.hub?.log?.('client.audio.chunk_dropped_throttle', { ts, pause_ms: pauseMs }); } catch {}
+        return true;
+      }
     }
     const result = sendBinary(buf, options);
     if (result && typeof result.then === "function") {

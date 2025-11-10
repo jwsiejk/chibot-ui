@@ -1,55 +1,55 @@
-BUILD_ID 65cc410
-app.js?v=65cc410:35 AskChip build: 65cc410
-ws_client.js?v=65cc410:4421 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=65cc410:4421Understand this warning
-app.js?v=65cc410:680 client.vad.state
-app.js?v=65cc410:680 client.appstate.delta
-app.js?v=65cc410:2298 evt=ws_open_attempt Object
-ws_client.js?v=65cc410:4211 evt=ws_client_open_params Object
-ws_client.js?v=65cc410:4215 WS opening Object
-app.js?v=65cc410:680 client.appstate.delta
-ws_client.js?v=65cc410:4233 WebSocket open Object
-app.js?v=65cc410:680 client.ws
-ws_client.js?v=65cc410:4421 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=65cc410:4421Understand this warning
-ws_client.js?v=65cc410:4421 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=65cc410:4421Understand this warning
-app.js?v=65cc410:680 client.appstate.heartbeat
-app.js?v=65cc410:680 client.ws
-ws_client.js?v=65cc410:4018 evt=ws_linked AppState true WSClient true
-app.js?v=65cc410:680 client.ws
-ws_client.js?v=65cc410:2944 WS server banner Object
-app.js?v=65cc410:680 client.appstate.delta
-app.js?v=65cc410:1034 client.mic evt=policy_capture asr_input= timeslice_ms=200
-app.js?v=65cc410:680 client.ws
-app.js?v=65cc410:680 client.audio.worklet_load_ok
-app.js?v=65cc410:1034 client.mic evt=mic_get_user_media_start constraints={"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false,"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16}
-app.js?v=65cc410:1034 client.mic evt=mic_get_user_media_success track_id=29d4fc2c-0e94-4307-98e4-7ce373a6a44b
-app.js?v=65cc410:1034 evt=mic_perm_granted
-app.js?v=65cc410:680 client.ws
-app.js?v=65cc410:680 client.appstate.heartbeat
-ws_client.js?v=65cc410:3311 evt=ui_transcript_filter allow=true type=chat.message role=assistant
-app.js?v=65cc410:680 client.ws
-app.js?v=65cc410:1034 client.mic evt=mic_capture_request_blocked reason=active
-app.js?v=65cc410:1034 evt=ui_rec_badge_on
-app.js?v=65cc410:1034 client.mic evt=mic_start timeslice_ms=200
-app.js?v=65cc410:1034 watchdog_silence_notice
-app.js?v=65cc410:680 client.ws
-app.js?v=65cc410:680 client.vad.state
-app.js?v=65cc410:680 client.pcm.capture_stop
-ws_client.js?v=65cc410:4421 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=65cc410:4421Understand this warning
-app.js?v=65cc410:1034 client.mic evt=mic_stop reason=appstate.disconnect
-app.js?v=65cc410:680 client.ws
-app.js?v=65cc410:1034 client.mic evt=mic_capture_request_blocked reason=starting
-app.js?v=65cc410:680 client.appstate.delta
-ws_client.js?v=65cc410:4254 WebSocket closed Object
-ws.onclose @ ws_client.js?v=65cc410:4254Understand this error
-app.js?v=65cc410:680 client.ws
-app.js?v=65cc410:1034 client.mic evt=mic_get_user_media_start constraints={"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16,"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false}
-app.js?v=65cc410:680 client.appstate.delta
-app.js?v=65cc410:1034 client.mic evt=mic_get_user_media_success track_id=b4d44a2f-a678-476a-b946-2971d75eac5e
-app.js?v=65cc410:1034 evt=ui_rec_badge_on
-app.js?v=65cc410:1034 client.mic evt=mic_start timeslice_ms=200
-6app.js?v=65cc410:1034 watchdog_silence_notice
-app.js?v=65cc410:1034 watchdog_silence_notice
+BUILD_ID cece9dc
+app.js?v=cece9dc:35 AskChip build: cece9dc
+ws_client.js?v=cece9dc:4421 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=cece9dc:4421Understand this warning
+app.js?v=cece9dc:680 client.vad.state
+app.js?v=cece9dc:680 client.appstate.delta
+app.js?v=cece9dc:2298 evt=ws_open_attempt Object
+ws_client.js?v=cece9dc:4211 evt=ws_client_open_params Object
+ws_client.js?v=cece9dc:4215 WS opening Object
+app.js?v=cece9dc:680 client.appstate.delta
+ws_client.js?v=cece9dc:4233 WebSocket open Object
+app.js?v=cece9dc:680 client.ws
+ws_client.js?v=cece9dc:4421 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=cece9dc:4421Understand this warning
+ws_client.js?v=cece9dc:4421 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=cece9dc:4421Understand this warning
+app.js?v=cece9dc:680 client.appstate.heartbeat
+app.js?v=cece9dc:680 client.ws
+ws_client.js?v=cece9dc:4018 evt=ws_linked AppState true WSClient true
+app.js?v=cece9dc:680 client.ws
+ws_client.js?v=cece9dc:2944 WS server banner Object
+app.js?v=cece9dc:680 client.appstate.delta
+app.js?v=cece9dc:1034 client.mic evt=policy_capture asr_input= timeslice_ms=200
+app.js?v=cece9dc:680 client.ws
+app.js?v=cece9dc:680 client.audio.worklet_load_ok
+app.js?v=cece9dc:1034 client.mic evt=mic_get_user_media_start constraints={"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false,"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16}
+app.js?v=cece9dc:1034 client.mic evt=mic_get_user_media_success track_id=ad2772fb-f9da-46e3-8bdc-db262610019e
+app.js?v=cece9dc:1034 evt=mic_perm_granted
+app.js?v=cece9dc:680 client.appstate.heartbeat
+app.js?v=cece9dc:680 client.ws
+ws_client.js?v=cece9dc:3311 evt=ui_transcript_filter allow=true type=chat.message role=assistant
+app.js?v=cece9dc:680 client.ws
+app.js?v=cece9dc:680 client.audio.throttle
+app.js?v=cece9dc:1034 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=cece9dc:1034 evt=ui_rec_badge_on
+app.js?v=cece9dc:1034 client.mic evt=mic_start timeslice_ms=200
+app.js?v=cece9dc:1034 watchdog_silence_notice
+app.js?v=cece9dc:680 client.vad.state
+app.js?v=cece9dc:680 client.pcm.capture_stop
+ws_client.js?v=cece9dc:4421 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=cece9dc:4421Understand this warning
+app.js?v=cece9dc:1034 client.mic evt=mic_stop reason=appstate.disconnect
+app.js?v=cece9dc:680 client.ws
+app.js?v=cece9dc:1034 client.mic evt=mic_capture_request_blocked reason=starting
+app.js?v=cece9dc:680 client.appstate.delta
+ws_client.js?v=cece9dc:4254 WebSocket closed Object
+ws.onclose @ ws_client.js?v=cece9dc:4254Understand this error
+app.js?v=cece9dc:680 client.ws
+app.js?v=cece9dc:1034 client.mic evt=mic_get_user_media_start constraints={"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16,"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false}
+app.js?v=cece9dc:680 client.appstate.delta
+app.js?v=cece9dc:1034 client.mic evt=mic_get_user_media_success track_id=8d2ba6cd-cc97-488e-88e6-f185f05e5719
+app.js?v=cece9dc:1034 evt=ui_rec_badge_on
+app.js?v=cece9dc:1034 client.mic evt=mic_start timeslice_ms=200
+4app.js?v=cece9dc:1034 watchdog_silence_notice
+app.js?v=cece9dc:1034 watchdog_silence_notice

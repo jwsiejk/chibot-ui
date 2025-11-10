@@ -14,6 +14,7 @@ import inspect
 import platform
 import socket
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -25,6 +26,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Deque,
     Protocol,
     runtime_checkable,
 )
@@ -399,6 +401,8 @@ class AdapterContext:
     audio_expected_seq: int = 0
     audio_highest_seq: int = -1
     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+    audio_backlog: Deque[tuple[int, bytes]] = field(default_factory=deque)
+    audio_backlog_bytes: int = 0
     audio_window: int = AUDIO_SEQ_WINDOW
     audio_chunks_recv: int = 0
     audio_bytes_recv: int = 0
@@ -517,8 +521,6 @@ class AdapterContext:
     asr_turn_active: bool = False
     asr_turn_begin_sent: bool = False
     asr_turn_armed_sent: bool = False
-    last_audio_throttle_ms: int = 0
-    audio_throttle_cooldown_ms: int = _AUDIO_THROTTLE_COOLDOWN_MS
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -526,6 +528,13 @@ class AdapterContext:
 
 class ChatV2Adapter:
     """Minimal chat.v2 WebSocket adapter with telemetry taps."""
+
+    THROTTLE_COOLDOWN_MS = 800
+    THROTTLE_GRACE_AFTER_READY_MS = 2000
+    THROTTLE_BURST_MS = 250
+    THROTTLE_BACKLOG_FRAMES = 6
+    THROTTLE_BACKLOG_MS = 600
+    THROTTLE_RING_BUFFER_MAX_BYTES = 11520
 
     def __init__(
         self,
@@ -547,6 +556,7 @@ class ChatV2Adapter:
         )
         self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
         self._policy_env_warning_logged = False
+        self._last_throttle_emit_ms: int = 0
 
     @staticmethod
     def _turn_key(ctx: AdapterContext, req_id: Optional[str]) -> Optional[str]:
@@ -2797,7 +2807,9 @@ class ChatV2Adapter:
         backpressure_ok = ctx.backpressure_state != "on"
 
         gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
+
         if gate_open:
+            await self._flush_audio_backlog(ctx)
             _log.info(
                 "evt=audio_ingress sid=%s len=%d gate_open=%s tts_mask=%s client_mic_open=%s audio_send_closed=%s backpressure_state=%s",
                 ctx.sid,
@@ -2808,34 +2820,79 @@ class ChatV2Adapter:
                 ctx.audio_send_closed,
                 ctx.backpressure_state,
             )
-            bus.publish(
-                {
-                    "type": EVT_WS_AUDIO_SEND,
-                    "sid": ctx.sid,
-                    "chunk": bytes(chunk),
-                    "len": byte_count,
-                    "who": "server",
-                    "source": "ws_server",
-                }
-            )
+            await self._forward_audio_chunk(ctx, chunk, seq)
+            return
+
+        if not mask_open:
+            reason = "mask"
+        elif not ready_gate:
+            reason = "not_ready"
+        elif not mic_open:
+            reason = "mic_closed"
+        elif not send_open:
+            reason = "send_closed"
         else:
-            if not mask_open:
-                reason = "mask"
-            elif not ready_gate:
-                reason = "not_ready"
-            elif not mic_open:
-                reason = "mic_closed"
-            elif not send_open:
-                reason = "send_closed"
-            else:
-                reason = "backpressure"
+            reason = "backpressure"
+
+        if reason == "backpressure":
+            self._queue_audio_backlog(ctx, chunk, seq)
+        else:
             _log.info(
                 "evt=audio_drop sid=%s len=%d reason=%s",
                 ctx.sid,
                 byte_count,
                 reason,
             )
+        return
+
+    def _queue_audio_backlog(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+        backlog = ctx.audio_backlog
+        backlog.append((seq, bytes(chunk)))
+        ctx.audio_backlog_bytes += len(chunk)
+        _log.info(
+            "evt=audio_backlog_queue sid=%s len=%d total_bytes=%d pending=%d",
+            ctx.sid,
+            len(chunk),
+            ctx.audio_backlog_bytes,
+            len(backlog),
+        )
+        while ctx.audio_backlog_bytes > self.THROTTLE_RING_BUFFER_MAX_BYTES and backlog:
+            _seq, drop_chunk = backlog.popleft()
+            ctx.audio_backlog_bytes -= len(drop_chunk)
+            _log.info(
+                "evt=audio_backlog_trim sid=%s len=%d total_bytes=%d pending=%d",
+                ctx.sid,
+                len(drop_chunk),
+                ctx.audio_backlog_bytes,
+                len(backlog),
+            )
+
+    async def _flush_audio_backlog(self, ctx: AdapterContext) -> None:
+        if not ctx.audio_backlog:
             return
+        while ctx.audio_backlog:
+            seq, queued = ctx.audio_backlog.popleft()
+            ctx.audio_backlog_bytes -= len(queued)
+            _log.info(
+                "evt=audio_backlog_flush sid=%s len=%d remaining=%d",
+                ctx.sid,
+                len(queued),
+                len(ctx.audio_backlog),
+            )
+            await self._forward_audio_chunk(ctx, queued, seq)
+
+    async def _forward_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+        byte_count = len(chunk)
+        bus.publish(
+            {
+                "type": EVT_WS_AUDIO_SEND,
+                "sid": ctx.sid,
+                "chunk": bytes(chunk),
+                "len": byte_count,
+                "who": "server",
+                "source": "ws_server",
+            }
+        )
         asr_client = ctx.session.asr
         if ctx.session.asr_state == "open" and asr_client is not None:
             try:
@@ -3118,6 +3175,15 @@ class ChatV2Adapter:
         loop = asyncio.get_running_loop()
         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
 
+        def _schedule_throttle(reason: str) -> None:
+            try:
+                loop.create_task(self._maybe_emit_audio_throttle(send, ctx, reason=reason))
+            except RuntimeError:
+                try:
+                    asyncio.create_task(self._maybe_emit_audio_throttle(send, ctx, reason=reason))
+                except RuntimeError:
+                    pass
+
         def _queue_payload(payload: Dict[str, Any], *, clone: bool = True) -> None:
             if ctx.outbox is None:
                 return
@@ -3136,19 +3202,11 @@ class ChatV2Adapter:
                     )
                 except RuntimeError:
                     pass
-                self._maybe_emit_audio_throttle(
-                    ctx,
-                    hint_ms=_AUDIO_THROTTLE_HINT_MS,
-                    reason="outbox_full",
-                )
+                _schedule_throttle("outbox_full")
                 return
             now = ctx.outbox.qsize()
             if now >= _AUDIO_THROTTLE_QUEUE_THRESHOLD:
-                self._maybe_emit_audio_throttle(
-                    ctx,
-                    hint_ms=_AUDIO_THROTTLE_HINT_MS,
-                    reason="outbox_depth",
-                )
+                _schedule_throttle("outbox_depth")
 
         def _enqueue(payload: Dict[str, Any]) -> None:
             frame_type = payload.get("type")
@@ -3640,11 +3698,7 @@ class ChatV2Adapter:
                         )
 
                 if len(ctx.audio_tasks) >= _AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD:
-                    self._maybe_emit_audio_throttle(
-                        ctx,
-                        hint_ms=_AUDIO_THROTTLE_HINT_MS,
-                        reason="audio_backlog",
-                    )
+                    _schedule_throttle("audio_backlog")
                 task = asyncio.create_task(_run_audio_task())
                 ctx.audio_tasks.add(task)
 
@@ -5736,62 +5790,49 @@ class ChatV2Adapter:
             return f"{preview[: limit - 1]}…"
         return preview
 
-    def _maybe_emit_audio_throttle(
+    async def _maybe_emit_audio_throttle(
         self,
+        send: Callable[[dict], Awaitable[None]] | None,
         ctx: AdapterContext,
-        *,
-        hint_ms: int = _AUDIO_THROTTLE_HINT_MS,
-        reason: str,
+        reason: str = "audio_backlog",
     ) -> None:
-        send = ctx.ws_send
         if send is None:
             return
-        now_ms = self._now_ms()
-        cooldown_ms = max(0, getattr(ctx, "audio_throttle_cooldown_ms", 0) or 0)
-        if cooldown_ms <= 0:
-            cooldown_ms = _AUDIO_THROTTLE_COOLDOWN_MS
-        last_sent = getattr(ctx, "last_audio_throttle_ms", 0)
-        if last_sent and now_ms - last_sent < cooldown_ms:
+        now = int(time.time() * 1000)
+        if getattr(ctx.session, "tts_active", False):
             return
-        ctx.last_audio_throttle_ms = now_ms
-        ms_value = max(50, min(1000, int(hint_ms)))
-
-        async def _send() -> None:
-            try:
-                await self._send_json(send, ctx.sid, {"type": "audio.throttle", "ms": ms_value})
-            except Exception:  # pragma: no cover - defensive logging
-                _log.debug(
-                    "evt=audio_throttle_emit_failed sid=%s reason=%s", ctx.sid, reason, exc_info=True
-                )
-
+        ready_sent = ctx.asr_ready_bundle_sent_ms
+        if ready_sent and (now - ready_sent) < self.THROTTLE_GRACE_AFTER_READY_MS:
+            return
+        if (now - getattr(self, "_last_throttle_emit_ms", 0)) < self.THROTTLE_COOLDOWN_MS:
+            return
+        backlog_ok = False
+        if ctx.ing_chunks >= self.THROTTLE_BACKLOG_FRAMES:
+            backlog_ok = True
+        elif ctx.ing_last_tick_t0_ms is not None:
+            if (now - ctx.ing_last_tick_t0_ms) > self.THROTTLE_BACKLOG_MS:
+                backlog_ok = True
+        if not backlog_ok:
+            return
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is not None:
-            loop.create_task(_send())
-        else:  # pragma: no cover - fallback when not in an event loop
-            try:
-                asyncio.create_task(_send())
-            except RuntimeError:
-                _log.debug(
-                    "evt=audio_throttle_emit_skipped sid=%s reason=%s", ctx.sid, reason,
-                    exc_info=True,
-                )
-                return
-
-        _log.info("evt=audio_throttle_emit sid=%s reason=%s ms=%d", ctx.sid, reason, ms_value)
+            await self._send_json(send, ctx.sid, {"type": "audio.throttle", "ms": self.THROTTLE_BURST_MS})
+            self._last_throttle_emit_ms = now
+            _log.info(
+                "evt=audio_throttle_emit sid=%s reason=%s ms=%s",
+                ctx.sid,
+                reason,
+                self.THROTTLE_BURST_MS,
+            )
+        except Exception:
+            _log.warning("evt=audio_throttle_emit_failed sid=%s", ctx.sid, exc_info=True)
 
     async def _update_backpressure(self, ctx: AdapterContext, queued: int) -> None:
         ctx.outbound_queue_depth = queued
+        send = ctx.ws_send
         if ctx.backpressure_state == "off" and queued > QUEUE_ON_THRESHOLD:
             ctx.backpressure_state = "on"
-            self._maybe_emit_audio_throttle(
-                ctx,
-                hint_ms=_AUDIO_THROTTLE_HINT_MS,
-                reason="backpressure_on",
-            )
+            if send is not None:
+                await self._maybe_emit_audio_throttle(send, ctx, reason="backpressure_on")
             await self._publish(
                 EVT_BACKPRESSURE_ON,
                 ctx.sid,
