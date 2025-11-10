@@ -1301,14 +1301,14 @@ import { initVAD } from "./audio/vad_client.js";
 
   function schedulePcmFlushTimer() {
     if (!pcmFlushTimerId) {
-      pcmFlushTimerId = setTimeout(() => {
+      pcmFlushTimerId = setTimeout(async () => {
         pcmFlushTimerId = null;
-        flushPcmBatch();
+        await flushPcmBatch();
       }, PCM_FLUSH_TIMER_MS);
     }
   }
 
-  function enqueuePcmFrame(frame, meta) {
+  async function enqueuePcmFrame(frame, meta) {
     if (!(frame instanceof Int16Array) || frame.length === 0) {
       return;
     }
@@ -1318,11 +1318,11 @@ import { initVAD } from "./audio/vad_client.js";
     schedulePcmFlushTimer();
     const accumulatedMs = pcmBatchSampleCount / PCM_SAMPLES_PER_MS;
     if (accumulatedMs >= PCM_TARGET_BATCH_MS) {
-      flushPcmBatch();
+      await flushPcmBatch();
     }
   }
 
-  function flushPcmBatch() {
+  async function flushPcmBatch() {
     if (!pcmBatchQueue.length || pcmBatchSampleCount <= 0) {
       resetPcmBatchState();
       return;
@@ -1359,9 +1359,20 @@ import { initVAD } from "./audio/vad_client.js";
     }
     if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent) {
       try {
-        sendAudioHeader(AppState?.policy || {});
+        const maybe = sendAudioHeader(AppState?.policy || {});
+        if (maybe && typeof maybe.then === "function") {
+          const ok = await maybe;
+          if (!ok) {
+            console.warn('pcm.flush: header send failed; skipping batch');
+            return;
+          }
+        } else if (!__audioHeaderSent) {
+          console.warn('pcm.flush: header send failed; skipping batch');
+          return;
+        }
       } catch (err) {
         console.warn('pcm.flush: header send threw', err);
+        return;
       }
       if (!__audioHeaderSent) {
         console.warn('pcm.flush: header send failed; skipping batch');
@@ -1400,7 +1411,7 @@ import { initVAD } from "./audio/vad_client.js";
     __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
   }
 
-  function stopRecorder(reason) {
+  async function stopRecorder(reason) {
     _audioStreaming = false;
     __firstChunkSeen = false;
     __armingGraceUntil = 0;
@@ -1423,7 +1434,7 @@ import { initVAD } from "./audio/vad_client.js";
       console.warn("Recorder stopListening failed", err);
     }
     syncSenderPaused(false);
-    flushPcmBatch();
+    await flushPcmBatch();
     if (vadController && typeof vadController.reset === "function") {
       try {
         vadController.reset();
@@ -1440,7 +1451,7 @@ import { initVAD } from "./audio/vad_client.js";
     } catch {}
   }
 
-  function handleRecorderChunk(event) {
+  async function handleRecorderChunk(event) {
     if (!event) {
       return;
     }
@@ -1491,7 +1502,7 @@ import { initVAD } from "./audio/vad_client.js";
       }
       window.StatusBar?.updateMeter?.(rms);
     }
-    enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
+    await enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
   }
 
   async function startRecorderStreaming(policy, reason) {
@@ -1576,7 +1587,7 @@ import { initVAD } from "./audio/vad_client.js";
     }
   }
 
-  function requestAsrClose(reason = "client_stop") {
+  async function requestAsrClose(reason = "client_stop") {
     const label = normalizeReason(reason);
     clearPostTtsArmTimer();
     setArmAfterTtsEnd(false);
@@ -1589,7 +1600,7 @@ import { initVAD } from "./audio/vad_client.js";
       console.warn("Failed to send asr.close", err);
       setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
     }
-    stopRecorder(label);
+    await stopRecorder(label);
   }
 
   const CLIENT_BANNER_TYPE = "client.banner";
@@ -3299,11 +3310,11 @@ import { initVAD } from "./audio/vad_client.js";
     return safe;
   }
 
-  function handleInfoFrame(frame) {
+  async function handleInfoFrame(frame) {
     const meta = frame && frame.meta;
     if (!meta || typeof meta.sid !== "string") {
       console.error("Invalid info frame", frame);
-      close("bad_info_frame");
+      await close("bad_info_frame");
       return;
     }
     expectInfoFrame = false;
@@ -3383,7 +3394,7 @@ import { initVAD } from "./audio/vad_client.js";
     }
   }
 
-  function handleErrorFrame(frame) {
+  async function handleErrorFrame(frame) {
     const code = typeof frame?.code === "string" ? frame.code : "unknown";
     const sig = `${code}|${frame?.detail || frame?.message || ""}`;
     const now = Date.now();
@@ -3439,7 +3450,7 @@ import { initVAD } from "./audio/vad_client.js";
       });
     } catch {}
     if (isResumeInvalid) {
-      close("resume_invalid");
+      await close("resume_invalid");
     }
   }
 
@@ -3535,29 +3546,29 @@ import { initVAD } from "./audio/vad_client.js";
       if (frame.type === "chat.history") {
         handleChatHistoryFrame(frame);
       } else if (frame.type === "error") {
-        handleErrorFrame(frame);
+        await handleErrorFrame(frame);
         return;
       } else if (frame.type !== "info") {
         console.error("Expected info frame first, received", frame.type);
-        close("bad_info_sequence");
+        await close("bad_info_sequence");
         return;
       }
       if (frame.type === "info") {
-        handleInfoFrame(frame);
+        await handleInfoFrame(frame);
       }
     } else if (frame.type === "info") {
-      handleInfoFrame(frame);
+      await handleInfoFrame(frame);
     } else if (frame.type === "server.pong") {
       handlePongFrame(frame);
     } else if (frame.type === "pong") {
       handlePongFrame(frame);
     } else if (frame.type === "error") {
-      handleErrorFrame(frame);
+      await handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
       try {
         AppState?.hub?.stopListening?.("tts");
       } catch {}
-      stopRecorder("tts_start");
+      await stopRecorder("tts_start");
       setAppStateValue("ttsActive", true);
       AppState.tts = true;
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
@@ -3693,7 +3704,7 @@ import { initVAD } from "./audio/vad_client.js";
         hubLog("client.stream.off", { reason });
       }
       _audioStreaming = false;
-      stopRecorder("server_requested");
+      await stopRecorder("server_requested");
       setAsrArmInFlight(false);
       setArmAfterTtsEnd(false);
       try {
@@ -3855,7 +3866,7 @@ import { initVAD } from "./audio/vad_client.js";
       AppState.asrReady = false;
       AppState.asrVendor = null;
       updateState({ asrReady: false, asrVendor: null });
-      stopRecorder("asr_unavailable");
+      await stopRecorder("asr_unavailable");
       __resetAudioHeaderSent();
       resetTurnIntent(frame?.type || "asr.unavailable");
       setAsrArmInFlight(false);
@@ -4003,7 +4014,7 @@ import { initVAD } from "./audio/vad_client.js";
         const normalizedFrame = normalizeIncomingFrame(frame);
         if (!normalizedFrame) {
           console.warn("Dropping WS frame without recognizable type", frame);
-          handleErrorFrame({
+          await handleErrorFrame({
             type: "error",
             code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
             detail:
@@ -4362,14 +4373,14 @@ import { initVAD } from "./audio/vad_client.js";
     return ws;
   }
 
-  function close(reason = DEFAULT_CLOSE_REASON) {
+  async function close(reason = DEFAULT_CLOSE_REASON) {
     if (_audioStreaming) {
       const offReason = typeof reason === "string" && reason ? reason : "client_shutdown";
       hubLog("client.stream.off", { reason: offReason });
     }
     _audioStreaming = false;
     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
-    stopRecorder(reason || "client_shutdown");
+    await stopRecorder(reason || "client_shutdown");
     setAsrArmInFlight(false);
     setArmAfterTtsEnd(false);
     setAppStateValue("ttsActive", false);
