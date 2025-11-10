@@ -6,29 +6,21 @@
       const host = document.getElementById(this.mountId);
       if (!host) return;
 
-      const REQUIRE_ACTIVE_TURN = Boolean((ui?.policy?.ui?.status?.require_active_turn) ?? true);
-      const activeTurn = Boolean(ui?.asrTurnActive ?? ui?.state?.asrTurnActive);
-
       const f = {
         connected:    !!(ui.wsConn || ui.wsConning),
         asrReady:     !!ui.asrReady,
         micOpen:      !!(ui.micLive || ui.listening),
         ttsActive:    !!ui.tts,
         senderPaused: !!ui.senderPaused,
+        processing:   !!ui.processing,
       };
       const canCapture = f.asrReady && f.micOpen && !f.ttsActive;
-
-      const hints = [];
-      if (REQUIRE_ACTIVE_TURN && !activeTurn && canCapture) {
-        hints.push("Opening turn…");
-      }
-      if (f.senderPaused && canCapture) {
-        hints.push("Quiet (VAD)");
-      }
 
       let st;
       if (f.ttsActive) {
         st = { label: "Speaking…", sub: "Say “Hold on” to interrupt.", tone: "blue" };
+      } else if (f.processing) {
+        st = { label: "Thinking…", sub: "Waiting for Chip’s response.", tone: "purple" };
       } else if (!f.connected) {
         st = { label: "Ready", sub: "Press Start to begin.", tone: "gray" };
       } else if (!f.micOpen) {
@@ -36,10 +28,8 @@
       } else if (!f.asrReady) {
         st = { label: "Preparing mic…", sub: "Getting ready to listen.", tone: "amber" };
       } else if (canCapture) {
-        const subText = hints.length ? hints.join(" · ") : "You can speak now.";
-        st = { label: "Listening", sub: subText, tone: "green" };
-      } else if (REQUIRE_ACTIVE_TURN && !activeTurn) {
-        st = { label: "Stand by", sub: "Waiting for your turn…", tone: "amber" };
+        const hint = f.senderPaused ? "quiet (VAD)" : "You can speak now.";
+        st = { label: "Listening", sub: hint, tone: "green" };
       } else {
         st = { label: "Ready", sub: "", tone: "gray" };
       }

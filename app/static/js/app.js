@@ -13,7 +13,11 @@
         vadActive: false,
         vadDbfs: null,
         lastSpeechAt: null,
+        processing: false,
       };
+    if (typeof window.AppState.processing !== "boolean") {
+      window.AppState.processing = false;
+    }
   } catch {}
 
   function hubLog(label, detail) {
@@ -208,6 +212,7 @@
         micLive: snapshot.micLive ?? recorder.active ?? appState.micLive ?? window.AudioRecorder?.listening,
         tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts,
         senderPaused: snapshot.senderPaused ?? appState.senderPaused,
+        processing: snapshot.processing ?? appState.processing,
       };
       window.StatusBar?.render(merged);
     } catch {}
@@ -2970,6 +2975,13 @@ window.addEventListener('tts.start', (event) => {
   if (detail) {
     updateVoiceState(extractVoiceLocale(detail));
   }
+  try {
+    window.AppState.processing = false;
+    if (window.AppState.state && typeof window.AppState.state === 'object') {
+      window.AppState.state.processing = false;
+    }
+    window.AppUI?.refresh?.();
+  } catch {}
   runtimeState.audioPlaybackIdle = false;
   cancelAsrPartialWatchdog();
   asrPrearmIssued = false;
@@ -3077,6 +3089,13 @@ window.addEventListener('asr.partial', () => {
 
 window.addEventListener('asr.final', () => {
   cancelAsrReadyGuard();
+  try {
+    window.AppState.processing = true;
+    if (window.AppState.state && typeof window.AppState.state === 'object') {
+      window.AppState.state.processing = true;
+    }
+    window.AppUI?.refresh?.();
+  } catch {}
   if (runtimeState.finalSeenThisTurn) {
     return;
   }
@@ -3102,8 +3121,32 @@ window.addEventListener('asr.final', () => {
   }
 });
 
+window.addEventListener('response', (event) => {
+  try {
+    const frame = event && event.detail;
+    const type = typeof frame?.type === 'string' ? frame.type : '';
+    if (!type || !type.startsWith('response.')) {
+      return;
+    }
+    if (type.includes('.delta') || type.includes('.chunk') || type.endsWith('.completed')) {
+      window.AppState.processing = false;
+      if (window.AppState.state && typeof window.AppState.state === 'object') {
+        window.AppState.state.processing = false;
+      }
+      window.AppUI?.refresh?.();
+    }
+  } catch {}
+});
+
 window.addEventListener('assistant.await_user', (event) => {
   runtimeState.audioPlaybackIdle = true;
+  try {
+    window.AppState.processing = false;
+    if (window.AppState.state && typeof window.AppState.state === 'object') {
+      window.AppState.state.processing = false;
+    }
+    window.AppUI?.refresh?.();
+  } catch {}
   const frame = event && event.detail;
   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
   maybeAutoStartCapture('await_user', reason);
