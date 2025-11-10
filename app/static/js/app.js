@@ -1395,7 +1395,7 @@
         ? runtimeState.turnState.slice(0, 32)
         : null;
       const gates = {
-        asrReady: Boolean(runtimeState.asrReady),
+        asrReady: !!(AppState?.asrReady ?? AppState?.getState?.()?.asrReady ?? runtimeState.asrReady),
         turnState: rawTurnState,
         micPerm: Boolean(runtimeState.micPermissionGranted),
         recording: Boolean(runtimeState.isRecording),
@@ -1406,14 +1406,22 @@
       let wantsAsrReady = capturePolicy.start_on_asr_ready !== false;
       let wantsTurnReady = capturePolicy.start_on_turn_ready !== false;
 
-      const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
+      const bypassTriggers = new Set(['asr_ready', 'turn_begin', 'await_user']);
 
       if (bypassTriggers.has(trigger)) {
         wantsAsrReady = true;
         wantsTurnReady = true;
       }
 
-      const trustedTrigger = trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin';
+      const trustedTrigger = (trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin');
+
+      logClient('client.autostart.intent', {
+        trigger: triggerLabel,
+        reason: reasonLabel,
+        wantsAsrReady,
+        wantsTurnReady,
+        trustedTrigger,
+      });
       if (!(wantsAsrReady || wantsTurnReady) && !trustedTrigger) {
         logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
         return;

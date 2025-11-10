@@ -1,8 +1,15 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index b11db10f197da369e1757bb0f83001ebbed691b4..0aaf0c008447c46bac8b84ece00bbeae60444159 100644
+index 0aaf0c008447c46bac8b84ece00bbeae60444159..0a677b373e7a7ce1c4579cec669c3df22219eb46 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1380,61 +1380,63 @@
+@@ -1373,69 +1373,77 @@
+           micPerm: gates.micPerm,
+           recording: gates.recording,
+         },
+       };
+       if (extra && typeof extra === 'object') {
+         const keys = Object.keys(extra);
+         if (keys.length) {
            detail.extra = {};
            for (let i = 0; i < keys.length && i < 8; i += 1) {
              const key = keys[i];
@@ -21,29 +28,37 @@ index b11db10f197da369e1757bb0f83001ebbed691b4..0aaf0c008447c46bac8b84ece00bbeae
          ? runtimeState.turnState.slice(0, 32)
          : null;
        const gates = {
-         asrReady: Boolean(runtimeState.asrReady),
+-        asrReady: Boolean(runtimeState.asrReady),
++        asrReady: !!(AppState?.asrReady ?? AppState?.getState?.()?.asrReady ?? runtimeState.asrReady),
          turnState: rawTurnState,
          micPerm: Boolean(runtimeState.micPermissionGranted),
          recording: Boolean(runtimeState.isRecording),
        };
  
        const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
--      let wantsAsrReady = Boolean(capturePolicy.start_on_asr_ready);
--      let wantsTurnReady = Boolean(capturePolicy.start_on_turn_ready);
-+      // Default to true unless explicitly false
-+      let wantsAsrReady = capturePolicy.start_on_asr_ready !== false;
-+      let wantsTurnReady = capturePolicy.start_on_turn_ready !== false;
+       // Default to true unless explicitly false
+       let wantsAsrReady = capturePolicy.start_on_asr_ready !== false;
+       let wantsTurnReady = capturePolicy.start_on_turn_ready !== false;
  
-       const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
+-      const bypassTriggers = new Set(['asr_ready', 'turn_ready', 'await_user']);
++      const bypassTriggers = new Set(['asr_ready', 'turn_begin', 'await_user']);
  
        if (bypassTriggers.has(trigger)) {
          wantsAsrReady = true;
          wantsTurnReady = true;
        }
  
--      if (!(wantsAsrReady || wantsTurnReady)) {
-+      const trustedTrigger = trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin';
-+      if (!(wantsAsrReady || wantsTurnReady) && !trustedTrigger) {
+-      const trustedTrigger = trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin';
++      const trustedTrigger = (trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin');
++
++      logClient('client.autostart.intent', {
++        trigger: triggerLabel,
++        reason: reasonLabel,
++        wantsAsrReady,
++        wantsTurnReady,
++        trustedTrigger,
++      });
+       if (!(wantsAsrReady || wantsTurnReady) && !trustedTrigger) {
          logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
          return;
        }
@@ -68,4 +83,3 @@ index b11db10f197da369e1757bb0f83001ebbed691b4..0aaf0c008447c46bac8b84ece00bbeae
          logClientMicEventText('evt=rearm_blocked reason=cooldown');
          logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
            blockedBy: 'cooldown',
-           msRemaining,
