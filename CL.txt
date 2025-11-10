@@ -1,37 +1,264 @@
-app.js?v=ed05340:651 client.vad.meter
-3
-app.js?v=ed05340:651 client.appstate.delta
-app.js?v=ed05340:651 client.vad.meter
-2
-app.js?v=ed05340:651 client.appstate.delta
-app.js?v=ed05340:651 client.vad.meter
-3
-app.js?v=ed05340:651 client.appstate.delta
-app.js?v=ed05340:651 client.vad.meter
-2
-app.js?v=ed05340:651 client.appstate.delta
-app.js?v=ed05340:651 client.vad.meter
-2
-app.js?v=ed05340:651 client.appstate.delta
-app.js?v=ed05340:651 client.pcm.capture_stop
-app.js?v=ed05340:1005 client.mic evt=mic_stop reason=watchdog
-app.js?v=ed05340:651 client.appstate.delta
-app.js?v=ed05340:651 client.appstate.heartbeat
-app.js?v=ed05340:651 client.stream.off
-app.js?v=ed05340:651 client.turn.intent
-app.js?v=ed05340:651 client.vad.state
-app.js?v=ed05340:651 client.pcm.capture_stop
-ws_client.js?v=ed05340:4393 WSClient.send queued (phase not ready) 
-Object
-app.js?v=ed05340:651 client.ws
-app.js?v=ed05340:1005 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=ed05340:1005 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=ed05340:1005 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"","micPerm":true,"start_on_asr_ready":false,"start_on_turn_ready":false} trigger=local_audio_end_unknown reason=tts_end
-app.js?v=ed05340:1005 evt=maybe_autostart_blocked gates={asrReady=false turnState=null micPerm=true recording=false}
-app.js?v=ed05340:651 client.appstate.delta
-ws_client.js?v=ed05340:4229 WebSocket closed 
-Object
-app.js?v=ed05340:651 client.ws
-app.js?v=ed05340:651 client.appstate.delta
-﻿
-
+(index):12 BUILD_ID 67a3afa
+app.js?v=67a3afa:27 AskChip build: 67a3afa
+ws_client.js?v=67a3afa:4393 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=67a3afa:4393Understand this warning
+app.js?v=67a3afa:651 client.vad.state
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:2178 Fetch finished loading: GET "https://chibot-ui.onrender.com/api/v1/auth/me".
+getMe @ app.js?v=67a3afa:2178
+handleStartSessionClick @ app.js?v=67a3afa:2254
+(anonymous) @ app.js?v=67a3afa:2346
+app.js?v=67a3afa:2190 Fetch finished loading: POST "https://chibot-ui.onrender.com/api/v1/auth/ws-token".
+mintWsToken @ app.js?v=67a3afa:2190
+handleStartSessionClick @ app.js?v=67a3afa:2271
+await in handleStartSessionClick
+(anonymous) @ app.js?v=67a3afa:2346
+app.js?v=67a3afa:2329 evt=ws_open_attempt {url: '/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5c…J1ZX0.mT-nPokur33X4qftJlCUqonCWhbRHhihCJnjFd96JYk', protocols: Array(2), sid: 'c4dbbc82ca6449d8b94ba853b2c25e19'}
+ws_client.js?v=67a3afa:4186 evt=ws_client_open_params {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.mT-nPokur33X4qftJlCUqonCWhbRHhihCJnjFd96JYk', protocols: Array(2)}
+ws_client.js?v=67a3afa:4190 WS opening {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.mT-nPokur33X4qftJlCUqonCWhbRHhihCJnjFd96JYk', protocols: Array(2)}
+app.js?v=67a3afa:651 client.appstate.delta
+ws_client.js?v=67a3afa:4208 WebSocket open {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.mT-nPokur33X4qftJlCUqonCWhbRHhihCJnjFd96JYk', protocol: 'chat.v2'}
+app.js?v=67a3afa:651 client.ws
+ws_client.js?v=67a3afa:4393 WSClient.send queued (phase not ready) {phase: 'connecting'}
+send @ ws_client.js?v=67a3afa:4393
+sendJSONPayload @ ws_client.js?v=67a3afa:4473
+sendJSONFast @ ws_client.js?v=67a3afa:4561
+sendJson @ ws_client.js?v=67a3afa:2634
+flushClientBannerQueue @ ws_client.js?v=67a3afa:2314
+queueClientBannerPayload @ ws_client.js?v=67a3afa:2304
+recordClientBannerEvent @ ws_client.js?v=67a3afa:2343
+ws.onopen @ ws_client.js?v=67a3afa:4210Understand this warning
+ws_client.js?v=67a3afa:4393 WSClient.send queued (phase not ready) {phase: 'connecting'}
+send @ ws_client.js?v=67a3afa:4393
+sendJSONPayload @ ws_client.js?v=67a3afa:4473
+sendJSONFast @ ws_client.js?v=67a3afa:4561
+sendJson @ ws_client.js?v=67a3afa:2634
+flushClientBannerQueue @ ws_client.js?v=67a3afa:2314
+queueClientBannerPayload @ ws_client.js?v=67a3afa:2304
+recordClientBannerEvent @ ws_client.js?v=67a3afa:2343
+ws.onopen @ ws_client.js?v=67a3afa:4210Understand this warning
+app.js?v=67a3afa:651 client.appstate.heartbeat
+app.js?v=67a3afa:651 client.ws
+ws_client.js?v=67a3afa:3993 evt=ws_linked AppState true WSClient true
+app.js?v=67a3afa:651 client.ws
+ws_client.js?v=67a3afa:3949 [Violation] 'open' handler took 242ms
+ws_client.js?v=67a3afa:2928 WS server banner {type: 'server.banner', build_id: '67a3afa', host: 'srv-d26hqi3e5dus73b43g10-hibernate-696f9774bf-4qn8s', cwd: '/opt/render/project/src', python: '3.13.4', …}
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:1005 client.mic evt=policy_capture asr_input= timeslice_ms=200
+app.js?v=67a3afa:651 client.ws
+app.js?v=67a3afa:651 client.audio.worklet_load_ok
+2app.js?v=67a3afa:1005 client.mic evt=mic_get_user_media_start constraints={"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false,"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16}
+app.js?v=67a3afa:1005 client.mic evt=mic_get_user_media_success track_id=061ce1bc-c4a4-41e6-af00-9a496c54aa8b
+app.js?v=67a3afa:1005 evt=mic_perm_granted
+app.js?v=67a3afa:1005 client.mic evt=mic_get_user_media_success track_id=48568f06-1c6d-42a7-8648-e4e5e1830ce9
+app.js?v=67a3afa:651 client.ws
+ws_client.js?v=67a3afa:3295 evt=ui_transcript_filter allow=true type=chat.message role=assistant
+app.js?v=67a3afa:651 client.ws
+app.js?v=67a3afa:1005 client.autostart.intent
+app.js?v=67a3afa:1005 client.turn: evt=tts_end_logic_start audio_idle=true
+app.js?v=67a3afa:1005 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
+app.js?v=67a3afa:1005 evt=asr_prearm_requested source=client trigger=turn_ready keep_stream_warm_ms=30000
+app.js?v=67a3afa:651 client.asr_rearm_request
+app.js?v=67a3afa:1005 client.mic evt=maybe_autostart_blocked gates={"asrReady":false,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=turn_ready reason=tts_end
+app.js?v=67a3afa:1005 evt=maybe_autostart_blocked gates={asrReady=false turnState=Ready micPerm=true recording=false}
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:1005 client.mic evt=guard_arm ts_ms=1762741074219
+app.js?v=67a3afa:1005 client.autostart.intent
+app.js?v=67a3afa:1005 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
+app.js?v=67a3afa:1005 evt=mic_arm trigger=asr_ready reason=policy
+app.js?v=67a3afa:1005 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=67a3afa:3070 diag=asr_ready
+app.js?v=67a3afa:1005 client.mic evt=mic_capture_request_blocked reason=active
+ws_client.js?v=67a3afa:4393 WSClient.send queued (phase not ready) {phase: 'arming'}
+send @ ws_client.js?v=67a3afa:4393
+sendJSONPayload @ ws_client.js?v=67a3afa:4473
+sendJSONFast @ ws_client.js?v=67a3afa:4561
+WSClient.<computed> @ app.js?v=67a3afa:49
+sendJson @ ws_client.js?v=67a3afa:2634
+sendAutostartTelemetry @ ws_client.js?v=67a3afa:1812
+execute @ ws_client.js?v=67a3afa:1868
+maybeAutoStart @ ws_client.js?v=67a3afa:1901
+(anonymous) @ ws_client.js?v=67a3afa:1944
+(anonymous) @ ws_client.js?v=67a3afa:1944
+(anonymous) @ state.js?v=67a3afa:330
+notify @ state.js?v=67a3afa:328
+setState @ state.js?v=67a3afa:383
+updateState @ ws_client.js?v=67a3afa:2416
+handleAsrReadyFrame @ ws_client.js?v=67a3afa:2940
+handleMessageFrame @ ws_client.js?v=67a3afa:3684
+parseFrame @ ws_client.js?v=67a3afa:3918Understand this warning
+app.js?v=67a3afa:651 client.pcm.capture_start
+app.js?v=67a3afa:651 client.vad.params
+app.js?v=67a3afa:651 client.mic
+app.js?v=67a3afa:651 client.asr
+app.js?v=67a3afa:651 client.asr.autostart_gates
+app.js?v=67a3afa:651 diag
+app.js?v=67a3afa:651 client.asr_arm_clear
+app.js?v=67a3afa:651 client.audio_header_send
+app.js?v=67a3afa:1005 client.mic evt=guard_arm ts_ms=1762741074224
+app.js?v=67a3afa:1005 client.autostart.intent
+app.js?v=67a3afa:1005 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=false
+app.js?v=67a3afa:1005 evt=mic_arm trigger=asr_ready reason=policy
+app.js?v=67a3afa:1005 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=67a3afa:3070 diag=asr_ready
+app.js?v=67a3afa:1005 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=67a3afa:1005 evt=mic_start_ok reason=already_active
+app.js?v=67a3afa:1005 evt=ui_rec_badge_on
+app.js?v=67a3afa:1005 client.mic evt=mic_start timeslice_ms=200
+app.js?v=67a3afa:1005 evt=mic_open
+app.js?v=67a3afa:1005 evt=mic_start_ok reason=already_active
+app.js?v=67a3afa:651 client.stream.on
+ws_client.js?v=67a3afa:432 diag=awaiting_asr_ready reason=input.start
+app.js?v=67a3afa:651 client.mic
+app.js?v=67a3afa:651 client.mic
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+3app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+3app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+3app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+3app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+3app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+3app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+ws_client.js?v=67a3afa:3524 diag=start_listening_order vendor=null vad_warmup_ms=1200 require_active_turn=true
+app.js?v=67a3afa:651 client.mic
+ws_client.js?v=67a3afa:432 diag=awaiting_asr_ready reason=start_listening
+app.js?v=67a3afa:651 client.mic
+app.js?v=67a3afa:1005 client.mic evt=guard_arm ts_ms=1762741075040
+app.js?v=67a3afa:1005 client.autostart.intent
+app.js?v=67a3afa:1005 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=true
+app.js?v=67a3afa:1005 client.mic evt=maybe_autostart_blocked gates={"asrReady":true,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=asr_ready reason=policy
+app.js?v=67a3afa:1005 evt=maybe_autostart_blocked gates={asrReady=true turnState=Ready micPerm=true recording=true}
+app.js?v=67a3afa:3070 diag=asr_ready
+app.js?v=67a3afa:1005 client.mic evt=mic_capture_request_blocked reason=active
+app.js?v=67a3afa:651 client.asr
+app.js?v=67a3afa:651 client.asr.autostart_gates
+app.js?v=67a3afa:651 diag
+app.js?v=67a3afa:651 client.asr_arm_clear
+app.js?v=67a3afa:651 client.audio_header_send
+app.js?v=67a3afa:1005 client.mic evt=guard_arm ts_ms=1762741075043
+app.js?v=67a3afa:1005 client.autostart.intent
+app.js?v=67a3afa:1005 client.turn: evt=gates_snapshot policy={start_on_asr_ready=true start_on_turn_ready=true timeslice_ms=200 mask_during_tts=true} is_recording=true
+app.js?v=67a3afa:1005 client.mic evt=maybe_autostart_blocked gates={"asrReady":true,"turnState":"Ready","micPerm":true,"start_on_asr_ready":true,"start_on_turn_ready":true} trigger=asr_ready reason=policy
+app.js?v=67a3afa:1005 evt=maybe_autostart_blocked gates={asrReady=true turnState=Ready micPerm=true recording=true}
+app.js?v=67a3afa:3070 diag=asr_ready
+app.js?v=67a3afa:1005 client.mic evt=mic_capture_request_blocked reason=active
+3app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.vad.meter
+2app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.audio_first_chunk
+12app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.vad.preroll_flush
+app.js?v=67a3afa:651 client.vad.state
+app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+2app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.pcm.chunk
+app.js?v=67a3afa:651 client.vad.state
+7app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.pcm.capture_stop
+app.js?v=67a3afa:1005 client.mic evt=mic_stop reason=watchdog
+app.js?v=67a3afa:651 client.appstate.heartbeat
+app.js?v=67a3afa:651 client.turn.intent
+ws_client.js?v=67a3afa:3295 evt=ui_transcript_filter allow=false type=asr.final role=
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:651 client.appstate.heartbeat
+app.js?v=67a3afa:651 client.ws
+app.js?v=67a3afa:651 client.vad.state
+app.js?v=67a3afa:651 client.pcm.capture_stop
+ws_client.js?v=67a3afa:4393 WSClient.send queued (phase not ready) {phase: 'closing'}
+send @ ws_client.js?v=67a3afa:4393
+sendJSONPayload @ ws_client.js?v=67a3afa:4473
+sendJSONFast @ ws_client.js?v=67a3afa:4561
+WSClient.<computed> @ app.js?v=67a3afa:49
+sendJson @ ws_client.js?v=67a3afa:2634
+flushClientBannerQueue @ ws_client.js?v=67a3afa:2314
+queueClientBannerPayload @ ws_client.js?v=67a3afa:2304
+recordClientBannerEvent @ ws_client.js?v=67a3afa:2343
+cleanupSocket @ ws_client.js?v=67a3afa:4083
+close @ ws_client.js?v=67a3afa:4290
+(anonymous) @ app.js?v=67a3afa:2352Understand this warning
+app.js?v=67a3afa:651 client.ws
+app.js?v=67a3afa:1005 client.autostart.intent
+app.js?v=67a3afa:1005 client.turn: evt=tts_end_logic_start audio_idle=true
+app.js?v=67a3afa:1005 client.turn: evt=gates_snapshot policy={} is_recording=false
+app.js?v=67a3afa:1005 evt=mic_arm trigger=local_audio_end_unknown reason=tts_end
+app.js?v=67a3afa:1005 client.autostart.intent
+app.js?v=67a3afa:1005 client.turn: evt=tts_end_logic_start audio_idle=true
+app.js?v=67a3afa:1005 client.turn: evt=gates_snapshot policy={} is_recording=false
+app.js?v=67a3afa:1005 evt=mic_arm trigger=local_audio_end_unknown reason=tts_end
+app.js?v=67a3afa:651 client.appstate.delta
+ws_client.js?v=67a3afa:4229 WebSocket closed {code: 1000, reason: '', wasClean: true, readyState: 3}
+ws.onclose @ ws_client.js?v=67a3afa:4229Understand this error
+app.js?v=67a3afa:651 client.ws
+2app.js?v=67a3afa:1005 client.mic evt=mic_get_user_media_start constraints={"channelCount":1,"sampleRate":{"ideal":48000},"sampleSize":16,"echoCancellation":true,"noiseSuppression":true,"autoGainControl":false}
+app.js?v=67a3afa:651 client.appstate.delta
+app.js?v=67a3afa:1005 client.mic evt=mic_get_user_media_success track_id=8e13df2d-9064-44b7-8c98-6916e98d6b00
+app.js?v=67a3afa:1005 evt=mic_open
+app.js?v=67a3afa:1005 client.mic evt=mic_get_user_media_success track_id=1a1339ef-4cc0-4079-89d3-88423e935b9e

@@ -1145,12 +1145,12 @@
         if (nested.lastSpeechAt != null) return true;
         return false;
       })();
-      const bytesSent = (() => {
+      const chunksSent = (() => {
         if (Number.isFinite(snapshot.chunkCount)) return snapshot.chunkCount;
         if (Number.isFinite(AppState?.chunkCount)) return AppState.chunkCount;
         return 0;
       })();
-      if (!isRecorderListening() || AppState?.ttsActive || !turnActive || !firstFrame || (!speechActive && bytesSent < 12)) {
+      if (!isRecorderListening() || AppState?.ttsActive || !turnActive || !firstFrame || (!speechActive && chunksSent < 12)) {
         cancelAsrPartialWatchdog();
         return;
       }
@@ -1177,13 +1177,13 @@
           if (latestNested.lastSpeechAt != null) return true;
           return false;
         })();
-        const latestBytesSent = (() => {
+        const latestChunksSent = (() => {
           if (Number.isFinite(latestSnapshot.chunkCount)) return latestSnapshot.chunkCount;
           if (Number.isFinite(AppState?.chunkCount)) return AppState.chunkCount;
           return 0;
         })();
         const recorderLive = isRecorderListening() || AppState?.listening || window.AudioRecorder?.listening;
-        if (!isRecorderListening() || AppState?.ttsActive || !latestTurnActive || !latestFirstFrame || (!latestSpeechActive && latestBytesSent < 12)) {
+        if (!isRecorderListening() || AppState?.ttsActive || !latestTurnActive || !latestFirstFrame || (!latestSpeechActive && latestChunksSent < 12)) {
           cancelAsrPartialWatchdog();
           return;
         }
@@ -1195,7 +1195,24 @@
           if (typeof AppState?.asrReady !== 'undefined') return !!AppState.asrReady;
           return false;
         })();
-        if ((runtimeState.isArming || inGraceWindow || !latestFirstFrame || !asrReadyNow || (!latestSpeechActive && latestBytesSent < 12)) && !recorderLive) {
+        if (consumeMicTelemetryBudget('hub')) {
+          try {
+            const hubDetail = { chunks: latestChunksSent };
+            if (typeof hubLog === 'function') {
+              hubLog('client.bytes_progress', hubDetail);
+            } else if (typeof window !== 'undefined') {
+              const hub = window.AppState?.hub;
+              if (hub && typeof hub.log === 'function') {
+                hub.log('client.bytes_progress', hubDetail);
+              } else if (typeof window.dispatchEvent === 'function') {
+                window.dispatchEvent(new CustomEvent('client.log', { detail: { label: 'client.bytes_progress', detail: hubDetail } }));
+              }
+            }
+          } catch (err) {
+            console.warn('client.bytes_progress hubLog failed', err);
+          }
+        }
+        if ((runtimeState.isArming || inGraceWindow || !latestFirstFrame || !asrReadyNow || (!latestSpeechActive && latestChunksSent < 12)) && !recorderLive) {
           const graceMs = Math.max(0, __firstTurnGraceUntil - now);
           logClient('watchdog_suppressed_during_grace', {
             reason: 'partial_watchdog',
@@ -1204,7 +1221,7 @@
             firstFrame: latestFirstFrame,
             asrReady: asrReadyNow,
             speechActive: latestSpeechActive,
-            bytesSent: latestBytesSent,
+            chunks: latestChunksSent,
           });
           armAsrPartialWatchdog();
           return;
@@ -2976,6 +2993,13 @@ window.addEventListener('turn.state', (event) => {
   runtimeState.audioPlaybackIdle = true;
   maybeAutoStartCapture('turn_ready', 'tts_end');
 
+});
+
+window.addEventListener('asr.turn', (event) => {
+  const frame = event && event.detail;
+  if (frame && frame.state === 'begin') {
+    maybeAutoStartCapture('turn_begin', 'asr.turn');
+  }
 });
 
 // Assistant TTS finished → open mic after optional delay
