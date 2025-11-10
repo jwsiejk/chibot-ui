@@ -4,39 +4,19 @@
   }
 
   function mergePlainObjects(base, patch) {
-    const result = { ...base };
-    if (!isPlainObject(patch)) {
-      return result;
-    }
-    for (const [key, value] of Object.entries(patch)) {
-      if (isPlainObject(value)) {
-        const nextBase = isPlainObject(result[key]) ? result[key] : {};
-        result[key] = mergePlainObjects(nextBase, value);
-      } else {
-        result[key] = value;
-      }
-    }
-    return result;
+    // Only shallow merge is strictly necessary for the final state properties
+    return { ...base, ...patch }; 
   }
 
   function cloneState(source) {
+    // Clone only the top-level properties.
     const next = { ...source };
-    if (isPlainObject(source.state)) {
-      next.state = mergePlainObjects({}, source.state);
-    } else {
-      next.state = {};
-    }
+    // The previous nested 'state' object is REMOVED.
     return next;
   }
-
-  function getStateBag(source) {
-    if (!source || typeof source !== "object") {
-      return {};
-    }
-    const bag = source.state;
-    return isPlainObject(bag) ? bag : {};
-  }
-
+  
+  // Cleaned up initialState: Removed the nested 'state' object entirely.
+  // Mic state is consolidated to 'listening'.
   const initialState = {
     connectionState: "disconnected",
     sid: null,
@@ -52,19 +32,19 @@
       info: null,
       events: []
     },
+    // Consolidating mic/ASR state:
     wsConnected: false,
     wsPhase: "disconnected",
     ttsActive: false,
-    asrArmInFlight: false,
-    armAfterTtsEnd: false,
+    asrArmInFlight: false, // KEPT, as it's a critical in-flight flag
     asrReady: false,
-    micLive: false,
-    listening: false,
-    recorderActive: false,
+    // Unified Mic Control Flag (replaces micLive, recorderActive, and old nested listening)
+    listening: false, 
     lastChunkTs: null,
     chunkCount: 0,
     lastErrorCode: null,
     lastErrorDetail: null,
+    // VAD state remains flat
     vadActive: false,
     vadSpeech: false,
     vadConfidence: 0,
@@ -72,27 +52,20 @@
     vadNoiseDb: null,
     vadDbfs: null,
     lastSpeechAt: null,
-    state: {
-      asrReady: false,
-      micLive: false,
-      listening: false,
-      vadActive: false,
-      vadDbfs: null,
-      lastSpeechAt: null,
-    },
+    // Removed old nested 'state' object
   };
 
   let state = cloneState(initialState);
   const listeners = new Set();
-
+  
+  // Only track the necessary flat keys for telemetry
   const TELEMETRY_KEYS = [
     "wsConnected",
     "wsPhase",
     "ttsActive",
     "asrArmInFlight",
-    "armAfterTtsEnd",
-    "listening",
-    "recorderActive",
+    "asrReady",
+    "listening", // Consolidated flag
     "lastChunkTs",
     "chunkCount",
     "lastErrorCode",
@@ -114,26 +87,20 @@
 
   function computeTelemetrySnapshot(sourceState = state) {
     const snapshot = sourceState && typeof sourceState === "object" ? sourceState : {};
-    const nestedState = getStateBag(snapshot);
-    const recorderActive = typeof snapshot.recorderActive === "boolean"
-      ? snapshot.recorderActive
-      : Boolean(snapshot.recorder && typeof snapshot.recorder === "object" && snapshot.recorder.active);
-    const vadActiveSource = Object.prototype.hasOwnProperty.call(snapshot, "vadActive")
-      ? snapshot.vadActive
-      : nestedState.vadActive;
     return {
       wsConnected: Boolean(snapshot.wsConnected),
       wsPhase: typeof snapshot.wsPhase === "string" ? snapshot.wsPhase : "disconnected",
       ttsActive: Boolean(snapshot.ttsActive),
       asrArmInFlight: Boolean(snapshot.asrArmInFlight),
-      armAfterTtsEnd: Boolean(snapshot.armAfterTtsEnd),
+      asrReady: Boolean(snapshot.asrReady),
       listening: Boolean(snapshot.listening),
-      recorderActive,
+      // Derived property: recorderActive is now equivalent to listening
+      recorderActive: Boolean(snapshot.listening), 
       lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
       chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
       lastErrorCode: Number.isFinite(snapshot.lastErrorCode) ? snapshot.lastErrorCode : (snapshot.lastErrorCode ?? null),
       lastErrorDetail: snapshot.lastErrorDetail ?? null,
-      vadActive: Boolean(vadActiveSource),
+      vadActive: Boolean(snapshot.vadActive),
       vadSpeech: Boolean(snapshot.vadSpeech),
       vadConfidence: Number.isFinite(snapshot.vadConfidence) ? snapshot.vadConfidence : 0,
       vadEnergyDb: Number.isFinite(snapshot.vadEnergyDb) ? snapshot.vadEnergyDb : null,
@@ -164,14 +131,9 @@
       return;
     }
     for (const key of TELEMETRY_KEYS) {
-      if (key === "recorderActive") {
-        target.recorderActive = snapshot.recorderActive;
-      } else {
-        target[key] = snapshot[key];
-      }
+      target[key] = snapshot[key];
     }
-    const nestedState = getStateBag(state);
-    target.state = mergePlainObjects({}, nestedState);
+    // Remove all references to nested state (target.state)
   }
 
   function scheduleDeltaFlush() {
@@ -188,11 +150,9 @@
           changed: pendingDelta.changed,
           now_ms: Date.now(),
           wsPhase: snapshot.wsPhase,
-          recorderActive: snapshot.recorderActive,
           listening: snapshot.listening,
           ttsActive: snapshot.ttsActive,
           asrArmInFlight: snapshot.asrArmInFlight,
-          armAfterTtsEnd: snapshot.armAfterTtsEnd,
           chunkCount: snapshot.chunkCount,
           vadActive: snapshot.vadActive,
           vadSpeech: snapshot.vadSpeech,
@@ -254,7 +214,7 @@
       a.wsConnected === b.wsConnected &&
       a.ttsActive === b.ttsActive &&
       a.listening === b.listening &&
-      a.recorderActive === b.recorderActive &&
+      // Removed recorderActive comparison
       a.chunkCount === b.chunkCount &&
       a.lastChunkAgeMs === b.lastChunkAgeMs &&
       a.vadActive === b.vadActive &&
@@ -279,7 +239,8 @@
       wsConnected: snapshot.wsConnected,
       ttsActive: snapshot.ttsActive,
       listening: snapshot.listening,
-      recorderActive: snapshot.recorderActive,
+      // Derived property: recorderActive is now snapshot.listening
+      recorderActive: snapshot.listening, 
       chunkCount: snapshot.chunkCount,
       lastChunkAgeMs,
       vadActive: snapshot.vadActive,
@@ -342,10 +303,16 @@
   function setState(patch) {
     if (!patch || typeof patch !== "object") return;
     const sanitized = { ...patch };
-    const nestedPatch = sanitized.state;
+    // Explicitly REMOVE any nested state updates from the patch
     if (Object.prototype.hasOwnProperty.call(sanitized, "state")) {
       delete sanitized.state;
     }
+    // Remove micLive, recorderActive if 'listening' is present to enforce one source of truth
+    if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
+      delete sanitized.micLive;
+      delete sanitized.recorderActive;
+    }
+
     if ("resume" in sanitized) {
       delete sanitized.resume;
     }
@@ -360,29 +327,28 @@
       resume: preservedResume,
       resumeError: preservedResumeError
     };
-    if (isPlainObject(nestedPatch)) {
-      const mergedState = mergePlainObjects(getStateBag(state), nestedPatch);
-      nextState = {
-        ...nextState,
-        state: mergedState,
-      };
-      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadActive")) {
-        nextState.vadActive = Boolean(mergedState.vadActive);
-      }
-      if (Object.prototype.hasOwnProperty.call(nestedPatch, "vadDbfs")) {
-        const normalizedDbfs = Number.isFinite(mergedState.vadDbfs) ? mergedState.vadDbfs : null;
-        nextState.vadDbfs = normalizedDbfs;
-      }
-      if (Object.prototype.hasOwnProperty.call(nestedPatch, "lastSpeechAt")) {
-        const normalizedLastSpeech = Number.isFinite(mergedState.lastSpeechAt) ? mergedState.lastSpeechAt : null;
-        nextState.lastSpeechAt = normalizedLastSpeech;
-      }
-    } else if (!isPlainObject(nextState.state)) {
-      nextState = {
-        ...nextState,
-        state: mergePlainObjects({}, getStateBag(state)),
-      };
+    // Re-introduce derived properties (micLive, recorderActive are now always derived from listening)
+    if (Object.prototype.hasOwnProperty.call(nextState, "listening")) {
+        nextState.micLive = nextState.listening;
+        nextState.recorderActive = nextState.listening;
     }
+
+    // Clean up VAD state properties that were previously part of the nested state
+    const vadPatch = {};
+    if (Object.prototype.hasOwnProperty.call(patch, "vadActive")) {
+        vadPatch.vadActive = patch.vadActive;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "vadDbfs")) {
+        vadPatch.vadDbfs = patch.vadDbfs;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "lastSpeechAt")) {
+        vadPatch.lastSpeechAt = patch.lastSpeechAt;
+    }
+    nextState = { ...nextState, ...vadPatch };
+    
+    // Ensure the old nested state object is null/gone
+    nextState.state = null;
+    
     state = nextState;
     processTelemetry(state);
     notify();
@@ -451,6 +417,7 @@
 
   syncTrackedProperties(telemetryPrev);
 
+  // Hub logging/queueing logic remains the same
   const hubLogs = [];
   const hubStartQueue = [];
   const hubStopQueue = [];
