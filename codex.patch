@@ -1,357 +1,181 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 53b4a52a1fe87a2379d1bedafedad57d2272fe62..7a84478f4a85c8167f64985945b90c5c6db9089c 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -1294,81 +1294,108 @@
-         return;
-       }
-       micSessionTelemetry.recBadgeLogged = true;
-       const detail = { event: 'ui_rec_badge_on' };
-       if (source) {
-         detail.source = String(source).slice(0, 32);
-       }
-       logClient('evt=ui_rec_badge_on', detail);
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 434e573c5b50ee6a3eb1f69df11c2ffdc7b8235a..cc64d3efff2a3b0dafc1e6e75b8b8412b5e040fd 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,50 +1,51 @@
+ // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
+ /* __BUILD_MARKER__: FULL_DUPLEX_01 */
+ import { initVAD } from "./audio/vad_client.js";
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+   const CLIENT_VAD_POLICY = Object.freeze({
+     enable: true,
+-    sensitivity: 0.5,
+-    min_speech_ms: 200,
+-    min_silence_ms: 400,
++    sensitivity: 0.60,
++    min_speech_ms: 160,
++    min_silence_ms: 300,
+     hold_ms: 250,
+     echo_suppression_db: 10,
+     tts_threshold_boost_db: 12,
+     debounce_ms: 40,
+     // Enable true gating; preroll remains handled internally by the VAD.
+-    stream_gate: "gate",
++    stream_gate: "gate",          // keep gating if you want to save bandwidth
+     max_gate_silence_ms: 3000,
+     // Optional: per-deployment configurable warmup in ms
+     warmup_ms: 1200,
++    // If your input is very quiet, allow threshold override via policy
+   });
+   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
+   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
+ 
+   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
+ 
+   // ---- Golden-path turn trace & mic outcomes (additive) ----
+   // ---- Telemetry (additive) ----
+   const MIC_OUTCOME = {
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
+     ERROR_NO_DEVICE: 'error_no_device',
+     ERROR_GUM: 'error_getuser_media',
+     ERROR_SILENT: 'error_silent_stream',
+     ERROR_WS_SEND: 'error_ws_send',
+     ERROR_STATE_GUARD: 'error_state_guard',
+     ERROR_UNKNOWN: 'error_unknown',
+   };
+   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+   const DEFAULT_ASR_VENDOR = 'speechmatics';
+   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
+@@ -597,51 +598,59 @@ import { initVAD } from "./audio/vad_client.js";
+     } catch {}
+   }
+ 
+   const VAD_APPSTATE_KEYS = [
+     "vadActive",
+     "vadSpeech",
+     "vadConfidence",
+     "vadEnergyDb",
+     "vadNoiseDb",
+   ];
+   let vadController = null;
+   let vadSilenceTimerId = null;
+   let senderPaused = false;
+   let warmupUntil = 0;
+   function beginWarmup(ms = 1200) {
+     warmupUntil = Date.now() + ms;
+   }
+   function _warming() {
+     return Date.now() < warmupUntil;
+   }
+   function _canCaptureNow() {
+     if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
+     // During arming (or until first chunk), don’t block the stream
+     if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
+     const s = window.AppState || {};
+-    return _warming() || (s.asrReady && s.micLive && !s.tts && !senderPaused);
++    const ws = WSClient?._ws || window.ws;
++    const throttled = s._throttleUntil && Date.now() < s._throttleUntil;
++    if (!(!!ws && ws.readyState === WebSocket.OPEN)) {
++      return false;
++    }
++    if (s.tts || throttled) {
++      return false;
++    }
++    return _warming() || (s.asrReady && s.micLive && !senderPaused);
+   }
+   function syncSenderPaused(value) {
+     senderPaused = Boolean(value);
+     if (AppState && typeof AppState === "object") {
+       AppState.senderPaused = senderPaused;
+     }
+     updateState({ senderPaused });
+     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+   }
+   const PCM_TARGET_BATCH_MS = 60;
+   const PCM_FLUSH_TIMER_MS = 50;
+   const PCM_SAMPLE_RATE = 16000;
+   const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
+   let pcmBatchQueue = [];
+   let pcmBatchSampleCount = 0;
+   let pcmFlushTimerId = null;
+ 
+   function hubLog(label, detail) {
+     const state = typeof window !== "undefined" ? window.AppState : null;
+     const hub = state && state.hub;
+     if (hub && typeof hub.log === "function") {
+       try {
+         hub.log(label, detail);
+         return true;
+       } catch (err) {
+@@ -3383,50 +3392,59 @@ import { initVAD } from "./audio/vad_client.js";
+   }
+ 
+   async function handleMessageFrame(frame) {
+     if (!frame || typeof frame.type !== "string") {
+       console.warn("Ignoring WS frame without type", frame);
+       return;
+     }
+     if (frame.type === "keepalive") {
+       return;
      }
  
-     function normalizeStopReason(source) {
-       if (typeof source === 'string' && source) {
-         return source.slice(0, 48);
+     if (frame.type === "server.ping") {
+       const response = { type: "client.pong", ts: Date.now() };
+       if (typeof frame.ts === "number") {
+         response.echo = frame.ts;
        }
-       if (source && typeof source === 'object') {
-         if (typeof source.reason === 'string' && source.reason) {
-           return source.reason.slice(0, 48);
-         }
-         if (typeof source.code === 'string' && source.code) {
-           return source.code.slice(0, 48);
-         }
-       }
-       return 'unknown';
+       sendJson(response);
+       return;
      }
  
-+    let __silenceWD = null;
-+    let __lastChunkCount = 0;
-+    let __lastPartialAt = 0;
-+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-+      window.addEventListener('asr.partial', () => {
-+        __lastPartialAt = Date.now();
-+      });
+     if (frame.type === "ping") {
+       sendJson({ type: "pong", t: Date.now() });
+       return;
+     }
+ 
++    if (frame.type === "audio.throttle") {
++      try {
++        const ms = Math.max(50, Math.min(1000, Number(frame.ms) || 200));
++        window.AppState._throttleUntil = Date.now() + ms;
++        hubLog("client.audio.throttle", { ms });
++      } catch {}
++      return;
 +    }
-+    function armSilenceWatchdog() {
-+      if (__silenceWD) {
-+        clearTimeout(__silenceWD);
-+      }
-+      __lastChunkCount = AppState?.chunkCount || 0;
-+      __silenceWD = setTimeout(() => {
-+        const now = Date.now();
-+        const curr = AppState?.chunkCount || 0;
-+        const noBytes = (curr - __lastChunkCount) <= 0;
-+        const noPartials = __lastPartialAt ? (now - __lastPartialAt > 8000) : true;
-+        if (!AppState?.ttsActive && noBytes && noPartials) {
-+          logClient('watchdog_silence_notice', { noBytes, noPartials });
-+        }
-+        armSilenceWatchdog();
-+      }, 8000);
-+    }
-+    // call after successful updateRecordingState(true, ...)
 +
-     function updateRecordingState(active, source) {
-       const previous = runtimeState.isRecording;
-       const next = !!active;
-       runtimeState.isRecording = next;
-       if (typeof AppState === 'object' && AppState) {
-         AppState.listening = next;
+     if (frame.type === "config.updated" || frame.type === "config_updated") {
+       const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
+       const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
+       const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
+       if (incomingType !== 'config.updated') {
+         dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
        }
-       if (!next) {
-         cancelAsrReadyGuard();
-       }
-       let stopReasonLabel = null;
-       if (next) {
-         if (!previous) {
-           runtimeState.finalSeenThisTurn = false;
-           if (AppState && typeof AppState.__no_rearm_until === 'number') {
-             AppState.__no_rearm_until = 0;
-           }
-           beginMicTelemetrySession();
-           resetMicSessionTelemetry();
-           noteRecordingBadgeOn(source);
-           const timeslice = getCaptureTimesliceMs();
-           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
-             ? Math.max(0, Math.round(timeslice))
-             : 'unknown';
-           logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
-         }
-         if (!AppState?.ttsActive) {
-           armAsrPartialWatchdog();
-         } else {
-           cancelAsrPartialWatchdog();
-         }
-+        armSilenceWatchdog();
-       } else if (previous) {
-         stopReasonLabel = normalizeStopReason(source);
-         logClientMicEventText(`evt=mic_stop reason=${stopReasonLabel}`);
-         endMicTelemetrySession();
-         resetMicSessionTelemetry();
-         cancelAsrPartialWatchdog();
-       } else {
-         cancelAsrPartialWatchdog();
-       }
-       if (previous !== next) {
-         const hudState = next ? 'Listening' : 'Idle';
-         const hudMeta = { state: hudState };
-         if (typeof source === 'string' && source) {
-           hudMeta.source = source;
-         } else if (!next && stopReasonLabel) {
-           hudMeta.reason = stopReasonLabel;
-         }
-         handleHudStateChange({ state: hudState, meta: hudMeta });
-       }
-       window.AppUI?.refresh?.();
-       return next;
+       return;
      }
  
-     function markRecordingLive(reason) {
-       // If recorder is already listening or the client saw its first PCM, we can flip recording
-@@ -1469,228 +1496,68 @@
-         event: 'maybe_autostart_blocked',
-         trigger: triggerLabel,
-         reason: reasonLabel,
-         gates: {
-           asrReady: gates.asrReady,
-           turnState: gates.turnState,
-           micPerm: gates.micPerm,
-           recording: gates.recording,
-         },
-       };
-       if (extra && typeof extra === 'object') {
-         const keys = Object.keys(extra);
-         if (keys.length) {
-           detail.extra = {};
-           for (let i = 0; i < keys.length && i < 8; i += 1) {
-             const key = keys[i];
-             if (!key) continue;
-             detail.extra[key.slice(0, 32)] = extra[key];
-           }
-         }
+     if (frame.type === "policy.interaction") {
+       const sanitized = sanitizePolicyFrame(frame);
+       const appliedPolicy = applyPolicySnapshotFromSource(
+         sanitized && sanitized.policy ? sanitized.policy : null,
+         'policy.interaction'
+       );
+       sanitized.policy = appliedPolicy;
+       if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
+         markUserGestureSatisfied('policy_update');
        }
-       logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
+       attachUserGestureListeners();
+       dispatchFrame(sanitized);
+       maybeAutoStart("policy");
+       return;
      }
- 
-     function maybeAutoStartCapture(trigger, reason) {
--      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
--      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
--      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
--        ? runtimeState.turnState.slice(0, 32)
--        : null;
--      const gates = {
--        asrReady: !!(AppState?.asrReady ?? AppState?.getState?.()?.asrReady ?? runtimeState.asrReady),
--        turnState: rawTurnState,
--        micPerm: Boolean(runtimeState.micPermissionGranted),
--        recording: Boolean(runtimeState.isRecording),
--      };
--
--      const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
--      // Default to true unless explicitly false
--      let wantsAsrReady = capturePolicy.start_on_asr_ready !== false;
--      let wantsTurnReady = capturePolicy.start_on_turn_ready !== false;
--
--      const bypassTriggers = new Set(['asr_ready', 'turn_begin', 'await_user']);
--
--      if (bypassTriggers.has(trigger)) {
--        wantsAsrReady = true;
--        wantsTurnReady = true;
--      }
--
--      const trustedTrigger = (trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin');
--
--      logClient('client.autostart.intent', {
--        trigger: triggerLabel,
--        reason: reasonLabel,
--        wantsAsrReady,
--        wantsTurnReady,
--        trustedTrigger,
--      });
--      if (!(wantsAsrReady || wantsTurnReady) && !trustedTrigger) {
--        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
--        return;
--      }
--
--      if (reason === 'tts_end') {
--        const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
--        logClient(`client.turn: evt=tts_end_logic_start audio_idle=${audioIdle}`, {
--          event: 'client.turn',
--          type: 'tts_end_logic_start',
--          trigger: triggerLabel,
--          reason: reasonLabel,
--          audioIdle,
--        });
--      }
--
--      const noRearmUntil = AppState && Number.isFinite(Number(AppState.__no_rearm_until))
--        ? Number(AppState.__no_rearm_until)
--        : 0;
--      const now = Date.now();
--      if (noRearmUntil && now < noRearmUntil) {
--        const msRemaining = Math.max(0, Math.ceil(noRearmUntil - now));
--        logClientMicEventText('evt=rearm_blocked reason=cooldown');
--        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
--          blockedBy: 'cooldown',
--          msRemaining,
--        });
--        return;
--      }
--
--      const policyCaptureEntries = [];
--      if (capturePolicy && typeof capturePolicy === 'object') {
--        const captureKeys = Object.keys(capturePolicy).slice(0, 6);
--        for (let i = 0; i < captureKeys.length; i += 1) {
--          const key = captureKeys[i];
--          if (!key) continue;
--          const safeKey = String(key).slice(0, 32);
--          let safeValue;
--          const value = capturePolicy[key];
--          if (typeof value === 'boolean') {
--            safeValue = value ? 'true' : 'false';
--          } else if (value == null) {
--            safeValue = 'null';
--          } else {
--            safeValue = String(value).slice(0, 32);
--          }
--          policyCaptureEntries.push(`${safeKey}=${safeValue}`);
--        }
--      }
--      const policyCaptureLabel = `{${policyCaptureEntries.join(' ')}}`;
--      const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
--      const policyDetail = {};
--      if (capturePolicy && typeof capturePolicy === 'object') {
--        const keys = Object.keys(capturePolicy).slice(0, 8);
--        for (let i = 0; i < keys.length; i += 1) {
--          const key = keys[i];
--          if (!key) continue;
--          policyDetail[key] = capturePolicy[key];
--        }
--      }
--      logClient(`client.turn: evt=gates_snapshot policy=${policyCaptureLabel} is_recording=${gates.recording}`, {
--        event: 'client.turn',
--        type: 'gates_snapshot',
--        trigger: triggerLabel,
--        reason: reasonLabel,
--        policy: policyDetail,
--        gates: {
--          asrReady: gates.asrReady,
--          turnState: gates.turnState,
--          micPerm: gates.micPerm,
--          recording: gates.recording,
--          audioIdle,
--        },
--      });
--
--      // wake-word path removed; VAD barge-in is the only gate.
--
--      if (runtimeState.isRecording && !runtimeState.isArming) {
--        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
--          blockedBy: 'recording',
--          audioIdle: runtimeState.audioPlaybackIdle,
--        });
--        return;
--      }
--      if (!runtimeState.micPermissionGranted) {
--        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
--          blockedBy: 'mic_permission',
--          audioIdle: runtimeState.audioPlaybackIdle,
--        });
--        return;
--      }
--      const asrReadyNow = !!(AppState?.asrReady || AppState?.getState?.()?.asrReady);
--      if (!asrReadyNow) {
--        requestAsrPrearm(trigger);
--        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
--          blockedBy: 'asr_ready',
--          audioIdle: runtimeState.audioPlaybackIdle,
--        });
-+      if (AppState?.ttsActive) {
-         return;
-       }
--      if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {
--        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
--          blockedBy: 'audio_playback',
--          audioIdle: runtimeState.audioPlaybackIdle,
--        });
--        return;
-+      if (!AppState?.micLive && !AppState?.listening) {
-+        startMicCapture()
-+          .then((started) => {
-+            if (!started && (window.AudioRecorder?.listening || AppState?.listening)) {
-+              updateRecordingState(true, 'auto_start_already_active');
-+              armSilenceWatchdog();
-+              return;
-+            }
-+            if (started) {
-+              updateRecordingState(true, 'auto_start_capture');
-+              armSilenceWatchdog();
-+            }
-+          })
-+          .catch(() => {});
-       }
--
--      logClient(`evt=mic_arm trigger=${triggerLabel} reason=${reasonLabel}`, {
--        event: 'mic_arm',
--        trigger: triggerLabel,
--        reason: reasonLabel,
--      });
--      // entering arming phase; prevent re-entrant self-blocks
--      runtimeState.isArming = true;
--      startMicCapture()
--        .then((started) => {
--          const recorderIsActive = window.AudioRecorder?.listening === true || AppState?.listening === true;
--          if (!started && recorderIsActive) {
--            logClient('evt=mic_start_ok reason=already_active');
--            // Defer setting isRecording until we're truly live
--            markRecordingLive('auto_start_already_active');
--            noteMicOpen('auto_start_already_active');
--            return;
--          }
--          if (!started) {
--            logClient('evt=mic_open_failed err=mic_not_started', {
--              event: 'mic_open_failed',
--              error: 'mic_not_started',
--            });
--            runtimeState.isArming = false;
--            return;
--          }
--          // Recorder claim succeeded; mark live truthfully
--          markRecordingLive('auto_start_capture');
--          noteMicOpen('auto_start_capture');
--        })
--        .catch((err) => {
--          const errText = safeErr(err);
--          logClient(`evt=mic_open_failed err=${errText}`, {
--            event: 'mic_open_failed',
--            error: errText,
--          });
--          runtimeState.isArming = false;
--        });
-     }
- 
-     function maybeLogClientReadyOutcome(outcome, extraMeta) {
-       if (!clientReadyStats) {
-         return;
-       }
-       const summary = {
-         outcome: typeof outcome === 'string' && outcome ? outcome.slice(0, 32) : 'unknown',
-         attempts: clientReadyStats.attempts,
-         startedMs: clientReadyStats.startedAt,
-       };
-       if (typeof clientReadyStats.startedAt === 'number') {
-         const elapsed = Date.now() - clientReadyStats.startedAt;
-         if (Number.isFinite(elapsed)) {
-           summary.durationMs = Math.max(0, elapsed);
-         }
-       }
-       if (clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number') {
-         summary.micTs = clientReadyStats.detail.ts;
-       }
-       if (clientReadyStats.detail && clientReadyStats.detail.vendor) {
-         summary.vendor = clientReadyStats.detail.vendor.slice(0, 64);
-       }
-       if (clientReadyStats.events.length) {
-         summary.events = clientReadyStats.events.slice(-12);

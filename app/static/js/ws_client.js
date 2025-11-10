@@ -11,18 +11,19 @@ import { initVAD } from "./audio/vad_client.js";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
   const CLIENT_VAD_POLICY = Object.freeze({
     enable: true,
-    sensitivity: 0.5,
-    min_speech_ms: 200,
-    min_silence_ms: 400,
+    sensitivity: 0.60,
+    min_speech_ms: 160,
+    min_silence_ms: 300,
     hold_ms: 250,
     echo_suppression_db: 10,
     tts_threshold_boost_db: 12,
     debounce_ms: 40,
     // Enable true gating; preroll remains handled internally by the VAD.
-    stream_gate: "gate",
+    stream_gate: "gate",          // keep gating if you want to save bandwidth
     max_gate_silence_ms: 3000,
     // Optional: per-deployment configurable warmup in ms
     warmup_ms: 1200,
+    // If your input is very quiet, allow threshold override via policy
   });
   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
@@ -619,7 +620,15 @@ import { initVAD } from "./audio/vad_client.js";
     // During arming (or until first chunk), don’t block the stream
     if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
     const s = window.AppState || {};
-    return _warming() || (s.asrReady && s.micLive && !s.tts && !senderPaused);
+    const ws = WSClient?._ws || window.ws;
+    const throttled = s._throttleUntil && Date.now() < s._throttleUntil;
+    if (!(!!ws && ws.readyState === WebSocket.OPEN)) {
+      return false;
+    }
+    if (s.tts || throttled) {
+      return false;
+    }
+    return _warming() || (s.asrReady && s.micLive && !senderPaused);
   }
   function syncSenderPaused(value) {
     senderPaused = Boolean(value);
@@ -3402,6 +3411,15 @@ import { initVAD } from "./audio/vad_client.js";
 
     if (frame.type === "ping") {
       sendJson({ type: "pong", t: Date.now() });
+      return;
+    }
+
+    if (frame.type === "audio.throttle") {
+      try {
+        const ms = Math.max(50, Math.min(1000, Number(frame.ms) || 200));
+        window.AppState._throttleUntil = Date.now() + ms;
+        hubLog("client.audio.throttle", { ms });
+      } catch {}
       return;
     }
 
