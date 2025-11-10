@@ -188,6 +188,26 @@
     return '"unserializable"';
   }
 
+  let __pcmRecorderGumInFlight = false;
+  async function requestUserMediaOnce(constraints) {
+    const win = typeof window !== 'undefined' ? window : null;
+    if (win && typeof win.getMicOnce === 'function') {
+      return win.getMicOnce(constraints);
+    }
+    if (__pcmRecorderGumInFlight) {
+      return null;
+    }
+    __pcmRecorderGumInFlight = true;
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('MediaDevices.getUserMedia is not available');
+      }
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } finally {
+      __pcmRecorderGumInFlight = false;
+    }
+  }
+
   function normalizeReason(reason) {
     if (typeof reason === 'string' && reason) {
       return reason;
@@ -243,6 +263,7 @@
       this._tearDownPromise = null;
       this._clientVadConfig = this._extractClientVadConfig({});
       this._clientVadState = this._createClientVadState();
+      this._startPromise = null;
     }
 
     get listening() {
@@ -330,156 +351,188 @@
       if (this._active) {
         return this._audioContext;
       }
-      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      if (this._startPromise) {
+        return this._startPromise;
+      }
+      if (!navigator?.mediaDevices?.getUserMedia) {
         throw new Error('MediaDevices.getUserMedia is not available');
       }
 
-      const context = await this.init();
-      if (!context) {
-        throw new Error('Audio context unavailable');
-      }
-
-      if (context.state === 'suspended') {
-        try {
-          await context.resume();
-        } catch (err) {
-          console.warn('Failed to resume audio context', err);
+      const startOperation = (async () => {
+        const context = await this.init();
+        if (!context) {
+          throw new Error('Audio context unavailable');
         }
-      }
 
-      const constraintSource = this._policy
-        && typeof this._policy === 'object'
-        && this._policy.capture
-        && typeof this._policy.capture === 'object'
-        && this._policy.capture.constraints
-        && typeof this._policy.capture.constraints === 'object'
-          ? this._policy.capture.constraints
-          : {};
+        if (context.state === 'suspended') {
+          try {
+            await context.resume();
+          } catch (err) {
+            console.warn('Failed to resume audio context', err);
+          }
+        }
 
-      const audioConstraints = {};
-      Object.keys(constraintSource).forEach((key) => {
-        const value = constraintSource[key];
-        if (typeof value !== 'undefined') {
-          audioConstraints[key] = value;
+        const constraintSource = this._policy
+          && typeof this._policy === 'object'
+          && this._policy.capture
+          && typeof this._policy.capture === 'object'
+          && this._policy.capture.constraints
+          && typeof this._policy.capture.constraints === 'object'
+            ? this._policy.capture.constraints
+            : {};
+
+        const audioConstraints = {};
+        Object.keys(constraintSource).forEach((key) => {
+          const value = constraintSource[key];
+          if (typeof value !== 'undefined') {
+            audioConstraints[key] = value;
+          }
+        });
+
+        if (typeof audioConstraints.channelCount === 'undefined') {
+          audioConstraints.channelCount = 1;
+        } else if (Number.isFinite(audioConstraints.channelCount)) {
+          audioConstraints.channelCount = Number(audioConstraints.channelCount);
+        }
+
+        const sampleRateSource = audioConstraints.sampleRate;
+        if (typeof sampleRateSource === 'undefined') {
+          audioConstraints.sampleRate = { ideal: 48000 };
+        } else if (Number.isFinite(sampleRateSource)) {
+          audioConstraints.sampleRate = { ideal: Number(sampleRateSource) };
+        } else if (sampleRateSource && typeof sampleRateSource === 'object') {
+          audioConstraints.sampleRate = { ...sampleRateSource };
+        }
+
+        if (typeof audioConstraints.sampleSize === 'undefined') {
+          audioConstraints.sampleSize = 16;
+        } else if (Number.isFinite(audioConstraints.sampleSize)) {
+          audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
+        }
+
+        if (typeof audioConstraints.echoCancellation === 'undefined') {
+          audioConstraints.echoCancellation = true;
+        } else {
+          audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
+        }
+
+        if (typeof audioConstraints.noiseSuppression === 'undefined') {
+          audioConstraints.noiseSuppression = true;
+        } else {
+          audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
+        }
+
+        let runtimeAgc = null;
+        if (typeof window !== 'undefined') {
+          try {
+            const mediaPolicy = window.AppState?.policy?.media;
+            if (mediaPolicy && Object.prototype.hasOwnProperty.call(mediaPolicy, 'agc')) {
+              runtimeAgc = Boolean(mediaPolicy.agc);
+            }
+          } catch (_) {}
+        }
+        if (runtimeAgc !== null) {
+          audioConstraints.autoGainControl = runtimeAgc;
+        } else if (typeof audioConstraints.autoGainControl === 'undefined') {
+          audioConstraints.autoGainControl = false;
+        } else {
+          audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
+        }
+
+        let stream = this._stream;
+        if (!stream) {
+          try {
+            const constraintsLog = serializeConstraintsForLog(audioConstraints);
+            logClientMicEventText(`evt=mic_get_user_media_start constraints=${constraintsLog}`);
+            stream = await requestUserMediaOnce({
+              audio: audioConstraints,
+              video: false,
+            });
+            if (!stream) {
+              logClientMicEventText('evt=mic_get_user_media_skip reason=in_flight');
+              const err = new Error('mic_capture_in_flight');
+              err.code = 'mic_capture_in_flight';
+              throw err;
+            }
+            const audioTracks = stream && typeof stream.getAudioTracks === 'function'
+              ? stream.getAudioTracks()
+              : [];
+            const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
+            const trackId = primaryTrack && typeof primaryTrack.id === 'string' && primaryTrack.id
+              ? primaryTrack.id
+              : 'unknown';
+            const safeTrackId = sanitizeLogText(trackId, 'unknown', 80);
+            logClientMicEventText(`evt=mic_get_user_media_success track_id=${safeTrackId}`);
+          } catch (err) {
+            const errorName = sanitizeLogText(err && err.name ? err.name : null, 'unknown', 64);
+            const errorMessageSource = err && typeof err.message === 'string' && err.message
+              ? err.message
+              : err;
+            const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
+            logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
+            emitClientLog('client.pcm.capture_error', {
+              stage: 'getUserMedia',
+              message: err && err.message ? err.message : String(err),
+            });
+            throw err;
+          }
+        }
+
+        const sourceNode = context.createMediaStreamSource(stream);
+        let workletNode;
+        try {
+          workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
+            numberOfOutputs: 0,
+            processorOptions: {
+              targetSampleRate: TARGET_SAMPLE_RATE,
+              minFrameSamples: MIN_FRAME_SAMPLES,
+              maxFrameSamples: MAX_FRAME_SAMPLES,
+            },
+          });
+        } catch (err) {
+          emitClientLog('client.pcm.capture_error', {
+            stage: 'createWorkletNode',
+            message: err && err.message ? err.message : String(err),
+          });
+          stream.getTracks().forEach((track) => {
+            try { track.stop(); } catch (_) {}
+          });
+          throw err;
+        }
+
+        this._attachPort(workletNode.port);
+        try {
+          sourceNode.connect(workletNode);
+        } catch (err) {
+          emitClientLog('client.pcm.capture_error', {
+            stage: 'connectWorklet',
+            message: err && err.message ? err.message : String(err),
+          });
+          workletNode.port.onmessage = null;
+          try { workletNode.disconnect(); } catch (_) {}
+          try { sourceNode.disconnect(); } catch (_) {}
+          stream.getTracks().forEach((track) => {
+            try { track.stop(); } catch (_) {}
+          });
+          throw err;
+        }
+
+        this._stream = stream;
+        this._sourceNode = sourceNode;
+        this._workletNode = workletNode;
+        this._active = true;
+        this._muted = false;
+        this._firstChunkSent = false;
+        return context;
+      })();
+
+      const guardedStart = startOperation.finally(() => {
+        if (this._startPromise === guardedStart || this._startPromise === startOperation) {
+          this._startPromise = null;
         }
       });
-
-      if (typeof audioConstraints.channelCount === 'undefined') {
-        audioConstraints.channelCount = 1;
-      } else if (Number.isFinite(audioConstraints.channelCount)) {
-        audioConstraints.channelCount = Number(audioConstraints.channelCount);
-      }
-
-      const sampleRateSource = audioConstraints.sampleRate;
-      if (typeof sampleRateSource === 'undefined') {
-        audioConstraints.sampleRate = { ideal: 48000 };
-      } else if (Number.isFinite(sampleRateSource)) {
-        audioConstraints.sampleRate = { ideal: Number(sampleRateSource) };
-      } else if (sampleRateSource && typeof sampleRateSource === 'object') {
-        audioConstraints.sampleRate = { ...sampleRateSource };
-      }
-
-      if (typeof audioConstraints.sampleSize === 'undefined') {
-        audioConstraints.sampleSize = 16;
-      } else if (Number.isFinite(audioConstraints.sampleSize)) {
-        audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
-      }
-
-      if (typeof audioConstraints.echoCancellation === 'undefined') {
-        audioConstraints.echoCancellation = true;
-      } else {
-        audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
-      }
-
-      if (typeof audioConstraints.noiseSuppression === 'undefined') {
-        audioConstraints.noiseSuppression = true;
-      } else {
-        audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
-      }
-
-      if (typeof audioConstraints.autoGainControl === 'undefined') {
-        audioConstraints.autoGainControl = false;
-      } else {
-        audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
-      }
-
-      let stream;
-      try {
-        const constraintsLog = serializeConstraintsForLog(audioConstraints);
-        logClientMicEventText(`evt=mic_get_user_media_start constraints=${constraintsLog}`);
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: audioConstraints,
-          video: false,
-        });
-        const audioTracks = stream && typeof stream.getAudioTracks === 'function'
-          ? stream.getAudioTracks()
-          : [];
-        const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
-        const trackId = primaryTrack && typeof primaryTrack.id === 'string' && primaryTrack.id
-          ? primaryTrack.id
-          : 'unknown';
-        const safeTrackId = sanitizeLogText(trackId, 'unknown', 80);
-        logClientMicEventText(`evt=mic_get_user_media_success track_id=${safeTrackId}`);
-      } catch (err) {
-        const errorName = sanitizeLogText(err && err.name ? err.name : null, 'unknown', 64);
-        const errorMessageSource = err && typeof err.message === 'string' && err.message
-          ? err.message
-          : err;
-        const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
-        logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
-        emitClientLog('client.pcm.capture_error', {
-          stage: 'getUserMedia',
-          message: err && err.message ? err.message : String(err),
-        });
-        throw err;
-      }
-
-      const sourceNode = context.createMediaStreamSource(stream);
-      let workletNode;
-      try {
-        workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
-          numberOfOutputs: 0,
-          processorOptions: {
-            targetSampleRate: TARGET_SAMPLE_RATE,
-            minFrameSamples: MIN_FRAME_SAMPLES,
-            maxFrameSamples: MAX_FRAME_SAMPLES,
-          },
-        });
-      } catch (err) {
-        emitClientLog('client.pcm.capture_error', {
-          stage: 'createWorkletNode',
-          message: err && err.message ? err.message : String(err),
-        });
-        stream.getTracks().forEach((track) => {
-          try { track.stop(); } catch (_) {}
-        });
-        throw err;
-      }
-
-      this._attachPort(workletNode.port);
-      try {
-        sourceNode.connect(workletNode);
-      } catch (err) {
-        emitClientLog('client.pcm.capture_error', {
-          stage: 'connectWorklet',
-          message: err && err.message ? err.message : String(err),
-        });
-        workletNode.port.onmessage = null;
-        try { workletNode.disconnect(); } catch (_) {}
-        try { sourceNode.disconnect(); } catch (_) {}
-        stream.getTracks().forEach((track) => {
-          try { track.stop(); } catch (_) {}
-        });
-        throw err;
-      }
-
-      this._stream = stream;
-      this._sourceNode = sourceNode;
-      this._workletNode = workletNode;
-      this._active = true;
-      this._muted = false;
-      this._firstChunkSent = false;
-      return context;
+      this._startPromise = guardedStart;
+      return guardedStart;
     }
 
     async startListening(policy = {}) {
@@ -614,13 +667,28 @@
       this._muted = false;
     }
 
-    startMicCaptureIfIdle() {
-      if (this._active || this._initializing) {
-        const reason = this._initializing ? 'initializing' : 'active';
-        logClientMicEventText(`evt=mic_capture_request_blocked reason=${reason}`);
-        return this._initializing || Promise.resolve(null);
+    startMicCaptureIfIdle(options = {}) {
+      if (this._listening || this._active) {
+        logClientMicEventText('evt=mic_capture_request_blocked reason=active');
+        return Promise.resolve(true);
       }
-      return this.start();
+      if (this._startPromise) {
+        logClientMicEventText('evt=mic_capture_request_blocked reason=starting');
+        return this._startPromise.then(() => true);
+      }
+      if (this._initializing) {
+        logClientMicEventText('evt=mic_capture_request_blocked reason=initializing');
+      }
+      let outcome;
+      try {
+        outcome = this.start(options);
+      } catch (err) {
+        return Promise.reject(err);
+      }
+      if (outcome && typeof outcome.then === 'function') {
+        return outcome.then(() => true);
+      }
+      return Promise.resolve(Boolean(outcome));
     }
 
     _attachPort(port) {

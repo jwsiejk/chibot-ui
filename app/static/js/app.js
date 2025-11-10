@@ -35,6 +35,26 @@
   } catch (_) {}
 
   // Mic capture is centralized in pcm_recorder.js and follows policy.capture.constraints.
+  let __gumInFlight = false;
+  async function getMicOnce(constraints) {
+    if (__gumInFlight) {
+      return null;
+    }
+    __gumInFlight = true;
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        throw new Error('MediaDevices.getUserMedia unavailable');
+      }
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } finally {
+      __gumInFlight = false;
+    }
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      window.getMicOnce = getMicOnce;
+    } catch (_) {}
+  }
 
   (function wrapDiag() {
     const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });

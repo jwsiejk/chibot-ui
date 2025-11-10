@@ -1,153 +1,647 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 2faa1290d24e9ea80ce3bab3e1d5ff6144686ff8..434e573c5b50ee6a3eb1f69df11c2ffdc7b8235a 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -509,59 +509,53 @@ import { initVAD } from "./audio/vad_client.js";
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 140f21673745c76a5ba5f8e8584ef1717687af68..552b6cbd4b95e162b7c6bb6a44bc6b09c3fc2f57 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -13,50 +13,70 @@
+         vadActive: false,
+         vadDbfs: null,
+         lastSpeechAt: null,
+       };
+   } catch {}
+ 
+   function hubLog(label, detail) {
+     try { window.AppState?.hub?.log?.(label, detail); } catch {}
    }
  
-   function toArrayBuffer(value) {
-     if (value instanceof ArrayBuffer) {
-       return value;
+   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
+   try {
+     const el =
+       document.currentScript ||
+       document.querySelector('script[src*="/static/js/app.js"]');
+     const build = el ? new URL(el.src, location.href).searchParams.get('v') : null;
+     if (build) {
+       window.__BUILD_SHA__ = build;
+       console.log('AskChip build:', build);
+     } else {
+       console.log('AskChip build: (no v param on app.js)');
      }
-     if (isTypedArray(value)) {
-       if (value.byteLength === value.buffer.byteLength && value.byteOffset === 0) {
-         return value.buffer;
-       }
-       try {
-         return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
-       } catch {
-         return null;
-       }
-     }
-     return null;
-   }
+   } catch (_) {}
  
-   function wsOpen() {
-     const ws = WSClient._ws || window.ws;
-     return ws && ws.readyState === WebSocket.OPEN ? ws : null;
-   }
+   // Mic capture is centralized in pcm_recorder.js and follows policy.capture.constraints.
++  let __gumInFlight = false;
++  async function getMicOnce(constraints) {
++    if (__gumInFlight) {
++      return null;
++    }
++    __gumInFlight = true;
++    try {
++      if (!navigator?.mediaDevices?.getUserMedia) {
++        throw new Error('MediaDevices.getUserMedia unavailable');
++      }
++      return await navigator.mediaDevices.getUserMedia(constraints);
++    } finally {
++      __gumInFlight = false;
++    }
++  }
++  if (typeof window !== 'undefined') {
++    try {
++      window.getMicOnce = getMicOnce;
++    } catch (_) {}
++  }
  
-   function isControlFrame(frame) {
--    if (!frame || typeof frame !== "object") {
--      return false;
--    }
--    const type = typeof frame.type === "string" ? frame.type : "";
--    return type === "input.start"
--      || type === "input.stop"
--      || type === "audio.header"
--      || type === "ping"
--      || type === "pong";
-+    if (!frame || typeof frame !== "object") return false;
-+    const t = typeof frame.type === "string" ? frame.type : "";
-+    return t === "input.start" || t === "input.stop" || t === "audio.header" || t === "ping" || t === "pong";
-   }
- 
-   // ---- Turn opener (idempotent + retry) ----
-   let __turnOpen = false, __turnOpenAt = 0;
-   async function openTurnOnce(reason) {
-     if (__turnOpen) return true;
-     const ws = () => (WSClient?._ws || window.ws);
-     const deadline = Date.now() + 1200;
-     while ((!ws() || ws().readyState !== WebSocket.OPEN) && Date.now() < deadline) {
-       await new Promise((r) => setTimeout(r, 50));
-     }
-     if (!ws() || ws().readyState !== WebSocket.OPEN) {
-       console.warn("openTurnOnce: socket not open");
-       return false;
-     }
-     const reasonLabel = reason || (dbg("audio_safe_mode") ? "safe_mode" : "auto");
-     try {
-       WSClient.send({ type: "input.start", reason: reasonLabel });
-     } catch {}
-     __turnOpen = true;
-     __turnOpenAt = Date.now();
-     try {
-       hubLog("client.turn.intent", { action: "open", reason: reasonLabel });
-     } catch {}
-     return true;
-@@ -4375,82 +4369,78 @@ import { initVAD } from "./audio/vad_client.js";
-       if (data.type === "audio.header") {
-         if (data.format !== "pcm16" ||
-             typeof data.sample_rate !== "number" ||
-             typeof data.channels !== "number") {
-           console.warn("WSClient.send blocked: invalid audio.header schema", payload);
-           return false;
-         }
-         data = {
-           type: "audio.header",
-           format: "pcm16",
-           sample_rate: Number(data.sample_rate),
-           channels: Number(data.channels)
-         };
-       }
-     }
-     let stateSocket = null;
-     if (typeof AppState !== "undefined" && AppState) {
-       stateSocket = AppState.websocket || null;
-       if (!stateSocket && typeof AppState.getState === "function") {
+   (function wrapDiag() {
+     const ctr = (window.__WS_DIAG__ = window.__WS_DIAG__ || { types: {} });
+     function maybeWrap() {
+       if (!window.WSClient) return;
+       const method = typeof WSClient.sendJSON === 'function' ? 'sendJSON' : (typeof WSClient.send === 'function' ? 'send' : null);
+       if (!method) return;
+       const flag = method === 'sendJSON' ? '__wrapped_sendJSON__' : '__wrapped_send__';
+       if (WSClient[flag]) return;
+       const orig = WSClient[method].bind(WSClient);
+       WSClient[method] = function (frame) {
          try {
-           const snapshot = AppState.getState();
-           stateSocket = snapshot && snapshot.websocket ? snapshot.websocket : null;
+           const t = frame && frame.type;
+           if (t) ctr.types[t] = (ctr.types[t] || 0) + 1;
          } catch {}
-       }
-     }
--    let live = client._ws || stateSocket;
--    if (!live) {
--      live = wsOpen();
--    }
-+    let live = client._ws || stateSocket || (WSClient?._ws || window.ws);
-+    const open = !!live && live.readyState === WebSocket.OPEN;
-     const isControl = !binary && isControlFrame(data);
--    const open = live && live.readyState === WebSocket.OPEN;
- 
-     if (!skipPhaseCheck && !binary && !isControl) {
-       try {
-         const phase = AppState?.wsPhase || AppState?.connectionState;
-         if (!WS_READY_PHASES.has(phase)) {
-           client._queue.push({ data, isBinary: false });
-           console.warn("WSClient.send queued (phase not ready)", { phase });
-           return true;
+         return orig(frame);
+       };
+       WSClient[flag] = true;
+       if (method === 'sendJSON') {
+         WSClient.__wrapped_send__ = true;
+         if (typeof WSClient.send !== 'function' || WSClient.send === orig) {
+           WSClient.send = WSClient.sendJSON;
          }
-       } catch {}
-     }
- 
-     if (!open) {
-       client._queue.push({ data, isBinary: !!binary });
-       console.warn("WSClient.send queued (socket not open)");
-       return true;
-     }
- 
-     client._ws = live;
-     client._connected = true;
-     try { live.binaryType = "arraybuffer"; } catch {}
- 
-     if (!binary && isControl) {
--      const text = typeof data === "string" ? data : JSON.stringify(data);
-       try {
--        live.send(text);
-+        live.send(typeof data === "string" ? data : JSON.stringify(data));
-         return true;
-       } catch (err) {
-         console.error("WSClient send error", err);
-         return false;
        }
      }
+diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
+index 0853227bb3432fbca81bc97df776c4c0a21cdc8f..e86e9d1d0fa2c8341db907666e1a4fe02f1630fb 100644
+--- a/app/static/js/audio/pcm_recorder.js
++++ b/app/static/js/audio/pcm_recorder.js
+@@ -166,50 +166,70 @@
+       }
+     } catch (_) {}
+     try {
+       const text = String(value);
+       if (text.length > maxLength) {
+         return `${text.slice(0, maxLength - 1)}…`;
+       }
+       return text;
+     } catch (_) {}
+     return fallback;
+   }
  
-     if (binary) {
-       if (payload instanceof Blob) {
-         return payload.arrayBuffer().then((buf) => {
-           try {
-             live.send(buf);
-             return true;
-           } catch (err) {
-             console.error("WSClient binary send error", err);
-             throw err;
-           }
+   function serializeConstraintsForLog(constraints) {
+     try {
+       const json = JSON.stringify(constraints);
+       if (typeof json === 'string' && json) {
+         if (json.length > 512) {
+           return `${json.slice(0, 511)}…`;
+         }
+         return json;
+       }
+     } catch (_) {}
+     return '"unserializable"';
+   }
+ 
++  let __pcmRecorderGumInFlight = false;
++  async function requestUserMediaOnce(constraints) {
++    const win = typeof window !== 'undefined' ? window : null;
++    if (win && typeof win.getMicOnce === 'function') {
++      return win.getMicOnce(constraints);
++    }
++    if (__pcmRecorderGumInFlight) {
++      return null;
++    }
++    __pcmRecorderGumInFlight = true;
++    try {
++      if (!navigator?.mediaDevices?.getUserMedia) {
++        throw new Error('MediaDevices.getUserMedia is not available');
++      }
++      return await navigator.mediaDevices.getUserMedia(constraints);
++    } finally {
++      __pcmRecorderGumInFlight = false;
++    }
++  }
++
+   function normalizeReason(reason) {
+     if (typeof reason === 'string' && reason) {
+       return reason;
+     }
+     if (reason && typeof reason === 'object') {
+       if (typeof reason.reason === 'string' && reason.reason) {
+         return reason.reason;
+       }
+       if (typeof reason.code === 'string' && reason.code) {
+         return reason.code;
+       }
+       if (typeof reason.message === 'string' && reason.message) {
+         return reason.message;
+       }
+     }
+     return 'unknown';
+   }
+ 
+   function emitAppStateRecordingStarted(policy) {
+     const AppState = typeof window !== 'undefined' ? window.AppState : null;
+     if (!AppState || typeof AppState.emit !== 'function') {
+       return;
+     }
+     try {
+       AppState.emit('recordingStarted', { policy: policy || null, source: 'pcm_recorder' });
+@@ -221,50 +241,51 @@
+   }
+ 
+   class PcmRecorder {
+     constructor() {
+       this._audioContext = null;
+       this._sourceNode = null;
+       this._workletNode = null;
+       this._stream = null;
+       this._socket = null;
+       this._active = false;
+       this._listening = false;
+       this._muted = false;
+       this._chunkSeq = 0;
+       this._listeningStartedAt = 0;
+       this._firstChunkSent = false;
+       this._policy = {};
+       this._shouldMuteOnTts = true;
+       this._stopOnTts = false;
+       this._onChunk = null;
+       this._deviceSampleRate = null;
+       this._initializing = null;
+       this._workletLoaded = false;
+       this._tearDownPromise = null;
+       this._clientVadConfig = this._extractClientVadConfig({});
+       this._clientVadState = this._createClientVadState();
++      this._startPromise = null;
+     }
+ 
+     get listening() {
+       return this._listening;
+     }
+ 
+     isActive() {
+       return this._active;
+     }
+ 
+     isListening() {
+       return this._listening;
+     }
+ 
+     async init() {
+       if (this._initializing) {
+         return this._initializing;
+       }
+       if (this._audioContext && this._audioContext.state === 'closed') {
+         this._audioContext = null;
+         this._workletLoaded = false;
+       }
+       if (this._audioContext && this._workletLoaded) {
+         return this._audioContext;
+       }
+@@ -308,200 +329,232 @@
+       this._initializing = initializer
+         .catch((err) => {
+           this._initializing = null;
+           throw err;
+         })
+         .then((ctx) => {
+           this._initializing = null;
+           return ctx;
          });
+ 
+       return this._initializing;
+     }
+ 
+     async start(options = {}) {
+       const config = (options && typeof options === 'object') ? options : {};
+       if (typeof config.onChunk === 'function') {
+         this._onChunk = config.onChunk;
        }
-       if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
-         const buffer = payload instanceof ArrayBuffer
-           ? payload
-           : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
-         try {
-           live.send(buffer);
+       const policyCandidate = this._extractPolicyFromConfig(config);
+       if (policyCandidate) {
+         this.setPolicy(policyCandidate);
+       }
+       if (this._active) {
+         return this._audioContext;
+       }
+-      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
++      if (this._startPromise) {
++        return this._startPromise;
++      }
++      if (!navigator?.mediaDevices?.getUserMedia) {
+         throw new Error('MediaDevices.getUserMedia is not available');
+       }
+ 
+-      const context = await this.init();
+-      if (!context) {
+-        throw new Error('Audio context unavailable');
+-      }
++      const startOperation = (async () => {
++        const context = await this.init();
++        if (!context) {
++          throw new Error('Audio context unavailable');
++        }
+ 
+-      if (context.state === 'suspended') {
+-        try {
+-          await context.resume();
+-        } catch (err) {
+-          console.warn('Failed to resume audio context', err);
++        if (context.state === 'suspended') {
++          try {
++            await context.resume();
++          } catch (err) {
++            console.warn('Failed to resume audio context', err);
++          }
+         }
+-      }
+ 
+-      const constraintSource = this._policy
+-        && typeof this._policy === 'object'
+-        && this._policy.capture
+-        && typeof this._policy.capture === 'object'
+-        && this._policy.capture.constraints
+-        && typeof this._policy.capture.constraints === 'object'
+-          ? this._policy.capture.constraints
+-          : {};
+-
+-      const audioConstraints = {};
+-      Object.keys(constraintSource).forEach((key) => {
+-        const value = constraintSource[key];
+-        if (typeof value !== 'undefined') {
+-          audioConstraints[key] = value;
++        const constraintSource = this._policy
++          && typeof this._policy === 'object'
++          && this._policy.capture
++          && typeof this._policy.capture === 'object'
++          && this._policy.capture.constraints
++          && typeof this._policy.capture.constraints === 'object'
++            ? this._policy.capture.constraints
++            : {};
++
++        const audioConstraints = {};
++        Object.keys(constraintSource).forEach((key) => {
++          const value = constraintSource[key];
++          if (typeof value !== 'undefined') {
++            audioConstraints[key] = value;
++          }
++        });
++
++        if (typeof audioConstraints.channelCount === 'undefined') {
++          audioConstraints.channelCount = 1;
++        } else if (Number.isFinite(audioConstraints.channelCount)) {
++          audioConstraints.channelCount = Number(audioConstraints.channelCount);
+         }
+-      });
+ 
+-      if (typeof audioConstraints.channelCount === 'undefined') {
+-        audioConstraints.channelCount = 1;
+-      } else if (Number.isFinite(audioConstraints.channelCount)) {
+-        audioConstraints.channelCount = Number(audioConstraints.channelCount);
+-      }
++        const sampleRateSource = audioConstraints.sampleRate;
++        if (typeof sampleRateSource === 'undefined') {
++          audioConstraints.sampleRate = { ideal: 48000 };
++        } else if (Number.isFinite(sampleRateSource)) {
++          audioConstraints.sampleRate = { ideal: Number(sampleRateSource) };
++        } else if (sampleRateSource && typeof sampleRateSource === 'object') {
++          audioConstraints.sampleRate = { ...sampleRateSource };
++        }
+ 
+-      const sampleRateSource = audioConstraints.sampleRate;
+-      if (typeof sampleRateSource === 'undefined') {
+-        audioConstraints.sampleRate = { ideal: 48000 };
+-      } else if (Number.isFinite(sampleRateSource)) {
+-        audioConstraints.sampleRate = { ideal: Number(sampleRateSource) };
+-      } else if (sampleRateSource && typeof sampleRateSource === 'object') {
+-        audioConstraints.sampleRate = { ...sampleRateSource };
+-      }
++        if (typeof audioConstraints.sampleSize === 'undefined') {
++          audioConstraints.sampleSize = 16;
++        } else if (Number.isFinite(audioConstraints.sampleSize)) {
++          audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
++        }
+ 
+-      if (typeof audioConstraints.sampleSize === 'undefined') {
+-        audioConstraints.sampleSize = 16;
+-      } else if (Number.isFinite(audioConstraints.sampleSize)) {
+-        audioConstraints.sampleSize = Number(audioConstraints.sampleSize);
+-      }
++        if (typeof audioConstraints.echoCancellation === 'undefined') {
++          audioConstraints.echoCancellation = true;
++        } else {
++          audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
++        }
+ 
+-      if (typeof audioConstraints.echoCancellation === 'undefined') {
+-        audioConstraints.echoCancellation = true;
+-      } else {
+-        audioConstraints.echoCancellation = Boolean(audioConstraints.echoCancellation);
+-      }
++        if (typeof audioConstraints.noiseSuppression === 'undefined') {
++          audioConstraints.noiseSuppression = true;
++        } else {
++          audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
++        }
+ 
+-      if (typeof audioConstraints.noiseSuppression === 'undefined') {
+-        audioConstraints.noiseSuppression = true;
+-      } else {
+-        audioConstraints.noiseSuppression = Boolean(audioConstraints.noiseSuppression);
+-      }
++        let runtimeAgc = null;
++        if (typeof window !== 'undefined') {
++          try {
++            const mediaPolicy = window.AppState?.policy?.media;
++            if (mediaPolicy && Object.prototype.hasOwnProperty.call(mediaPolicy, 'agc')) {
++              runtimeAgc = Boolean(mediaPolicy.agc);
++            }
++          } catch (_) {}
++        }
++        if (runtimeAgc !== null) {
++          audioConstraints.autoGainControl = runtimeAgc;
++        } else if (typeof audioConstraints.autoGainControl === 'undefined') {
++          audioConstraints.autoGainControl = false;
++        } else {
++          audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
++        }
+ 
+-      if (typeof audioConstraints.autoGainControl === 'undefined') {
+-        audioConstraints.autoGainControl = false;
+-      } else {
+-        audioConstraints.autoGainControl = Boolean(audioConstraints.autoGainControl);
+-      }
++        let stream = this._stream;
++        if (!stream) {
++          try {
++            const constraintsLog = serializeConstraintsForLog(audioConstraints);
++            logClientMicEventText(`evt=mic_get_user_media_start constraints=${constraintsLog}`);
++            stream = await requestUserMediaOnce({
++              audio: audioConstraints,
++              video: false,
++            });
++            if (!stream) {
++              logClientMicEventText('evt=mic_get_user_media_skip reason=in_flight');
++              const err = new Error('mic_capture_in_flight');
++              err.code = 'mic_capture_in_flight';
++              throw err;
++            }
++            const audioTracks = stream && typeof stream.getAudioTracks === 'function'
++              ? stream.getAudioTracks()
++              : [];
++            const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
++            const trackId = primaryTrack && typeof primaryTrack.id === 'string' && primaryTrack.id
++              ? primaryTrack.id
++              : 'unknown';
++            const safeTrackId = sanitizeLogText(trackId, 'unknown', 80);
++            logClientMicEventText(`evt=mic_get_user_media_success track_id=${safeTrackId}`);
++          } catch (err) {
++            const errorName = sanitizeLogText(err && err.name ? err.name : null, 'unknown', 64);
++            const errorMessageSource = err && typeof err.message === 'string' && err.message
++              ? err.message
++              : err;
++            const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
++            logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
++            emitClientLog('client.pcm.capture_error', {
++              stage: 'getUserMedia',
++              message: err && err.message ? err.message : String(err),
++            });
++            throw err;
++          }
++        }
+ 
+-      let stream;
+-      try {
+-        const constraintsLog = serializeConstraintsForLog(audioConstraints);
+-        logClientMicEventText(`evt=mic_get_user_media_start constraints=${constraintsLog}`);
+-        stream = await navigator.mediaDevices.getUserMedia({
+-          audio: audioConstraints,
+-          video: false,
+-        });
+-        const audioTracks = stream && typeof stream.getAudioTracks === 'function'
+-          ? stream.getAudioTracks()
+-          : [];
+-        const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
+-        const trackId = primaryTrack && typeof primaryTrack.id === 'string' && primaryTrack.id
+-          ? primaryTrack.id
+-          : 'unknown';
+-        const safeTrackId = sanitizeLogText(trackId, 'unknown', 80);
+-        logClientMicEventText(`evt=mic_get_user_media_success track_id=${safeTrackId}`);
+-      } catch (err) {
+-        const errorName = sanitizeLogText(err && err.name ? err.name : null, 'unknown', 64);
+-        const errorMessageSource = err && typeof err.message === 'string' && err.message
+-          ? err.message
+-          : err;
+-        const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
+-        logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
+-        emitClientLog('client.pcm.capture_error', {
+-          stage: 'getUserMedia',
+-          message: err && err.message ? err.message : String(err),
+-        });
+-        throw err;
+-      }
++        const sourceNode = context.createMediaStreamSource(stream);
++        let workletNode;
++        try {
++          workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
++            numberOfOutputs: 0,
++            processorOptions: {
++              targetSampleRate: TARGET_SAMPLE_RATE,
++              minFrameSamples: MIN_FRAME_SAMPLES,
++              maxFrameSamples: MAX_FRAME_SAMPLES,
++            },
++          });
++        } catch (err) {
++          emitClientLog('client.pcm.capture_error', {
++            stage: 'createWorkletNode',
++            message: err && err.message ? err.message : String(err),
++          });
++          stream.getTracks().forEach((track) => {
++            try { track.stop(); } catch (_) {}
++          });
++          throw err;
++        }
+ 
+-      const sourceNode = context.createMediaStreamSource(stream);
+-      let workletNode;
+-      try {
+-        workletNode = new AudioWorkletNode(context, 'pcm-worklet-processor', {
+-          numberOfOutputs: 0,
+-          processorOptions: {
+-            targetSampleRate: TARGET_SAMPLE_RATE,
+-            minFrameSamples: MIN_FRAME_SAMPLES,
+-            maxFrameSamples: MAX_FRAME_SAMPLES,
+-          },
+-        });
+-      } catch (err) {
+-        emitClientLog('client.pcm.capture_error', {
+-          stage: 'createWorkletNode',
+-          message: err && err.message ? err.message : String(err),
+-        });
+-        stream.getTracks().forEach((track) => {
+-          try { track.stop(); } catch (_) {}
+-        });
+-        throw err;
+-      }
++        this._attachPort(workletNode.port);
++        try {
++          sourceNode.connect(workletNode);
++        } catch (err) {
++          emitClientLog('client.pcm.capture_error', {
++            stage: 'connectWorklet',
++            message: err && err.message ? err.message : String(err),
++          });
++          workletNode.port.onmessage = null;
++          try { workletNode.disconnect(); } catch (_) {}
++          try { sourceNode.disconnect(); } catch (_) {}
++          stream.getTracks().forEach((track) => {
++            try { track.stop(); } catch (_) {}
++          });
++          throw err;
++        }
+ 
+-      this._attachPort(workletNode.port);
+-      try {
+-        sourceNode.connect(workletNode);
+-      } catch (err) {
+-        emitClientLog('client.pcm.capture_error', {
+-          stage: 'connectWorklet',
+-          message: err && err.message ? err.message : String(err),
+-        });
+-        workletNode.port.onmessage = null;
+-        try { workletNode.disconnect(); } catch (_) {}
+-        try { sourceNode.disconnect(); } catch (_) {}
+-        stream.getTracks().forEach((track) => {
+-          try { track.stop(); } catch (_) {}
+-        });
+-        throw err;
+-      }
++        this._stream = stream;
++        this._sourceNode = sourceNode;
++        this._workletNode = workletNode;
++        this._active = true;
++        this._muted = false;
++        this._firstChunkSent = false;
++        return context;
++      })();
+ 
+-      this._stream = stream;
+-      this._sourceNode = sourceNode;
+-      this._workletNode = workletNode;
+-      this._active = true;
+-      this._muted = false;
+-      this._firstChunkSent = false;
+-      return context;
++      const guardedStart = startOperation.finally(() => {
++        if (this._startPromise === guardedStart || this._startPromise === startOperation) {
++          this._startPromise = null;
++        }
++      });
++      this._startPromise = guardedStart;
++      return guardedStart;
+     }
+ 
+     async startListening(policy = {}) {
+       if (policy && typeof policy === 'object' && Object.keys(policy).length) {
+         this.setPolicy(policy);
+       }
+       if (!this._active) {
+         await this.start(policy || {});
+       }
+       if (this._listening) {
+         return;
+       }
+       this._listening = true;
+       this._chunkSeq = 0;
+       this._firstChunkSent = false;
+       this._listeningStartedAt = Date.now();
+       this._resetClientVadState();
+       const vadConfig = this._getResolvedClientVadConfig();
+       const chunkMs = DEFAULT_CHUNK_MS;
+       emitClientLog('client.pcm.capture_start', {
+         device_rate: this._deviceSampleRate || null,
+         target_rate: TARGET_SAMPLE_RATE,
+         chunk_ms: chunkMs,
+       });
+       emitClientLog('client.vad.params', {
+@@ -592,57 +645,72 @@
+ 
+     setPolicy(policy) {
+       if (!policy || typeof policy !== 'object') {
+         this._policy = {};
+         this._applyPolicyDefaults();
+         return;
+       }
+       this._policy = { ...policy };
+       this._applyPolicyDefaults();
+     }
+ 
+     handleTtsStart() {
+       if (this._stopOnTts) {
+         this.stopListening({ reason: 'tts_start_policy' });
+         return;
+       }
+       if (this._shouldMuteOnTts) {
+         this._muted = true;
+       }
+     }
+ 
+     handleTtsEnd() {
+       this._muted = false;
+     }
+ 
+-    startMicCaptureIfIdle() {
+-      if (this._active || this._initializing) {
+-        const reason = this._initializing ? 'initializing' : 'active';
+-        logClientMicEventText(`evt=mic_capture_request_blocked reason=${reason}`);
+-        return this._initializing || Promise.resolve(null);
++    startMicCaptureIfIdle(options = {}) {
++      if (this._listening || this._active) {
++        logClientMicEventText('evt=mic_capture_request_blocked reason=active');
++        return Promise.resolve(true);
++      }
++      if (this._startPromise) {
++        logClientMicEventText('evt=mic_capture_request_blocked reason=starting');
++        return this._startPromise.then(() => true);
++      }
++      if (this._initializing) {
++        logClientMicEventText('evt=mic_capture_request_blocked reason=initializing');
++      }
++      let outcome;
++      try {
++        outcome = this.start(options);
++      } catch (err) {
++        return Promise.reject(err);
++      }
++      if (outcome && typeof outcome.then === 'function') {
++        return outcome.then(() => true);
+       }
+-      return this.start();
++      return Promise.resolve(Boolean(outcome));
+     }
+ 
+     _attachPort(port) {
+       if (!port) {
+         return;
+       }
+       port.onmessage = (event) => {
+         const data = event ? event.data : null;
+         if (!data || data.type !== 'pcm16' || !data.buffer) {
+           return;
+         }
+         const buffer = data.buffer;
+         const byteLength = buffer.byteLength || 0;
+         if (byteLength === 0) {
+           return;
+         }
+         if (!this._listening || this._muted) {
+           return;
+         }
+         this._handleIncomingChunk(buffer);
+       };
+     }
+ 
+     _handleIncomingChunk(buffer) {
+       const byteLength = buffer && buffer.byteLength ? buffer.byteLength : 0;
