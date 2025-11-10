@@ -4381,6 +4381,7 @@ import { initVAD } from "./audio/vad_client.js";
     _audioStreaming = false;
     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
     await stopRecorder(reason || "client_shutdown");
+    try { __resetAudioHeaderSent?.(); } catch {}
     setAsrArmInFlight(false);
     setArmAfterTtsEnd(false);
     setAppStateValue("ttsActive", false);
