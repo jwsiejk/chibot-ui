@@ -531,15 +531,9 @@ import { initVAD } from "./audio/vad_client.js";
   }
 
   function isControlFrame(frame) {
-    if (!frame || typeof frame !== "object") {
-      return false;
-    }
-    const type = typeof frame.type === "string" ? frame.type : "";
-    return type === "input.start"
-      || type === "input.stop"
-      || type === "audio.header"
-      || type === "ping"
-      || type === "pong";
+    if (!frame || typeof frame !== "object") return false;
+    const t = typeof frame.type === "string" ? frame.type : "";
+    return t === "input.start" || t === "input.stop" || t === "audio.header" || t === "ping" || t === "pong";
   }
 
   // ---- Turn opener (idempotent + retry) ----
@@ -4397,12 +4391,9 @@ import { initVAD } from "./audio/vad_client.js";
         } catch {}
       }
     }
-    let live = client._ws || stateSocket;
-    if (!live) {
-      live = wsOpen();
-    }
+    let live = client._ws || stateSocket || (WSClient?._ws || window.ws);
+    const open = !!live && live.readyState === WebSocket.OPEN;
     const isControl = !binary && isControlFrame(data);
-    const open = live && live.readyState === WebSocket.OPEN;
 
     if (!skipPhaseCheck && !binary && !isControl) {
       try {
@@ -4426,9 +4417,8 @@ import { initVAD } from "./audio/vad_client.js";
     try { live.binaryType = "arraybuffer"; } catch {}
 
     if (!binary && isControl) {
-      const text = typeof data === "string" ? data : JSON.stringify(data);
       try {
-        live.send(text);
+        live.send(typeof data === "string" ? data : JSON.stringify(data));
         return true;
       } catch (err) {
         console.error("WSClient send error", err);
