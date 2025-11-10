@@ -4414,7 +4414,6 @@ import { initVAD } from "./audio/vad_client.js";
     // Reset header state so the next session emits header again
     try { typeof __resetAudioHeaderSent === 'function' && __resetAudioHeaderSent(); } catch {}
     await stopRecorder(reason || "client_shutdown");
-    try { __resetAudioHeaderSent?.(); } catch {}
     setAsrArmInFlight(false);
     setArmAfterTtsEnd(false);
     setAppStateValue("ttsActive", false);
