@@ -1,346 +1,357 @@
 diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 552b6cbd4b95e162b7c6bb6a44bc6b09c3fc2f57..53b4a52a1fe87a2379d1bedafedad57d2272fe62 100644
+index 53b4a52a1fe87a2379d1bedafedad57d2272fe62..7a84478f4a85c8167f64985945b90c5c6db9089c 100644
 --- a/app/static/js/app.js
 +++ b/app/static/js/app.js
-@@ -1,41 +1,45 @@
- (() => {
-   // Ensure single-store shape (idempotent)
-   try {
-     window.AppState = window.AppState || {};
-     window.AppState.policy = window.AppState.policy || {};
-     window.AppState.state =
-       window.AppState.state || {
-         asrReady: false,
-         micLive: false,
-         tts: false,
-         senderPaused: false,
-         asrTurnActive: false,
-         vadActive: false,
-         vadDbfs: null,
-         lastSpeechAt: null,
-+        processing: false,
-       };
-+    if (typeof window.AppState.processing !== "boolean") {
-+      window.AppState.processing = false;
-+    }
-   } catch {}
- 
-   function hubLog(label, detail) {
-     try { window.AppState?.hub?.log?.(label, detail); } catch {}
-   }
- 
-   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
-   try {
-     const el =
-       document.currentScript ||
-       document.querySelector('script[src*="/static/js/app.js"]');
-     const build = el ? new URL(el.src, location.href).searchParams.get('v') : null;
-     if (build) {
-       window.__BUILD_SHA__ = build;
-       console.log('AskChip build:', build);
-     } else {
-       console.log('AskChip build: (no v param on app.js)');
-     }
-   } catch (_) {}
- 
-   // Mic capture is centralized in pcm_recorder.js and follows policy.capture.constraints.
-   let __gumInFlight = false;
-   async function getMicOnce(constraints) {
-     if (__gumInFlight) {
-       return null;
-@@ -186,50 +190,51 @@
+@@ -1294,81 +1294,108 @@
+         return;
        }
-       return appendVersionQuery(src);
+       micSessionTelemetry.recBadgeLogged = true;
+       const detail = { event: 'ui_rec_badge_on' };
+       if (source) {
+         detail.source = String(source).slice(0, 32);
+       }
+       logClient('evt=ui_rec_badge_on', detail);
      }
  
-     const normalized = src.replace(/^\.\//, "");
-     const base = STATIC_JS_BASE.replace(/\/?$/, "/");
-     const joined = `${base}${normalized}`;
- 
-     return appendVersionQuery(joined);
-   }
- 
-   function renderStatusBarFromState() {
-     try {
-       const appState = window.AppState || {};
-       const snapshot = typeof appState.getState === "function" ? appState.getState() : appState;
-       const recorder = snapshot.recorder && typeof snapshot.recorder === "object" ? snapshot.recorder : {};
-       const merged = {
-         ...snapshot,
-         policy: snapshot.policy ?? (window.AppState?.policy || {}),
-         wsConn: snapshot.wsConn ?? snapshot.wsConnected ?? appState.wsConnected,
-         wsConning: snapshot.wsConning ?? snapshot.wsConnecting ?? appState.wsConnecting,
-         asrReady: snapshot.asrReady ?? appState.asrReady,
-         micLive: snapshot.micLive ?? recorder.active ?? appState.micLive ?? window.AudioRecorder?.listening,
-         tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts,
-         senderPaused: snapshot.senderPaused ?? appState.senderPaused,
-+        processing: snapshot.processing ?? appState.processing,
-       };
-       window.StatusBar?.render(merged);
-     } catch {}
-   }
- 
-   if (typeof document !== "undefined") {
-     document.addEventListener("DOMContentLoaded", () => {
-       renderStatusBarFromState();
-     });
-   }
- 
-   window.AppUI = window.AppUI || {};
-   window.AppUI.refresh = function () {
-     renderStatusBarFromState();
-   };
- 
-   if (typeof window !== "undefined") {
-     window.addEventListener("client.log", (event) => {
-       try {
-         const detail = event?.detail;
-         if (!detail || typeof detail !== "object") {
-           return;
+     function normalizeStopReason(source) {
+       if (typeof source === 'string' && source) {
+         return source.slice(0, 48);
+       }
+       if (source && typeof source === 'object') {
+         if (typeof source.reason === 'string' && source.reason) {
+           return source.reason.slice(0, 48);
          }
-         const AppState = window.AppState;
-         if (!AppState || !AppState.hub || typeof AppState.hub.log !== "function") {
-@@ -2948,50 +2953,57 @@
-       }
- 
-       logClient(
-         `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
-       );
-       const arm =
-         typeof requestAsrArm === 'function'
-           ? requestAsrArm
-           : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
-             ? window.WSClient.requestAsrArm
-             : null;
-       if (arm) {
-         try {
-           arm('policy');
-         } catch (err) {
-           console.warn('requestAsrArm failed after asr_prearm_requested', err);
+         if (typeof source.code === 'string' && source.code) {
+           return source.code.slice(0, 48);
          }
        }
+       return 'unknown';
      }
  
- window.addEventListener('tts.start', (event) => {
-   const detail = event && event.detail;
-   if (detail) {
-     updateVoiceState(extractVoiceLocale(detail));
-   }
-+  try {
-+    window.AppState.processing = false;
-+    if (window.AppState.state && typeof window.AppState.state === 'object') {
-+      window.AppState.state.processing = false;
++    let __silenceWD = null;
++    let __lastChunkCount = 0;
++    let __lastPartialAt = 0;
++    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
++      window.addEventListener('asr.partial', () => {
++        __lastPartialAt = Date.now();
++      });
 +    }
-+    window.AppUI?.refresh?.();
-+  } catch {}
-   runtimeState.audioPlaybackIdle = false;
-   cancelAsrPartialWatchdog();
-   asrPrearmIssued = false;
-   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
-     try {
-       window.AudioRecorder.handleTtsStart();
-     } catch (err) {
-       console.warn('AudioRecorder handleTtsStart failed', err);
-     }
-   }
-   patchPolicyVad({ auto_vad_active: false });
-   vadListeningLogged = false;
-   window.AppUI?.refresh?.();
- });
- 
- window.addEventListener('policy.snapshot', (event) => {
-   const frame = event && event.detail;
-   try {
-     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
-     runtimeState.policy = policy && typeof policy === 'object' ? policy : null;
-     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
-       audioRecorder.setPolicy(policy);
-     }
-   } catch (err) {
-     console.warn('AudioRecorder setPolicy failed', err);
-@@ -3055,77 +3067,108 @@ window.addEventListener('tts.end', () => {
- 
- window.addEventListener('local_audio.ended', (event) => {
-   runtimeState.audioPlaybackIdle = true;
-   const detail = event && event.detail;
-   const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
-   maybeAutoStartCapture(trigger, 'tts_end');
- });
- 
- const FINAL_REARM_COOLDOWN_MS = 1500;
- 
- window.addEventListener('asr.partial', () => {
-   cancelAsrReadyGuard();
-   if (AppState?.ttsActive) {
-     cancelAsrPartialWatchdog();
-     return;
-   }
-   if (!isRecorderListening()) {
-     cancelAsrPartialWatchdog();
-     return;
-   }
-   armAsrPartialWatchdog();
- });
- 
- window.addEventListener('asr.final', () => {
-   cancelAsrReadyGuard();
-+  try {
-+    window.AppState.processing = true;
-+    if (window.AppState.state && typeof window.AppState.state === 'object') {
-+      window.AppState.state.processing = true;
-+    }
-+    window.AppUI?.refresh?.();
-+  } catch {}
-   if (runtimeState.finalSeenThisTurn) {
-     return;
-   }
-   runtimeState.finalSeenThisTurn = true;
-   const now = Date.now();
-   if (AppState && typeof AppState === 'object') {
-     AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
-   }
-   let recorder = null;
-   try {
-     recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
-   } catch (_) {
-     recorder = null;
-   }
-   try {
-     recorder?.stopListening?.({ reason: 'final' });
-   } catch (err) {
-     console.warn('AudioRecorder stopListening on asr.final failed', err);
-   }
-   if (runtimeState.isRecording) {
-     updateRecordingState(false, 'final');
-     runtimeState.isArming = false;
-   }
- });
- 
-+window.addEventListener('response', (event) => {
-+  try {
-+    const frame = event && event.detail;
-+    const type = typeof frame?.type === 'string' ? frame.type : '';
-+    if (!type || !type.startsWith('response.')) {
-+      return;
-+    }
-+    if (type.includes('.delta') || type.includes('.chunk') || type.endsWith('.completed')) {
-+      window.AppState.processing = false;
-+      if (window.AppState.state && typeof window.AppState.state === 'object') {
-+        window.AppState.state.processing = false;
++    function armSilenceWatchdog() {
++      if (__silenceWD) {
++        clearTimeout(__silenceWD);
 +      }
-+      window.AppUI?.refresh?.();
++      __lastChunkCount = AppState?.chunkCount || 0;
++      __silenceWD = setTimeout(() => {
++        const now = Date.now();
++        const curr = AppState?.chunkCount || 0;
++        const noBytes = (curr - __lastChunkCount) <= 0;
++        const noPartials = __lastPartialAt ? (now - __lastPartialAt > 8000) : true;
++        if (!AppState?.ttsActive && noBytes && noPartials) {
++          logClient('watchdog_silence_notice', { noBytes, noPartials });
++        }
++        armSilenceWatchdog();
++      }, 8000);
 +    }
-+  } catch {}
-+});
++    // call after successful updateRecordingState(true, ...)
 +
- window.addEventListener('assistant.await_user', (event) => {
-   runtimeState.audioPlaybackIdle = true;
-+  try {
-+    window.AppState.processing = false;
-+    if (window.AppState.state && typeof window.AppState.state === 'object') {
-+      window.AppState.state.processing = false;
-+    }
-+    window.AppUI?.refresh?.();
-+  } catch {}
-   const frame = event && event.detail;
-   const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
-   maybeAutoStartCapture('await_user', reason);
-   if (shouldPrearmOnTtsEnd()) {
-     try {
-       requestAsrPrearm('await_user');
-     } catch (err) {
-       console.warn('requestAsrPrearm failed after assistant.await_user', err);
-     }
-   }
-   patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
-   if (!vadListeningLogged) {
-     logClient('client.mic', 'diag=vad_active state=Listening');
-     vadListeningLogged = true;
-   }
-   window.AppUI?.refresh?.();
- });
- 
- window.addEventListener('asr.unavailable', (event) => {
-   cancelAsrPartialWatchdog();
-   cancelAsrReadyGuard();
-   runtimeState.asrReady = false;
-   const detail = event && typeof event === 'object' ? event.detail : undefined;
-   let reason = null;
-   if (detail && typeof detail === 'object') {
-diff --git a/app/static/js/ui/statusbar.js b/app/static/js/ui/statusbar.js
-index 3496643ba414d967b5359f613692cef81715b6bb..810202c9579c5a093b1936fef9279f1efb70c264 100644
---- a/app/static/js/ui/statusbar.js
-+++ b/app/static/js/ui/statusbar.js
-@@ -1,67 +1,57 @@
- // UMD-style module: attaches to window.StatusBar
- (function (global) {
-   const StatusBar = {
-     mountId: "statusbar-root",
-     render(ui = {}) {
-       const host = document.getElementById(this.mountId);
-       if (!host) return;
- 
--      const REQUIRE_ACTIVE_TURN = Boolean((ui?.policy?.ui?.status?.require_active_turn) ?? true);
--      const activeTurn = Boolean(ui?.asrTurnActive ?? ui?.state?.asrTurnActive);
--
-       const f = {
-         connected:    !!(ui.wsConn || ui.wsConning),
-         asrReady:     !!ui.asrReady,
-         micOpen:      !!(ui.micLive || ui.listening),
-         ttsActive:    !!ui.tts,
-         senderPaused: !!ui.senderPaused,
-+        processing:   !!ui.processing,
-       };
-       const canCapture = f.asrReady && f.micOpen && !f.ttsActive;
- 
--      const hints = [];
--      if (REQUIRE_ACTIVE_TURN && !activeTurn && canCapture) {
--        hints.push("Opening turn…");
--      }
--      if (f.senderPaused && canCapture) {
--        hints.push("Quiet (VAD)");
--      }
--
-       let st;
-       if (f.ttsActive) {
-         st = { label: "Speaking…", sub: "Say “Hold on” to interrupt.", tone: "blue" };
-+      } else if (f.processing) {
-+        st = { label: "Thinking…", sub: "Waiting for Chip’s response.", tone: "purple" };
-       } else if (!f.connected) {
-         st = { label: "Ready", sub: "Press Start to begin.", tone: "gray" };
-       } else if (!f.micOpen) {
-         st = { label: "Stand by", sub: "Press Start to open the mic.", tone: "amber" };
-       } else if (!f.asrReady) {
-         st = { label: "Preparing mic…", sub: "Getting ready to listen.", tone: "amber" };
-       } else if (canCapture) {
--        const subText = hints.length ? hints.join(" · ") : "You can speak now.";
--        st = { label: "Listening", sub: subText, tone: "green" };
--      } else if (REQUIRE_ACTIVE_TURN && !activeTurn) {
--        st = { label: "Stand by", sub: "Waiting for your turn…", tone: "amber" };
-+        const hint = f.senderPaused ? "quiet (VAD)" : "You can speak now.";
-+        st = { label: "Listening", sub: hint, tone: "green" };
-       } else {
-         st = { label: "Ready", sub: "", tone: "gray" };
+     function updateRecordingState(active, source) {
+       const previous = runtimeState.isRecording;
+       const next = !!active;
+       runtimeState.isRecording = next;
+       if (typeof AppState === 'object' && AppState) {
+         AppState.listening = next;
        }
- 
-       host.innerHTML = `
-         <div class="statusbar status-${st.tone}">
-           <div class="status-dot"></div>
-           <div class="status-text">
-             <div class="status-label">${st.label}</div>
-             <div class="status-sub">${st.sub}</div>
-           </div>
-           <div class="status-meter" id="micMeter" aria-hidden="true">
-             <div class="status-meter-fill" style="width:0%"></div>
-           </div>
-         </div>`;
-     },
-     updateMeter(rms /* 0..1 */) {
-       const el = document.getElementById("micMeter");
-       if (!el) return;
-       const fill = el.querySelector(".status-meter-fill");
-       if (!fill) return;
-       const pct = Math.max(0, Math.min(100, Math.round(rms * 100)));
-       fill.style.width = pct + "%";
+       if (!next) {
+         cancelAsrReadyGuard();
+       }
+       let stopReasonLabel = null;
+       if (next) {
+         if (!previous) {
+           runtimeState.finalSeenThisTurn = false;
+           if (AppState && typeof AppState.__no_rearm_until === 'number') {
+             AppState.__no_rearm_until = 0;
+           }
+           beginMicTelemetrySession();
+           resetMicSessionTelemetry();
+           noteRecordingBadgeOn(source);
+           const timeslice = getCaptureTimesliceMs();
+           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
+             ? Math.max(0, Math.round(timeslice))
+             : 'unknown';
+           logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
+         }
+         if (!AppState?.ttsActive) {
+           armAsrPartialWatchdog();
+         } else {
+           cancelAsrPartialWatchdog();
+         }
++        armSilenceWatchdog();
+       } else if (previous) {
+         stopReasonLabel = normalizeStopReason(source);
+         logClientMicEventText(`evt=mic_stop reason=${stopReasonLabel}`);
+         endMicTelemetrySession();
+         resetMicSessionTelemetry();
+         cancelAsrPartialWatchdog();
+       } else {
+         cancelAsrPartialWatchdog();
+       }
+       if (previous !== next) {
+         const hudState = next ? 'Listening' : 'Idle';
+         const hudMeta = { state: hudState };
+         if (typeof source === 'string' && source) {
+           hudMeta.source = source;
+         } else if (!next && stopReasonLabel) {
+           hudMeta.reason = stopReasonLabel;
+         }
+         handleHudStateChange({ state: hudState, meta: hudMeta });
+       }
+       window.AppUI?.refresh?.();
+       return next;
      }
-   };
+ 
+     function markRecordingLive(reason) {
+       // If recorder is already listening or the client saw its first PCM, we can flip recording
+@@ -1469,228 +1496,68 @@
+         event: 'maybe_autostart_blocked',
+         trigger: triggerLabel,
+         reason: reasonLabel,
+         gates: {
+           asrReady: gates.asrReady,
+           turnState: gates.turnState,
+           micPerm: gates.micPerm,
+           recording: gates.recording,
+         },
+       };
+       if (extra && typeof extra === 'object') {
+         const keys = Object.keys(extra);
+         if (keys.length) {
+           detail.extra = {};
+           for (let i = 0; i < keys.length && i < 8; i += 1) {
+             const key = keys[i];
+             if (!key) continue;
+             detail.extra[key.slice(0, 32)] = extra[key];
+           }
+         }
+       }
+       logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
+     }
+ 
+     function maybeAutoStartCapture(trigger, reason) {
+-      const triggerLabel = trigger ? String(trigger).slice(0, 32) : 'unknown';
+-      const reasonLabel = reason ? String(reason).slice(0, 32) : 'unknown';
+-      const rawTurnState = typeof runtimeState.turnState === 'string' && runtimeState.turnState
+-        ? runtimeState.turnState.slice(0, 32)
+-        : null;
+-      const gates = {
+-        asrReady: !!(AppState?.asrReady ?? AppState?.getState?.()?.asrReady ?? runtimeState.asrReady),
+-        turnState: rawTurnState,
+-        micPerm: Boolean(runtimeState.micPermissionGranted),
+-        recording: Boolean(runtimeState.isRecording),
+-      };
+-
+-      const capturePolicy = (runtimeState.policy && runtimeState.policy.capture) || {};
+-      // Default to true unless explicitly false
+-      let wantsAsrReady = capturePolicy.start_on_asr_ready !== false;
+-      let wantsTurnReady = capturePolicy.start_on_turn_ready !== false;
+-
+-      const bypassTriggers = new Set(['asr_ready', 'turn_begin', 'await_user']);
+-
+-      if (bypassTriggers.has(trigger)) {
+-        wantsAsrReady = true;
+-        wantsTurnReady = true;
+-      }
+-
+-      const trustedTrigger = (trigger === 'asr_ready' || trigger === 'await_user' || trigger === 'turn_begin');
+-
+-      logClient('client.autostart.intent', {
+-        trigger: triggerLabel,
+-        reason: reasonLabel,
+-        wantsAsrReady,
+-        wantsTurnReady,
+-        trustedTrigger,
+-      });
+-      if (!(wantsAsrReady || wantsTurnReady) && !trustedTrigger) {
+-        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, { blockedBy: 'policy_disabled' });
+-        return;
+-      }
+-
+-      if (reason === 'tts_end') {
+-        const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
+-        logClient(`client.turn: evt=tts_end_logic_start audio_idle=${audioIdle}`, {
+-          event: 'client.turn',
+-          type: 'tts_end_logic_start',
+-          trigger: triggerLabel,
+-          reason: reasonLabel,
+-          audioIdle,
+-        });
+-      }
+-
+-      const noRearmUntil = AppState && Number.isFinite(Number(AppState.__no_rearm_until))
+-        ? Number(AppState.__no_rearm_until)
+-        : 0;
+-      const now = Date.now();
+-      if (noRearmUntil && now < noRearmUntil) {
+-        const msRemaining = Math.max(0, Math.ceil(noRearmUntil - now));
+-        logClientMicEventText('evt=rearm_blocked reason=cooldown');
+-        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+-          blockedBy: 'cooldown',
+-          msRemaining,
+-        });
+-        return;
+-      }
+-
+-      const policyCaptureEntries = [];
+-      if (capturePolicy && typeof capturePolicy === 'object') {
+-        const captureKeys = Object.keys(capturePolicy).slice(0, 6);
+-        for (let i = 0; i < captureKeys.length; i += 1) {
+-          const key = captureKeys[i];
+-          if (!key) continue;
+-          const safeKey = String(key).slice(0, 32);
+-          let safeValue;
+-          const value = capturePolicy[key];
+-          if (typeof value === 'boolean') {
+-            safeValue = value ? 'true' : 'false';
+-          } else if (value == null) {
+-            safeValue = 'null';
+-          } else {
+-            safeValue = String(value).slice(0, 32);
+-          }
+-          policyCaptureEntries.push(`${safeKey}=${safeValue}`);
+-        }
+-      }
+-      const policyCaptureLabel = `{${policyCaptureEntries.join(' ')}}`;
+-      const audioIdle = Boolean(runtimeState.audioPlaybackIdle);
+-      const policyDetail = {};
+-      if (capturePolicy && typeof capturePolicy === 'object') {
+-        const keys = Object.keys(capturePolicy).slice(0, 8);
+-        for (let i = 0; i < keys.length; i += 1) {
+-          const key = keys[i];
+-          if (!key) continue;
+-          policyDetail[key] = capturePolicy[key];
+-        }
+-      }
+-      logClient(`client.turn: evt=gates_snapshot policy=${policyCaptureLabel} is_recording=${gates.recording}`, {
+-        event: 'client.turn',
+-        type: 'gates_snapshot',
+-        trigger: triggerLabel,
+-        reason: reasonLabel,
+-        policy: policyDetail,
+-        gates: {
+-          asrReady: gates.asrReady,
+-          turnState: gates.turnState,
+-          micPerm: gates.micPerm,
+-          recording: gates.recording,
+-          audioIdle,
+-        },
+-      });
+-
+-      // wake-word path removed; VAD barge-in is the only gate.
+-
+-      if (runtimeState.isRecording && !runtimeState.isArming) {
+-        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+-          blockedBy: 'recording',
+-          audioIdle: runtimeState.audioPlaybackIdle,
+-        });
+-        return;
+-      }
+-      if (!runtimeState.micPermissionGranted) {
+-        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+-          blockedBy: 'mic_permission',
+-          audioIdle: runtimeState.audioPlaybackIdle,
+-        });
+-        return;
+-      }
+-      const asrReadyNow = !!(AppState?.asrReady || AppState?.getState?.()?.asrReady);
+-      if (!asrReadyNow) {
+-        requestAsrPrearm(trigger);
+-        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+-          blockedBy: 'asr_ready',
+-          audioIdle: runtimeState.audioPlaybackIdle,
+-        });
++      if (AppState?.ttsActive) {
+         return;
+       }
+-      if (wantsTurnReady && !runtimeState.audioPlaybackIdle) {
+-        logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, {
+-          blockedBy: 'audio_playback',
+-          audioIdle: runtimeState.audioPlaybackIdle,
+-        });
+-        return;
++      if (!AppState?.micLive && !AppState?.listening) {
++        startMicCapture()
++          .then((started) => {
++            if (!started && (window.AudioRecorder?.listening || AppState?.listening)) {
++              updateRecordingState(true, 'auto_start_already_active');
++              armSilenceWatchdog();
++              return;
++            }
++            if (started) {
++              updateRecordingState(true, 'auto_start_capture');
++              armSilenceWatchdog();
++            }
++          })
++          .catch(() => {});
+       }
+-
+-      logClient(`evt=mic_arm trigger=${triggerLabel} reason=${reasonLabel}`, {
+-        event: 'mic_arm',
+-        trigger: triggerLabel,
+-        reason: reasonLabel,
+-      });
+-      // entering arming phase; prevent re-entrant self-blocks
+-      runtimeState.isArming = true;
+-      startMicCapture()
+-        .then((started) => {
+-          const recorderIsActive = window.AudioRecorder?.listening === true || AppState?.listening === true;
+-          if (!started && recorderIsActive) {
+-            logClient('evt=mic_start_ok reason=already_active');
+-            // Defer setting isRecording until we're truly live
+-            markRecordingLive('auto_start_already_active');
+-            noteMicOpen('auto_start_already_active');
+-            return;
+-          }
+-          if (!started) {
+-            logClient('evt=mic_open_failed err=mic_not_started', {
+-              event: 'mic_open_failed',
+-              error: 'mic_not_started',
+-            });
+-            runtimeState.isArming = false;
+-            return;
+-          }
+-          // Recorder claim succeeded; mark live truthfully
+-          markRecordingLive('auto_start_capture');
+-          noteMicOpen('auto_start_capture');
+-        })
+-        .catch((err) => {
+-          const errText = safeErr(err);
+-          logClient(`evt=mic_open_failed err=${errText}`, {
+-            event: 'mic_open_failed',
+-            error: errText,
+-          });
+-          runtimeState.isArming = false;
+-        });
+     }
+ 
+     function maybeLogClientReadyOutcome(outcome, extraMeta) {
+       if (!clientReadyStats) {
+         return;
+       }
+       const summary = {
+         outcome: typeof outcome === 'string' && outcome ? outcome.slice(0, 32) : 'unknown',
+         attempts: clientReadyStats.attempts,
+         startedMs: clientReadyStats.startedAt,
+       };
+       if (typeof clientReadyStats.startedAt === 'number') {
+         const elapsed = Date.now() - clientReadyStats.startedAt;
+         if (Number.isFinite(elapsed)) {
+           summary.durationMs = Math.max(0, elapsed);
+         }
+       }
+       if (clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number') {
+         summary.micTs = clientReadyStats.detail.ts;
+       }
+       if (clientReadyStats.detail && clientReadyStats.detail.vendor) {
+         summary.vendor = clientReadyStats.detail.vendor.slice(0, 64);
+       }
+       if (clientReadyStats.events.length) {
+         summary.events = clientReadyStats.events.slice(-12);
