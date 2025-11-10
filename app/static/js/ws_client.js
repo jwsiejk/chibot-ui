@@ -990,7 +990,9 @@ import { initVAD } from "./audio/vad_client.js";
   });
   // --- Begin: header idempotency + strict schema ---
   let __audioHeaderSent = false;
-  function __resetAudioHeaderSent() { __audioHeaderSent = false; }
+  function __resetAudioHeaderSent() {
+    __audioHeaderSent = false;
+  }
   function __buildStrictAudioHeader(frameOrPolicy) {
     const base = AUDIO_HEADER_FRAME;
     const source = (frameOrPolicy?.policy || frameOrPolicy) || {};
@@ -1331,6 +1333,26 @@ import { initVAD } from "./audio/vad_client.js";
     // GREET-FIRST: skip batch until server is ready and header can be sent
     if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent) {
       if (!AppState?.asrReady) {
+        schedulePcmFlushTimer();
+        return;
+      }
+      // Ensure header is actually sent before first chunk
+      try {
+        const maybe = sendAudioHeader(AppState?.policy || {});
+        if (maybe && typeof maybe.then === "function") {
+          const ok = await maybe;
+          if (!ok) {
+            console.warn('pcm.flush: header send failed; skipping batch');
+            schedulePcmFlushTimer();
+            return;
+          }
+        } else if (!__audioHeaderSent) {
+          console.warn('pcm.flush: header send failed; skipping batch');
+          schedulePcmFlushTimer();
+          return;
+        }
+      } catch (err) {
+        console.warn('pcm.flush: header send threw', err);
         schedulePcmFlushTimer();
         return;
       }
@@ -4389,6 +4411,8 @@ import { initVAD } from "./audio/vad_client.js";
     }
     _audioStreaming = false;
     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
+    // Reset header state so the next session emits header again
+    try { typeof __resetAudioHeaderSent === 'function' && __resetAudioHeaderSent(); } catch {}
     await stopRecorder(reason || "client_shutdown");
     try { __resetAudioHeaderSent?.(); } catch {}
     setAsrArmInFlight(false);
