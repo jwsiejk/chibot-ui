@@ -43,11 +43,21 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
             "min_active_ms": 300,
         },
     },
+    "audio": {
+        "start_on_ws_open": False,
+        "header_on_first_chunk": True,
+        "allow_capture_during_tts": False,
+    },
     "watchdog": {
         "partial_wait_ms_first_turn": 3500,
     },
     "server": {
         "buffer_prestart_audio_ms": 300,
+        "sync_ready_on_tts_end": True,
+        "asr_ready_deadline_ms": 8000,
+        "throttle_grace_ms": 2000,
+        "queue_pre_ready_audio": True,
+        "drop_pre_tts_audio_ms": 0,
     },
     "capture": {
         "mode": "webrtc_aec",  # "webrtc_aec" | "pcm"

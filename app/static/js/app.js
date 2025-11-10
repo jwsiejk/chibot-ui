@@ -2843,6 +2843,14 @@ window.addEventListener('tts.start', (event) => {
     updateVoiceState(extractVoiceLocale(detail));
   }
   try {
+    // Suspend silence watchdog during greet playback.
+    if (typeof window.__silenceWD?.suspend === 'function') {
+      window.__silenceWD.suspend('tts.start');
+    } else if (typeof window.clearSilenceWatchdog === 'function') {
+      window.clearSilenceWatchdog();
+    }
+  } catch {}
+  try {
     window.AppState.processing = false;
     if (window.AppState.state && typeof window.AppState.state === 'object') {
       window.AppState.state.processing = false;
@@ -3080,6 +3088,17 @@ window.addEventListener('asr.ready', (event) => {
   runtimeState.asrReady = true;
   armAsrReadyGuard();
   maybeAutoStartCapture('asr_ready', 'policy');
+  try {
+    // Re-arm silence watchdog for the listening window.
+    if (typeof window.__silenceWD?.arm === 'function') {
+      window.__silenceWD.arm({ source: 'asr.ready' });
+    } else if (typeof window.startSilenceWatchdog === 'function') {
+      window.startSilenceWatchdog();
+    }
+  } catch {}
+  try {
+    emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
+  } catch {}
   if (diagHudEnabled()) {
     console.info('diag=asr_ready');
     setBadge('asr:ready');

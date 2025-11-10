@@ -558,6 +558,15 @@ class ChatV2Adapter:
         self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
         self._policy_env_warning_logged = False
         self._last_throttle_emit_ms: int = 0
+        # (no-op if unused; helps explicitness)
+        self._noop = None
+
+    def _server_policy(self, ctx: AdapterContext) -> Mapping[str, Any]:
+        pol = getattr(ctx.session, "policy", None) or {}
+        if not isinstance(pol, Mapping):
+            return {}
+        sp = pol.get("server", {}) if isinstance(pol.get("server"), Mapping) else {}
+        return sp
 
     async def _ensure_asr_ready(
         self,
@@ -569,12 +578,49 @@ class ChatV2Adapter:
             return
         if send is None:
             return
+        # GREET-FIRST: If policy syncs on tts.end and TTS is active, defer emit
+        sp = self._server_policy(ctx)
+        if bool(sp.get("sync_ready_on_tts_end", True)) and getattr(ctx.session, "tts_active", False):
+            _log.info("evt=asr_ready_deferred sid=%s where=%s", ctx.sid, label)
+            return
         try:
             await self._open_asr(ctx)
             await self._send_asr_ready_bundle(send, ctx)
             _log.info("evt=asr_ready_emit sid=%s where=%s", ctx.sid, label)
         except Exception:
             _log.exception("evt=asr_ready_emit_failed sid=%s where=%s", ctx.sid, label)
+
+    async def _handle_tts_start(
+        self,
+        send: Callable[[dict], Awaitable[None]] | None,
+        ctx: AdapterContext,
+        frame: Mapping[str, Any] | None,
+    ) -> None:
+        ctx.session.tts_active = True
+        try:
+            self._bus(
+                "tts.start",
+                {"sid": ctx.sid, "utt_id": frame.get("utt_id") if isinstance(frame, Mapping) else None},
+            )
+        except Exception:
+            _log.exception("evt=tts_start_bus_failed sid=%s", ctx.sid)
+
+    async def _handle_tts_end(
+        self,
+        send: Callable[[dict], Awaitable[None]] | None,
+        ctx: AdapterContext,
+        frame: Mapping[str, Any] | None,
+    ) -> None:
+        ctx.session.tts_active = False
+        try:
+            self._bus(
+                "tts.end",
+                {"sid": ctx.sid, "utt_id": frame.get("utt_id") if isinstance(frame, Mapping) else None},
+            )
+        except Exception:
+            _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
+        if not ctx.asr_ready_bundle_sent_ms:
+            await self._ensure_asr_ready(send, ctx, "tts_end")
 
     async def _arm_asr_ready_deadline(
         self,
@@ -2867,14 +2913,9 @@ class ChatV2Adapter:
         else:
             reason = "backpressure"
 
+        sp = self._server_policy(ctx)
         try:
-            policy_root = getattr(ctx.session, "policy", None) or {}
-            if not isinstance(policy_root, Mapping):
-                policy_root = {}
-            server_policy = policy_root.get("server", {})
-            if not isinstance(server_policy, Mapping):
-                server_policy = {}
-            queue_pre = bool(server_policy.get("queue_pre_ready_audio", True))
+            queue_pre = bool(sp.get("queue_pre_ready_audio", True))
         except Exception:
             queue_pre = True
         if reason in ("not_ready", "send_closed", "backpressure") and queue_pre:
@@ -3217,20 +3258,15 @@ class ChatV2Adapter:
     ) -> None:
         loop = asyncio.get_running_loop()
         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
-        deadline_task = ctx.asr_ready_deadline_task
-        if deadline_task is not None:
-            deadline_task.cancel()
+        sp = self._server_policy(ctx)
         try:
-            policy_root = getattr(ctx.session, "policy", None) or {}
-            if not isinstance(policy_root, Mapping):
-                policy_root = {}
-            server_policy = policy_root.get("server", {})
-            if not isinstance(server_policy, Mapping):
-                server_policy = {}
-            deadline_ms = int(server_policy.get("asr_ready_deadline_ms", 2500))
+            deadline_ms = int(sp.get("asr_ready_deadline_ms", 8000))
         except Exception:
-            deadline_ms = 2500
+            deadline_ms = 8000
         if deadline_ms > 0:
+            deadline_task = ctx.asr_ready_deadline_task
+            if deadline_task is not None:
+                deadline_task.cancel()
             ctx.asr_ready_deadline_task = asyncio.create_task(
                 self._arm_asr_ready_deadline(send, ctx, deadline_ms)
             )
@@ -3314,6 +3350,10 @@ class ChatV2Adapter:
                     self._maybe_emit_await_user(ctx, policy_mapping)
                     _schedule_listen_handoff(req_value)
                     ctx.session.tts_active = False
+                    try:
+                        loop.create_task(self._handle_tts_end(send, ctx, payload))
+                    except RuntimeError:
+                        asyncio.create_task(self._handle_tts_end(send, ctx, payload))
                     if ctx.session.queued_arm and can_open(ctx.session):
                         ctx.session.queued_arm = False
                         try:
@@ -3336,6 +3376,10 @@ class ChatV2Adapter:
                                 pass
                 elif frame_type == "tts.start":
                     ctx.session.tts_active = True
+                    try:
+                        loop.create_task(self._handle_tts_start(send, ctx, payload))
+                    except RuntimeError:
+                        asyncio.create_task(self._handle_tts_start(send, ctx, payload))
                 _enqueue(payload)
 
             try:
@@ -5870,14 +5914,9 @@ class ChatV2Adapter:
         now = int(time.time() * 1000)
         if getattr(ctx.session, "tts_active", False):
             return
+        sp = self._server_policy(ctx)
         try:
-            policy_root = getattr(ctx.session, "policy", None) or {}
-            if not isinstance(policy_root, Mapping):
-                policy_root = {}
-            server_policy = policy_root.get("server", {})
-            if not isinstance(server_policy, Mapping):
-                server_policy = {}
-            grace_ms = int(server_policy.get("throttle_grace_ms", self.THROTTLE_GRACE_AFTER_READY_MS))
+            grace_ms = int(sp.get("throttle_grace_ms", self.THROTTLE_GRACE_AFTER_READY_MS))
         except Exception:
             grace_ms = self.THROTTLE_GRACE_AFTER_READY_MS
         ready_sent = ctx.asr_ready_bundle_sent_ms

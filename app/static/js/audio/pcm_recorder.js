@@ -1134,14 +1134,11 @@
     window.AudioRecorder = recorder;
   }
 
-  // Idempotent preflight: ensure we hold a live mic track without starting the send loop.
-  // Returns true if mic is available (existing or newly acquired).
+  // Idempotent mic preflight, no sending — used in other profiles
   recorder.startMicCaptureIfIdle = async function startMicCaptureIfIdle() {
     try {
       if (this._stream && this._stream.active) return true;
-      // Reuse the normal start path but with a no-op onChunk; we only want the track.
       const ok = await this.start({ onChunk: () => {}, policy: {} });
-      // Optional: immediately pause internal read loop if exposed, send path is controlled by ws_client
       if (ok && typeof this.pause === 'function') this.pause();
       return !!ok;
     } catch (_) {

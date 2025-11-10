@@ -176,6 +176,9 @@ _DEFAULT_POLICY_ROUTING = {
 
 _DEFAULT_POLICY_AUDIO = {
     "pipeline": {"mode": "pcm16"},
+    "start_on_ws_open": False,
+    "header_on_first_chunk": True,
+    "allow_capture_during_tts": False,
 }
 
 POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)

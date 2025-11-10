@@ -1327,8 +1327,19 @@ import { initVAD } from "./audio/vad_client.js";
       resetPcmBatchState();
       return;
     }
-    const frames = pcmBatchQueue;
     const totalSamples = pcmBatchSampleCount;
+    // GREET-FIRST: skip batch until server is ready and header can be sent
+    if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent) {
+      if (!AppState?.asrReady) {
+        schedulePcmFlushTimer();
+        return;
+      }
+    }
+    if (!AppState?.asrReady) {
+      schedulePcmFlushTimer();
+      return;
+    }
+    const frames = pcmBatchQueue;
     pcmBatchQueue = [];
     pcmBatchSampleCount = 0;
     clearPcmFlushTimer();
@@ -1483,9 +1494,7 @@ import { initVAD } from "./audio/vad_client.js";
         } catch {}
       }
     }
-    if (!_canCaptureNow()) {
-      return;
-    }
+    // Do not block enqueue; flush path will honor readiness gates.
     if (seq === 0) {
       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
     }

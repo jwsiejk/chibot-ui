@@ -1,56 +1,816 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index d599f353c0019624015844738a0e9ba99448592d..4a662ddbfc4ee137b70e938e4ba60cdef73fe8b2 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -4359,50 +4359,51 @@ import { initVAD } from "./audio/vad_client.js";
-       });
-     };
+diff --git a/app/config.py b/app/config.py
+index db4534d10aed933375fb64ffac53270c0eda7106..7b4e69796da2b105811a25f990876a6461eee744 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -154,50 +154,53 @@ _DEFAULT_POLICY_INPUT = {
+ }
  
-     socket = ws;
-     updateState({
-       connectionState: resumeTokenValue ? "resuming" : "connecting",
-       websocket: ws,
-       latencyMs: null,
-       lastPingAt: null,
-       resumeError: null,
-       infoFrame: null,
-       serverBanner: null
-     });
-     attachSocket(ws);
-     return ws;
+ _DEFAULT_POLICY_ASR = {
+     "prearm_on_tts_end": False,
+     "keep_stream_warm_ms": 30000,
+     "vendor": {"primary": "speechmatics", "secondary": None},
+     "commit_on_vad_silence": True,
+     # Make VAD slightly more patient so we do not clip trailing speech.
+     "commit_silence_ms": 900,
+     "max_utterance_ms": 8000,
+     "dup_final_suppress_ms": 150,
+     "dedupe_normalize": True,
+     # Give the utterance end detector a wider buffer to avoid premature stops.
+     "utterance_end_ms": 2100,
+     "min_segment_ms": 800,
+     "final_guard_ms": 250,
+     "allow_word_finals": False,
+ }
+ 
+ _DEFAULT_POLICY_ROUTING = {
+     "ws_version": "v2",
+ }
+ 
+ _DEFAULT_POLICY_AUDIO = {
+     "pipeline": {"mode": "pcm16"},
++    "start_on_ws_open": False,
++    "header_on_first_chunk": True,
++    "allow_capture_during_tts": False,
+ }
+ 
+ POLICY_MEDIA: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_MEDIA)
+ POLICY_CAPTURE: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_CAPTURE)
+ POLICY_RECORDER: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_RECORDER)
+ POLICY_INPUT: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_INPUT)
+ POLICY_ASR: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ASR)
+ POLICY_AUDIO: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_AUDIO)
+ POLICY_ROUTING: MutableMapping[str, Any] = dict(_DEFAULT_POLICY_ROUTING)
+ POLICY_OVERRIDES: MutableMapping[str, Any] = {
+     "media": dict(POLICY_MEDIA),
+     "capture": dict(POLICY_CAPTURE),
+     "policy": {
+         "recorder": dict(POLICY_RECORDER),
+         "input": dict(POLICY_INPUT),
+         "asr": dict(POLICY_ASR),
+         "routing": dict(POLICY_ROUTING),
+     },
+     "audio": dict(POLICY_AUDIO),
+ }
+ 
+ 
+ def _normalize_key(key: str) -> str:
+     return key.strip().lower()
+ 
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index e4503782b1b00266d83b168f6ea0f96ecd31bbaf..eb86c8968df383301a69f23f67511b2a77c20175 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -2820,50 +2820,58 @@
+       }
+ 
+       logClient(
+         `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
+       );
+       const arm =
+         typeof requestAsrArm === 'function'
+           ? requestAsrArm
+           : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
+             ? window.WSClient.requestAsrArm
+             : null;
+       if (arm) {
+         try {
+           arm('policy');
+         } catch (err) {
+           console.warn('requestAsrArm failed after asr_prearm_requested', err);
+         }
+       }
+     }
+ 
+ window.addEventListener('tts.start', (event) => {
+   const detail = event && event.detail;
+   if (detail) {
+     updateVoiceState(extractVoiceLocale(detail));
+   }
++  try {
++    // Suspend silence watchdog during greet playback.
++    if (typeof window.__silenceWD?.suspend === 'function') {
++      window.__silenceWD.suspend('tts.start');
++    } else if (typeof window.clearSilenceWatchdog === 'function') {
++      window.clearSilenceWatchdog();
++    }
++  } catch {}
+   try {
+     window.AppState.processing = false;
+     if (window.AppState.state && typeof window.AppState.state === 'object') {
+       window.AppState.state.processing = false;
+     }
+     window.AppUI?.refresh?.();
+   } catch {}
+   runtimeState.audioPlaybackIdle = false;
+   cancelAsrPartialWatchdog();
+   asrPrearmIssued = false;
+   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
+     try {
+       window.AudioRecorder.handleTtsStart();
+     } catch (err) {
+       console.warn('AudioRecorder handleTtsStart failed', err);
+     }
+   }
+   patchPolicyVad({ auto_vad_active: false });
+   vadListeningLogged = false;
+   window.AppUI?.refresh?.();
+ });
+ 
+ window.addEventListener('policy.snapshot', (event) => {
+   const frame = event && event.detail;
+   try {
+@@ -3058,50 +3066,61 @@ window.addEventListener('asr.unavailable', (event) => {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+     console.warn('diag=asr_unavailable', reasonText);
+     setBadge('asr:down');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_UNAVAILABLE',
+       reasonText ? { reason: reasonText } : undefined,
+       {
+         level: 'warn',
+         badge: 'asr:down',
+         message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
+       }
+     );
+   }
+   try {
+     scheduleAsrRearm();
+   } catch (err) {
+     console.warn('scheduleAsrRearm failed after asr.unavailable', err);
+   }
+   window.AppUI?.refresh?.();
+ });
+ 
+ window.addEventListener('asr.ready', (event) => {
+   runtimeState.asrReady = true;
+   armAsrReadyGuard();
+   maybeAutoStartCapture('asr_ready', 'policy');
++  try {
++    // Re-arm silence watchdog for the listening window.
++    if (typeof window.__silenceWD?.arm === 'function') {
++      window.__silenceWD.arm({ source: 'asr.ready' });
++    } else if (typeof window.startSilenceWatchdog === 'function') {
++      window.startSilenceWatchdog();
++    }
++  } catch {}
++  try {
++    emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
++  } catch {}
+   if (diagHudEnabled()) {
+     console.info('diag=asr_ready');
+     setBadge('asr:ready');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_READY',
+       event && typeof event === 'object' ? event.detail : undefined,
+       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+     );
+   }
+   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
+     try {
+       window.ChatView?.showSystemFromChip?.(
+         "Voice is back. You can speak again when you’re ready."
+       );
+     } catch (err) {
+       console.warn('Failed to show voice restoration message', err);
+     }
+     asrRetry.tries = 0;
+     clearTimeout(asrRetry.timer);
+     asrRetry.timer = null;
+   }
+   if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
+     try {
+       const maybe = window.AudioRecorder.startMicCaptureIfIdle();
+       if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
+diff --git a/app/static/js/audio/pcm_recorder.js b/app/static/js/audio/pcm_recorder.js
+index 9e58c34385a3d7817e9f6f813ccf5f29b246f2db..b88ef5f2be8618d88e1b0c4eacc5542b5e273064 100644
+--- a/app/static/js/audio/pcm_recorder.js
++++ b/app/static/js/audio/pcm_recorder.js
+@@ -1112,40 +1112,37 @@
+         return clone;
+       }
+     }
+ 
+     _extractPolicyFromConfig(config) {
+       if (!config || typeof config !== 'object') {
+         return null;
+       }
+       if (config.policy && typeof config.policy === 'object') {
+         return config.policy;
+       }
+       const knownKeys = new Set(['onChunk']);
+       const hasOnlyPolicyKeys = Object.keys(config).every((key) => knownKeys.has(key));
+       if (!hasOnlyPolicyKeys) {
+         return config;
+       }
+       return null;
+     }
    }
  
-   async function close(reason = DEFAULT_CLOSE_REASON) {
-     if (_audioStreaming) {
-       const offReason = typeof reason === "string" && reason ? reason : "client_shutdown";
-       hubLog("client.stream.off", { reason: offReason });
+   const recorder = new PcmRecorder();
+   if (typeof window !== 'undefined') {
+     window.AudioRecorder = recorder;
+   }
+ 
+-  // Idempotent preflight: ensure we hold a live mic track without starting the send loop.
+-  // Returns true if mic is available (existing or newly acquired).
++  // Idempotent mic preflight, no sending — used in other profiles
+   recorder.startMicCaptureIfIdle = async function startMicCaptureIfIdle() {
+     try {
+       if (this._stream && this._stream.active) return true;
+-      // Reuse the normal start path but with a no-op onChunk; we only want the track.
+       const ok = await this.start({ onChunk: () => {}, policy: {} });
+-      // Optional: immediately pause internal read loop if exposed, send path is controlled by ws_client
+       if (ok && typeof this.pause === 'function') this.pause();
+       return !!ok;
+     } catch (_) {
+       return false;
      }
-     _audioStreaming = false;
-     recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
-     await stopRecorder(reason || "client_shutdown");
-+    try { __resetAudioHeaderSent?.(); } catch {}
-     setAsrArmInFlight(false);
-     setArmAfterTtsEnd(false);
-     setAppStateValue("ttsActive", false);
-     setWsPhase("closing");
-     setWsConnected(false);
-     const emitResumeInvalid = () => {
-       if (reason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-         try {
-           window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason } }));
-         } catch {}
-       }
-     };
-     if (!socket) {
-       setWsPhase("disconnected");
-       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-       emitResumeInvalid();
+   };
+ })();
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 4a662ddbfc4ee137b70e938e4ba60cdef73fe8b2..913e0b0310b72cb50db6620cf3e4106c2353b355 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1305,52 +1305,63 @@ import { initVAD } from "./audio/vad_client.js";
+         pcmFlushTimerId = null;
+         await flushPcmBatch();
+       }, PCM_FLUSH_TIMER_MS);
+     }
+   }
+ 
+   async function enqueuePcmFrame(frame, meta) {
+     if (!(frame instanceof Int16Array) || frame.length === 0) {
        return;
      }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+     const metadata = meta && typeof meta === "object" ? { ...meta } : {};
+     pcmBatchQueue.push({ frame, meta: metadata });
+     pcmBatchSampleCount += frame.length;
+     schedulePcmFlushTimer();
+     const accumulatedMs = pcmBatchSampleCount / PCM_SAMPLES_PER_MS;
+     if (accumulatedMs >= PCM_TARGET_BATCH_MS) {
+       await flushPcmBatch();
+     }
+   }
+ 
+   async function flushPcmBatch() {
+     if (!pcmBatchQueue.length || pcmBatchSampleCount <= 0) {
+       resetPcmBatchState();
+       return;
+     }
+-    const frames = pcmBatchQueue;
+     const totalSamples = pcmBatchSampleCount;
++    // GREET-FIRST: skip batch until server is ready and header can be sent
++    if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent) {
++      if (!AppState?.asrReady) {
++        schedulePcmFlushTimer();
++        return;
++      }
++    }
++    if (!AppState?.asrReady) {
++      schedulePcmFlushTimer();
++      return;
++    }
++    const frames = pcmBatchQueue;
+     pcmBatchQueue = [];
+     pcmBatchSampleCount = 0;
+     clearPcmFlushTimer();
+     if (!totalSamples) {
+       return;
+     }
+     if (!_audioStreaming) {
+       resetPcmBatchState();
+       return;
+     }
+ 
+     const out = new Int16Array(totalSamples);
+     let offset = 0;
+     let firstSeq = 0;
+     let batchChunks = 0;
+     for (const entry of frames) {
+       if (!batchChunks && entry && entry.meta && Number.isFinite(entry.meta.seq)) {
+         firstSeq = Number(entry.meta.seq);
+       }
+       if (entry && entry.frame) {
+         out.set(entry.frame, offset);
+         offset += entry.frame.length;
+         batchChunks += 1;
+       }
+     }
+@@ -1461,53 +1472,51 @@ import { initVAD } from "./audio/vad_client.js";
+         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
+         : null);
+     if (!buffer) {
+       return;
+     }
+     if (!__firstChunkSeen) {
+       __firstChunkSeen = true;
+       try { hubLog("client.pcm.first_frame", {}); } catch {}
+     }
+     const seq = Number(event.seq) || 0;
+     micLastChunkAt = Date.now();
+     scheduleAudioKeepalive();
+     recordRecorderChunk(micLastChunkAt);
+     const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
+       ? performance.now()
+       : Date.now();
+     if (vadController && typeof vadController.onPcmFrame === "function") {
        try {
+         vadController.onPcmFrame(buffer, frameTimestamp);
+       } catch (err) {
+         try {
+           console.warn("VAD frame processing failed", err);
+         } catch {}
+       }
+     }
+-    if (!_canCaptureNow()) {
+-      return;
+-    }
++    // Do not block enqueue; flush path will honor readiness gates.
+     if (seq === 0) {
+       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
+     }
+     const frame = new Int16Array(buffer);
+     if (frame.length) {
+       let sumSq = 0;
+       for (let i = 0; i < frame.length; i += 1) {
+         const sample = frame[i] / 32768;
+         sumSq += sample * sample;
+       }
+       const rms = Math.sqrt(sumSq / frame.length);
+       if (AppState && typeof AppState === "object") {
+         AppState.micRms = rms;
+       }
+       window.StatusBar?.updateMeter?.(rms);
+     }
+     await enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
+   }
+ 
+   async function startRecorderStreaming(policy, reason) {
+     // Ensure we never stop the mic due to throttle/phase; sender loop will drop/skip while paused
+     if (AppState.listening) {
+       AppState.micLive = true;
+       return true;
+     }
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 6afcf6c7e9833dbb0cd4c6183af5af4159d3e39e..0ed2d86df0550e7634573af4863988ca0e87f85b 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -536,68 +536,114 @@ class ChatV2Adapter:
+     THROTTLE_BACKLOG_FRAMES = 6
+     THROTTLE_BACKLOG_MS = 600
+     THROTTLE_RING_BUFFER_MAX_BYTES = 16384
+ 
+     def __init__(
+         self,
+         engine: EngineHooks | None = None,
+         exporter: FileExporter | None = None,
+         *,
+         text_limit_bytes: int = TEXT_FRAME_LIMIT_BYTES,
+         binary_limit_bytes: int = BINARY_FRAME_LIMIT_BYTES,
+     ) -> None:
+         self.engine = engine
+         self.exporter = exporter
+         self.text_limit_bytes = text_limit_bytes
+         self.binary_limit_bytes = binary_limit_bytes
+         self._ip_buckets: Dict[str, TokenBucket] = {}
+         self._contexts: Dict[str, AdapterContext] = {}
+         self._ping_interval_ms = max(
+             0,
+             int(os.getenv("WS_PING_INTERVAL_MS", str(_DEFAULT_WS_PING_INTERVAL_MS))),
+         )
+         self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
+         self._policy_env_warning_logged = False
+         self._last_throttle_emit_ms: int = 0
++        # (no-op if unused; helps explicitness)
++        self._noop = None
++
++    def _server_policy(self, ctx: AdapterContext) -> Mapping[str, Any]:
++        pol = getattr(ctx.session, "policy", None) or {}
++        if not isinstance(pol, Mapping):
++            return {}
++        sp = pol.get("server", {}) if isinstance(pol.get("server"), Mapping) else {}
++        return sp
+ 
+     async def _ensure_asr_ready(
+         self,
+         send: Callable[[dict], Awaitable[None]] | None,
+         ctx: AdapterContext,
+         label: str,
+     ) -> None:
+         if ctx.asr_ready_bundle_sent_ms:
+             return
+         if send is None:
+             return
++        # GREET-FIRST: If policy syncs on tts.end and TTS is active, defer emit
++        sp = self._server_policy(ctx)
++        if bool(sp.get("sync_ready_on_tts_end", True)) and getattr(ctx.session, "tts_active", False):
++            _log.info("evt=asr_ready_deferred sid=%s where=%s", ctx.sid, label)
++            return
+         try:
+             await self._open_asr(ctx)
+             await self._send_asr_ready_bundle(send, ctx)
+             _log.info("evt=asr_ready_emit sid=%s where=%s", ctx.sid, label)
+         except Exception:
+             _log.exception("evt=asr_ready_emit_failed sid=%s where=%s", ctx.sid, label)
+ 
++    async def _handle_tts_start(
++        self,
++        send: Callable[[dict], Awaitable[None]] | None,
++        ctx: AdapterContext,
++        frame: Mapping[str, Any] | None,
++    ) -> None:
++        ctx.session.tts_active = True
++        try:
++            self._bus(
++                "tts.start",
++                {"sid": ctx.sid, "utt_id": frame.get("utt_id") if isinstance(frame, Mapping) else None},
++            )
++        except Exception:
++            _log.exception("evt=tts_start_bus_failed sid=%s", ctx.sid)
++
++    async def _handle_tts_end(
++        self,
++        send: Callable[[dict], Awaitable[None]] | None,
++        ctx: AdapterContext,
++        frame: Mapping[str, Any] | None,
++    ) -> None:
++        ctx.session.tts_active = False
++        try:
++            self._bus(
++                "tts.end",
++                {"sid": ctx.sid, "utt_id": frame.get("utt_id") if isinstance(frame, Mapping) else None},
++            )
++        except Exception:
++            _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
++        if not ctx.asr_ready_bundle_sent_ms:
++            await self._ensure_asr_ready(send, ctx, "tts_end")
++
+     async def _arm_asr_ready_deadline(
+         self,
+         send: Callable[[dict], Awaitable[None]] | None,
+         ctx: AdapterContext,
+         deadline_ms: int,
+     ) -> None:
+         try:
+             await asyncio.sleep(max(0, int(deadline_ms)) / 1000.0)
+             if ctx.asr_ready_bundle_sent_ms:
+                 return
+             _log.warning("evt=asr_ready_deadline sid=%s action=force_emit", ctx.sid)
+             await self._ensure_asr_ready(send, ctx, "deadline")
+         finally:
+             ctx.asr_ready_deadline_task = None
+ 
+     @staticmethod
+     def _turn_key(ctx: AdapterContext, req_id: Optional[str]) -> Optional[str]:
+         if isinstance(req_id, str) and req_id:
+             return f"{ctx.sid}:{req_id}"
+         return None
+ 
+     def _session_policy_env(self) -> Mapping[str, Any] | None:
+         candidates: List[tuple[str, str]] = []
+         for name in ("SESSION_POLICY", "SESSION_POLICY_JSON", "CHAT_V2_POLICY"):
+             raw_value = config.get_env(name, None)
+@@ -2845,58 +2891,53 @@ class ChatV2Adapter:
+             await self._flush_audio_backlog(ctx)
+             _log.info(
+                 "evt=audio_ingress sid=%s len=%d gate_open=%s tts_mask=%s client_mic_open=%s audio_send_closed=%s backpressure_state=%s",
+                 ctx.sid,
+                 byte_count,
+                 gate_open,
+                 mask_phase,
+                 mic_open,
+                 ctx.audio_send_closed,
+                 ctx.backpressure_state,
+             )
+             await self._forward_audio_chunk(ctx, chunk, seq)
+             return
+ 
+         if not mask_open:
+             reason = "mask"
+         elif not ready_gate:
+             reason = "not_ready"
+         elif not mic_open:
+             reason = "mic_closed"
+         elif not send_open:
+             reason = "send_closed"
+         else:
+             reason = "backpressure"
+ 
++        sp = self._server_policy(ctx)
+         try:
+-            policy_root = getattr(ctx.session, "policy", None) or {}
+-            if not isinstance(policy_root, Mapping):
+-                policy_root = {}
+-            server_policy = policy_root.get("server", {})
+-            if not isinstance(server_policy, Mapping):
+-                server_policy = {}
+-            queue_pre = bool(server_policy.get("queue_pre_ready_audio", True))
++            queue_pre = bool(sp.get("queue_pre_ready_audio", True))
+         except Exception:
+             queue_pre = True
+         if reason in ("not_ready", "send_closed", "backpressure") and queue_pre:
+             self._queue_audio_backlog(ctx, chunk, seq)
+             return
+         _log.info(
+             "evt=audio_drop sid=%s len=%d reason=%s",
+             ctx.sid,
+             byte_count,
+             reason,
+         )
+         return
+ 
+     def _queue_audio_backlog(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+         backlog = ctx.audio_backlog
+         backlog.append((seq, bytes(chunk)))
+         ctx.audio_backlog_bytes += len(chunk)
+         _log.info(
+             "evt=audio_backlog_queue sid=%s len=%d total_bytes=%d pending=%d",
+             ctx.sid,
+             len(chunk),
+             ctx.audio_backlog_bytes,
+             len(backlog),
+         )
+         while ctx.audio_backlog_bytes > self.THROTTLE_RING_BUFFER_MAX_BYTES and backlog:
+@@ -3195,64 +3236,59 @@ class ChatV2Adapter:
+                     ctx.last_server_ping_ms = now_ms
+                     await self._send_json(send, ctx.sid, ping_frame)
+             except asyncio.CancelledError:
+                 raise
+             except Exception:  # pragma: no cover - defensive
+                 _log.exception("evt=ws_keepalive_failed sid=%s", ctx.sid)
+             finally:
+                 ctx.server_keepalive_task = None
+ 
+         ctx.server_keepalive_task = asyncio.create_task(_run())
+ 
+     async def _stop_server_keepalive(self, ctx: AdapterContext) -> None:
+         task = ctx.server_keepalive_task
+         ctx.server_keepalive_task = None
+         if task is None:
+             return
+         task.cancel()
+         with contextlib.suppress(asyncio.CancelledError):
+             await task
+ 
+     def _start_outbound_bridge(
+         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+     ) -> None:
+         loop = asyncio.get_running_loop()
+         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
+-        deadline_task = ctx.asr_ready_deadline_task
+-        if deadline_task is not None:
+-            deadline_task.cancel()
++        sp = self._server_policy(ctx)
+         try:
+-            policy_root = getattr(ctx.session, "policy", None) or {}
+-            if not isinstance(policy_root, Mapping):
+-                policy_root = {}
+-            server_policy = policy_root.get("server", {})
+-            if not isinstance(server_policy, Mapping):
+-                server_policy = {}
+-            deadline_ms = int(server_policy.get("asr_ready_deadline_ms", 2500))
++            deadline_ms = int(sp.get("asr_ready_deadline_ms", 8000))
+         except Exception:
+-            deadline_ms = 2500
++            deadline_ms = 8000
+         if deadline_ms > 0:
++            deadline_task = ctx.asr_ready_deadline_task
++            if deadline_task is not None:
++                deadline_task.cancel()
+             ctx.asr_ready_deadline_task = asyncio.create_task(
+                 self._arm_asr_ready_deadline(send, ctx, deadline_ms)
+             )
+ 
+         def _schedule_throttle(reason: str) -> None:
+             try:
+                 loop.create_task(self._maybe_emit_audio_throttle(send, ctx, reason=reason))
+             except RuntimeError:
+                 try:
+                     asyncio.create_task(self._maybe_emit_audio_throttle(send, ctx, reason=reason))
+                 except RuntimeError:
+                     pass
+ 
+         def _queue_payload(payload: Dict[str, Any], *, clone: bool = True) -> None:
+             if ctx.outbox is None:
+                 return
+             item = dict(payload) if clone else payload
+             try:
+                 ctx.outbox.put_nowait(item)
+             except asyncio.QueueFull:
+                 now = ctx.outbox.qsize()
+                 try:
+                     asyncio.create_task(
+                         self._publish(
+                             EVT_WS_OUTBOX_DROP,
+@@ -3292,72 +3328,80 @@ class ChatV2Adapter:
+                     return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
+ 
+             def _on_loop() -> None:
+                 frame_type = payload.get("type")
+                 if frame_type == "tts.end":
+                     self._handle_tts_end_diag(ctx, loop, payload)
+                     req_val = payload.get("req_id") if isinstance(payload, dict) else None
+                     req_value = req_val if isinstance(req_val, str) and req_val else None
+                     if req_value:
+                         ctx.last_tts_end_req_id = req_value
+                         ctx.await_user_req_id = req_value
+                     elif isinstance(ctx.await_user_req_id, str) and ctx.await_user_req_id:
+                         ctx.last_tts_end_req_id = ctx.await_user_req_id
+                     policy_mapping = (
+                         ctx.policy_snapshot
+                         if FEATURE_LEGACY_POLICY
+                         and isinstance(ctx.policy_snapshot, Mapping)
+                         else self._policy(ctx)
+                     )
+                     self._maybe_emit_await_user(ctx, policy_mapping)
+                     _schedule_listen_handoff(req_value)
+                     ctx.session.tts_active = False
++                    try:
++                        loop.create_task(self._handle_tts_end(send, ctx, payload))
++                    except RuntimeError:
++                        asyncio.create_task(self._handle_tts_end(send, ctx, payload))
+                     if ctx.session.queued_arm and can_open(ctx.session):
+                         ctx.session.queued_arm = False
+                         try:
+                             self._schedule_asr_open(ctx)
+                         except Exception:
+                             _log.exception("evt=asr_open_after_tts_failed sid=%s", ctx.sid)
+                         else:
+                             try:
+                                 loop.create_task(
+                                     self._publish(
+                                         ASR_OPEN_AFTER_TTS,
+                                         ctx.sid,
+                                         {
+                                             "reason": "tts_end",
+                                             "state": ctx.session.asr_state,
+                                         },
+                                     )
+                                 )
+                             except RuntimeError:
+                                 pass
+                 elif frame_type == "tts.start":
+                     ctx.session.tts_active = True
++                    try:
++                        loop.create_task(self._handle_tts_start(send, ctx, payload))
++                    except RuntimeError:
++                        asyncio.create_task(self._handle_tts_start(send, ctx, payload))
+                 _enqueue(payload)
+ 
+             try:
+                 loop.call_soon_threadsafe(_on_loop)
+             except RuntimeError:
+                 pass
+ 
+         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
+ 
+         def _handle_asr_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+ 
+             event_type = event.get("type")
+             if event_type in {EVT_ASR_PARTIAL, EVT_ASR_FINAL}:
+                 now_ms = self._now_ms()
+                 ctx.session.last_vendor_activity_ms = float(now_ms)
+                 if isinstance(event, Mapping):
+                     self._emit_server_vendor_activity(ctx, event_type, event, now_ms)
+                 if event_type == EVT_ASR_PARTIAL:
+                     self._maybe_emit_first_token_latency(ctx, "partial", now_ms)
+                 else:
+                     self._maybe_emit_first_token_latency(ctx, "final", now_ms)
+ 
+             def _on_loop() -> None:
+@@ -5848,58 +5892,53 @@ class ChatV2Adapter:
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
+ 
+     async def _maybe_emit_audio_throttle(
+         self,
+         send: Callable[[dict], Awaitable[None]] | None,
+         ctx: AdapterContext,
+         reason: str = "audio_backlog",
+     ) -> None:
+         if send is None:
+             return
+         now = int(time.time() * 1000)
+         if getattr(ctx.session, "tts_active", False):
+             return
++        sp = self._server_policy(ctx)
+         try:
+-            policy_root = getattr(ctx.session, "policy", None) or {}
+-            if not isinstance(policy_root, Mapping):
+-                policy_root = {}
+-            server_policy = policy_root.get("server", {})
+-            if not isinstance(server_policy, Mapping):
+-                server_policy = {}
+-            grace_ms = int(server_policy.get("throttle_grace_ms", self.THROTTLE_GRACE_AFTER_READY_MS))
++            grace_ms = int(sp.get("throttle_grace_ms", self.THROTTLE_GRACE_AFTER_READY_MS))
+         except Exception:
+             grace_ms = self.THROTTLE_GRACE_AFTER_READY_MS
+         ready_sent = ctx.asr_ready_bundle_sent_ms
+         if ready_sent and (now - ready_sent) < grace_ms:
+             return
+         if (now - getattr(self, "_last_throttle_emit_ms", 0)) < self.THROTTLE_COOLDOWN_MS:
+             return
+         backlog_ok = False
+         if ctx.ing_chunks >= self.THROTTLE_BACKLOG_FRAMES:
+             backlog_ok = True
+         elif ctx.ing_last_tick_t0_ms is not None:
+             if (now - ctx.ing_last_tick_t0_ms) > self.THROTTLE_BACKLOG_MS:
+                 backlog_ok = True
+         if not backlog_ok:
+             return
+         try:
+             await self._send_json(send, ctx.sid, {"type": "audio.throttle", "ms": self.THROTTLE_BURST_MS})
+             self._last_throttle_emit_ms = now
+             _log.info(
+                 "evt=audio_throttle_emit sid=%s reason=%s ms=%s",
+                 ctx.sid,
+                 reason,
+                 self.THROTTLE_BURST_MS,
+             )
+         except Exception:
+diff --git a/app/ws/policy.py b/app/ws/policy.py
+index 2ed5d6f3b539f35fdf014179e2932fb6c5503f3e..40ef7c4336ffd4901bb0af4842a5d5f8c719bc19 100644
+--- a/app/ws/policy.py
++++ b/app/ws/policy.py
+@@ -21,55 +21,65 @@ DEPRECATED_KEYS = {
+     ("input", "require_hotword_to_start"),
+     ("input", "require_user_gesture_first_visit"),  # keep only if UX requires
+     ("audio", "pipeline", "mode"),
+     ("media", "asr_input"),
+ }
+ 
+ SAFE_DEFAULTS_V2: dict[str, Any] = {
+     "version": POLICY_VERSION,
+     "asr": {
+         "server_starts_input": True,
+         "prearm_on_tts_end": True,
+         "cold_start_grace_ms": 3000,
+     },
+     "vad": {
+         "warmup_ms": 1500,
+         "sender_gate_on_tts": True,
+         "client": {
+             "enable": True,
+             "threshold_dbfs": -60,
+             "attack_ms": 80,
+             "release_ms": 250,
+             "pre_roll_ms": 240,
+             "min_active_ms": 300,
+         },
+     },
++    "audio": {
++        "start_on_ws_open": False,
++        "header_on_first_chunk": True,
++        "allow_capture_during_tts": False,
++    },
+     "watchdog": {
+         "partial_wait_ms_first_turn": 3500,
+     },
+     "server": {
+         "buffer_prestart_audio_ms": 300,
++        "sync_ready_on_tts_end": True,
++        "asr_ready_deadline_ms": 8000,
++        "throttle_grace_ms": 2000,
++        "queue_pre_ready_audio": True,
++        "drop_pre_tts_audio_ms": 0,
+     },
+     "capture": {
+         "mode": "webrtc_aec",  # "webrtc_aec" | "pcm"
+         "constraints": {
+             "echoCancellation": True,
+             "noiseSuppression": True,
+             "autoGainControl": False,
+             "channelCount": 1,
+             "sampleRate": 48000,
+         }
+     },
+     "ui": {
+         "status": {
+             "require_active_turn": True,
+             "enable_meter": True,
+         }
+     },
+ }
+ 
+ 
+ def _get(d: Mapping[str, Any], path: Sequence[str], default: Any = None) -> Any:
+     cur: Any = d
+     for key in path:
+         if not isinstance(cur, Mapping) or key not in cur:
+             return default
