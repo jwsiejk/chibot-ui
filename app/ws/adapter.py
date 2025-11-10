@@ -5611,6 +5611,16 @@ class ChatV2Adapter:
             ctx.asr_close_reason = None
             ctx.session.first_chunk_sent = False
             _publish_invariant("open", True)
+            # Notify the adapter bus that the Speechmatics stream is ready so trackers fire.
+            bus.publish(
+                {
+                    "type": EVT_ASR_READY,
+                    "sid": ctx.sid,
+                    "who": "server",
+                    "source": "ws.adapter",
+                    "vendor": "speechmatics",
+                }
+            )
 
         def _on_closed(reason: str) -> None:
             ctx.session.asr = None
@@ -5868,6 +5878,7 @@ class ChatV2Adapter:
 
         self._mark_input_start(ctx)
         await self._send_json(send, ctx.sid, input_start)
+        ctx.client_mic_open = True  # allow first audio chunk through immediately
         ctx.pending_start_listening = dict(start_payload)
         ctx.pending_start_listening_sent = False
         if ctx.asr_ready:
