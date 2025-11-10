@@ -5646,15 +5646,24 @@ class ChatV2Adapter:
         descriptor = dict(self._input_descriptor_for_mode(mode))
         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
         vendor = ctx.asr_vendor or "speechmatics"
-        ready_frame = {
+        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
+        now_ms = int(time.time() * 1000)
+        input_payload = dict(descriptor)
+        input_payload.setdefault("mode", mode)
+        input_payload["mime"] = descriptor.get("mime", "")
+        input_payload["timeslice_ms"] = timeslice_ms
+        asr_ready_frame = {
             "type": "asr.ready",
-            "input": dict(descriptor),
+            "ts_ms": now_ms,
             "vendor": vendor,
+            "input": input_payload,
         }
+        if session_policy:
+            asr_ready_frame["policy"] = session_policy
+
         capture = dict(descriptor)
         capture["timeslice_ms"] = timeslice_ms
         capture["manual_gate"] = False
-        session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
         input_start = {
             "type": "input.start",
             "capture": capture,
@@ -5666,7 +5675,6 @@ class ChatV2Adapter:
         if session_policy:
             start_payload["policy"] = session_policy
 
-        now_ms = int(time.time() * 1000)
         ctx.awaiting_asr_ready = True
         ctx.client_capture_armed = True
         ctx.asr_recovering_until = 0.0
@@ -5678,7 +5686,19 @@ class ChatV2Adapter:
         ctx.mic_armed_ms = now_ms
         ctx.asr_ready_bundle_sent_ms = now_ms
 
-        await self._send_json(send, ctx.sid, ready_frame)
+        try:
+            await self._send_json(send, ctx.sid, asr_ready_frame)
+            _log.info(
+                "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
+                ctx.sid,
+                mode,
+                descriptor.get("mime", ""),
+                timeslice_ms,
+                vendor,
+            )
+        except Exception:
+            _log.warning("evt=asr_ready_bundle_send_failed sid=%s", ctx.sid, exc_info=True)
+
         self._mark_input_start(ctx)
         await self._send_json(send, ctx.sid, input_start)
         ctx.pending_start_listening = dict(start_payload)
@@ -5693,14 +5713,7 @@ class ChatV2Adapter:
                 await self._send_json(send, ctx.sid, turn_begin_payload)
             except Exception:  # pragma: no cover - defensive logging
                 _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
-        _log.info(
-            "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
-            ctx.sid,
-            mode,
-            descriptor.get("mime", ""),
-            timeslice_ms,
-            vendor,
-        )
+        
 
     @staticmethod
     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
