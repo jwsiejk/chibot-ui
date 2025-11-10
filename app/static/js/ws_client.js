@@ -529,6 +529,18 @@ import { initVAD } from "./audio/vad_client.js";
     return ws && ws.readyState === WebSocket.OPEN ? ws : null;
   }
 
+  function isControlFrame(frame) {
+    if (!frame || typeof frame !== "object") {
+      return false;
+    }
+    const type = typeof frame.type === "string" ? frame.type : "";
+    return type === "input.start"
+      || type === "input.stop"
+      || type === "audio.header"
+      || type === "ping"
+      || type === "pong";
+  }
+
   // ---- Turn opener (idempotent + retry) ----
   let __turnOpen = false, __turnOpenAt = 0;
   async function openTurnOnce(reason) {
@@ -4384,8 +4396,14 @@ import { initVAD } from "./audio/vad_client.js";
         } catch {}
       }
     }
-    const live = client._ws || stateSocket;
-    if (!skipPhaseCheck && !binary) {
+    let live = client._ws || stateSocket;
+    if (!live) {
+      live = wsOpen();
+    }
+    const isControl = !binary && isControlFrame(data);
+    const open = live && live.readyState === WebSocket.OPEN;
+
+    if (!skipPhaseCheck && !binary && !isControl) {
       try {
         const phase = AppState?.wsPhase || AppState?.connectionState;
         if (!WS_READY_PHASES.has(phase)) {
@@ -4395,14 +4413,28 @@ import { initVAD } from "./audio/vad_client.js";
         }
       } catch {}
     }
-    if (!live || live.readyState !== WebSocket.OPEN) {
+
+    if (!open) {
       client._queue.push({ data, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");
       return true;
     }
+
     client._ws = live;
     client._connected = true;
     try { live.binaryType = "arraybuffer"; } catch {}
+
+    if (!binary && isControl) {
+      const text = typeof data === "string" ? data : JSON.stringify(data);
+      try {
+        live.send(text);
+        return true;
+      } catch (err) {
+        console.error("WSClient send error", err);
+        return false;
+      }
+    }
+
     if (binary) {
       if (payload instanceof Blob) {
         return payload.arrayBuffer().then((buf) => {
@@ -4514,14 +4546,7 @@ import { initVAD } from "./audio/vad_client.js";
     try {
       const ws = WSClient?._ws || window.ws;
       const open = ws && ws.readyState === WebSocket.OPEN;
-      const isControl = payload && typeof payload === "object" && (
-        payload.type === "input.start" ||
-        payload.type === "input.stop"  ||
-        payload.type === "audio.header"||
-        payload.type === "ping"        ||
-        payload.type === "pong"
-      );
-      if (open && isControl) {
+      if (open && isControlFrame(payload)) {
         try {
           ws.send(JSON.stringify(payload));
           return true;
@@ -4541,13 +4566,7 @@ import { initVAD } from "./audio/vad_client.js";
       try {
         const ws = WSClient?._ws || window.ws;
         const open = ws && ws.readyState === WebSocket.OPEN;
-        const isControl = frame && typeof frame === "object" && (
-          frame.type === "input.start" ||
-          frame.type === "input.stop"  ||
-          frame.type === "audio.header"||
-          frame.type === "ping"        ||
-          frame.type === "pong"
-        );
+        const isControl = isControlFrame(frame);
         if (open && isControl) {
           try {
             ws.send(JSON.stringify(frame));

@@ -7,18 +7,23 @@
       if (!host) return;
 
       const REQUIRE_ACTIVE_TURN = Boolean((ui?.policy?.ui?.status?.require_active_turn) ?? true);
+      const activeTurn = Boolean(ui?.asrTurnActive ?? ui?.state?.asrTurnActive);
 
       const f = {
         connected:    !!(ui.wsConn || ui.wsConning),
         asrReady:     !!ui.asrReady,
-        micOpen:      !!ui.micLive,
+        micOpen:      !!(ui.micLive || ui.listening),
         ttsActive:    !!ui.tts,
         senderPaused: !!ui.senderPaused,
       };
-      let canCapture = f.asrReady && f.micOpen && !f.ttsActive && !f.senderPaused;
-      const activeTurn = !!ui.asrTurnActive;
-      if (REQUIRE_ACTIVE_TURN) {
-        canCapture = canCapture && activeTurn;
+      const canCapture = f.asrReady && f.micOpen && !f.ttsActive;
+
+      const hints = [];
+      if (REQUIRE_ACTIVE_TURN && !activeTurn && canCapture) {
+        hints.push("Opening turn…");
+      }
+      if (f.senderPaused && canCapture) {
+        hints.push("Quiet (VAD)");
       }
 
       let st;
@@ -26,14 +31,15 @@
         st = { label: "Speaking…", sub: "Say “Hold on” to interrupt.", tone: "blue" };
       } else if (!f.connected) {
         st = { label: "Ready", sub: "Press Start to begin.", tone: "gray" };
-      } else if (f.senderPaused) {
-        st = { label: "Paused", sub: "Resume to keep listening.", tone: "gray" };
+      } else if (!f.micOpen) {
+        st = { label: "Stand by", sub: "Press Start to open the mic.", tone: "amber" };
+      } else if (!f.asrReady) {
+        st = { label: "Preparing mic…", sub: "Getting ready to listen.", tone: "amber" };
       } else if (canCapture) {
-        st = { label: "Listening", sub: "You can speak now.", tone: "green" };
+        const subText = hints.length ? hints.join(" · ") : "You can speak now.";
+        st = { label: "Listening", sub: subText, tone: "green" };
       } else if (REQUIRE_ACTIVE_TURN && !activeTurn) {
         st = { label: "Stand by", sub: "Waiting for your turn…", tone: "amber" };
-      } else if (f.asrReady) {
-        st = { label: "Preparing mic…", sub: "Getting ready to listen.", tone: "amber" };
       } else {
         st = { label: "Ready", sub: "", tone: "gray" };
       }

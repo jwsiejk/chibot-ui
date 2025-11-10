@@ -1127,7 +1127,30 @@
       if (typeof window === 'undefined') {
         return;
       }
-      if (!isRecorderListening() || AppState?.ttsActive) {
+      const snapshot = (() => {
+        try {
+          if (typeof AppState?.getState === 'function') {
+            return AppState.getState() || {};
+          }
+        } catch {}
+        return AppState || {};
+      })();
+      const nested = snapshot && typeof snapshot.state === 'object' ? snapshot.state : {};
+      const turnActive = Boolean(snapshot.asrTurnActive ?? nested.asrTurnActive);
+      const firstFrame = (typeof WSClient?.__firstChunkSeen === 'function') ? WSClient.__firstChunkSeen() : false;
+      const speechActive = (() => {
+        if (typeof snapshot.vadSpeech !== 'undefined') return !!snapshot.vadSpeech;
+        if (typeof nested.vadSpeech !== 'undefined') return !!nested.vadSpeech;
+        if (snapshot.lastSpeechAt != null) return true;
+        if (nested.lastSpeechAt != null) return true;
+        return false;
+      })();
+      const bytesSent = (() => {
+        if (Number.isFinite(snapshot.chunkCount)) return snapshot.chunkCount;
+        if (Number.isFinite(AppState?.chunkCount)) return AppState.chunkCount;
+        return 0;
+      })();
+      if (!isRecorderListening() || AppState?.ttsActive || !turnActive || !firstFrame || (!speechActive && bytesSent < 12)) {
         cancelAsrPartialWatchdog();
         return;
       }
@@ -1136,21 +1159,54 @@
       }
       asrPartialWatchdogTimerId = window.setTimeout(() => {
         asrPartialWatchdogTimerId = null;
-        if (!isRecorderListening() || AppState?.ttsActive) {
+        const latestSnapshot = (() => {
+          try {
+            if (typeof AppState?.getState === 'function') {
+              return AppState.getState() || {};
+            }
+          } catch {}
+          return AppState || {};
+        })();
+        const latestNested = latestSnapshot && typeof latestSnapshot.state === 'object' ? latestSnapshot.state : {};
+        const latestTurnActive = Boolean(latestSnapshot.asrTurnActive ?? latestNested.asrTurnActive);
+        const latestFirstFrame = (typeof WSClient?.__firstChunkSeen === 'function') ? WSClient.__firstChunkSeen() : false;
+        const latestSpeechActive = (() => {
+          if (typeof latestSnapshot.vadSpeech !== 'undefined') return !!latestSnapshot.vadSpeech;
+          if (typeof latestNested.vadSpeech !== 'undefined') return !!latestNested.vadSpeech;
+          if (latestSnapshot.lastSpeechAt != null) return true;
+          if (latestNested.lastSpeechAt != null) return true;
+          return false;
+        })();
+        const latestBytesSent = (() => {
+          if (Number.isFinite(latestSnapshot.chunkCount)) return latestSnapshot.chunkCount;
+          if (Number.isFinite(AppState?.chunkCount)) return AppState.chunkCount;
+          return 0;
+        })();
+        const recorderLive = isRecorderListening() || AppState?.listening || window.AudioRecorder?.listening;
+        if (!isRecorderListening() || AppState?.ttsActive || !latestTurnActive || !latestFirstFrame || (!latestSpeechActive && latestBytesSent < 12)) {
+          cancelAsrPartialWatchdog();
           return;
         }
         const now = Date.now();
         const inGraceWindow = now < __firstTurnGraceUntil;
-        const recorderLive = isRecorderListening() || AppState?.listening || window.AudioRecorder?.listening;
-        const firstFrame = (typeof WSClient?.__firstChunkSeen === 'function') ? WSClient.__firstChunkSeen() : false;
-        if ((runtimeState.isArming || inGraceWindow || !firstFrame) && !recorderLive) {
+        const asrReadyNow = (() => {
+          if (typeof latestSnapshot.asrReady !== 'undefined') return !!latestSnapshot.asrReady;
+          if (typeof latestNested.asrReady !== 'undefined') return !!latestNested.asrReady;
+          if (typeof AppState?.asrReady !== 'undefined') return !!AppState.asrReady;
+          return false;
+        })();
+        if ((runtimeState.isArming || inGraceWindow || !latestFirstFrame || !asrReadyNow || (!latestSpeechActive && latestBytesSent < 12)) && !recorderLive) {
           const graceMs = Math.max(0, __firstTurnGraceUntil - now);
           logClient('watchdog_suppressed_during_grace', {
             reason: 'partial_watchdog',
             grace_ms: graceMs,
             isArming: !!runtimeState.isArming,
-            firstFrame,
+            firstFrame: latestFirstFrame,
+            asrReady: asrReadyNow,
+            speechActive: latestSpeechActive,
+            bytesSent: latestBytesSent,
           });
+          armAsrPartialWatchdog();
           return;
         }
         let stopAttempted = false;
