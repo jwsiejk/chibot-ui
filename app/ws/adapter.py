@@ -534,7 +534,7 @@ class ChatV2Adapter:
     THROTTLE_BURST_MS = 250
     THROTTLE_BACKLOG_FRAMES = 6
     THROTTLE_BACKLOG_MS = 600
-    THROTTLE_RING_BUFFER_MAX_BYTES = 11520
+    THROTTLE_RING_BUFFER_MAX_BYTES = 16384
 
     def __init__(
         self,
@@ -5696,6 +5696,8 @@ class ChatV2Adapter:
         send: Callable[[dict], Awaitable[None]],
         ctx: AdapterContext,
     ) -> None:
+        if ctx.asr_ready_bundle_sent_ms is not None:
+            return
         mode = ctx.audio_pipeline_mode or "pcm16"
         descriptor = dict(self._input_descriptor_for_mode(mode))
         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
