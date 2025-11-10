@@ -493,6 +493,7 @@ class AdapterContext:
     listen_handoff_done: set[str] = field(default_factory=set)
     listen_handoff_task: asyncio.Task[None] | None = None
     listen_handoff_task_key: Optional[str] = None
+    asr_ready_deadline_task: asyncio.Task[None] | None = None
     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     client_banner_info: Optional[Dict[str, Any]] = None
     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
@@ -557,6 +558,38 @@ class ChatV2Adapter:
         self._policy_defaults_emitted: Dict[Optional[str], bool] = {}
         self._policy_env_warning_logged = False
         self._last_throttle_emit_ms: int = 0
+
+    async def _ensure_asr_ready(
+        self,
+        send: Callable[[dict], Awaitable[None]] | None,
+        ctx: AdapterContext,
+        label: str,
+    ) -> None:
+        if ctx.asr_ready_bundle_sent_ms:
+            return
+        if send is None:
+            return
+        try:
+            await self._open_asr(ctx)
+            await self._send_asr_ready_bundle(send, ctx)
+            _log.info("evt=asr_ready_emit sid=%s where=%s", ctx.sid, label)
+        except Exception:
+            _log.exception("evt=asr_ready_emit_failed sid=%s where=%s", ctx.sid, label)
+
+    async def _arm_asr_ready_deadline(
+        self,
+        send: Callable[[dict], Awaitable[None]] | None,
+        ctx: AdapterContext,
+        deadline_ms: int,
+    ) -> None:
+        try:
+            await asyncio.sleep(max(0, int(deadline_ms)) / 1000.0)
+            if ctx.asr_ready_bundle_sent_ms:
+                return
+            _log.warning("evt=asr_ready_deadline sid=%s action=force_emit", ctx.sid)
+            await self._ensure_asr_ready(send, ctx, "deadline")
+        finally:
+            ctx.asr_ready_deadline_task = None
 
     @staticmethod
     def _turn_key(ctx: AdapterContext, req_id: Optional[str]) -> Optional[str]:
@@ -2834,15 +2867,25 @@ class ChatV2Adapter:
         else:
             reason = "backpressure"
 
-        if reason == "backpressure":
+        try:
+            policy_root = getattr(ctx.session, "policy", None) or {}
+            if not isinstance(policy_root, Mapping):
+                policy_root = {}
+            server_policy = policy_root.get("server", {})
+            if not isinstance(server_policy, Mapping):
+                server_policy = {}
+            queue_pre = bool(server_policy.get("queue_pre_ready_audio", True))
+        except Exception:
+            queue_pre = True
+        if reason in ("not_ready", "send_closed", "backpressure") and queue_pre:
             self._queue_audio_backlog(ctx, chunk, seq)
-        else:
-            _log.info(
-                "evt=audio_drop sid=%s len=%d reason=%s",
-                ctx.sid,
-                byte_count,
-                reason,
-            )
+            return
+        _log.info(
+            "evt=audio_drop sid=%s len=%d reason=%s",
+            ctx.sid,
+            byte_count,
+            reason,
+        )
         return
 
     def _queue_audio_backlog(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
@@ -3174,6 +3217,23 @@ class ChatV2Adapter:
     ) -> None:
         loop = asyncio.get_running_loop()
         ctx.outbox = asyncio.Queue(maxsize=_OUTBOX_MAXSIZE)
+        deadline_task = ctx.asr_ready_deadline_task
+        if deadline_task is not None:
+            deadline_task.cancel()
+        try:
+            policy_root = getattr(ctx.session, "policy", None) or {}
+            if not isinstance(policy_root, Mapping):
+                policy_root = {}
+            server_policy = policy_root.get("server", {})
+            if not isinstance(server_policy, Mapping):
+                server_policy = {}
+            deadline_ms = int(server_policy.get("asr_ready_deadline_ms", 2500))
+        except Exception:
+            deadline_ms = 2500
+        if deadline_ms > 0:
+            ctx.asr_ready_deadline_task = asyncio.create_task(
+                self._arm_asr_ready_deadline(send, ctx, deadline_ms)
+            )
 
         def _schedule_throttle(reason: str) -> None:
             try:
@@ -4406,6 +4466,13 @@ class ChatV2Adapter:
             pending_handoff.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pending_handoff
+
+        deadline_task = ctx.asr_ready_deadline_task
+        ctx.asr_ready_deadline_task = None
+        if deadline_task is not None:
+            deadline_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await deadline_task
 
         pending_audio = list(ctx.audio_tasks)
         if pending_audio:
@@ -5803,8 +5870,18 @@ class ChatV2Adapter:
         now = int(time.time() * 1000)
         if getattr(ctx.session, "tts_active", False):
             return
+        try:
+            policy_root = getattr(ctx.session, "policy", None) or {}
+            if not isinstance(policy_root, Mapping):
+                policy_root = {}
+            server_policy = policy_root.get("server", {})
+            if not isinstance(server_policy, Mapping):
+                server_policy = {}
+            grace_ms = int(server_policy.get("throttle_grace_ms", self.THROTTLE_GRACE_AFTER_READY_MS))
+        except Exception:
+            grace_ms = self.THROTTLE_GRACE_AFTER_READY_MS
         ready_sent = ctx.asr_ready_bundle_sent_ms
-        if ready_sent and (now - ready_sent) < self.THROTTLE_GRACE_AFTER_READY_MS:
+        if ready_sent and (now - ready_sent) < grace_ms:
             return
         if (now - getattr(self, "_last_throttle_emit_ms", 0)) < self.THROTTLE_COOLDOWN_MS:
             return

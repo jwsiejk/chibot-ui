@@ -1319,6 +1319,17 @@ import { initVAD } from "./audio/vad_client.js";
     if (!batchChunks) {
       return;
     }
+    if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent) {
+      try {
+        sendAudioHeader(AppState?.policy || {});
+      } catch (err) {
+        console.warn('pcm.flush: header send threw', err);
+      }
+      if (!__audioHeaderSent) {
+        console.warn('pcm.flush: header send failed; skipping batch');
+        return;
+      }
+    }
     const bytes = out.byteLength;
     logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
     const liveSocket = socket || (WSClient && WSClient._ws) || null;

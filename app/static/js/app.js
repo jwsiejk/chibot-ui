@@ -3123,16 +3123,35 @@ window.addEventListener('assistant.suggestions', (event) => {
 
 
 // Start mic immediately on ws.open as a safety net; send diag banner
-window.addEventListener('ws.open', () => {
+window.addEventListener('ws.open', async () => {
   vadListeningLogged = false;
-  if (audioRecorder && typeof audioRecorder.start === 'function') {
-    audioRecorder.start()
-      .then(() => {
-        setMicPermissionGranted(true, 'ws.open_start');
-      })
-      .catch(() => {
-        setMicPermissionGranted(false, 'ws.open_start_error');
-      });
+  const pol = (window.AppState && window.AppState.policy) || {};
+  const shouldAutoStart = pol?.audio?.start_on_ws_open === true;
+  if (shouldAutoStart) {
+    try {
+      if (typeof window.beginWarmup === 'function') {
+        window.beginWarmup(1400);
+      }
+    } catch (err) {
+      console.warn('ws.open warmup failed', err);
+    }
+    try {
+      const recorder = window.AudioRecorder;
+      if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
+        const micReady = await recorder.startMicCaptureIfIdle();
+        setMicPermissionGranted(Boolean(micReady), micReady ? 'ws.open_start' : 'ws.open_start_error');
+      }
+    } catch (err) {
+      console.warn('AudioRecorder.startMicCaptureIfIdle on ws.open failed', err);
+      setMicPermissionGranted(false, 'ws.open_start_error');
+    }
+    try {
+      if (WSClient && typeof WSClient.startRecorderStreaming === 'function') {
+        WSClient.startRecorderStreaming(pol, 'ws_open');
+      }
+    } catch (err) {
+      console.warn('WSClient.startRecorderStreaming on ws.open failed', err);
+    }
   }
   try {
     if (WSClient && typeof WSClient.sendJSON === 'function') {
