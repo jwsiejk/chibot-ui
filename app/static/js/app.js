@@ -630,6 +630,65 @@
     const deferredClientLogs = [];
     let deferredClientLogFlushTimer = null;
 
+    const MAX_DEFERRED_CLIENT_LOGS = 64;
+    const DEFERRED_CLIENT_LOG_FLUSH_DELAY_MS = 500;
+
+    function scheduleDeferredClientLogFlush() {
+      if (deferredClientLogFlushTimer || typeof setTimeout !== "function") {
+        return;
+      }
+      deferredClientLogFlushTimer = setTimeout(() => {
+        deferredClientLogFlushTimer = null;
+        try {
+          flushDeferredClientLogs();
+        } catch (err) {
+          try {
+            console.warn("flushDeferredClientLogs failed", err);
+          } catch (_) {}
+        }
+      }, DEFERRED_CLIENT_LOG_FLUSH_DELAY_MS);
+    }
+
+    function enqueueDeferredClientLog(label, detail) {
+      if (!Array.isArray(deferredClientLogs)) {
+        return;
+      }
+      const normalizedLabel = typeof label === "string" && label ? label : "event";
+      const normalizedDetail = cloneDiagDetail(detail);
+      if (deferredClientLogs.length >= MAX_DEFERRED_CLIENT_LOGS) {
+        deferredClientLogs.shift();
+      }
+      deferredClientLogs.push({ label: normalizedLabel, detail: normalizedDetail });
+      scheduleDeferredClientLogFlush();
+    }
+
+    function flushDeferredClientLogs() {
+      if (!Array.isArray(deferredClientLogs) || !deferredClientLogs.length) {
+        if (deferredClientLogFlushTimer) {
+          clearTimeout(deferredClientLogFlushTimer);
+          deferredClientLogFlushTimer = null;
+        }
+        return;
+      }
+      const wsClient = getWsClient();
+      if (!wsClientIsConnected(wsClient)) {
+        scheduleDeferredClientLogFlush();
+        return;
+      }
+      while (deferredClientLogs.length) {
+        const entry = deferredClientLogs[0];
+        if (!sendClientLog(entry.label, entry.detail)) {
+          scheduleDeferredClientLogFlush();
+          return;
+        }
+        deferredClientLogs.shift();
+      }
+      if (deferredClientLogFlushTimer) {
+        clearTimeout(deferredClientLogFlushTimer);
+        deferredClientLogFlushTimer = null;
+      }
+    }
+
     function installHubInterface() {
       const hub = AppState && AppState.hub;
       if (!hub || typeof hub._install !== "function") {
@@ -909,6 +968,49 @@
         }
       }
       return 'unknown';
+    }
+
+    function isRecorderListening() {
+      try {
+        if (audioRecorder && typeof audioRecorder.isListening === "function") {
+          return !!audioRecorder.isListening();
+        }
+      } catch (_) {}
+      if (audioRecorder && typeof audioRecorder.listening === "boolean") {
+        return audioRecorder.listening;
+      }
+      const winRecorder = typeof window !== "undefined" ? window.AudioRecorder : null;
+      try {
+        if (winRecorder && typeof winRecorder.isListening === "function") {
+          return !!winRecorder.isListening();
+        }
+      } catch (_) {}
+      if (winRecorder && typeof winRecorder.listening === "boolean") {
+        return winRecorder.listening;
+      }
+      let stateSnapshot = null;
+      try {
+        stateSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
+      } catch (_) {
+        stateSnapshot = AppState;
+      }
+      if (stateSnapshot && typeof stateSnapshot === "object") {
+        if (typeof stateSnapshot.listening === "boolean") {
+          return stateSnapshot.listening;
+        }
+        if (typeof stateSnapshot.micLive === "boolean") {
+          return stateSnapshot.micLive;
+        }
+        if (stateSnapshot.state && typeof stateSnapshot.state === "object") {
+          if (typeof stateSnapshot.state.listening === "boolean") {
+            return stateSnapshot.state.listening;
+          }
+          if (typeof stateSnapshot.state.micLive === "boolean") {
+            return stateSnapshot.state.micLive;
+          }
+        }
+      }
+      return false;
     }
 
     function updateRecordingState(active, source) {

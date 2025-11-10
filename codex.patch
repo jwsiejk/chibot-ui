@@ -1,117 +1,208 @@
-diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 0ed2d86df0550e7634573af4863988ca0e87f85b..6d41e66a4ee22e699107f6d11bb098ed1d9e93ef 100644
---- a/app/ws/adapter.py
-+++ b/app/ws/adapter.py
-@@ -5589,50 +5589,60 @@ class ChatV2Adapter:
-             "audio_format": {"type": "raw", "encoding": "pcm_s16le", "sample_rate": 16000},
-             "transcription_config": {"language": language},
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 017604bc7595cb521561a51b1e55ba17bedc400c..2bfa112089a629ca1224cae62da225d6b20e7995 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -608,50 +608,109 @@
+     }
+     await loadScript("audio/vad_client.js");
+     if (!window.WSClient) {
+       await loadScript("ws_client.js");
+     }
+     if (!window.TranscriptView) {
+       await loadScript("transcript_view.js");
+     }
+     if (!window.WSErrorUI) {
+       await loadScript("errors.js");
+     }
+   }
+ 
+   async function init() {
+     await bootstrapClientConfig();
+     await ensureRuntimeModules();
+ 
+     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
+     const AppState = window.AppState;
+     const WSClient = window.WSClient;
+     const audioRecorder = window.AudioRecorder || null;
+ 
+     const deferredClientLogs = [];
+     let deferredClientLogFlushTimer = null;
+ 
++    const MAX_DEFERRED_CLIENT_LOGS = 64;
++    const DEFERRED_CLIENT_LOG_FLUSH_DELAY_MS = 500;
++
++    function scheduleDeferredClientLogFlush() {
++      if (deferredClientLogFlushTimer || typeof setTimeout !== "function") {
++        return;
++      }
++      deferredClientLogFlushTimer = setTimeout(() => {
++        deferredClientLogFlushTimer = null;
++        try {
++          flushDeferredClientLogs();
++        } catch (err) {
++          try {
++            console.warn("flushDeferredClientLogs failed", err);
++          } catch (_) {}
++        }
++      }, DEFERRED_CLIENT_LOG_FLUSH_DELAY_MS);
++    }
++
++    function enqueueDeferredClientLog(label, detail) {
++      if (!Array.isArray(deferredClientLogs)) {
++        return;
++      }
++      const normalizedLabel = typeof label === "string" && label ? label : "event";
++      const normalizedDetail = cloneDiagDetail(detail);
++      if (deferredClientLogs.length >= MAX_DEFERRED_CLIENT_LOGS) {
++        deferredClientLogs.shift();
++      }
++      deferredClientLogs.push({ label: normalizedLabel, detail: normalizedDetail });
++      scheduleDeferredClientLogFlush();
++    }
++
++    function flushDeferredClientLogs() {
++      if (!Array.isArray(deferredClientLogs) || !deferredClientLogs.length) {
++        if (deferredClientLogFlushTimer) {
++          clearTimeout(deferredClientLogFlushTimer);
++          deferredClientLogFlushTimer = null;
++        }
++        return;
++      }
++      const wsClient = getWsClient();
++      if (!wsClientIsConnected(wsClient)) {
++        scheduleDeferredClientLogFlush();
++        return;
++      }
++      while (deferredClientLogs.length) {
++        const entry = deferredClientLogs[0];
++        if (!sendClientLog(entry.label, entry.detail)) {
++          scheduleDeferredClientLogFlush();
++          return;
++        }
++        deferredClientLogs.shift();
++      }
++      if (deferredClientLogFlushTimer) {
++        clearTimeout(deferredClientLogFlushTimer);
++        deferredClientLogFlushTimer = null;
++      }
++    }
++
+     function installHubInterface() {
+       const hub = AppState && AppState.hub;
+       if (!hub || typeof hub._install !== "function") {
+         return;
+       }
+ 
+       const sendThroughPipe = (label, detail) => {
+         if (!sendClientLog(label, detail)) {
+           enqueueDeferredClientLog(label, detail);
          }
+       };
  
-     def _create_sm_client(self, ctx: AdapterContext) -> SMRealtimeClient:
-         loop = asyncio.get_running_loop()
+       const buildMirrorDetail = (detail, stageLabel) => {
+         let payload;
+         if (detail && typeof detail === "object") {
+           payload = cloneDiagDetail(detail);
+           if (!payload || typeof payload !== "object") {
+             payload = { value: payload };
+           }
+         } else if (detail === undefined) {
+           payload = {};
+         } else if (typeof detail === "string") {
+           payload = { message: detail };
+         } else {
+           payload = { value: detail };
+@@ -889,50 +948,93 @@
+         return;
+       }
+       micSessionTelemetry.recBadgeLogged = true;
+       const detail = { event: 'ui_rec_badge_on' };
+       if (source) {
+         detail.source = String(source).slice(0, 32);
+       }
+       logClient('evt=ui_rec_badge_on', detail);
+     }
  
-         def _publish_invariant(state: str, ok: bool, extra: Optional[Dict[str, Any]] = None) -> None:
-             meta: Dict[str, Any] = {"state": state, "ok": ok}
-             if extra:
-                 meta.update(extra)
-             try:
-                 loop.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
-             except RuntimeError:
-                 try:
-                     asyncio.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
-                 except RuntimeError:
-                     _log.debug("evt=asr_invariant_emit_skipped sid=%s", ctx.sid)
+     function normalizeStopReason(source) {
+       if (typeof source === 'string' && source) {
+         return source.slice(0, 48);
+       }
+       if (source && typeof source === 'object') {
+         if (typeof source.reason === 'string' && source.reason) {
+           return source.reason.slice(0, 48);
+         }
+         if (typeof source.code === 'string' && source.code) {
+           return source.code.slice(0, 48);
+         }
+       }
+       return 'unknown';
+     }
  
-         def _on_ready(_meta: Dict[str, Any]) -> None:
-             mark(ctx.session, "open")
-             ctx.asr_opened_ms = self._now_ms()
-             ctx.asr_close_reason = None
-             ctx.session.first_chunk_sent = False
-             _publish_invariant("open", True)
-+            # Notify the adapter bus that the Speechmatics stream is ready so trackers fire.
-+            bus.publish(
-+                {
-+                    "type": EVT_ASR_READY,
-+                    "sid": ctx.sid,
-+                    "who": "server",
-+                    "source": "ws.adapter",
-+                    "vendor": "speechmatics",
-+                }
-+            )
++    function isRecorderListening() {
++      try {
++        if (audioRecorder && typeof audioRecorder.isListening === "function") {
++          return !!audioRecorder.isListening();
++        }
++      } catch (_) {}
++      if (audioRecorder && typeof audioRecorder.listening === "boolean") {
++        return audioRecorder.listening;
++      }
++      const winRecorder = typeof window !== "undefined" ? window.AudioRecorder : null;
++      try {
++        if (winRecorder && typeof winRecorder.isListening === "function") {
++          return !!winRecorder.isListening();
++        }
++      } catch (_) {}
++      if (winRecorder && typeof winRecorder.listening === "boolean") {
++        return winRecorder.listening;
++      }
++      let stateSnapshot = null;
++      try {
++        stateSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
++      } catch (_) {
++        stateSnapshot = AppState;
++      }
++      if (stateSnapshot && typeof stateSnapshot === "object") {
++        if (typeof stateSnapshot.listening === "boolean") {
++          return stateSnapshot.listening;
++        }
++        if (typeof stateSnapshot.micLive === "boolean") {
++          return stateSnapshot.micLive;
++        }
++        if (stateSnapshot.state && typeof stateSnapshot.state === "object") {
++          if (typeof stateSnapshot.state.listening === "boolean") {
++            return stateSnapshot.state.listening;
++          }
++          if (typeof stateSnapshot.state.micLive === "boolean") {
++            return stateSnapshot.state.micLive;
++          }
++        }
++      }
++      return false;
++    }
++
+     function updateRecordingState(active, source) {
+       const previous = isRecorderListening();
+       const next = !!active;
  
-         def _on_closed(reason: str) -> None:
-             ctx.session.asr = None
-             mark(ctx.session, "closed")
-             ctx.asr_close_reason = reason
-             ctx.asr_open_task = None
-             _publish_invariant("closed", True, {"reason": reason})
+       if (typeof AppState?.setState === 'function') {
+         AppState.setState({ listening: next });
+       } else if (typeof AppState === 'object' && AppState) {
+         AppState.listening = next;
+       }
  
-         def _on_notice(meta: Dict[str, Any]) -> None:
-             _log.info("evt=sm_notice sid=%s meta=%s", ctx.sid, meta)
- 
-         client = SMRealtimeClient(
-             ctx.sid,
-             on_ready=_on_ready,
-             on_notice=_on_notice,
-             on_closed=_on_closed,
-         )
-         setattr(client, "bytes_streamed", 0)
-         setattr(client, "first_packet_monotonic", None)
-         setattr(client, "ms_since_first_packet", 0)
-         return client
- 
-     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
-         if ctx.ws_send is None:
-             raise RuntimeError("websocket send unavailable for asr.open")
-@@ -5846,50 +5856,51 @@ class ChatV2Adapter:
-         ctx.client_capture_armed = True
-         ctx.asr_recovering_until = 0.0
-         ctx.asr_recovering_reason = None
-         ctx.asr_recovering_audio_logged = False
-         ctx.ingress_packets = 0
-         ctx.ingress_bytes = 0
-         ctx.first_ingress_ms = None
-         ctx.mic_armed_ms = now_ms
-         ctx.asr_ready_bundle_sent_ms = now_ms
- 
-         try:
-             await self._send_json(send, ctx.sid, asr_ready_frame)
-             _log.info(
-                 "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
-                 ctx.sid,
-                 mode,
-                 descriptor.get("mime", ""),
-                 timeslice_ms,
-                 vendor,
-             )
-         except Exception:
-             _log.warning("evt=asr_ready_bundle_send_failed sid=%s", ctx.sid, exc_info=True)
- 
-         self._mark_input_start(ctx)
-         await self._send_json(send, ctx.sid, input_start)
-+        ctx.client_mic_open = True  # allow first audio chunk through immediately
-         ctx.pending_start_listening = dict(start_payload)
-         ctx.pending_start_listening_sent = False
-         if ctx.asr_ready:
-             await self._send_json(send, ctx.sid, start_payload)
-             ctx.pending_start_listening = None
-             ctx.pending_start_listening_sent = False
-         turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
-         if turn_begin_payload is not None:
-             try:
-                 await self._send_json(send, ctx.sid, turn_begin_payload)
-             except Exception:  # pragma: no cover - defensive logging
-                 _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
-         
- 
-     @staticmethod
-     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
-         decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
- 
-     @staticmethod
-     def _now_ms() -> int:
-         return int(time.time() * 1000)
- 
+       let stopReasonLabel = null;
+       if (next) {
+         if (!previous) {
+           finalSeenThisTurn = false;
+           if (typeof AppState?.__no_rearm_until === 'number') {
+             AppState.__no_rearm_until = 0;
+           }
+           beginMicTelemetrySession();
+           resetMicSessionTelemetry();
+           noteRecordingBadgeOn(source);
+           const timeslice = getCaptureTimesliceMs();
+           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
+             ? Math.max(0, Math.round(timeslice))
+             : 'unknown';
+           logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
