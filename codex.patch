@@ -1,117 +1,137 @@
-diff --git a/app/static/js/state.js b/app/static/js/state.js
-index 91859a65a4a211e3c37b2270e23e450b85dfcf90..e87f3afa5df93641728e909072126e07b16dc2c9 100644
---- a/app/static/js/state.js
-+++ b/app/static/js/state.js
-@@ -321,92 +321,104 @@
-     if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
-       delete sanitized.micLive;
-       delete sanitized.recorderActive;
-     }
-     
-     // Standard patch application
-     let nextState = cloneState(state);
-     nextState = { ...nextState, ...sanitized };
- 
-     // Explicitly calculate derived properties on every setState call
-     if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
-       const listeningValue = Boolean(nextState.listening);
-       nextState.listening = listeningValue;
-       nextState.micLive = listeningValue; // Derived property
-       nextState.recorderActive = listeningValue; // Derived property
-     }
-     
-     // Clean up VAD/telemetry properties (already handled by computeTelemetrySnapshot)
-     // No need for complex nested VAD patch here.
-     
-     // Final check to remove legacy nested state from the next state object
-     delete nextState.state;
- 
-     state = nextState;
-     // DELETED: syncLegacyStateShape();
--    processTelemetry(state);
--    notify();
-+    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
-+    setTimeout(() => {
-+      processTelemetry(state);
-+      notify();
-+    }, 0);
-   }
- 
-   function setResume(token, ttlMs) {
-     const candidate = typeof token === "string" ? token.trim() : "";
-     const ttl = Number(ttlMs);
-     if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
-       clearResume();
-       return null;
-     }
-     const expiresAt = Date.now() + ttl;
-     const resumeState = {
-       token: candidate,
-       ttlMs: ttl,
-       expiresAt
-     };
-     state = {
-       ...state,
-       resume: resumeState,
-       resumeError: null
-     };
-     // DELETED: syncLegacyStateShape();
--    processTelemetry(state);
--    notify();
-+    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
-+    setTimeout(() => {
-+      processTelemetry(state);
-+      notify();
-+    }, 0);
-     return resumeState;
-   }
- 
-   function clearResume() {
-     if (state.resume !== null || state.resumeError !== null) {
-       state = { ...state, resume: null, resumeError: null };
-       // DELETED: syncLegacyStateShape();
--      processTelemetry(state);
--      notify();
-+      // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
-+      setTimeout(() => {
-+        processTelemetry(state);
-+        notify();
-+      }, 0);
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index d04c184b82c632a94d154ed80d99d54a23e5e802..dbe02bf65b69636bf2b9c50207701f78103d4f52 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -2067,91 +2067,94 @@ window.addEventListener('asr.unavailable', (event) => {
+         reason = nested.reason;
+       } else if (typeof nested.details === 'string') {
+         reason = nested.details;
+       }
      }
    }
- 
-   function reset() {
-     state = cloneState(initialState);
-     // DELETED: syncLegacyStateShape();
--    processTelemetry(state);
--    notify();
-+    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
-+    setTimeout(() => {
-+      processTelemetry(state);
-+      notify();
-+    }, 0);
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+     console.warn('diag=asr_unavailable', reasonText);
+     setBadge('asr:down');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_UNAVAILABLE',
+       reasonText ? { reason: reasonText } : undefined,
+       {
+         level: 'warn',
+         badge: 'asr:down',
+         message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
+       }
+     );
    }
+   window.AppUI?.refresh?.();
+ });
  
-   function subscribe(listener) {
-     if (typeof listener !== "function") {
-       throw new TypeError("listener must be a function");
+ // START REWRITE: window.addEventListener('asr.ready', ...)
+ window.addEventListener('asr.ready', (event) => {
+-  if (typeof AppState?.setState === 'function') {
+-    AppState.setState({ asrReady: true });
+-  } else if (AppState) {
+-    AppState.asrReady = true;
+-  }
+-  
+-  // *** NEW STABLE LOGIC ***
+-  // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
+-  updateRecordingState(true, 'asr_ready_signal');
+-  
+-  // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
+-  
+-  try {
+-    emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
+-  } catch {}
+-  if (diagHudEnabled()) {
+-    console.info('diag=asr_ready');
+-    setBadge('asr:ready');
+-    sendDiagHudEvent(
+-      'EVT_CLIENT_ASR_READY',
+-      event && typeof event === 'object' ? event.detail : undefined,
+-      { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+-    );
+-  }
+-  
+-  // Reset any retry count for ASR
+-  if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
++  // DEFER THE ENTIRE BLOCK TO PREVENT RACE CONDITIONS AND SYNCHRONOUS MIC START ERRORS
++  setTimeout(() => {
++    if (typeof AppState?.setState === 'function') {
++      AppState.setState({ asrReady: true });
++    } else if (AppState) {
++      AppState.asrReady = true;
++    }
++
++    // *** NEW STABLE LOGIC ***
++    // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
++    updateRecordingState(true, 'asr_ready_signal');
++
++    // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
++
+     try {
+-      window.ChatView?.showSystemFromChip?.(
+-        "Voice is back. You can speak again when you’re ready."
++      emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
++    } catch {}
++    if (diagHudEnabled()) {
++      console.info('diag=asr_ready');
++      setBadge('asr:ready');
++      sendDiagHudEvent(
++        'EVT_CLIENT_ASR_READY',
++        event && typeof event === 'object' ? event.detail : undefined,
++        { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+       );
+-    } catch (err) {
+-      console.warn('Failed to show voice restoration message', err);
      }
-     listeners.add(listener);
-     listener(snapshot());
-     return () => {
-       listeners.delete(listener);
-     };
-   }
+-    asrRetry.tries = 0;
+-    clearTimeout(asrRetry.timer);
+-    asrRetry.timer = null;
+-  }
+-  
+-  // Final UI refresh is mandatory
+-  window.AppUI?.refresh?.();
++
++    // Reset any retry count for ASR
++    if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
++      try {
++        window.ChatView?.showSystemFromChip?.(
++          "Voice is back. You can speak again when you’re ready."
++        );
++      } catch (err) {
++        console.warn('Failed to show voice restoration message', err);
++      }
++      asrRetry.tries = 0;
++      clearTimeout(asrRetry.timer);
++      asrRetry.timer = null;
++    }
++
++    // Final UI refresh is mandatory
++    window.AppUI?.refresh?.();
++  }, 0); // DEFERRAL
+ });
+ // END REWRITE: window.addEventListener('asr.ready', ...)
  
-   const AppState = window.AppState = {
-     get: snapshot,
-     getState: snapshot,
-     setState,
-     reset,
-     subscribe,
-     setResume,
-     clearResume,
-     get initialState() {
-       return cloneState(initialState);
+ window.addEventListener('assistant.suggestions', (event) => {
+   const detail = event && event.detail;
+   applySuggestionsFrame(detail);
+ });
+ 
+ 
+ // Start mic immediately on ws.open as a safety net; send diag banner
+ window.addEventListener('ws.open', async () => {
+   const pol = (window.AppState && window.AppState.policy) || {};
+   const shouldAutoStart = pol?.audio?.start_on_ws_open === true;
+   if (shouldAutoStart) {
+     try {
+       if (typeof window.beginWarmup === 'function') {
+         window.beginWarmup(1400);
+       }
+     } catch (err) {
+       console.warn('ws.open warmup failed', err);
      }
-   };
+     try {
+       const recorder = window.AudioRecorder;
+       if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
+         const micReady = await recorder.startMicCaptureIfIdle();

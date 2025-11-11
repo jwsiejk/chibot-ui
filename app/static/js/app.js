@@ -2089,47 +2089,50 @@ window.addEventListener('asr.unavailable', (event) => {
 
 // START REWRITE: window.addEventListener('asr.ready', ...)
 window.addEventListener('asr.ready', (event) => {
-  if (typeof AppState?.setState === 'function') {
-    AppState.setState({ asrReady: true });
-  } else if (AppState) {
-    AppState.asrReady = true;
-  }
-  
-  // *** NEW STABLE LOGIC ***
-  // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
-  updateRecordingState(true, 'asr_ready_signal');
-  
-  // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
-  
-  try {
-    emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
-  } catch {}
-  if (diagHudEnabled()) {
-    console.info('diag=asr_ready');
-    setBadge('asr:ready');
-    sendDiagHudEvent(
-      'EVT_CLIENT_ASR_READY',
-      event && typeof event === 'object' ? event.detail : undefined,
-      { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
-    );
-  }
-  
-  // Reset any retry count for ASR
-  if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
-    try {
-      window.ChatView?.showSystemFromChip?.(
-        "Voice is back. You can speak again when you’re ready."
-      );
-    } catch (err) {
-      console.warn('Failed to show voice restoration message', err);
+  // DEFER THE ENTIRE BLOCK TO PREVENT RACE CONDITIONS AND SYNCHRONOUS MIC START ERRORS
+  setTimeout(() => {
+    if (typeof AppState?.setState === 'function') {
+      AppState.setState({ asrReady: true });
+    } else if (AppState) {
+      AppState.asrReady = true;
     }
-    asrRetry.tries = 0;
-    clearTimeout(asrRetry.timer);
-    asrRetry.timer = null;
-  }
-  
-  // Final UI refresh is mandatory
-  window.AppUI?.refresh?.();
+
+    // *** NEW STABLE LOGIC ***
+    // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
+    updateRecordingState(true, 'asr_ready_signal');
+
+    // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
+
+    try {
+      emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
+    } catch {}
+    if (diagHudEnabled()) {
+      console.info('diag=asr_ready');
+      setBadge('asr:ready');
+      sendDiagHudEvent(
+        'EVT_CLIENT_ASR_READY',
+        event && typeof event === 'object' ? event.detail : undefined,
+        { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+      );
+    }
+
+    // Reset any retry count for ASR
+    if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
+      try {
+        window.ChatView?.showSystemFromChip?.(
+          "Voice is back. You can speak again when you’re ready."
+        );
+      } catch (err) {
+        console.warn('Failed to show voice restoration message', err);
+      }
+      asrRetry.tries = 0;
+      clearTimeout(asrRetry.timer);
+      asrRetry.timer = null;
+    }
+
+    // Final UI refresh is mandatory
+    window.AppUI?.refresh?.();
+  }, 0); // DEFERRAL
 });
 // END REWRITE: window.addEventListener('asr.ready', ...)
 
