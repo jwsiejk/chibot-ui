@@ -814,80 +814,8 @@
     }
 
 
-    function patchPolicyVad(patch) {
-      if (!patch || typeof patch !== 'object') {
-        return;
-      }
-
-      const applyPatch = (policyRoot) => {
-        if (!policyRoot || typeof policyRoot !== 'object') {
-          return;
-        }
-        const currentVad = policyRoot.vad && typeof policyRoot.vad === 'object'
-          ? policyRoot.vad
-          : {};
-        policyRoot.vad = { ...currentVad, ...patch };
-      };
-
-      try {
-        if (AppState && typeof AppState === 'object') {
-          const policy = AppState.policy && typeof AppState.policy === 'object'
-            ? AppState.policy
-            : (AppState.policy = {});
-          applyPatch(policy);
-        }
-      } catch (err) {
-        console.warn('Failed to update AppState policy VAD', err);
-      }
-
-    }
-
-    function getCapturePolicy() {
-      const snapshot = (() => {
-        try {
-          if (typeof AppState?.getState === 'function') {
-            const state = AppState.getState();
-            if (state && typeof state.policy === 'object') {
-              return state.policy;
-            }
-          }
-        } catch (_) {}
-        if (AppState && typeof AppState.policy === 'object') {
-          return AppState.policy;
-        }
-        return null;
-      })();
-      if (!snapshot || typeof snapshot !== 'object') {
-        return null;
-      }
-      if (snapshot.capture && typeof snapshot.capture === 'object') {
-        return snapshot.capture;
-      }
-      const nested = snapshot.policy;
-      if (nested && typeof nested === 'object' && nested.capture && typeof nested.capture === 'object') {
-        return nested.capture;
-      }
-      return null;
-    }
-
-    function getCaptureTimesliceMs() {
-      const capture = getCapturePolicy();
-      if (!capture) {
-        return null;
-      }
-      const raw = capture.timeslice_ms;
-      const numeric = Number(raw);
-      if (Number.isFinite(numeric) && numeric > 0) {
-        return Math.round(numeric);
-      }
-      return null;
-    }
-
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
     const CLIENT_HUD_STATE_EVENT = 'EVT_HUD_STATE';
-    let pendingClientReady = null;
-    let clientReadyTimerId = null;
-    let clientReadyStats = null;
 
     function normalizeStopReason(source) {
       if (typeof source === 'string' && source) {
@@ -964,11 +892,7 @@
             AppState.__no_rearm_until = 0;
           }
           beginMicTelemetrySession();
-          const timeslice = getCaptureTimesliceMs();
-          const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
-            ? Math.max(0, Math.round(timeslice))
-            : 'unknown';
-          logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
+          logClientMicEventText('evt=mic_start timeslice_ms=unknown');
         }
       } else if (previous) {
         stopReasonLabel = normalizeStopReason(source);
@@ -1025,149 +949,9 @@
       return next;
     }
 
-    function maybeLogClientReadyOutcome(outcome, extraMeta) {
-      if (!clientReadyStats) {
-        return;
-      }
-      const summary = {
-        outcome: typeof outcome === 'string' && outcome ? outcome.slice(0, 32) : 'unknown',
-        attempts: clientReadyStats.attempts,
-        startedMs: clientReadyStats.startedAt,
-      };
-      if (typeof clientReadyStats.startedAt === 'number') {
-        const elapsed = Date.now() - clientReadyStats.startedAt;
-        if (Number.isFinite(elapsed)) {
-          summary.durationMs = Math.max(0, elapsed);
-        }
-      }
-      if (clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number') {
-        summary.micTs = clientReadyStats.detail.ts;
-      }
-      if (clientReadyStats.detail && clientReadyStats.detail.vendor) {
-        summary.vendor = clientReadyStats.detail.vendor.slice(0, 64);
-      }
-      if (clientReadyStats.events.length) {
-        summary.events = clientReadyStats.events.slice(-12);
-      }
-      const extraDetail = cloneDiagDetail(extraMeta);
-      if (extraDetail !== undefined) {
-        summary.extra = extraDetail;
-      }
-      const wsClient = getWsClient();
-      const socket = getLiveSocket();
-      if (socket && typeof socket.readyState === 'number') {
-        summary.readyState = socket.readyState;
-      }
-      if (!sendClientLog('client_ready_handshake', summary)) {
-        enqueueDeferredClientLog('client_ready_handshake', summary);
-      } else if (getLiveSocket()) {
-        flushDeferredClientLogs();
-      }
-      clientReadyStats = null;
-    }
-
-    function normalizeMicOpenDetail(detail) {
-      const rawTs = detail ? detail.ts : null;
-      const tsNumber = Number(rawTs);
-      const tsValue = Number.isFinite(tsNumber) ? tsNumber : Date.now();
-      const vendorValue = detail && typeof detail.vendor === 'string' ? detail.vendor.trim() : '';
-      const vendor = vendorValue ? vendorValue.slice(0, 64) : null;
-      return { ts: tsValue, vendor };
-    }
-
-    function trySendClientReady(detail) {
-      if (!detail) return false;
-      const wsClient = getWsClient();
-      if (!wsClient || typeof wsClient.send !== 'function') {
-        recordClientReadyEvent('wsclient_missing');
-        return false;
-      }
-      const socket = getLiveSocket();
-      const readyState = socket && typeof socket.readyState === 'number' ? socket.readyState : -1;
-      if (clientReadyStats) {
-        clientReadyStats.attempts += 1;
-        recordClientReadyEvent('attempt', { readyState });
-      }
-      if (!socket || readyState !== WebSocket.OPEN) {
-        recordClientReadyEvent('socket_not_open', { readyState });
-        return false;
-      }
-      const payload = {
-        type: 'client.ready',
-        mic: {
-          state: 'open',
-          ts: detail.ts
-        }
-      };
-      if (detail.vendor) {
-        payload.mic.vendor = detail.vendor;
-      }
-      try {
-        wsClient.send(payload);
-        recordClientReadyEvent('sent', { readyState });
-        return true;
-      } catch (err) {
-        recordClientReadyEvent('send_error', {
-          readyState,
-          message: err && err.message ? String(err.message).slice(0, 120) : 'send_failed'
-        });
-        console.warn('client.ready send failed', err);
-        return false;
-      }
-    }
-
-    function flushPendingClientReady() {
-      if (!pendingClientReady) {
-        clientReadyTimerId = null;
-        return;
-      }
-      if (trySendClientReady(pendingClientReady)) {
-        pendingClientReady = null;
-        clientReadyTimerId = null;
-        maybeLogClientReadyOutcome('sent');
-        return;
-      }
-      recordClientReadyEvent('retry_wait', { delayMs: 200 });
-      clientReadyTimerId = window.setTimeout(flushPendingClientReady, 200);
-    }
-
-    function enqueueClientReady(detail) {
-      const normalized = normalizeMicOpenDetail(detail);
-      if (!normalized) {
-        return;
-      }
-      const detailChanged =
-        !!clientReadyStats &&
-        (clientReadyStats.detail.ts !== normalized.ts || clientReadyStats.detail.vendor !== normalized.vendor);
-      if (detailChanged) {
-        const replacementMeta = {
-          reason: 'detail_changed',
-          prevTs: clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number'
-            ? clientReadyStats.detail.ts
-            : undefined,
-          prevVendor: clientReadyStats.detail && clientReadyStats.detail.vendor
-            ? clientReadyStats.detail.vendor.slice(0, 64)
-            : undefined,
-        };
-        recordClientReadyEvent('detail_replaced', replacementMeta);
-        maybeLogClientReadyOutcome('replaced', replacementMeta);
-      }
-      pendingClientReady = normalized;
-      if (!clientReadyStats) {
-        startClientReadyTracking(normalized);
-      } else {
-        recordClientReadyEvent('enqueue_duplicate');
-      }
-      if (clientReadyTimerId !== null) {
-        return;
-      }
-      flushPendingClientReady();
-    }
-
     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
       setMicPermissionGranted(true, 'mic_open_event');
       updateRecordingState(true, 'mic_open_event');
-      enqueueClientReady(event && event.detail);
     });
 
     window.addEventListener(CLIENT_HUD_STATE_EVENT, (event) => {
@@ -1192,15 +976,6 @@
 
     // START REWRITE: window.addEventListener('ws.close', ...)
     window.addEventListener('ws.close', () => {
-      if (clientReadyStats && pendingClientReady) {
-        recordClientReadyEvent('socket_closed', { reason: 'ws.close' });
-        maybeLogClientReadyOutcome('socket_closed', { reason: 'ws.close' });
-      }
-      pendingClientReady = null;
-      if (clientReadyTimerId !== null) {
-        clearTimeout(clientReadyTimerId);
-        clientReadyTimerId = null;
-      }
       if (typeof AppState?.setState === 'function') {
         AppState.setState({ asrReady: false, turnState: null, policy: null });
       } else {
@@ -2146,9 +1921,6 @@
               setMicPermissionGranted(false, 'recorder.start_error');
             });
         }
-        if (pendingClientReady && clientReadyTimerId === null) {
-          flushPendingClientReady();
-        }
       } else if (becameDisconnected) {
         Waveform.stop();
 
@@ -2201,7 +1973,6 @@ window.addEventListener('tts.start', (event) => {
       console.warn('AudioRecorder handleTtsStart failed', err);
     }
   }
-  patchPolicyVad({ auto_vad_active: false });
   window.AppUI?.refresh?.();
 });
 
@@ -2309,7 +2080,6 @@ window.addEventListener('assistant.await_user', (event) => {
     }
     window.AppUI?.refresh?.();
   } catch {}
-  patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
   window.AppUI?.refresh?.();
 });
 
