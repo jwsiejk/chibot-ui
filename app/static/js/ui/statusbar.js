@@ -9,7 +9,9 @@
       const f = {
         connected:    !!(ui.wsConn || ui.wsConning),
         asrReady:     !!ui.asrReady,
-        micOpen:      !!(ui.micLive || ui.listening),
+        // *** CLEANUP: Rely only on the unified 'listening' flag ***
+        micOpen:      !!ui.listening, 
+        // *******************************************************
         ttsActive:    !!ui.tts,
         senderPaused: !!ui.senderPaused,
         processing:   !!ui.processing,
