@@ -1,83 +1,72 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 1a3755678602684d2f5dc210b00c15934217d075..fcb3a2a08c9d7eb3df03c0d39eea378480d9490c 100644
+index fcb3a2a08c9d7eb3df03c0d39eea378480d9490c..f2c942ca82763c6d0c4a5cf9a462fa04f870a524 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -400,56 +400,76 @@ import { initVAD } from "./audio/vad_client.js";
-     __turnOpenAt = 0;
-     try {
-       hubLog("client.turn.intent", { action: "close", reason: reason || "reset" });
-     } catch {}
+@@ -476,59 +476,67 @@ import { initVAD } from "./audio/vad_client.js";
+     if (!(!!ws && ws.readyState === WebSocket.OPEN)) {
+       return false;
+     }
+     if (s.tts) {
+       return false;
+     }
+     // Simplified gate check: listening state must be true AND not paused
+     return _warming() || (s.listening && !senderPaused); 
+   }
+   function syncSenderPaused(value) {
+     senderPaused = Boolean(value);
+     if (AppState && typeof AppState === "object") {
+       AppState.senderPaused = senderPaused;
+     }
+     updateState({ senderPaused });
+     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+   }
+   const PCM_TARGET_BATCH_MS = 60;
+   const PCM_FLUSH_TIMER_MS = 50;
+   const PCM_SAMPLE_RATE = 16000;
+   const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
+   let pcmBatchQueue = [];
+   let pcmBatchSampleCount = 0;
+   let pcmFlushTimerId = null;
+ 
++  let __hubLoggingInFlight = false;
++
+   function hubLog(label, detail) {
++    if (__hubLoggingInFlight) {
++      return false;
++    }
+     const state = typeof window !== "undefined" ? window.AppState : null;
+     const hub = state && state.hub;
+     if (hub && typeof hub.log === "function") {
++      __hubLoggingInFlight = true;
+       try {
+         hub.log(label, detail);
+         return true;
+       } catch (err) {
+         console.warn("AppState.hub.log failed", err);
++      } finally {
++        __hubLoggingInFlight = false;
+       }
+     }
+     if (typeof window !== "undefined") {
+       try {
+         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
+         return true;
+       } catch (err) {
+         console.warn("client.log dispatch failed", err);
+       }
+     }
+     return false;
    }
  
-   function canSendInputControl() {
-     let phase = null;
+   function getVadPolicySnapshot() {
      try {
-       phase = AppState?.wsPhase || AppState?.connectionState || null;
-     } catch {}
-     const inReadyPhase = (typeof phase === "string" && phase) ? WS_READY_PHASES.has(phase) : true;
-     let connected = false;
-     try {
-       if (typeof WSClient?.isConnected === "function") {
-         connected = WSClient.isConnected();
-       } else {
-         const live = wsOpen();
-         connected = !!live;
+       const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
+         ? AppState.policy
+         : null;
+       const client = root?.vad?.client;
+       if (client && typeof client === "object") {
+         // Shallow merge: runtime overrides hard-coded safe defaults
+         return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
        }
      } catch {}
-     if (!connected && typeof WSClient?._connected === "boolean") connected = WSClient._connected;
-     return connected && inReadyPhase;
-   }
- 
-+  let __transportMisuseLogging = false;
-+
-   function logTransportMisuse(kind) {
-     try {
--      const hub = window.AppState?.hub;
--      hub?.log?.("client.ws.misuse", { kind });
-       console.warn("WS misuse:", kind);
-     } catch {}
-+    if (__transportMisuseLogging) {
-+      return;
-+    }
-+    let hub = null;
-+    try {
-+      hub = window.AppState?.hub || null;
-+    } catch {}
-+    if (!hub || typeof hub.log !== "function") {
-+      return;
-+    }
-+    __transportMisuseLogging = true;
-+    try {
-+      hub.log("client.ws.misuse", { kind });
-+    } catch (err) {
-+      try {
-+        console.warn("WS misuse hub.log failed", err);
-+      } catch {}
-+    } finally {
-+      __transportMisuseLogging = false;
-+    }
-   }
- 
-   const VAD_APPSTATE_KEYS = [
-     "vadActive",
-     "vadSpeech",
-     "vadConfidence",
-     "vadEnergyDb",
-     "vadNoiseDb",
-   ];
-   let vadController = null;
-   let vadSilenceTimerId = null;
-   let senderPaused = false;
-   let warmupUntil = 0;
-   function beginWarmup(ms = 1200) {
-     warmupUntil = Date.now() + ms;
-   }
-   function _warming() {
-     return Date.now() < warmupUntil;
-   }
-   function _canCaptureNow() {
-     if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
-     // During arming (or until first chunk), don’t block the stream
-     if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
-     const s = window.AppState || {};
-     const ws = WSClient?._ws || window.ws;
+     return CLIENT_VAD_POLICY_ROOT;

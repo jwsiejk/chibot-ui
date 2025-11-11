@@ -498,15 +498,23 @@ import { initVAD } from "./audio/vad_client.js";
   let pcmBatchSampleCount = 0;
   let pcmFlushTimerId = null;
 
+  let __hubLoggingInFlight = false;
+
   function hubLog(label, detail) {
+    if (__hubLoggingInFlight) {
+      return false;
+    }
     const state = typeof window !== "undefined" ? window.AppState : null;
     const hub = state && state.hub;
     if (hub && typeof hub.log === "function") {
+      __hubLoggingInFlight = true;
       try {
         hub.log(label, detail);
         return true;
       } catch (err) {
         console.warn("AppState.hub.log failed", err);
+      } finally {
+        __hubLoggingInFlight = false;
       }
     }
     if (typeof window !== "undefined") {
