@@ -2172,21 +2172,24 @@ window.addEventListener('ws.open', async () => {
       console.warn('WSClient.startRecorderStreaming on ws.open failed', err);
     }
   }
-  try {
-    if (WSClient && typeof WSClient.sendJSON === 'function') {
-      WSClient.sendJSON({
-        type: 'client.banner',
-        event: { label: 'ws.open', ts_ms: Date.now() },
-        info: { build: window.__BUILD_SHA__ ?? null }
-      });
-    } else if (WSClient && typeof WSClient.send === 'function') {
-      WSClient.send({
-        type: 'client.banner',
-        event: { label: 'ws.open', ts_ms: Date.now() },
-        info: { build: window.__BUILD_SHA__ ?? null }
-      });
-    }
-  } catch {}
+  const allowBanner = window.AppState?.debug?.allow_client_banner === true;
+  if (allowBanner) {
+    try {
+      if (WSClient && typeof WSClient.sendJSON === 'function') {
+        WSClient.sendJSON({
+          type: 'client.banner',
+          event: { label: 'ws.open', ts_ms: Date.now() },
+          info: { build: window.__BUILD_SHA__ ?? null }
+        });
+      } else if (WSClient && typeof WSClient.send === 'function') {
+        WSClient.send({
+          type: 'client.banner',
+          event: { label: 'ws.open', ts_ms: Date.now() },
+          info: { build: window.__BUILD_SHA__ ?? null }
+        });
+      }
+    } catch {}
+  }
 });
 window.addEventListener('ws.close', () => {
   resetSuggestions();
