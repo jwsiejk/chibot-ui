@@ -72,9 +72,6 @@ import { initVAD } from "./audio/vad_client.js";
   let __pauseSendUntil = 0;
   let __throttleTimer = null;
 
-  // Per-turn readiness/start tokens to prevent re-arm loops
-  let __asrReadySeen = false;
-
   let _audioStreaming = false;
 
   if (typeof window !== "undefined") {
@@ -149,9 +146,6 @@ import { initVAD } from "./audio/vad_client.js";
   }
   const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
   const P0 = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-  const DEFAULT_AUTOSTART_RETRY = ["asrReady", "ttsEnded", "turnState:Ready"];
-  const DEFAULT_AUTOSTART_BACKOFF = [0, 300, 1000];
-  const DEFAULT_AUTOSTART_ATTEMPTS = 5;
   const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
   const DEFAULT_POLICY_WATCHDOG = { partial_wait_ms_first_turn: 2500 };
   const DEFAULT_POLICY_STATUS = { require_active_turn: true };
@@ -177,13 +171,13 @@ import { initVAD } from "./audio/vad_client.js";
       tts_gate_enabled: P0.tts_gate_enabled ?? true,
       autostart_retry_on: Array.isArray(P0.autostart_retry_on)
         ? P0.autostart_retry_on.slice()
-        : DEFAULT_AUTOSTART_RETRY.slice(),
+        : ["asrReady", "ttsEnded", "turnState:Ready"],
       autostart_backoff_ms: Array.isArray(P0.autostart_backoff_ms)
         ? P0.autostart_backoff_ms.slice()
-        : DEFAULT_AUTOSTART_BACKOFF.slice(),
+        : [0, 300, 1000],
       autostart_max_attempts: Number.isFinite(P0.autostart_max_attempts)
         ? P0.autostart_max_attempts
-        : DEFAULT_AUTOSTART_ATTEMPTS,
+        : 5,
       show_tap_to_speak_cta_after_ms: Number.isFinite(P0.show_tap_to_speak_cta_after_ms)
         ? P0.show_tap_to_speak_cta_after_ms
         : 2000,
@@ -204,15 +198,15 @@ import { initVAD } from "./audio/vad_client.js";
       tts_gate_enabled: P0?.tts_gate_enabled ?? true,
       autostart_retry_on: Array.isArray(P0?.autostart_retry_on)
         ? P0.autostart_retry_on.filter((item) => typeof item === "string" && item)
-        : DEFAULT_AUTOSTART_RETRY.slice(),
+        : ["asrReady", "ttsEnded", "turnState:Ready"],
       autostart_backoff_ms: Array.isArray(P0?.autostart_backoff_ms)
         ? P0.autostart_backoff_ms
             .map((value) => Number(value))
             .filter((value) => Number.isFinite(value) && value >= 0)
-        : DEFAULT_AUTOSTART_BACKOFF.slice(),
+        : [0, 300, 1000],
       autostart_max_attempts: Number.isFinite(P0?.autostart_max_attempts)
         ? Number(P0.autostart_max_attempts)
-        : DEFAULT_AUTOSTART_ATTEMPTS,
+        : 5,
       show_tap_to_speak_cta_after_ms: Number.isFinite(P0?.show_tap_to_speak_cta_after_ms)
         ? Number(P0.show_tap_to_speak_cta_after_ms)
         : 2000,
@@ -329,8 +323,6 @@ import { initVAD } from "./audio/vad_client.js";
   }
 
   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
-  let autostartAttempts = 0;
-  let autostartTimer = null;
 
   const WSClient = window.WSClient = window.WSClient || {};
   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
@@ -975,8 +967,9 @@ import { initVAD } from "./audio/vad_client.js";
 
   function setListeningState(active) {
     const listening = Boolean(active);
-    AppState.listening = listening;
+    // Use AppState.setState to update the single source of truth
     updateState({ listening });
+    // Clear phase if stopping listening, only if connected
     if (!listening && AppState.wsConnected) {
       setWsPhase("connected");
     }
@@ -1436,7 +1429,6 @@ import { initVAD } from "./audio/vad_client.js";
   ensureClientBannerState();
 
   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
-  const AUTOSTART_TRIGGERS_ALWAYS = new Set(["boot", "gesture"]);
 
   let gestureListenerCleanup = null;
 
@@ -1571,7 +1563,6 @@ import { initVAD } from "./audio/vad_client.js";
     const handler = (event) => {
       const reason = event && typeof event.type === "string" ? event.type : "gesture";
       markUserGestureSatisfied(reason);
-      maybeAutoStart("gesture");
     };
     USER_GESTURE_EVENTS.forEach((eventName) => {
       try {
@@ -1600,117 +1591,7 @@ import { initVAD } from "./audio/vad_client.js";
     if (typeof gestureListenerCleanup === "function") {
       gestureListenerCleanup();
     }
-    sendAutostartTelemetry("gesture", { reason });
   }
-
-  function requiresHotwordToStart(snapshot) {
-    const inputPolicy = snapshot?.input ?? null;
-    if (!inputPolicy || typeof inputPolicy !== "object") {
-      return false;
-    }
-    if (typeof inputPolicy.require_hotword_to_start === "boolean") {
-      return inputPolicy.require_hotword_to_start;
-    }
-    return false;
-  }
-
-  function canAutoRecord(state) {
-    if (requiresHotwordToStart(state)) return false;
-    if (!state?.policy?.auto_record_after_greet) return false;
-    if (state.policy.tts_gate_enabled && state.ttsActive) return false;
-    return state.asrReady === true && state.turnState === "Ready" && !state.recorder?.active;
-  }
-
-  function reasonFromState(state) {
-    if (requiresHotwordToStart(state)) return "wake_word_only";
-    if (!userGestureSatisfied && state?.policy?.require_user_gesture_first_visit) return "needs_user_gesture";
-    if (!state?.policy?.auto_record_after_greet) return "policy_disabled";
-    if (state.policy.tts_gate_enabled && state.ttsActive) return "tts_active";
-    if (!state.asrReady) return "asr_not_ready";
-    if (state.turnState !== "Ready") return "turn_not_ready";
-    if (state.recorder?.active) return "already_active";
-    return null;
-  }
-
-  function shouldAttemptForTrigger(trigger, policy) {
-    if (!trigger) {
-      return true;
-    }
-    if (AUTOSTART_TRIGGERS_ALWAYS.has(trigger)) {
-      return true;
-    }
-    const retries = Array.isArray(policy?.autostart_retry_on) ? policy.autostart_retry_on : [];
-    if (!retries.length) {
-      return true;
-    }
-    return retries.includes(trigger);
-  }
-
-  function getAutostartSnapshot() {
-    const state = typeof AppState.getState === "function" ? AppState.getState() : {};
-    const policy = AppState.policy || state.policy || {};
-    const inputPolicy = policy && typeof policy.input === "object" ? policy.input : null;
-    const recorderState = state && state.recorder && typeof state.recorder === "object"
-      ? { active: Boolean(state.recorder.active) }
-      : (AppState.recorder && typeof AppState.recorder === "object"
-        ? { active: Boolean(AppState.recorder.active) }
-        : { active: false });
-    const ttsActive = typeof state.ttsActive === "boolean" ? state.ttsActive : Boolean(AppState.ttsActive);
-    const turnState = typeof state.turnState === "string"
-      ? state.turnState
-      : (typeof AppState.turnState === "string" ? AppState.turnState : null);
-    const asrReady = typeof state.asrReady === "boolean" ? state.asrReady : Boolean(AppState.asrReady);
-    return {
-      ...state,
-      policy,
-      input: inputPolicy,
-      recorder: recorderState,
-      ttsActive,
-      turnState,
-      asrReady,
-    };
-  }
-
-  function sanitizeAutostartMeta(meta) {
-    if (!meta || typeof meta !== "object") {
-      return undefined;
-    }
-    const cleaned = {};
-    const keys = Object.keys(meta);
-    for (let i = 0; i < keys.length && i < 8; i += 1) {
-      const key = keys[i];
-      if (!key) continue;
-      const value = meta[key];
-      if (value === undefined) continue;
-      if (typeof value === "string") {
-        cleaned[key.slice(0, 48)] = truncateBannerString(value, 120);
-      } else if (typeof value === "number") {
-        if (Number.isFinite(value)) {
-          cleaned[key.slice(0, 48)] = value;
-        }
-      } else if (typeof value === "boolean") {
-        cleaned[key.slice(0, 48)] = value;
-      }
-    }
-    return Object.keys(cleaned).length ? cleaned : undefined;
-  }
-
-  function sendAutostartTelemetry(event, meta) {
-    if (typeof event !== "string" || !event) {
-      return;
-    }
-    const payload = { type: "client.autostart", event };
-    const sanitizedMeta = sanitizeAutostartMeta(meta);
-    if (sanitizedMeta) {
-      payload.meta = sanitizedMeta;
-    }
-    try {
-      sendJson(payload);
-    } catch (err) {
-      console.warn("Failed to send autostart telemetry", err);
-    }
-  }
-
   function invokeStartRecording(trigger) {
     let handler = null;
     if (typeof window !== "undefined" && typeof window.startRecording === "function") {
@@ -1733,190 +1614,8 @@ import { initVAD } from "./audio/vad_client.js";
     }
     throw new Error("startRecording_unavailable");
   }
-
-  function maybeAutoStart(trigger) {
-    const snapshot = getAutostartSnapshot();
-    const policy = snapshot.policy || {};
-    const reason = reasonFromState(snapshot);
-    if (reason) {
-      sendAutostartTelemetry("blocked", { trigger, reason });
-      return false;
-    }
-    if (!shouldAttemptForTrigger(trigger, policy)) {
-      return false;
-    }
-    if (!canAutoRecord(snapshot)) {
-      return false;
-    }
-    const maxAttempts = Number.isFinite(policy.autostart_max_attempts) ? policy.autostart_max_attempts : 5;
-    if (autostartAttempts >= Math.max(0, maxAttempts)) {
-      sendAutostartTelemetry("max_attempts", { trigger });
-      return false;
-    }
-    const delays = Array.isArray(policy.autostart_backoff_ms) && policy.autostart_backoff_ms.length
-      ? policy.autostart_backoff_ms
-      : [0];
-    const delayIndex = Math.min(autostartAttempts, delays.length - 1);
-    const delay = Number(delays[delayIndex]) || 0;
-    const execute = () => {
-      autostartTimer = null;
-      autostartAttempts += 1;
-      sendAutostartTelemetry("attempt", { trigger, attempt: autostartAttempts });
-      let result;
-      try {
-        result = invokeStartRecording(trigger || "auto");
-      } catch (err) {
-        console.warn("Auto startRecording failed", err);
-        sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
-        return;
-      }
-      const onFulfilled = (value) => {
-        if (!value) {
-          sendAutostartTelemetry("rejected", { trigger });
-          return;
-        }
-        sendAutostartTelemetry("armed", { trigger });
-      };
-      const onRejected = (err) => {
-        console.warn("Auto startRecording promise rejected", err);
-        sendAutostartTelemetry("error", { trigger, message: getErrorMessage(err) });
-      };
-      if (result && typeof result.then === "function") {
-        result.then(onFulfilled, onRejected);
-      } else {
-        onFulfilled(result);
-      }
-    };
-    if (autostartTimer) {
-      clearTimeout(autostartTimer);
-      autostartTimer = null;
-    }
-    if (delay > 0) {
-      autostartTimer = setTimeout(execute, delay);
-    } else {
-      execute();
-    }
-    return true;
-  }
-
-  function installAutostartRechecks() {
-    if (!AppState) {
-      return;
-    }
-    if (typeof AppState.subscribe === "function") {
-      let previous = typeof AppState.getState === "function" ? AppState.getState() : {};
-      AppState.subscribe((next) => {
-        const events = [];
-        const prevAsr = Boolean(previous.asrReady);
-        const nextAsr = Boolean(next.asrReady);
-        if (nextAsr && nextAsr !== prevAsr) {
-          events.push("asrReady");
-        }
-        if (!nextAsr && prevAsr) {
-          autostartAttempts = 0;
-        }
-        const prevTts = Boolean(previous.ttsActive);
-        const nextTts = Boolean(next.ttsActive);
-        if (nextTts !== prevTts) {
-          events.push(nextTts ? "ttsActive" : "ttsEnded");
-        }
-        const prevTurn = typeof previous.turnState === "string" ? previous.turnState : null;
-        const nextTurn = typeof next.turnState === "string" ? next.turnState : null;
-        if (nextTurn !== prevTurn) {
-          if (nextTurn === "Ready") {
-            autostartAttempts = 0;
-            events.push("turnState:Ready");
-          } else if (prevTurn === "Ready") {
-            autostartAttempts = 0;
-          }
-        }
-        previous = {
-          ...previous,
-          asrReady: next.asrReady,
-          ttsActive: next.ttsActive,
-          turnState: next.turnState,
-          recorder: next.recorder,
-        };
-        events.forEach((eventName) => maybeAutoStart(eventName));
-      });
-    } else {
-      const watch = (keys, fn) => {
-        let prevSnapshot = {};
-        setInterval(() => {
-          const snapshot = getAutostartSnapshot();
-          let changed = false;
-          const changedKeys = [];
-          keys.forEach((key) => {
-            if (prevSnapshot[key] !== snapshot[key]) {
-              changed = true;
-              changedKeys.push(key);
-            }
-          });
-          if (changed) {
-            prevSnapshot = {
-              asrReady: snapshot.asrReady,
-              ttsActive: snapshot.ttsActive,
-              turnState: snapshot.turnState,
-            };
-            fn(changedKeys, snapshot);
-          }
-        }, 100);
-      };
-      watch(["asrReady", "ttsActive", "turnState"], (changedKeys, snapshot) => {
-        changedKeys.forEach((key) => {
-          if (key === "asrReady" && snapshot.asrReady) {
-            maybeAutoStart("asrReady");
-          } else if (key === "ttsActive" && !snapshot.ttsActive) {
-            maybeAutoStart("ttsEnded");
-          } else if (key === "turnState" && snapshot.turnState === "Ready") {
-            autostartAttempts = 0;
-            maybeAutoStart("turnState:Ready");
-          }
-        });
-      });
-    }
-    AppState.on?.("turnReset", () => {
-      autostartAttempts = 0;
-      __turnTraceId = null;
-      __asrReadySeen = false;
-    });
-
-    maybeAutoStart("boot");
-  }
-
-  function handleTurnStateEvent(event) {
-    const detail = event && typeof event === "object" ? event.detail : null;
-    const stateValue = detail && typeof detail === "object" && typeof detail.state === "string"
-      ? detail.state
-      : (detail && detail.meta && typeof detail.meta.state === "string" ? detail.meta.state : null);
-    const normalized = typeof stateValue === "string" ? stateValue : null;
-    const reasonValue = detail && typeof detail === "object" && typeof detail.reason === "string"
-      ? detail.reason
-      : (detail && detail.meta && typeof detail.meta.reason === "string" ? detail.meta.reason : null);
-    AppState.turnState = normalized;
-    updateState({ turnState: normalized });
-    if (normalized === "Ready") {
-      autostartAttempts = 0;
-      __asrReadySeen = false;
-      if (typeof AppState.emit === "function") {
-        AppState.emit("turnReset", { state: normalized, reason: reasonValue || null });
-      }
-    }
-  }
-
   ensureInitialAutostartState();
   attachUserGestureListeners();
-  if (typeof window !== "undefined") {
-    try {
-      if (!window.__wsClientTurnStateListenerInstalled) {
-        window.addEventListener("turn.state", handleTurnStateEvent);
-        window.__wsClientTurnStateListenerInstalled = true;
-      }
-    } catch (err) {
-      console.warn("Failed to bind turn.state listener", err);
-    }
-  }
-  installAutostartRechecks();
 
   function truncateBannerString(value, max) {
     const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
@@ -2670,17 +2369,17 @@ import { initVAD } from "./audio/vad_client.js";
       reason: frame?.reason || frame?.type || "input.start",
     });
 
-    // If we're already ready, immediately run the same gate used by the asr.ready handler.
+    // If we're already ready, immediately start streaming.
     if (asrReady) {
       try {
-        await startStreamingAfterAsrReady("input.start_asr_ready");
+        await startRecorderStreaming(frame?.policy || {}, "input.start_asr_ready");
+        _audioStreaming = true;
       } catch (err) {
         console.error("input.start deferred start failed", err);
       }
     }
 
-    // Do NOT call startInputCapture() here in unified mode;
-    // startStreamingAfterAsrReady() will invoke AudioRecorder/hub correctly.
+    // Do NOT call startInputCapture() here in unified mode; recorder streaming handles it.
   }
 
   function handleInputStopFrame() {
@@ -3347,7 +3046,6 @@ import { initVAD } from "./audio/vad_client.js";
       }
       attachUserGestureListeners();
       dispatchFrame(sanitized);
-      maybeAutoStart("policy");
       return;
     }
 
@@ -3415,6 +3113,13 @@ import { initVAD } from "./audio/vad_client.js";
       const uttIdEnd = frame?.utt_id || 'utt-00001';
       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+
+      // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
+      // We rely on the server to send asr.ready back when it processes this.
+      if (AppState?.policy?.auto_record_after_greet !== false) {
+        requestAsrArm('tts_end');
+      }
+      // *** END NEW LOGIC ***
     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
       const uttId = frame?.utt_id || 'utt-00001';
       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
@@ -3472,7 +3177,8 @@ import { initVAD } from "./audio/vad_client.js";
       setPendingAsrReadyStart({ frame, policy, reason: frame?.reason || frame?.type || "start_listening" });
       if (AppState?.asrReady) {
         try {
-          await startStreamingAfterAsrReady("start_listening_asr_ready");
+          await startRecorderStreaming(policy, "start_listening_asr_ready");
+          _audioStreaming = true;
         } catch (err) {
           console.error("Deferred mic start after start_listening failed", err);
         }
@@ -3528,7 +3234,6 @@ import { initVAD } from "./audio/vad_client.js";
         console.warn("Hub stop_listening handler error", err);
         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
       }
-      __asrReadySeen = false;
       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
         try {
           const reason =
@@ -3570,7 +3275,6 @@ import { initVAD } from "./audio/vad_client.js";
       resetTurnIntent(reason);
       emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
       stopInputCapture({ reason: "input.stop" });
-      __asrReadySeen = false;
       __resetAudioHeaderSent();
     } else if (frame.type === "assistant.await_user") {
       const reason = typeof frame?.reason === "string" && frame.reason
@@ -3584,34 +3288,31 @@ import { initVAD } from "./audio/vad_client.js";
       resetTurnIntent(reason);
     } else if (frame.type === "asr.ready") {
       frame = handleAsrReadyFrame(frame) || frame;
-      // HARD SYNC before gates:
+      // HARD SYNC: Set final state flags
       AppState.asrReady = true;
-      try {
-        const s = (AppState.state = AppState.state || {});
-        s.asrReady = true;
-        if (typeof AppState.setState === "function") AppState.setState({ state: { ...s } });
-      } catch {}
-      __asrReadySeen = true;
       setAsrArmInFlight(false);
       setWsConnected(true);
       setWsPhase("ready");
       emitConsoleBusEvent("client.asr.ready", { asrReady: true });
 
-      // NEW LOGIC: Immediately transition to streaming based on server readiness.
+      // *** NEW STABLE LOGIC: Immediately transition to streaming based on server readiness ***
       const startReason = "asr_ready_forced_start";
       hubLog("client.ws_ready_check", {
         socketOpen: !!(WSClient?._ws) && WSClient._ws.readyState === WebSocket.OPEN,
         phase: (AppState?.wsPhase || AppState?.connectionState || null),
       });
+      // 1. Open Turn (Idempotent)
       const turned = await openTurnOnce(startReason);
       void turned;
       try {
+        // 2. Start Mic Streaming (Triggers mic hardware and sets AppState.listening=true)
         await startRecorderStreaming(frame?.policy || {}, startReason);
         _audioStreaming = true;
-        // badge flips when startRecorderStreaming succeeds
       } catch (e) {
         console.warn("auto-arm on asr.ready failed", e);
       }
+      // -----------------------------------------------------------------------------------
+
       try {
         const capturePolicy = AppState?.policy?.capture || {};
         const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
@@ -3647,7 +3348,6 @@ import { initVAD } from "./audio/vad_client.js";
       if (typeof AppState.emit === "function") {
         AppState.emit("asrReady", { ready: false, reason, vendor: null });
       }
-      __asrReadySeen = false;
       try {
         const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
         hud?.setState?.("Chat");
