@@ -1,47 +1,23 @@
+// state.js - FINAL, CLEAN VERSION (FLAT STATE ARCHITECTURE)
+
 (() => {
   function isPlainObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 
   function mergePlainObjects(base, patch) {
-    // Only shallow merge is strictly necessary for the final state properties
-    return { ...base, ...patch };
+    return { ...base, ...patch }; 
   }
 
   function cloneState(source) {
-    if (!source || typeof source !== "object") {
-      return {};
-    }
+    // Clone only the top-level properties. The nested 'state' object is permanently REMOVED.
     const next = { ...source };
-    if (source.state && typeof source.state === "object") {
-      next.state = { ...source.state };
-    }
+    // Explicitly delete any reference to the old nested state to prevent legacy callers from finding it
+    delete next.state; 
     return next;
   }
-
-  const legacyAppState = typeof window !== "undefined" && window.AppState && typeof window.AppState === "object"
-    ? window.AppState
-    : null;
-  const legacyNestedState = legacyAppState && legacyAppState.state && typeof legacyAppState.state === "object"
-    ? legacyAppState.state
-    : null;
-  const defaultNestedState = {
-    asrReady: false,
-    micLive: false,
-    tts: false,
-    senderPaused: false,
-    asrTurnActive: false,
-    vadActive: false,
-    vadDbfs: null,
-    lastSpeechAt: null,
-    processing: false,
-  };
-  const initialNestedState = legacyNestedState
-    ? { ...defaultNestedState, ...legacyNestedState }
-    : { ...defaultNestedState };
-
-  // Cleaned up initialState while preserving the legacy nested `state` object for callers
-  // that still rely on it.
+  
+  // Cleaned up initialState: Nested 'state' object is REMOVED entirely.
   const initialState = {
     connectionState: "disconnected",
     sid: null,
@@ -63,7 +39,7 @@
     ttsActive: false,
     asrArmInFlight: false, // KEPT, as it's a critical in-flight flag
     asrReady: false,
-    // Unified Mic Control Flag (replaces micLive, recorderActive, and old nested listening)
+    // Unified Mic Control Flag (replaces micLive, recorderActive, etc., which are derived)
     listening: false, 
     lastChunkTs: null,
     chunkCount: 0,
@@ -77,7 +53,7 @@
     vadNoiseDb: null,
     vadDbfs: null,
     lastSpeechAt: null,
-    state: initialNestedState,
+    // The legacy `state` property is intentionally omitted here.
   };
 
   let state = cloneState(initialState);
@@ -90,7 +66,7 @@
     "ttsActive",
     "asrArmInFlight",
     "asrReady",
-    "listening", // Consolidated flag
+    "listening", 
     "lastChunkTs",
     "chunkCount",
     "lastErrorCode",
@@ -119,7 +95,7 @@
       asrArmInFlight: Boolean(snapshot.asrArmInFlight),
       asrReady: Boolean(snapshot.asrReady),
       listening: Boolean(snapshot.listening),
-      // Derived property: recorderActive is now equivalent to listening
+      // Derived property is calculated explicitly here:
       recorderActive: Boolean(snapshot.listening), 
       lastChunkTs: Number.isFinite(snapshot.lastChunkTs) ? snapshot.lastChunkTs : null,
       chunkCount: Number.isFinite(snapshot.chunkCount) ? snapshot.chunkCount : 0,
@@ -159,6 +135,9 @@
       target[key] = snapshot[key];
     }
     // Remove all references to nested state (target.state)
+    target.micLive = snapshot.listening;
+    target.recorderActive = snapshot.listening;
+    delete target.state; // Ensure legacy property is removed/cleaned up
   }
 
   function scheduleDeltaFlush() {
@@ -239,7 +218,8 @@
       a.wsConnected === b.wsConnected &&
       a.ttsActive === b.ttsActive &&
       a.listening === b.listening &&
-      // Removed recorderActive comparison
+      // Derived property check:
+      a.recorderActive === b.recorderActive && 
       a.chunkCount === b.chunkCount &&
       a.lastChunkAgeMs === b.lastChunkAgeMs &&
       a.vadActive === b.vadActive &&
@@ -264,7 +244,7 @@
       wsConnected: snapshot.wsConnected,
       ttsActive: snapshot.ttsActive,
       listening: snapshot.listening,
-      // Derived property: recorderActive is now snapshot.listening
+      // Derived property:
       recorderActive: snapshot.listening, 
       chunkCount: snapshot.chunkCount,
       lastChunkAgeMs,
@@ -325,88 +305,44 @@
     });
   }
 
-  function syncLegacyStateShape() {
-    if (typeof AppState !== "object" || !AppState) {
-      return;
-    }
-    AppState.state = state.state && typeof state.state === "object"
-      ? { ...state.state }
-      : { ...initialNestedState };
-  }
+  // DELETED: syncLegacyStateShape() - No longer needed
 
   function setState(patch) {
     if (!patch || typeof patch !== "object") return;
 
     const sanitized = { ...patch };
-    let nestedPatch = null;
+    
+    // DELETE all nested state logic and merging
     if (Object.prototype.hasOwnProperty.call(sanitized, "state")) {
-      const candidate = sanitized.state;
-      if (candidate && typeof candidate === "object") {
-        nestedPatch = { ...candidate };
-      }
       delete sanitized.state;
     }
-
-    if (nestedPatch) {
-      for (const key of Object.keys(nestedPatch)) {
-        if (key === "listening" && Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
-          continue;
-        }
-        if (!Object.prototype.hasOwnProperty.call(sanitized, key)) {
-          sanitized[key] = nestedPatch[key];
-        }
-      }
-    }
-
-    const listeningFromNested =
-      nestedPatch && Object.prototype.hasOwnProperty.call(nestedPatch, "listening")
-        ? nestedPatch.listening
-        : undefined;
-
+    
+    // Enforce single source of truth for mic state
     if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
       delete sanitized.micLive;
       delete sanitized.recorderActive;
-      if (nestedPatch) {
-        delete nestedPatch.micLive;
-        delete nestedPatch.recorderActive;
-      }
-    } else if (typeof listeningFromNested !== "undefined") {
-      sanitized.listening = listeningFromNested;
-      delete nestedPatch.micLive;
-      delete nestedPatch.recorderActive;
     }
-
+    
+    // Standard patch application
     let nextState = cloneState(state);
     nextState = { ...nextState, ...sanitized };
 
-    if (nestedPatch) {
-      const previousNested = state.state && typeof state.state === "object" ? state.state : {};
-      const mergedNested = { ...previousNested, ...nestedPatch };
-      nextState.state = mergedNested;
-    } else if (state.state && typeof state.state === "object") {
-      nextState.state = { ...state.state };
-    }
-
-    if (
-      Object.prototype.hasOwnProperty.call(sanitized, "listening") ||
-      (nestedPatch && Object.prototype.hasOwnProperty.call(nestedPatch, "listening"))
-    ) {
+    // Explicitly calculate derived properties on every setState call
+    if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
       const listeningValue = Boolean(nextState.listening);
       nextState.listening = listeningValue;
-      nextState.micLive = listeningValue;
-      nextState.recorderActive = listeningValue;
-      if (nextState.state && typeof nextState.state === "object") {
-        nextState.state = {
-          ...nextState.state,
-          listening: listeningValue,
-          micLive: listeningValue,
-          recorderActive: listeningValue,
-        };
-      }
+      nextState.micLive = listeningValue; // Derived property
+      nextState.recorderActive = listeningValue; // Derived property
     }
+    
+    // Clean up VAD/telemetry properties (already handled by computeTelemetrySnapshot)
+    // No need for complex nested VAD patch here.
+    
+    // Final check to remove legacy nested state from the next state object
+    delete nextState.state;
 
     state = nextState;
-    syncLegacyStateShape();
+    // DELETED: syncLegacyStateShape();
     processTelemetry(state);
     notify();
   }
@@ -429,7 +365,7 @@
       resume: resumeState,
       resumeError: null
     };
-    syncLegacyStateShape();
+    // DELETED: syncLegacyStateShape();
     processTelemetry(state);
     notify();
     return resumeState;
@@ -438,7 +374,7 @@
   function clearResume() {
     if (state.resume !== null || state.resumeError !== null) {
       state = { ...state, resume: null, resumeError: null };
-      syncLegacyStateShape();
+      // DELETED: syncLegacyStateShape();
       processTelemetry(state);
       notify();
     }
@@ -446,7 +382,7 @@
 
   function reset() {
     state = cloneState(initialState);
-    syncLegacyStateShape();
+    // DELETED: syncLegacyStateShape();
     processTelemetry(state);
     notify();
   }
@@ -474,8 +410,8 @@
       return cloneState(initialState);
     }
   };
-
-  syncLegacyStateShape();
+  
+  // DELETED: syncLegacyStateShape() call on boot
 
   syncTrackedProperties(telemetryPrev);
 
