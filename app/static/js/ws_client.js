@@ -3388,58 +3388,63 @@ import { initVAD } from "./audio/vad_client.js";
   }
 
   async function parseFrame(event) {
-    const { data } = event;
-    if (typeof data === "string") {
-      try {
-        const frame = JSON.parse(data);
-        if (frame && typeof frame.message === "string") {
-          if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+    try {
+      const { data } = event;
+      if (typeof data === "string") {
+        try {
+          const frame = JSON.parse(data);
+          if (frame && typeof frame.message === "string") {
+            if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+              return;
+            }
+          }
+          const normalizedFrame = normalizeIncomingFrame(frame);
+          if (!normalizedFrame) {
+            console.warn("Dropping WS frame without recognizable type", frame);
+            await handleErrorFrame({
+              type: "error",
+              code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
+              detail:
+                typeof frame?.detail === "string"
+                  ? frame.detail
+                  : "Frame missing type field",
+            });
             return;
           }
+          if (normalizedFrame.type === "server.ping") {
+            send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+            return;
+          }
+          await handleMessageFrame(normalizedFrame);
+        } catch (err) {
+          console.error("Failed to parse WS frame", err, data);
         }
-        const normalizedFrame = normalizeIncomingFrame(frame);
-        if (!normalizedFrame) {
-          console.warn("Dropping WS frame without recognizable type", frame);
-          await handleErrorFrame({
-            type: "error",
-            code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
-            detail:
-              typeof frame?.detail === "string"
-                ? frame.detail
-                : "Frame missing type field",
-          });
-          return;
+        return;
+      }
+      if (data instanceof Blob) {
+        const audioPlayer = getAudioPlayer();
+        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+          audioPlayer.enqueueChunk(data);
         }
-        if (normalizedFrame.type === "server.ping") {
-          send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
-          return;
+        window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+        return;
+      }
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+        const chunk = data instanceof ArrayBuffer
+          ? data
+          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        const audioPlayer = getAudioPlayer();
+        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+          audioPlayer.enqueueChunk(chunk);
         }
-        await handleMessageFrame(normalizedFrame);
-      } catch (err) {
-        console.error("Failed to parse WS frame", err, data);
+        window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+        return;
       }
-      return;
+      console.warn("Unknown WS frame type", data);
+    } catch (outerErr) {
+      console.error("Uncaught exception in parseFrame", outerErr);
+      hubLog("client.ws.parse_crash", { error: outerErr?.message, frame_data: event?.data });
     }
-    if (data instanceof Blob) {
-      const audioPlayer = getAudioPlayer();
-      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-        audioPlayer.enqueueChunk(data);
-      }
-      window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-      return;
-    }
-    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-      const chunk = data instanceof ArrayBuffer
-        ? data
-        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-      const audioPlayer = getAudioPlayer();
-      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-        audioPlayer.enqueueChunk(chunk);
-      }
-      window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-      return;
-    }
-    console.warn("Unknown WS frame type", data);
   }
 
   function attachSocket(ws) {
@@ -3496,7 +3501,14 @@ import { initVAD } from "./audio/vad_client.js";
         startHeartbeat();
         logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
       },
-      message: parseFrame,
+      message: (event) => {
+        try {
+          parseFrame(event);
+        } catch (err) {
+          console.error("WS message handler critical crash", err);
+          hubLog("client.ws.crash", { error: err?.message, source: "onmessage" });
+        }
+      },
       error: (event) => {
         console.error("WebSocket error", event);
         const message = event && typeof event?.message === "string" && event.message

@@ -1,88 +1,217 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index dbe02bf65b69636bf2b9c50207701f78103d4f52..3f94b76dacc654e5b6d2df830af34830079a6d1b 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -2150,65 +2150,68 @@ window.addEventListener('ws.open', async () => {
-     try {
-       if (typeof window.beginWarmup === 'function') {
-         window.beginWarmup(1400);
-       }
-     } catch (err) {
-       console.warn('ws.open warmup failed', err);
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 20238f0c32e57a0669408aca02ea73949eea4f69..c6d382f7a92a4a99672a244c98abd0727ddde67b 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -3366,102 +3366,107 @@ import { initVAD } from "./audio/vad_client.js";
+     if (!frame || typeof frame !== "object") {
+       return null;
      }
-     try {
-       const recorder = window.AudioRecorder;
-       if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
-         const micReady = await recorder.startMicCaptureIfIdle();
-         setMicPermissionGranted(Boolean(micReady), micReady ? 'ws.open_start' : 'ws.open_start_error');
-       }
-     } catch (err) {
-       console.warn('AudioRecorder.startMicCaptureIfIdle on ws.open failed', err);
-       setMicPermissionGranted(false, 'ws.open_start_error');
+     if (typeof frame.type === "string" && frame.type) {
+       return frame;
      }
-     try {
-       if (WSClient && typeof WSClient.startRecorderStreaming === 'function') {
-         WSClient.startRecorderStreaming(pol, 'ws_open');
-       }
-     } catch (err) {
-       console.warn('WSClient.startRecorderStreaming on ws.open failed', err);
+     let inferredType = null;
+     if (typeof frame.kind === "string" && frame.kind) {
+       inferredType = frame.kind;
+     } else if (typeof frame.event === "string" && frame.event) {
+       inferredType = frame.event;
+     } else if (
+       typeof frame.code === "string" ||
+       typeof frame.detail === "string" ||
+       typeof frame.message === "string"
+     ) {
+       inferredType = "error";
      }
+     if (!inferredType) {
+       return null;
+     }
+     return { ...frame, type: inferredType };
    }
--  try {
--    if (WSClient && typeof WSClient.sendJSON === 'function') {
--      WSClient.sendJSON({
--        type: 'client.banner',
--        event: { label: 'ws.open', ts_ms: Date.now() },
--        info: { build: window.__BUILD_SHA__ ?? null }
--      });
--    } else if (WSClient && typeof WSClient.send === 'function') {
--      WSClient.send({
--        type: 'client.banner',
--        event: { label: 'ws.open', ts_ms: Date.now() },
--        info: { build: window.__BUILD_SHA__ ?? null }
--      });
--    }
--  } catch {}
-+  const allowBanner = window.AppState?.debug?.allow_client_banner === true;
-+  if (allowBanner) {
+ 
+   async function parseFrame(event) {
+-    const { data } = event;
+-    if (typeof data === "string") {
+-      try {
+-        const frame = JSON.parse(data);
+-        if (frame && typeof frame.message === "string") {
+-          if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
 +    try {
-+      if (WSClient && typeof WSClient.sendJSON === 'function') {
-+        WSClient.sendJSON({
-+          type: 'client.banner',
-+          event: { label: 'ws.open', ts_ms: Date.now() },
-+          info: { build: window.__BUILD_SHA__ ?? null }
-+        });
-+      } else if (WSClient && typeof WSClient.send === 'function') {
-+        WSClient.send({
-+          type: 'client.banner',
-+          event: { label: 'ws.open', ts_ms: Date.now() },
-+          info: { build: window.__BUILD_SHA__ ?? null }
-+        });
-+      }
-+    } catch {}
-+  }
- });
- window.addEventListener('ws.close', () => {
-   resetSuggestions();
- });
- 
-     // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
-     if (urlParams.get('wsSmoke') === '1') {
-       const transitions = [];
-       const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
- 
-       class MockSocket extends EventTarget {
-         constructor() {
-           super();
-           this.readyState = WebSocket.CONNECTING;
-           setTimeout(() => {
-             this.readyState = WebSocket.OPEN;
-             this.dispatchEvent(new Event('open'));
-           }, 0);
++      const { data } = event;
++      if (typeof data === "string") {
++        try {
++          const frame = JSON.parse(data);
++          if (frame && typeof frame.message === "string") {
++            if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
++              return;
++            }
++          }
++          const normalizedFrame = normalizeIncomingFrame(frame);
++          if (!normalizedFrame) {
++            console.warn("Dropping WS frame without recognizable type", frame);
++            await handleErrorFrame({
++              type: "error",
++              code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
++              detail:
++                typeof frame?.detail === "string"
++                  ? frame.detail
++                  : "Frame missing type field",
++            });
+             return;
+           }
++          if (normalizedFrame.type === "server.ping") {
++            send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
++            return;
++          }
++          await handleMessageFrame(normalizedFrame);
++        } catch (err) {
++          console.error("Failed to parse WS frame", err, data);
          }
-         send(payload) {
-           this.lastSent = payload;
+-        const normalizedFrame = normalizeIncomingFrame(frame);
+-        if (!normalizedFrame) {
+-          console.warn("Dropping WS frame without recognizable type", frame);
+-          await handleErrorFrame({
+-            type: "error",
+-            code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
+-            detail:
+-              typeof frame?.detail === "string"
+-                ? frame.detail
+-                : "Frame missing type field",
+-          });
+-          return;
+-        }
+-        if (normalizedFrame.type === "server.ping") {
+-          send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+-          return;
+-        }
+-        await handleMessageFrame(normalizedFrame);
+-      } catch (err) {
+-        console.error("Failed to parse WS frame", err, data);
++        return;
+       }
+-      return;
+-    }
+-    if (data instanceof Blob) {
+-      const audioPlayer = getAudioPlayer();
+-      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+-        audioPlayer.enqueueChunk(data);
++      if (data instanceof Blob) {
++        const audioPlayer = getAudioPlayer();
++        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
++          audioPlayer.enqueueChunk(data);
++        }
++        window.dispatchEvent(new CustomEvent("binary", { detail: data }));
++        return;
+       }
+-      window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+-      return;
+-    }
+-    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+-      const chunk = data instanceof ArrayBuffer
+-        ? data
+-        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+-      const audioPlayer = getAudioPlayer();
+-      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+-        audioPlayer.enqueueChunk(chunk);
++      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
++        const chunk = data instanceof ArrayBuffer
++          ? data
++          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
++        const audioPlayer = getAudioPlayer();
++        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
++          audioPlayer.enqueueChunk(chunk);
++        }
++        window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
++        return;
+       }
+-      window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+-      return;
++      console.warn("Unknown WS frame type", data);
++    } catch (outerErr) {
++      console.error("Uncaught exception in parseFrame", outerErr);
++      hubLog("client.ws.parse_crash", { error: outerErr?.message, frame_data: event?.data });
+     }
+-    console.warn("Unknown WS frame type", data);
+   }
+ 
+   function attachSocket(ws) {
+     ws.__intentionalClose = false;
+     const handlers = {
+       open: () => {
+         // Write live socket and mark connected so UI gates on ws.open can run
+         setWsConnected(true);
+         setWsPhase("connected");
+         recordLastError(null, null);
+         try {
+           if (typeof AppState.setState === "function") {
+             AppState.setState({ websocket: ws, connectionState: "connected" });
+           } else {
+             updateState({ websocket: ws, connectionState: "connected" });
+           }
+         } catch {
+           updateState({ websocket: ws, connectionState: "connected" });
          }
-         close(code = 1000, reason = '') {
-           this.readyState = WebSocket.CLOSED;
-           const ev = new Event('close');
+         try {
+           WSClient._ws = ws;
+           WSClient._connected = true;
+         } catch {}
+         try {
+           window.ws = ws;
+@@ -3474,51 +3479,58 @@ import { initVAD } from "./audio/vad_client.js";
+           console.warn("AppState.hub.bindSocket open failed", err);
+         }
+         try {
+           if (!Array.isArray(WSClient._queue)) {
+             WSClient._queue = [];
+           }
+           if (WSClient._queue.length) {
+             for (const { data, isBinary } of WSClient._queue) {
+               send.call(WSClient, data, { binary: isBinary });
+             }
+             WSClient._queue.length = 0;
+           }
+         } catch {}
+         try {
+           window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
+         } catch {}
+         try {
+           if (!WSClient._linkedProofLogged) {
+             console.info("evt=ws_linked AppState", !!AppState?.websocket, "WSClient", !!WSClient._ws);
+             WSClient._linkedProofLogged = true;
+           }
+         } catch {}
+         startHeartbeat();
+         logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
+       },
+-      message: parseFrame,
++      message: (event) => {
++        try {
++          parseFrame(event);
++        } catch (err) {
++          console.error("WS message handler critical crash", err);
++          hubLog("client.ws.crash", { error: err?.message, source: "onmessage" });
++        }
++      },
+       error: (event) => {
+         console.error("WebSocket error", event);
+         const message = event && typeof event?.message === "string" && event.message
+           ? event.message
+           : "socket_error";
+         recordLastError(null, message);
+         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
+       },
+       close: (event) => {
+         const expected = ws.__intentionalClose === true;
+         const detailReason = event && typeof event?.reason === "string" && event.reason
+           ? event.reason
+           : (expected ? "intentional_close" : "ws_close");
+         if (_audioStreaming) {
+           const offReason = detailReason || (expected ? "intentional_close" : "ws_close");
+           hubLog("client.stream.off", {
+             reason: offReason,
+             code: typeof event?.code === "number" ? event.code : undefined,
+           });
+           _audioStreaming = false;
+         }
+         recordLastError(event && typeof event?.code === "number" ? event.code : null, detailReason);
+         setWsConnected(false);
+         setWsPhase("disconnected");
+         logStage('client.ws', { outcome: 'close', code: event?.code, reason: event?.reason });
