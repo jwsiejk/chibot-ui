@@ -3107,49 +3107,15 @@ import { initVAD } from "./audio/vad_client.js";
       });
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
-      // *** REPLACED WITH MINIMAL LOGIC ***
-      const ar = window.AudioRecorder || null;
       const policy = frame?.policy || {};
-      try {
-        if (ar?.setPolicy) ar.setPolicy(policy);
-        if (ar?.start) await ar.start(policy);
-      } catch (err) {
-        console.warn("AudioRecorder start_listening preflight failed", err);
+      if (!AppState?.asrReady) {
+        console.warn("Received start_listening before ASR ready; ignoring until asr.ready arrives.", frame);
+        return;
       }
-      
-      const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
-      const warmupMs = getWarmupMs();
-      console.info(
-        "diag=start_listening_order vendor=%s vad_warmup_ms=%s require_active_turn=%s",
-        vendor,
-        Number.isFinite(warmupMs) ? warmupMs : null,
-        REQUIRE_ACTIVE_TURN,
-      );
-
-      try {
-        __micAttempts += 1;
-        __micChunks = 0;
-        __micBytes = 0;
-        __micArmedAt = Date.now();
-        if (!__turnTraceId) {
-          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
-        }
-        logMic({ outcome: MIC_OUTCOME.ARMED });
-      } catch {}
-
-      // If ASR is ready, start streaming immediately. Otherwise, wait for ASR.ready frame.
-      if (AppState?.asrReady) {
-        try {
-          await startRecorderStreaming(policy, "start_listening_asr_ready");
-          _audioStreaming = true;
-        } catch (err) {
-          console.error("Deferred mic start after start_listening failed", err);
-        }
-      }
-      
-      console.warn('Deferred mic streaming start until asr.ready received.', frame);
+      console.info("start_listening received after ASR ready; relying on automatic mic start.", {
+        vendor: policy?.asr?.vendor?.primary ?? null,
+      });
       return;
-      // *** END REPLACED LOGIC ***
     } else if (frame.type === "stop_listening") {
       if (_audioStreaming) {
         const reason = typeof frame?.reason === "string" && frame.reason

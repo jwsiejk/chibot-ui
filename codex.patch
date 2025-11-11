@@ -1,571 +1,104 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index f1d29b79bd5d831f4f1b96c79f13e6a3e2275f56..b76dd1575f6a1234bbf9cb62d51c0935d1f2589d 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -792,124 +792,52 @@
-             }
-           } catch (err) {
-             console.warn("AudioRecorder stopListening failed", err);
-           }
-         },
-       };
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index 3dfa0339b47582614d580c259f6404d522146228..1a3755678602684d2f5dc210b00c15934217d075 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -3085,93 +3085,59 @@ import { initVAD } from "./audio/vad_client.js";
+       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+         audioPlayer.handleTtsEnd(frame);
+       }
+       const uttIdEnd = frame?.utt_id || 'utt-00001';
+       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
  
-       hub._install(hubImpl);
-     }
- 
-     installHubInterface();
- 
-     let policyCaptureLogged = false;
- 
-     renderStatusBarFromState();
-     if (typeof AppState?.on === 'function') {
-       const events = ['change', 'wsConnected', 'wsConnecting', 'ttsActive', 'turnState', 'asrReady'];
-       events.forEach((eventName) => AppState.on(eventName, () => window.AppUI?.refresh?.()));
-     }
- 
-     if (AppState && typeof AppState.__no_rearm_until !== 'number') {
-       AppState.__no_rearm_until = 0;
-     }
- 
- 
--    function patchPolicyVad(patch) {
--      if (!patch || typeof patch !== 'object') {
--        return;
+       // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
+       // We rely on the server to send asr.ready back when it processes this.
+       if (AppState?.policy?.auto_record_after_greet !== false) {
+         requestAsrArm('tts_end');
+       }
+       // *** END NEW LOGIC ***
+     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+       const uttId = frame?.utt_id || 'utt-00001';
+       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+       setAppStateValue("ttsActive", false);
+       logStage('client.tts', {
+         outcome: 'ended',
+         utt_id: uttId,
+         dur_ms: frame?.dur_ms,
+         reason,
+       });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
+     } else if (frame.type === "start_listening") {
+-      // *** REPLACED WITH MINIMAL LOGIC ***
+-      const ar = window.AudioRecorder || null;
+       const policy = frame?.policy || {};
+-      try {
+-        if (ar?.setPolicy) ar.setPolicy(policy);
+-        if (ar?.start) await ar.start(policy);
+-      } catch (err) {
+-        console.warn("AudioRecorder start_listening preflight failed", err);
 -      }
--
--      const applyPatch = (policyRoot) => {
--        if (!policyRoot || typeof policyRoot !== 'object') {
--          return;
--        }
--        const currentVad = policyRoot.vad && typeof policyRoot.vad === 'object'
--          ? policyRoot.vad
--          : {};
--        policyRoot.vad = { ...currentVad, ...patch };
--      };
+-      
+-      const vendor = frame?.policy?.asr?.vendor?.primary ?? null;
+-      const warmupMs = getWarmupMs();
+-      console.info(
+-        "diag=start_listening_order vendor=%s vad_warmup_ms=%s require_active_turn=%s",
+-        vendor,
+-        Number.isFinite(warmupMs) ? warmupMs : null,
+-        REQUIRE_ACTIVE_TURN,
+-      );
 -
 -      try {
--        if (AppState && typeof AppState === 'object') {
--          const policy = AppState.policy && typeof AppState.policy === 'object'
--            ? AppState.policy
--            : (AppState.policy = {});
--          applyPatch(policy);
+-        __micAttempts += 1;
+-        __micChunks = 0;
+-        __micBytes = 0;
+-        __micArmedAt = Date.now();
+-        if (!__turnTraceId) {
+-          __turnTraceId = `${AppState?.sid || 'sid-unknown'}:${Date.now()}`;
 -        }
--      } catch (err) {
--        console.warn('Failed to update AppState policy VAD', err);
--      }
+-        logMic({ outcome: MIC_OUTCOME.ARMED });
+-      } catch {}
 -
--    }
--
--    function getCapturePolicy() {
--      const snapshot = (() => {
+-      // If ASR is ready, start streaming immediately. Otherwise, wait for ASR.ready frame.
+-      if (AppState?.asrReady) {
 -        try {
--          if (typeof AppState?.getState === 'function') {
--            const state = AppState.getState();
--            if (state && typeof state.policy === 'object') {
--              return state.policy;
--            }
--          }
--        } catch (_) {}
--        if (AppState && typeof AppState.policy === 'object') {
--          return AppState.policy;
+-          await startRecorderStreaming(policy, "start_listening_asr_ready");
+-          _audioStreaming = true;
+-        } catch (err) {
+-          console.error("Deferred mic start after start_listening failed", err);
 -        }
--        return null;
--      })();
--      if (!snapshot || typeof snapshot !== 'object') {
--        return null;
--      }
--      if (snapshot.capture && typeof snapshot.capture === 'object') {
--        return snapshot.capture;
--      }
--      const nested = snapshot.policy;
--      if (nested && typeof nested === 'object' && nested.capture && typeof nested.capture === 'object') {
--        return nested.capture;
--      }
--      return null;
--    }
--
--    function getCaptureTimesliceMs() {
--      const capture = getCapturePolicy();
--      if (!capture) {
--        return null;
--      }
--      const raw = capture.timeslice_ms;
--      const numeric = Number(raw);
--      if (Number.isFinite(numeric) && numeric > 0) {
--        return Math.round(numeric);
--      }
--      return null;
--    }
--
-     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
-     const CLIENT_HUD_STATE_EVENT = 'EVT_HUD_STATE';
--    let pendingClientReady = null;
--    let clientReadyTimerId = null;
--    let clientReadyStats = null;
- 
-     function normalizeStopReason(source) {
-       if (typeof source === 'string' && source) {
-         return source.slice(0, 48);
++      if (!AppState?.asrReady) {
++        console.warn("Received start_listening before ASR ready; ignoring until asr.ready arrives.", frame);
++        return;
        }
-       if (source && typeof source === 'object') {
-         if (typeof source.reason === 'string' && source.reason) {
-           return source.reason.slice(0, 48);
-         }
-         if (typeof source.code === 'string' && source.code) {
-           return source.code.slice(0, 48);
-         }
-       }
-       return 'unknown';
-     }
- 
-     function isRecorderListening() {
-       try {
-         if (audioRecorder && typeof audioRecorder.isListening === "function") {
-           return !!audioRecorder.isListening();
-         }
-       } catch (_) {}
-       if (audioRecorder && typeof audioRecorder.listening === "boolean") {
-         return audioRecorder.listening;
-       }
-@@ -942,55 +870,51 @@
-           if (typeof stateSnapshot.state.micLive === "boolean") {
-             return stateSnapshot.state.micLive;
-           }
-         }
-       }
-       return false;
-     }
- 
-     function updateRecordingState(active, source) {
-       const previous = isRecorderListening();
-       const next = !!active;
- 
-       if (typeof AppState?.setState === 'function') {
-         AppState.setState({ listening: next });
-       } else if (typeof AppState === 'object' && AppState) {
-         AppState.listening = next;
-       }
- 
-       let stopReasonLabel = null;
-       if (next) {
-         if (!previous) {
-           if (typeof AppState?.__no_rearm_until === 'number') {
-             AppState.__no_rearm_until = 0;
-           }
-           beginMicTelemetrySession();
--          const timeslice = getCaptureTimesliceMs();
--          const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
--            ? Math.max(0, Math.round(timeslice))
--            : 'unknown';
--          logClientMicEventText(`evt=mic_start timeslice_ms=${timesliceLabel}`);
-+          logClientMicEventText('evt=mic_start timeslice_ms=unknown');
-         }
-       } else if (previous) {
-         stopReasonLabel = normalizeStopReason(source);
-         logClientMicEventText(`evt=mic_stop reason=${stopReasonLabel}`);
-         endMicTelemetrySession();
-       }
- 
-       if (previous !== next) {
-         const hudState = next ? 'Listening' : 'Idle';
-         const hudMeta = { state: hudState };
-         if (typeof source === 'string' && source) {
-           hudMeta.source = source;
-         } else if (!next && stopReasonLabel) {
-           hudMeta.reason = stopReasonLabel;
-         }
-         handleHudStateChange({ state: hudState, meta: hudMeta });
-       }
- 
-       window.AppUI?.refresh?.();
-       return next;
-     }
- 
-     function startMicCapture() {
-       if (!audioRecorder || typeof audioRecorder.startMicCaptureIfIdle !== 'function') {
-         return Promise.reject(new Error('startMicCapture_unavailable'));
-@@ -1003,226 +927,77 @@
-       }
-       if (outcome && typeof outcome.then === 'function') {
-         return outcome.then((value) => {
-           if (value) {
-             setMicPermissionGranted(true, 'startMicCapture');
-           }
-           return value;
-         });
-       }
-       if (outcome) {
-         setMicPermissionGranted(true, 'startMicCapture');
-       }
-       return Promise.resolve(outcome);
-     }
- 
-     function setMicPermissionGranted(granted) {
-       const next = !!granted;
-       if (typeof AppState?.setState === 'function') {
-         AppState.setState({ micPermissionGranted: next });
-       } else if (AppState && typeof AppState === 'object') {
-         AppState.micPermissionGranted = next;
-       }
-       return next;
-     }
- 
--    function maybeLogClientReadyOutcome(outcome, extraMeta) {
--      if (!clientReadyStats) {
--        return;
--      }
--      const summary = {
--        outcome: typeof outcome === 'string' && outcome ? outcome.slice(0, 32) : 'unknown',
--        attempts: clientReadyStats.attempts,
--        startedMs: clientReadyStats.startedAt,
--      };
--      if (typeof clientReadyStats.startedAt === 'number') {
--        const elapsed = Date.now() - clientReadyStats.startedAt;
--        if (Number.isFinite(elapsed)) {
--          summary.durationMs = Math.max(0, elapsed);
--        }
--      }
--      if (clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number') {
--        summary.micTs = clientReadyStats.detail.ts;
--      }
--      if (clientReadyStats.detail && clientReadyStats.detail.vendor) {
--        summary.vendor = clientReadyStats.detail.vendor.slice(0, 64);
--      }
--      if (clientReadyStats.events.length) {
--        summary.events = clientReadyStats.events.slice(-12);
--      }
--      const extraDetail = cloneDiagDetail(extraMeta);
--      if (extraDetail !== undefined) {
--        summary.extra = extraDetail;
--      }
--      const wsClient = getWsClient();
--      const socket = getLiveSocket();
--      if (socket && typeof socket.readyState === 'number') {
--        summary.readyState = socket.readyState;
--      }
--      if (!sendClientLog('client_ready_handshake', summary)) {
--        enqueueDeferredClientLog('client_ready_handshake', summary);
--      } else if (getLiveSocket()) {
--        flushDeferredClientLogs();
--      }
--      clientReadyStats = null;
--    }
--
--    function normalizeMicOpenDetail(detail) {
--      const rawTs = detail ? detail.ts : null;
--      const tsNumber = Number(rawTs);
--      const tsValue = Number.isFinite(tsNumber) ? tsNumber : Date.now();
--      const vendorValue = detail && typeof detail.vendor === 'string' ? detail.vendor.trim() : '';
--      const vendor = vendorValue ? vendorValue.slice(0, 64) : null;
--      return { ts: tsValue, vendor };
--    }
--
--    function trySendClientReady(detail) {
--      if (!detail) return false;
--      const wsClient = getWsClient();
--      if (!wsClient || typeof wsClient.send !== 'function') {
--        recordClientReadyEvent('wsclient_missing');
--        return false;
--      }
--      const socket = getLiveSocket();
--      const readyState = socket && typeof socket.readyState === 'number' ? socket.readyState : -1;
--      if (clientReadyStats) {
--        clientReadyStats.attempts += 1;
--        recordClientReadyEvent('attempt', { readyState });
--      }
--      if (!socket || readyState !== WebSocket.OPEN) {
--        recordClientReadyEvent('socket_not_open', { readyState });
--        return false;
--      }
--      const payload = {
--        type: 'client.ready',
--        mic: {
--          state: 'open',
--          ts: detail.ts
--        }
--      };
--      if (detail.vendor) {
--        payload.mic.vendor = detail.vendor;
--      }
--      try {
--        wsClient.send(payload);
--        recordClientReadyEvent('sent', { readyState });
--        return true;
--      } catch (err) {
--        recordClientReadyEvent('send_error', {
--          readyState,
--          message: err && err.message ? String(err.message).slice(0, 120) : 'send_failed'
--        });
--        console.warn('client.ready send failed', err);
--        return false;
--      }
--    }
--
--    function flushPendingClientReady() {
--      if (!pendingClientReady) {
--        clientReadyTimerId = null;
--        return;
--      }
--      if (trySendClientReady(pendingClientReady)) {
--        pendingClientReady = null;
--        clientReadyTimerId = null;
--        maybeLogClientReadyOutcome('sent');
--        return;
--      }
--      recordClientReadyEvent('retry_wait', { delayMs: 200 });
--      clientReadyTimerId = window.setTimeout(flushPendingClientReady, 200);
--    }
--
--    function enqueueClientReady(detail) {
--      const normalized = normalizeMicOpenDetail(detail);
--      if (!normalized) {
--        return;
--      }
--      const detailChanged =
--        !!clientReadyStats &&
--        (clientReadyStats.detail.ts !== normalized.ts || clientReadyStats.detail.vendor !== normalized.vendor);
--      if (detailChanged) {
--        const replacementMeta = {
--          reason: 'detail_changed',
--          prevTs: clientReadyStats.detail && typeof clientReadyStats.detail.ts === 'number'
--            ? clientReadyStats.detail.ts
--            : undefined,
--          prevVendor: clientReadyStats.detail && clientReadyStats.detail.vendor
--            ? clientReadyStats.detail.vendor.slice(0, 64)
--            : undefined,
--        };
--        recordClientReadyEvent('detail_replaced', replacementMeta);
--        maybeLogClientReadyOutcome('replaced', replacementMeta);
--      }
--      pendingClientReady = normalized;
--      if (!clientReadyStats) {
--        startClientReadyTracking(normalized);
--      } else {
--        recordClientReadyEvent('enqueue_duplicate');
--      }
--      if (clientReadyTimerId !== null) {
--        return;
--      }
--      flushPendingClientReady();
--    }
--
-     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
-       setMicPermissionGranted(true, 'mic_open_event');
-       updateRecordingState(true, 'mic_open_event');
--      enqueueClientReady(event && event.detail);
-     });
- 
-     window.addEventListener(CLIENT_HUD_STATE_EVENT, (event) => {
-       handleHudStateChange(event && event.detail);
-     });
- 
-     window.addEventListener('input.start', () => {
-       updateRecordingState(true, 'input.start');
-       setMicPermissionGranted(true, 'input.start');
-     });
- 
-     window.addEventListener('input.stop', () => {
-       updateRecordingState(false, 'input.stop');
-     });
- 
-     window.addEventListener('stop_listening', (event) => {
-       const reason =
-         (event && event.detail && typeof event.detail.reason === 'string' && event.detail.reason) ||
-         'stop_listening';
-       updateRecordingState(false, reason);
-     });
- 
-     // START REWRITE: window.addEventListener('ws.close', ...)
-     window.addEventListener('ws.close', () => {
--      if (clientReadyStats && pendingClientReady) {
--        recordClientReadyEvent('socket_closed', { reason: 'ws.close' });
--        maybeLogClientReadyOutcome('socket_closed', { reason: 'ws.close' });
--      }
--      pendingClientReady = null;
--      if (clientReadyTimerId !== null) {
--        clearTimeout(clientReadyTimerId);
--        clientReadyTimerId = null;
--      }
-       if (typeof AppState?.setState === 'function') {
-         AppState.setState({ asrReady: false, turnState: null, policy: null });
-       } else {
-         if (AppState) {
-           AppState.asrReady = false;
-           AppState.turnState = null;
-           AppState.policy = null;
-         }
-       }
-       // *** Crucial Fix: Forcibly stop mic hardware and clear UI state ***
-       updateRecordingState(false, 'ws.close');
-       // END Crucial Fix
-       setMicPermissionGranted(false, 'ws.close');
-       policyCaptureLogged = false;
-       window.AppUI?.refresh?.();
-     });
-     // END REWRITE: window.addEventListener('ws.close', ...)
- 
-     window.addEventListener('ws.open', () => {
-       if (typeof AppState?.setState === 'function') {
-         AppState.setState({ asrReady: false, turnState: null });
-       } else if (AppState) {
-         AppState.asrReady = false;
-         AppState.turnState = null;
-       }
-@@ -2124,53 +1899,50 @@
-       previousConnectionState = nextConnectionState;
- 
-       if (becameConnected) {
-         Waveform.start();
-         if (getLiveSocket()) {
-           try {
-             flushDeferredClientLogs();
-           } catch {}
-         }
- 
-         try {
-           AppState?.hub?.bindSocket?.(getLiveSocket());
-         } catch (err) {
-           console.warn('AppState.hub.bindSocket connect failed', err);
-         }
-         if (audioRecorder && typeof audioRecorder.start === 'function') {
-           audioRecorder.start()
-             .then(() => {
-               setMicPermissionGranted(true, 'recorder.start');
-             })
-             .catch((err) => {
-               console.error('AudioRecorder start error', err);
-               setMicPermissionGranted(false, 'recorder.start_error');
-             });
-         }
--        if (pendingClientReady && clientReadyTimerId === null) {
--          flushPendingClientReady();
--        }
-       } else if (becameDisconnected) {
-         Waveform.stop();
- 
-         if (audioRecorder && typeof audioRecorder.stop === 'function') {
-           try {
-             audioRecorder.stop();
-           } catch (err) {
-             console.warn('AudioRecorder stop error', err);
-           }
-         }
-         try {
-           AppState?.hub?.bindSocket?.(null);
-         } catch (err) {
-           console.warn('AppState.hub.bindSocket disconnect failed', err);
-         }
-         updateRecordingState(false, 'appstate.disconnect');
-         if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-           window.AudioPlayer.interrupt();
-         }
-       }
-       updateResumeBanner(state);
-     });
- 
-     const asrRetry = { tries: 0, timer: null };
- 
-@@ -2179,51 +1951,50 @@ window.addEventListener('tts.start', (event) => {
-   if (detail) {
-     updateVoiceState(extractVoiceLocale(detail));
-   }
-   try {
-     // Suspend silence watchdog during greet playback.
-     if (typeof window.__silenceWD?.suspend === 'function') {
-       window.__silenceWD.suspend('tts.start');
-     } else if (typeof window.clearSilenceWatchdog === 'function') {
-       window.clearSilenceWatchdog();
-     }
-   } catch {}
-   try {
-     window.AppState.processing = false;
-     if (window.AppState.state && typeof window.AppState.state === 'object') {
-       window.AppState.state.processing = false;
-     }
-     window.AppUI?.refresh?.();
-   } catch {}
-   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
-     try {
-       window.AudioRecorder.handleTtsStart();
-     } catch (err) {
-       console.warn('AudioRecorder handleTtsStart failed', err);
-     }
-   }
--  patchPolicyVad({ auto_vad_active: false });
-   window.AppUI?.refresh?.();
- });
- 
- window.addEventListener('policy.snapshot', (event) => {
-   const frame = event && event.detail;
-   try {
-     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
-     const normalized = policy && typeof policy === 'object' ? policy : null;
-     try { AppState.policy = normalized; } catch {}
-     if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
-       audioRecorder.setPolicy(normalized);
-     }
-   } catch (err) {
-     console.warn('AudioRecorder setPolicy failed', err);
-   }
- });
- 
- // Turn becomes Ready → hand control to user
- window.addEventListener('turn.state', (event) => {
-   const frame = (event && event.detail) || {};
-   const nextState = typeof frame.state === 'string'
-     ? frame.state
-     : (frame.meta && typeof frame.meta.state === 'string' ? frame.meta.state : null);
-   const normalized = typeof nextState === 'string' ? nextState : null;
-   if (typeof AppState?.setState === 'function') {
-@@ -2287,51 +2058,50 @@ window.addEventListener('asr.final', () => {
- window.addEventListener('response', (event) => {
-   try {
-     const frame = event && event.detail;
-     const type = typeof frame?.type === 'string' ? frame.type : '';
-     if (!type || !type.startsWith('response.')) {
+-      
+-      console.warn('Deferred mic streaming start until asr.ready received.', frame);
++      console.info("start_listening received after ASR ready; relying on automatic mic start.", {
++        vendor: policy?.asr?.vendor?.primary ?? null,
++      });
        return;
-     }
-     if (type.includes('.delta') || type.includes('.chunk') || type.endsWith('.completed')) {
-       window.AppState.processing = false;
-       if (window.AppState.state && typeof window.AppState.state === 'object') {
-         window.AppState.state.processing = false;
+-      // *** END REPLACED LOGIC ***
+     } else if (frame.type === "stop_listening") {
+       if (_audioStreaming) {
+         const reason = typeof frame?.reason === "string" && frame.reason
+           ? frame.reason
+           : frame?.type || "stop_listening";
+         hubLog("client.stream.off", { reason });
        }
-       window.AppUI?.refresh?.();
-     }
-   } catch {}
- });
- 
- window.addEventListener('assistant.await_user', (event) => {
-   try {
-     window.AppState.processing = false;
-     if (window.AppState.state && typeof window.AppState.state === 'object') {
-       window.AppState.state.processing = false;
-     }
-     window.AppUI?.refresh?.();
-   } catch {}
--  patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
-   window.AppUI?.refresh?.();
- });
- 
- window.addEventListener('asr.unavailable', (event) => {
-   if (typeof AppState?.setState === 'function') {
-     AppState.setState({ asrReady: false });
-   } else if (AppState) {
-     AppState.asrReady = false;
-   }
-   const detail = event && typeof event === 'object' ? event.detail : undefined;
-   let reason = null;
-   if (detail && typeof detail === 'object') {
-     if (typeof detail.reason === 'string') {
-       reason = detail.reason;
-     } else if (typeof detail.details === 'string') {
-       reason = detail.details;
-     } else if (typeof detail.detail === 'string') {
-       reason = detail.detail;
-     } else if (detail.detail && typeof detail.detail === 'object') {
-       const nested = detail.detail;
-       if (typeof nested.reason === 'string') {
-         reason = nested.reason;
-       } else if (typeof nested.details === 'string') {
-         reason = nested.details;
+       _audioStreaming = false;
+       await stopRecorder("server_requested");
+       setAsrArmInFlight(false);
+       try {
+         const hub = AppState?.hub;
+         if (hub && typeof hub.stopListening === "function") {
+           hub.stopListening("server_requested");
+         } else {
+           stopInputCapture({ reason: "server_requested" });
+         }
+         logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+       } catch (err) {
+         console.warn("Hub stop_listening handler error", err);
+         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
        }
+       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+         try {
+           const reason =
