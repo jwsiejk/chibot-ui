@@ -422,12 +422,32 @@ import { initVAD } from "./audio/vad_client.js";
     return connected && inReadyPhase;
   }
 
+  let __transportMisuseLogging = false;
+
   function logTransportMisuse(kind) {
     try {
-      const hub = window.AppState?.hub;
-      hub?.log?.("client.ws.misuse", { kind });
       console.warn("WS misuse:", kind);
     } catch {}
+    if (__transportMisuseLogging) {
+      return;
+    }
+    let hub = null;
+    try {
+      hub = window.AppState?.hub || null;
+    } catch {}
+    if (!hub || typeof hub.log !== "function") {
+      return;
+    }
+    __transportMisuseLogging = true;
+    try {
+      hub.log("client.ws.misuse", { kind });
+    } catch (err) {
+      try {
+        console.warn("WS misuse hub.log failed", err);
+      } catch {}
+    } finally {
+      __transportMisuseLogging = false;
+    }
   }
 
   const VAD_APPSTATE_KEYS = [
