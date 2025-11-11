@@ -802,7 +802,6 @@
     installHubInterface();
 
     let policyCaptureLogged = false;
-    let finalSeenThisTurn = false;
 
     renderStatusBarFromState();
     if (typeof AppState?.on === 'function') {
@@ -843,8 +842,8 @@
 
     }
 
-    function getPolicySnapshot() {
-      const policyFromStore = (() => {
+    function getCapturePolicy() {
+      const snapshot = (() => {
         try {
           if (typeof AppState?.getState === 'function') {
             const state = AppState.getState();
@@ -853,53 +852,11 @@
             }
           }
         } catch (_) {}
+        if (AppState && typeof AppState.policy === 'object') {
+          return AppState.policy;
+        }
         return null;
       })();
-      if (policyFromStore && typeof policyFromStore === 'object') {
-        return policyFromStore;
-      }
-      if (AppState && typeof AppState.policy === 'object') {
-        return AppState.policy;
-      }
-      return null;
-    }
-
-    function getNestedPolicySection(section) {
-      const snapshot = getPolicySnapshot();
-      if (!snapshot || typeof snapshot !== 'object') {
-        return null;
-      }
-      const nested = snapshot.policy && typeof snapshot.policy === 'object'
-        ? snapshot.policy
-        : snapshot;
-      if (!nested || typeof nested !== 'object') {
-        return null;
-      }
-      const candidate = nested[section];
-      return candidate && typeof candidate === 'object' ? candidate : null;
-    }
-
-    function shouldPrearmOnTtsEnd() {
-      const asrPolicy = getNestedPolicySection('asr');
-      if (asrPolicy && typeof asrPolicy.prearm_on_tts_end === 'boolean') {
-        return asrPolicy.prearm_on_tts_end;
-      }
-      return false;
-    }
-
-    function getKeepWarmMs() {
-      const asrPolicy = getNestedPolicySection('asr');
-      if (asrPolicy && Number.isFinite(Number(asrPolicy.keep_stream_warm_ms))) {
-        const value = Number(asrPolicy.keep_stream_warm_ms);
-        if (value >= 0) {
-          return Math.round(value);
-        }
-      }
-      return 30000;
-    }
-
-    function getCapturePolicy() {
-      const snapshot = getPolicySnapshot();
       if (!snapshot || typeof snapshot !== 'object') {
         return null;
       }
@@ -926,34 +883,11 @@
       return null;
     }
 
-    const micSessionTelemetry = {
-      micOpenLogged: false,
-      recBadgeLogged: false,
-    };
-    let micPermissionTelemetryLogged = false;
-
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
     const CLIENT_HUD_STATE_EVENT = 'EVT_HUD_STATE';
     let pendingClientReady = null;
     let clientReadyTimerId = null;
     let clientReadyStats = null;
-
-    function resetMicSessionTelemetry() {
-      micSessionTelemetry.micOpenLogged = false;
-      micSessionTelemetry.recBadgeLogged = false;
-    }
-
-    function noteRecordingBadgeOn(source) {
-      if (micSessionTelemetry.recBadgeLogged) {
-        return;
-      }
-      micSessionTelemetry.recBadgeLogged = true;
-      const detail = { event: 'ui_rec_badge_on' };
-      if (source) {
-        detail.source = String(source).slice(0, 32);
-      }
-      logClient('evt=ui_rec_badge_on', detail);
-    }
 
     function normalizeStopReason(source) {
       if (typeof source === 'string' && source) {
@@ -1026,13 +960,10 @@
       let stopReasonLabel = null;
       if (next) {
         if (!previous) {
-          finalSeenThisTurn = false;
           if (typeof AppState?.__no_rearm_until === 'number') {
             AppState.__no_rearm_until = 0;
           }
           beginMicTelemetrySession();
-          resetMicSessionTelemetry();
-          noteRecordingBadgeOn(source);
           const timeslice = getCaptureTimesliceMs();
           const timesliceLabel = typeof timeslice === 'number' && Number.isFinite(timeslice)
             ? Math.max(0, Math.round(timeslice))
@@ -1043,7 +974,6 @@
         stopReasonLabel = normalizeStopReason(source);
         logClientMicEventText(`evt=mic_stop reason=${stopReasonLabel}`);
         endMicTelemetrySession();
-        resetMicSessionTelemetry();
       }
 
       if (previous !== next) {
@@ -1058,40 +988,6 @@
       }
 
       window.AppUI?.refresh?.();
-      return next;
-    }
-
-    function noteMicOpen(source) {
-      if (micSessionTelemetry.micOpenLogged) {
-        return;
-      }
-      micSessionTelemetry.micOpenLogged = true;
-      const detail = { event: 'mic_open' };
-      if (source) {
-        detail.source = String(source).slice(0, 32);
-      }
-      logClient('evt=mic_open', detail);
-    }
-
-    function setMicPermissionGranted(granted, source) {
-      const next = !!granted;
-      if (typeof AppState?.setState === 'function') {
-        AppState.setState({ micPermissionGranted: next });
-      } else if (AppState && typeof AppState === 'object') {
-        AppState.micPermissionGranted = next;
-      }
-      if (next) {
-        if (!micPermissionTelemetryLogged) {
-          micPermissionTelemetryLogged = true;
-          const detail = { event: 'mic_perm_granted' };
-          if (source) {
-            detail.source = String(source).slice(0, 32);
-          }
-          logClient('evt=mic_perm_granted', detail);
-        }
-      } else {
-        micPermissionTelemetryLogged = false;
-      }
       return next;
     }
 
@@ -1119,85 +1015,14 @@
       return Promise.resolve(outcome);
     }
 
-    function logMaybeAutostartBlocked(triggerLabel, reasonLabel, gates, extra) {
-      const stateSnapshot = (() => {
-        try {
-          if (typeof AppState?.getState === 'function') {
-            return AppState.getState() || {};
-          }
-        } catch (_) {}
-        return AppState || {};
-      })();
-      const policyCapture = (stateSnapshot.policy && typeof stateSnapshot.policy.capture === 'object')
-        ? stateSnapshot.policy.capture
-        : (AppState?.policy && typeof AppState.policy.capture === 'object' ? AppState.policy.capture : {});
-      const gateSnapshot = {
-        asrReady: !!(typeof stateSnapshot.asrReady !== 'undefined' ? stateSnapshot.asrReady : AppState?.asrReady),
-        turnState: typeof stateSnapshot.turnState === 'string'
-          ? stateSnapshot.turnState
-          : (typeof AppState?.turnState === 'string' ? AppState.turnState : ''),
-        micPerm: !!(typeof stateSnapshot.micPermissionGranted !== 'undefined'
-          ? stateSnapshot.micPermissionGranted
-          : AppState?.micPermissionGranted),
-        start_on_asr_ready: !!policyCapture?.start_on_asr_ready,
-        start_on_turn_ready: !!policyCapture?.start_on_turn_ready
-      };
-      if (typeof logClient === 'function') {
-        try {
-          const gatesJson = JSON.stringify(gateSnapshot);
-          logClient('client.mic', `evt=maybe_autostart_blocked gates=${gatesJson} trigger=${triggerLabel} reason=${reasonLabel}`);
-        } catch (err) {
-          logClient('client.mic', `evt=maybe_autostart_blocked gates_error trigger=${triggerLabel} reason=${reasonLabel}`);
-        }
+    function setMicPermissionGranted(granted) {
+      const next = !!granted;
+      if (typeof AppState?.setState === 'function') {
+        AppState.setState({ micPermissionGranted: next });
+      } else if (AppState && typeof AppState === 'object') {
+        AppState.micPermissionGranted = next;
       }
-      const parts = [
-        `asrReady=${gates.asrReady}`,
-        `turnState=${gates.turnState === null ? 'null' : gates.turnState}`,
-        `micPerm=${gates.micPerm}`,
-        `recording=${gates.recording}`,
-      ];
-      const detail = {
-        event: 'maybe_autostart_blocked',
-        trigger: triggerLabel,
-        reason: reasonLabel,
-        gates: {
-          asrReady: gates.asrReady,
-          turnState: gates.turnState,
-          micPerm: gates.micPerm,
-          recording: gates.recording,
-        },
-      };
-      if (extra && typeof extra === 'object') {
-        const keys = Object.keys(extra);
-        if (keys.length) {
-          detail.extra = {};
-          for (let i = 0; i < keys.length && i < 8; i += 1) {
-            const key = keys[i];
-            if (!key) continue;
-            detail.extra[key.slice(0, 32)] = extra[key];
-          }
-        }
-      }
-      logClient(`evt=maybe_autostart_blocked gates={${parts.join(' ')}}`, detail);
-    }
-
-    function maybeAutoStartCapture(trigger, reason) {
-      if (AppState?.ttsActive) {
-        return;
-      }
-      if (!AppState?.micLive && !AppState?.listening) {
-        startMicCapture()
-          .then((started) => {
-            if (!started && (window.AudioRecorder?.listening || AppState?.listening)) {
-              updateRecordingState(true, 'auto_start_already_active');
-              return;
-            }
-            if (started) {
-              updateRecordingState(true, 'auto_start_capture');
-            }
-          })
-          .catch(() => {});
-      }
+      return next;
     }
 
     function maybeLogClientReadyOutcome(outcome, extraMeta) {
@@ -1342,7 +1167,6 @@
     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
       setMicPermissionGranted(true, 'mic_open_event');
       updateRecordingState(true, 'mic_open_event');
-      noteMicOpen('mic_open_event');
       enqueueClientReady(event && event.detail);
     });
 
@@ -1366,6 +1190,7 @@
       updateRecordingState(false, reason);
     });
 
+    // START REWRITE: window.addEventListener('ws.close', ...)
     window.addEventListener('ws.close', () => {
       if (clientReadyStats && pendingClientReady) {
         recordClientReadyEvent('socket_closed', { reason: 'ws.close' });
@@ -1385,11 +1210,14 @@
           AppState.policy = null;
         }
       }
+      // *** Crucial Fix: Forcibly stop mic hardware and clear UI state ***
       updateRecordingState(false, 'ws.close');
+      // END Crucial Fix
       setMicPermissionGranted(false, 'ws.close');
       policyCaptureLogged = false;
       window.AppUI?.refresh?.();
     });
+    // END REWRITE: window.addEventListener('ws.close', ...)
 
     window.addEventListener('ws.open', () => {
       if (typeof AppState?.setState === 'function') {
@@ -2257,7 +2085,6 @@
         resetSuggestions();
         updateRecordingState(false, 'appstate.disconnect');
         policyCaptureLogged = false;
-        finalSeenThisTurn = false;
         if (typeof AppState?.setState === 'function') {
           AppState.setState({ policy: null });
         } else if (AppState) {
@@ -2345,157 +2172,7 @@
       updateResumeBanner(state);
     });
 
-    const ASR_PREARM_RETRY_DELAY_MS = 150;
-    const ASR_PREARM_ALLOWED_PHASES = ['connected', 'ready', 'resuming'];
-
-    let asrRetry = { tries: 0, timer: null };
-    let asrPrearmRetryTimerId = null;
-
-    function scheduleAsrRearm() {
-      if (typeof window === 'undefined') {
-        return;
-      }
-      if (asrRetry && typeof asrRetry === 'object') {
-        clearTimeout(asrRetry.timer);
-      }
-      const tries = asrRetry && typeof asrRetry.tries === 'number' ? asrRetry.tries : 0;
-      const exponent = Math.min(5, tries);
-      const delay = Math.min(30000, 1000 * Math.pow(2, exponent));
-      if (asrRetry && typeof asrRetry === 'object') {
-        asrRetry.tries = tries + 1;
-      }
-      const timer = setTimeout(() => {
-        try {
-          const payload = { type: 'asr.rearm.request' };
-          const client = window.WSClient;
-          if (client && typeof client.send === 'function') {
-            client.send(payload);
-            return;
-          }
-          const ws = window.WS;
-          if (ws && typeof ws.send === 'function') {
-            ws.send(payload);
-          }
-        } catch (err) {
-          console.warn('Failed to send asr.rearm.request', err);
-        }
-      }, delay);
-      if (asrRetry && typeof asrRetry === 'object') {
-        asrRetry.timer = timer;
-      }
-    }
-
-    function readSocketPhaseSnapshot() {
-      const stateSnapshot = (() => {
-        try {
-          return typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
-        } catch (_) {
-          return AppState || null;
-        }
-      })();
-
-      const phase = typeof stateSnapshot?.wsPhase === 'string' ? stateSnapshot.wsPhase : null;
-      const connectionState =
-        typeof stateSnapshot?.connectionState === 'string' ? stateSnapshot.connectionState : null;
-      const isAllowedPhase = (value) =>
-        typeof value === 'string' && ASR_PREARM_ALLOWED_PHASES.includes(value);
-      const socketReady = isAllowedPhase(phase) || isAllowedPhase(connectionState);
-      const phaseLabel = phase || connectionState || 'unknown';
-
-      return { phase, connectionState, socketReady, phaseLabel };
-    }
-
-    function scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel, options) {
-      const phaseLabelValue = phaseLabel || 'unknown';
-      const { logRetry } = options || {};
-      if (logRetry) {
-        logClient(
-          `evt=asr_prearm_retry source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
-        );
-      }
-      logClient(
-        `evt=asr_prearm_deferred source=client trigger=${triggerLabel} phase=${phaseLabelValue}`
-      );
-      asrPrearmRetryTimerId = setTimeout(() => {
-        asrPrearmRetryTimerId = null;
-        try {
-          requestAsrPrearm(trigger);
-        } catch (err) {
-          console.warn('requestAsrPrearm retry failed', err);
-        }
-      }, ASR_PREARM_RETRY_DELAY_MS);
-    }
-
-    function requestAsrPrearm(trigger) {
-      if (asrPrearmRetryTimerId) {
-        clearTimeout(asrPrearmRetryTimerId);
-        asrPrearmRetryTimerId = null;
-      }
-
-      const triggerLabel = typeof trigger === 'string' && trigger ? trigger : 'unknown';
-
-      const { socketReady, phaseLabel } = readSocketPhaseSnapshot();
-
-      if (!socketReady) {
-        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseLabel);
-        return;
-      }
-
-      const payload = { type: 'asr.rearm.request' };
-      const keepWarm = getKeepWarmMs();
-      const liveSnapshot = readSocketPhaseSnapshot();
-      if (!liveSnapshot.socketReady) {
-        scheduleAsrPrearmRetry(trigger, triggerLabel, liveSnapshot.phaseLabel, { logRetry: true });
-        return;
-      }
-
-      let sendAttempted = false;
-      let sendSucceeded = false;
-      let sendError = null;
-      try {
-        const client = window.WSClient;
-        if (client && typeof client.send === 'function') {
-          sendAttempted = true;
-          client.send(payload);
-          sendSucceeded = true;
-        } else {
-          const ws = window.WS;
-          if (ws && typeof ws.send === 'function') {
-            sendAttempted = true;
-            ws.send(payload);
-            sendSucceeded = true;
-          }
-        }
-      } catch (err) {
-        sendError = err;
-      }
-
-      if (!sendSucceeded) {
-        const phaseForRetry = liveSnapshot.phaseLabel;
-        const error =
-          sendError || (sendAttempted ? new Error('Unknown send failure') : new Error('No websocket client available'));
-        console.warn('Failed to send asr.rearm.request', error);
-        scheduleAsrPrearmRetry(trigger, triggerLabel, phaseForRetry, { logRetry: true });
-        return;
-      }
-
-      logClient(
-        `evt=asr_prearm_requested source=client trigger=${triggerLabel} keep_stream_warm_ms=${keepWarm}`
-      );
-      const arm =
-        typeof requestAsrArm === 'function'
-          ? requestAsrArm
-          : window.WSClient && typeof window.WSClient.requestAsrArm === 'function'
-            ? window.WSClient.requestAsrArm
-            : null;
-      if (arm) {
-        try {
-          arm('policy');
-        } catch (err) {
-          console.warn('requestAsrArm failed after asr_prearm_requested', err);
-        }
-      }
-    }
+    const asrRetry = { tries: 0, timer: null };
 
 window.addEventListener('tts.start', (event) => {
   const detail = event && event.detail;
@@ -2556,24 +2233,9 @@ window.addEventListener('turn.state', (event) => {
   }
   window.AppUI?.refresh?.();
   if (normalized !== 'Ready') return;
-
-  // Optional: why we became ready (e.g., 'tts')
-  const reason = typeof frame.reason === 'string'
-    ? frame.reason
-    : (frame.meta && typeof frame.meta.reason === 'string' ? frame.meta.reason : null);
-  void reason; // not strictly needed, but kept for clarity
-
-  maybeAutoStartCapture('turn_ready', 'tts_end');
-
 });
 
-window.addEventListener('asr.turn', (event) => {
-  const frame = event && event.detail;
-  if (frame && frame.state === 'begin') {
-    maybeAutoStartCapture('turn_begin', 'asr.turn');
-  }
-});
-
+// START REWRITE: window.addEventListener('tts.end', ...)
 // Assistant TTS finished → open mic after optional delay
 window.addEventListener('tts.end', () => {
   const release = () => {
@@ -2584,24 +2246,13 @@ window.addEventListener('tts.end', () => {
         console.warn('AudioRecorder handleTtsEnd failed', err);
       }
     }
-    if (shouldPrearmOnTtsEnd()) {
-      try {
-        requestAsrPrearm('tts_end');
-      } catch (err) {
-        console.warn('requestAsrPrearm failed after tts.end', err);
-      }
-    }
+    // The ASR arm request is handled by WSClient.js IMMEDIATELY on receiving the tts.end frame.
+    // No action is required here except UI refresh.
     window.AppUI?.refresh?.();
   };
-
   release();
 });
-
-window.addEventListener('local_audio.ended', (event) => {
-  const detail = event && event.detail;
-  const trigger = detail && detail.uttId === null ? 'local_audio_end_unknown' : 'local_audio_end';
-  maybeAutoStartCapture(trigger, 'tts_end');
-});
+// END REWRITE: window.addEventListener('tts.end', ...)
 
 const FINAL_REARM_COOLDOWN_MS = 1500;
 
@@ -2613,10 +2264,6 @@ window.addEventListener('asr.final', () => {
     }
     window.AppUI?.refresh?.();
   } catch {}
-  if (finalSeenThisTurn) {
-    return;
-  }
-  finalSeenThisTurn = true;
   const now = Date.now();
   if (AppState && typeof AppState === 'object') {
     AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
@@ -2662,16 +2309,6 @@ window.addEventListener('assistant.await_user', (event) => {
     }
     window.AppUI?.refresh?.();
   } catch {}
-  const frame = event && event.detail;
-  const reason = frame && typeof frame.reason === 'string' ? frame.reason : 'tts_end';
-  maybeAutoStartCapture('await_user', reason);
-  if (shouldPrearmOnTtsEnd()) {
-    try {
-      requestAsrPrearm('await_user');
-    } catch (err) {
-      console.warn('requestAsrPrearm failed after assistant.await_user', err);
-    }
-  }
   patchPolicyVad({ allow_auto_vad: true, auto_vad_active: true });
   window.AppUI?.refresh?.();
 });
@@ -2714,29 +2351,23 @@ window.addEventListener('asr.unavailable', (event) => {
       }
     );
   }
-  try {
-    scheduleAsrRearm();
-  } catch (err) {
-    console.warn('scheduleAsrRearm failed after asr.unavailable', err);
-  }
   window.AppUI?.refresh?.();
 });
 
+// START REWRITE: window.addEventListener('asr.ready', ...)
 window.addEventListener('asr.ready', (event) => {
   if (typeof AppState?.setState === 'function') {
     AppState.setState({ asrReady: true });
   } else if (AppState) {
     AppState.asrReady = true;
   }
+  
+  // *** NEW STABLE LOGIC ***
+  // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
   updateRecordingState(true, 'asr_ready_signal');
-  try {
-    // Re-arm silence watchdog for the listening window.
-    if (typeof window.__silenceWD?.arm === 'function') {
-      window.__silenceWD.arm({ source: 'asr.ready' });
-    } else if (typeof window.startSilenceWatchdog === 'function') {
-      window.startSilenceWatchdog();
-    }
-  } catch {}
+  
+  // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
+  
   try {
     emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
   } catch {}
@@ -2749,6 +2380,8 @@ window.addEventListener('asr.ready', (event) => {
       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
     );
   }
+  
+  // Reset any retry count for ASR
   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
     try {
       window.ChatView?.showSystemFromChip?.(
@@ -2761,20 +2394,11 @@ window.addEventListener('asr.ready', (event) => {
     clearTimeout(asrRetry.timer);
     asrRetry.timer = null;
   }
-  if (window.AudioRecorder && typeof window.AudioRecorder.startMicCaptureIfIdle === 'function') {
-    try {
-      const maybe = window.AudioRecorder.startMicCaptureIfIdle();
-      if (maybe && typeof maybe.then === 'function' && typeof maybe.catch === 'function') {
-        maybe.catch((err) => {
-          console.error('AudioRecorder startMicCaptureIfIdle on asr.ready failed', err);
-        });
-      }
-    } catch (err) {
-      console.error('AudioRecorder startMicCaptureIfIdle on asr.ready threw', err);
-    }
-  }
+  
+  // Final UI refresh is mandatory
   window.AppUI?.refresh?.();
 });
+// END REWRITE: window.addEventListener('asr.ready', ...)
 
 window.addEventListener('assistant.suggestions', (event) => {
   const detail = event && event.detail;
