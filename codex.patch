@@ -1,72 +1,117 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index fcb3a2a08c9d7eb3df03c0d39eea378480d9490c..f2c942ca82763c6d0c4a5cf9a462fa04f870a524 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -476,59 +476,67 @@ import { initVAD } from "./audio/vad_client.js";
-     if (!(!!ws && ws.readyState === WebSocket.OPEN)) {
-       return false;
+diff --git a/app/static/js/state.js b/app/static/js/state.js
+index 91859a65a4a211e3c37b2270e23e450b85dfcf90..e87f3afa5df93641728e909072126e07b16dc2c9 100644
+--- a/app/static/js/state.js
++++ b/app/static/js/state.js
+@@ -321,92 +321,104 @@
+     if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
+       delete sanitized.micLive;
+       delete sanitized.recorderActive;
      }
-     if (s.tts) {
-       return false;
-     }
-     // Simplified gate check: listening state must be true AND not paused
-     return _warming() || (s.listening && !senderPaused); 
-   }
-   function syncSenderPaused(value) {
-     senderPaused = Boolean(value);
-     if (AppState && typeof AppState === "object") {
-       AppState.senderPaused = senderPaused;
-     }
-     updateState({ senderPaused });
-     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-   }
-   const PCM_TARGET_BATCH_MS = 60;
-   const PCM_FLUSH_TIMER_MS = 50;
-   const PCM_SAMPLE_RATE = 16000;
-   const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
-   let pcmBatchQueue = [];
-   let pcmBatchSampleCount = 0;
-   let pcmFlushTimerId = null;
+     
+     // Standard patch application
+     let nextState = cloneState(state);
+     nextState = { ...nextState, ...sanitized };
  
-+  let __hubLoggingInFlight = false;
-+
-   function hubLog(label, detail) {
-+    if (__hubLoggingInFlight) {
-+      return false;
-+    }
-     const state = typeof window !== "undefined" ? window.AppState : null;
-     const hub = state && state.hub;
-     if (hub && typeof hub.log === "function") {
-+      __hubLoggingInFlight = true;
-       try {
-         hub.log(label, detail);
-         return true;
-       } catch (err) {
-         console.warn("AppState.hub.log failed", err);
-+      } finally {
-+        __hubLoggingInFlight = false;
-       }
+     // Explicitly calculate derived properties on every setState call
+     if (Object.prototype.hasOwnProperty.call(sanitized, "listening")) {
+       const listeningValue = Boolean(nextState.listening);
+       nextState.listening = listeningValue;
+       nextState.micLive = listeningValue; // Derived property
+       nextState.recorderActive = listeningValue; // Derived property
      }
-     if (typeof window !== "undefined") {
-       try {
-         window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
-         return true;
-       } catch (err) {
-         console.warn("client.log dispatch failed", err);
-       }
-     }
-     return false;
+     
+     // Clean up VAD/telemetry properties (already handled by computeTelemetrySnapshot)
+     // No need for complex nested VAD patch here.
+     
+     // Final check to remove legacy nested state from the next state object
+     delete nextState.state;
+ 
+     state = nextState;
+     // DELETED: syncLegacyStateShape();
+-    processTelemetry(state);
+-    notify();
++    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
++    setTimeout(() => {
++      processTelemetry(state);
++      notify();
++    }, 0);
    }
  
-   function getVadPolicySnapshot() {
-     try {
-       const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
-         ? AppState.policy
-         : null;
-       const client = root?.vad?.client;
-       if (client && typeof client === "object") {
-         // Shallow merge: runtime overrides hard-coded safe defaults
-         return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
-       }
-     } catch {}
-     return CLIENT_VAD_POLICY_ROOT;
+   function setResume(token, ttlMs) {
+     const candidate = typeof token === "string" ? token.trim() : "";
+     const ttl = Number(ttlMs);
+     if (!candidate || !Number.isFinite(ttl) || ttl <= 0) {
+       clearResume();
+       return null;
+     }
+     const expiresAt = Date.now() + ttl;
+     const resumeState = {
+       token: candidate,
+       ttlMs: ttl,
+       expiresAt
+     };
+     state = {
+       ...state,
+       resume: resumeState,
+       resumeError: null
+     };
+     // DELETED: syncLegacyStateShape();
+-    processTelemetry(state);
+-    notify();
++    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
++    setTimeout(() => {
++      processTelemetry(state);
++      notify();
++    }, 0);
+     return resumeState;
+   }
+ 
+   function clearResume() {
+     if (state.resume !== null || state.resumeError !== null) {
+       state = { ...state, resume: null, resumeError: null };
+       // DELETED: syncLegacyStateShape();
+-      processTelemetry(state);
+-      notify();
++      // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
++      setTimeout(() => {
++        processTelemetry(state);
++        notify();
++      }, 0);
+     }
+   }
+ 
+   function reset() {
+     state = cloneState(initialState);
+     // DELETED: syncLegacyStateShape();
+-    processTelemetry(state);
+-    notify();
++    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
++    setTimeout(() => {
++      processTelemetry(state);
++      notify();
++    }, 0);
+   }
+ 
+   function subscribe(listener) {
+     if (typeof listener !== "function") {
+       throw new TypeError("listener must be a function");
+     }
+     listeners.add(listener);
+     listener(snapshot());
+     return () => {
+       listeners.delete(listener);
+     };
+   }
+ 
+   const AppState = window.AppState = {
+     get: snapshot,
+     getState: snapshot,
+     setState,
+     reset,
+     subscribe,
+     setResume,
+     clearResume,
+     get initialState() {
+       return cloneState(initialState);
+     }
+   };

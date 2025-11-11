@@ -343,8 +343,11 @@
 
     state = nextState;
     // DELETED: syncLegacyStateShape();
-    processTelemetry(state);
-    notify();
+    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
+    setTimeout(() => {
+      processTelemetry(state);
+      notify();
+    }, 0);
   }
 
   function setResume(token, ttlMs) {
@@ -366,8 +369,11 @@
       resumeError: null
     };
     // DELETED: syncLegacyStateShape();
-    processTelemetry(state);
-    notify();
+    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
+    setTimeout(() => {
+      processTelemetry(state);
+      notify();
+    }, 0);
     return resumeState;
   }
 
@@ -375,16 +381,22 @@
     if (state.resume !== null || state.resumeError !== null) {
       state = { ...state, resume: null, resumeError: null };
       // DELETED: syncLegacyStateShape();
-      processTelemetry(state);
-      notify();
+      // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
+      setTimeout(() => {
+        processTelemetry(state);
+        notify();
+      }, 0);
     }
   }
 
   function reset() {
     state = cloneState(initialState);
     // DELETED: syncLegacyStateShape();
-    processTelemetry(state);
-    notify();
+    // PROCESS TELEMETRY AND NOTIFY ASYNCHRONOUSLY
+    setTimeout(() => {
+      processTelemetry(state);
+      notify();
+    }, 0);
   }
 
   function subscribe(listener) {
