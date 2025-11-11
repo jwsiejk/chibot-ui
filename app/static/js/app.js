@@ -1,23 +1,12 @@
+// app.js - CLEAN VERSION (Server-Authoritative Flow)
+
 (() => {
   // Ensure single-store shape (idempotent)
   try {
     window.AppState = window.AppState || {};
     window.AppState.policy = window.AppState.policy || {};
-    window.AppState.state =
-      window.AppState.state || {
-        asrReady: false,
-        micLive: false,
-        tts: false,
-        senderPaused: false,
-        asrTurnActive: false,
-        vadActive: false,
-        vadDbfs: null,
-        lastSpeechAt: null,
-        processing: false,
-      };
-    if (typeof window.AppState.processing !== "boolean") {
-      window.AppState.processing = false;
-    }
+    // Removed nested state: window.AppState.state = ...
+    // State initialization is now centralized and flattened in state.js
   } catch {}
 
   function hubLog(label, detail) {
@@ -54,7 +43,7 @@
       __gumInFlight = false;
     }
   }
-  if (typeof window !== 'undefined') {
+  if (typeof window !== "undefined") {
     try {
       window.getMicOnce = getMicOnce;
     } catch (_) {}
@@ -209,7 +198,8 @@
         wsConn: snapshot.wsConn ?? snapshot.wsConnected ?? appState.wsConnected,
         wsConning: snapshot.wsConning ?? snapshot.wsConnecting ?? appState.wsConnecting,
         asrReady: snapshot.asrReady ?? appState.asrReady,
-        micLive: snapshot.micLive ?? recorder.active ?? appState.micLive ?? window.AudioRecorder?.listening,
+        // Now only checks the single, unified 'listening' flag:
+        micLive: snapshot.listening ?? appState.listening ?? window.AudioRecorder?.listening, 
         tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts,
         senderPaused: snapshot.senderPaused ?? appState.senderPaused,
         processing: snapshot.processing ?? appState.processing,
@@ -558,7 +548,7 @@
     return true;
   }
 
-  function setBadge() {
+  function setBadge(badge) {
     window.AppUI?.refresh?.();
   }
 
@@ -805,13 +795,13 @@
 
     renderStatusBarFromState();
     if (typeof AppState?.on === 'function') {
-      const events = ['change', 'wsConnected', 'wsConnecting', 'ttsActive', 'turnState', 'asrReady'];
+      // Listeners for refreshing the UI upon state changes (simplified to use AppState.listening)
+      const events = ['change', 'wsConnected', 'ttsActive', 'asrReady', 'listening'];
       events.forEach((eventName) => AppState.on(eventName, () => window.AppUI?.refresh?.()));
     }
-
-    if (AppState && typeof AppState.__no_rearm_until !== 'number') {
-      AppState.__no_rearm_until = 0;
-    }
+    
+    // REMOVED: if (AppState && typeof AppState.__no_rearm_until !== 'number') { AppState.__no_rearm_until = 0; }
+    // REMOVED: asrRetry object and related functions (except inside asr.ready handler)
 
 
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
@@ -833,52 +823,32 @@
     }
 
     function isRecorderListening() {
-      try {
-        if (audioRecorder && typeof audioRecorder.isListening === "function") {
-          return !!audioRecorder.isListening();
-        }
-      } catch (_) {}
-      if (audioRecorder && typeof audioRecorder.listening === "boolean") {
-        return audioRecorder.listening;
-      }
-      const winRecorder = typeof window !== "undefined" ? window.AudioRecorder : null;
-      try {
-        if (winRecorder && typeof winRecorder.isListening === "function") {
-          return !!winRecorder.isListening();
-        }
-      } catch (_) {}
-      if (winRecorder && typeof winRecorder.listening === "boolean") {
-        return winRecorder.listening;
-      }
+      // Simplified: now only checks the single authoritative state flag
       let stateSnapshot = null;
       try {
         stateSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
       } catch (_) {
         stateSnapshot = AppState;
       }
-      if (stateSnapshot && typeof stateSnapshot === "object") {
-        if (typeof stateSnapshot.listening === "boolean") {
-          return stateSnapshot.listening;
-        }
-        if (typeof stateSnapshot.micLive === "boolean") {
-          return stateSnapshot.micLive;
-        }
-        if (stateSnapshot.state && typeof stateSnapshot.state === "object") {
-          if (typeof stateSnapshot.state.listening === "boolean") {
-            return stateSnapshot.state.listening;
-          }
-          if (typeof stateSnapshot.state.micLive === "boolean") {
-            return stateSnapshot.state.micLive;
-          }
-        }
+      if (stateSnapshot && typeof stateSnapshot.listening === "boolean") {
+        return stateSnapshot.listening;
       }
-      return false;
+      // Fallback to hardware check if state is missing
+      return !!window.AudioRecorder?.listening;
+    }
+
+    function logClientMicEventText(text) {
+      try {
+        console.log(text);
+      } catch {}
+      hubLog('client.mic', { text });
     }
 
     function updateRecordingState(active, source) {
       const previous = isRecorderListening();
       const next = !!active;
 
+      // *** Primary Action: Update the Single Source of Truth ***
       if (typeof AppState?.setState === 'function') {
         AppState.setState({ listening: next });
       } else if (typeof AppState === 'object' && AppState) {
@@ -888,11 +858,10 @@
       let stopReasonLabel = null;
       if (next) {
         if (!previous) {
-          if (typeof AppState?.__no_rearm_until === 'number') {
-            AppState.__no_rearm_until = 0;
-          }
+          // REMOVED: AppState.__no_rearm_until = 0;
           beginMicTelemetrySession();
-          logClientMicEventText('evt=mic_start timeslice_ms=unknown');
+          // REMOVED: Policy check from getCaptureTimesliceMs()
+          logClientMicEventText('evt=mic_start timeslice_ms=unknown'); 
         }
       } else if (previous) {
         stopReasonLabel = normalizeStopReason(source);
@@ -948,6 +917,8 @@
       }
       return next;
     }
+
+    // REMOVED: startClientReadyTracking(), recordClientReadyEvent(), flushPendingClientReady()
 
     window.addEventListener(CLIENT_MIC_OPEN_EVENT, (event) => {
       setMicPermissionGranted(true, 'mic_open_event');
@@ -1010,7 +981,7 @@
       }
       window.AppUI?.refresh?.();
     });
-    
+
     // --- App context (server-injected) ---
     function readAppContext() {
       const node = document.getElementById('appContext');
@@ -1874,12 +1845,7 @@
           if (framePolicy && typeof framePolicy === 'object') {
             try { AppState.policy = framePolicy; } catch {}
             if (!policyCaptureLogged) {
-              const cap = framePolicy && typeof framePolicy.capture === 'object' ? framePolicy.capture : {};
-              const asrInput = cap && typeof cap.asr_input === 'string' ? cap.asr_input : '';
-              const timeslice = cap && cap.timeslice_ms !== undefined ? cap.timeslice_ms : '';
-              if (typeof logClient === 'function') {
-                logClient('client.mic', `evt=policy_capture asr_input=${asrInput} timeslice_ms=${timeslice}`);
-              }
+              // REMOVED: Old complex policy logging logic here.
               if (getLiveSocket()) {
                 try {
                   flushDeferredClientLogs();
@@ -1953,17 +1919,11 @@ window.addEventListener('tts.start', (event) => {
   }
   try {
     // Suspend silence watchdog during greet playback.
-    if (typeof window.__silenceWD?.suspend === 'function') {
-      window.__silenceWD.suspend('tts.start');
-    } else if (typeof window.clearSilenceWatchdog === 'function') {
-      window.clearSilenceWatchdog();
-    }
+    // REMOVED: All external watchdog references
   } catch {}
   try {
     window.AppState.processing = false;
-    if (window.AppState.state && typeof window.AppState.state === 'object') {
-      window.AppState.state.processing = false;
-    }
+    // REMOVED: window.AppState.state.processing = false;
     window.AppUI?.refresh?.();
   } catch {}
   if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
@@ -2030,9 +1990,7 @@ const FINAL_REARM_COOLDOWN_MS = 1500;
 window.addEventListener('asr.final', () => {
   try {
     window.AppState.processing = true;
-    if (window.AppState.state && typeof window.AppState.state === 'object') {
-      window.AppState.state.processing = true;
-    }
+    // REMOVED: window.AppState.state.processing = true;
     window.AppUI?.refresh?.();
   } catch {}
   const now = Date.now();
@@ -2064,9 +2022,7 @@ window.addEventListener('response', (event) => {
     }
     if (type.includes('.delta') || type.includes('.chunk') || type.endsWith('.completed')) {
       window.AppState.processing = false;
-      if (window.AppState.state && typeof window.AppState.state === 'object') {
-        window.AppState.state.processing = false;
-      }
+      // REMOVED: window.AppState.state.processing = false;
       window.AppUI?.refresh?.();
     }
   } catch {}
@@ -2075,9 +2031,7 @@ window.addEventListener('response', (event) => {
 window.addEventListener('assistant.await_user', (event) => {
   try {
     window.AppState.processing = false;
-    if (window.AppState.state && typeof window.AppState.state === 'object') {
-      window.AppState.state.processing = false;
-    }
+    // REMOVED: window.AppState.state.processing = false;
     window.AppUI?.refresh?.();
   } catch {}
   window.AppUI?.refresh?.();
