@@ -1,12 +1,10 @@
-// app.js - CLEAN VERSION (Server-Authoritative Flow)
+// app.js - FINAL, CORRECTED VERSION (with Recursive Call Guard)
 
 (() => {
   // Ensure single-store shape (idempotent)
   try {
     window.AppState = window.AppState || {};
     window.AppState.policy = window.AppState.policy || {};
-    // Removed nested state: window.AppState.state = ...
-    // State initialization is now centralized and flattened in state.js
   } catch {}
 
   function hubLog(label, detail) {
@@ -679,6 +677,9 @@
       }
     }
 
+    // --- CRITICAL RECURSION GUARD: Defined in the outer scope of installHubInterface ---
+    let __hubImplLogInFlight = false;
+
     function installHubInterface() {
       const hub = AppState && AppState.hub;
       if (!hub || typeof hub._install !== "function") {
@@ -712,8 +713,7 @@
       };
 
       let boundSocket = null;
-      let __hubImplLogInFlight = false;
-
+      
       const hubImpl = {
         log(label, detail) {
           if (__hubImplLogInFlight) {
@@ -766,6 +766,7 @@
             }
           }
           const outcome = next ? "bound" : "cleared";
+          // This call triggers the log path:
           hubImpl.log("client.ws", { outcome, source: "hub.bindSocket" });
         },
         startListening(policy) {
@@ -811,9 +812,6 @@
       events.forEach((eventName) => AppState.on(eventName, () => window.AppUI?.refresh?.()));
     }
     
-    // REMOVED: if (AppState && typeof AppState.__no_rearm_until !== 'number') { AppState.__no_rearm_until = 0; }
-    // REMOVED: asrRetry object and related functions (except inside asr.ready handler)
-
 
     const CLIENT_MIC_OPEN_EVENT = 'EVT_CLIENT_MIC_OPEN';
     const CLIENT_HUD_STATE_EVENT = 'EVT_HUD_STATE';
