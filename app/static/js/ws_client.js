@@ -440,7 +440,10 @@ import { initVAD } from "./audio/vad_client.js";
     }
     __transportMisuseLogging = true;
     try {
-      hub.log("client.ws.misuse", { kind });
+      // CRITICAL FIX: Decouple the hub log from the synchronous error handling flow
+      if (typeof setTimeout === 'function') {
+        setTimeout(() => hub.log("client.ws.misuse", { kind }), 0);
+      }
     } catch (err) {
       try {
         console.warn("WS misuse hub.log failed", err);
