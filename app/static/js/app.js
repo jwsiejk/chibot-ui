@@ -687,9 +687,25 @@
       }
 
       const sendThroughPipe = (label, detail) => {
-        if (!sendClientLog(label, detail)) {
-          enqueueDeferredClientLog(label, detail);
+        // CRITICAL FIX: Schedule the send asynchronously to prevent synchronous errors/recursion
+        if (typeof setTimeout !== "function") {
+          if (!sendClientLog(label, detail)) {
+            enqueueDeferredClientLog(label, detail);
+          }
+          return;
         }
+
+        setTimeout(() => {
+          try {
+            if (!sendClientLog(label, detail)) {
+              enqueueDeferredClientLog(label, detail);
+            }
+          } catch (err) {
+            try {
+              console.warn("Async sendThroughPipe failed", err);
+            } catch (_) {}
+          }
+        }, 0);
       };
 
       const buildMirrorDetail = (detail, stageLabel) => {
