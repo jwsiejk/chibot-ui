@@ -712,33 +712,44 @@
       };
 
       let boundSocket = null;
+      let __hubImplLogInFlight = false;
 
       const hubImpl = {
         log(label, detail) {
-          const normalizedLabel = typeof label === "string" && label ? label : "client.mic";
-          let consoleText = normalizedLabel;
-          let primaryDetail = detail;
-          if (normalizedLabel === "client.mic" && typeof detail === "string") {
-            consoleText = `${normalizedLabel} ${detail}`;
-            primaryDetail = { message: consoleText };
-          } else if (typeof detail === "string" && detail) {
-            consoleText = `${normalizedLabel} ${detail}`;
-          }
-          if (consoleText) {
-            try {
-              console.log(consoleText);
-            } catch {}
-          }
-          if (normalizedLabel === "client.mic") {
-            if (consumeMicTelemetryBudget('hub')) {
-              sendThroughPipe(normalizedLabel, primaryDetail);
-            }
+          if (__hubImplLogInFlight) {
             return;
           }
-          sendThroughPipe(normalizedLabel, primaryDetail);
-          if (consumeMicTelemetryBudget('hub')) {
-            const mirrorDetail = buildMirrorDetail(detail, normalizedLabel);
-            sendThroughPipe("client.mic", mirrorDetail);
+          __hubImplLogInFlight = true;
+          try {
+            const normalizedLabel = typeof label === "string" && label ? label : "client.mic";
+            let consoleText = normalizedLabel;
+            let primaryDetail = detail;
+            if (normalizedLabel === "client.mic" && typeof detail === "string") {
+              consoleText = `${normalizedLabel} ${detail}`;
+              primaryDetail = { message: consoleText };
+            } else if (typeof detail === "string" && detail) {
+              consoleText = `${normalizedLabel} ${detail}`;
+            }
+            if (consoleText) {
+              try {
+                console.log(consoleText);
+              } catch {}
+            }
+            if (normalizedLabel === "client.mic") {
+              if (consumeMicTelemetryBudget('hub')) {
+                sendThroughPipe(normalizedLabel, primaryDetail);
+              }
+              return;
+            }
+            sendThroughPipe(normalizedLabel, primaryDetail);
+            if (consumeMicTelemetryBudget('hub')) {
+              const mirrorDetail = buildMirrorDetail(detail, normalizedLabel);
+              sendThroughPipe("client.mic", mirrorDetail);
+            }
+          } catch (err) {
+            console.warn("Hub log failed: synchronous recursion detected and caught", err);
+          } finally {
+            __hubImplLogInFlight = false;
           }
         },
         bindSocket(ws) {
