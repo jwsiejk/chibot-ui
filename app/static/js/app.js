@@ -2360,66 +2360,7 @@ window.addEventListener('ws.close', () => {
   resetSuggestions();
 });
 
-    // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
-    if (urlParams.get('wsSmoke') === '1') {
-      const transitions = [];
-      const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
-
-      class MockSocket extends EventTarget {
-        constructor() {
-          super();
-          this.readyState = WebSocket.CONNECTING;
-          setTimeout(() => {
-            this.readyState = WebSocket.OPEN;
-            this.dispatchEvent(new Event('open'));
-          }, 0);
-        }
-        send(payload) {
-          this.lastSent = payload;
-        }
-        close(code = 1000, reason = '') {
-          this.readyState = WebSocket.CLOSED;
-          const ev = new Event('close');
-          ev.code = code;
-          ev.reason = reason;
-          ev.wasClean = true;
-          this.dispatchEvent(ev);
-        }
-        simulateMessage(frame) {
-          const payload = typeof frame === 'string' ? frame : JSON.stringify(frame);
-          const ev = new Event('message');
-          ev.data = payload;
-          this.dispatchEvent(ev);
-        }
-      }
-
-      const sockets = [];
-      WSClient.__debug.setTransportFactory(() => {
-        const mock = new MockSocket();
-        sockets.push(mock);
-        return mock;
-      });
-
-      startBtn.click();
-
-      setTimeout(() => {
-        const mock = sockets[0];
-        if (!mock) return;
-        mock.simulateMessage({
-          type: 'info',
-          meta: { sid: 'smoke-sid', resume_token: 'smoke-resume', resume_ttl_ms: 5000 }
-        });
-        WSClient.__debug.recordPing(Date.now() - 42);
-        mock.simulateMessage({ type: 'pong', t: Date.now() });
-        setTimeout(() => {
-          endBtn.click();
-          console.log('WSClient smoke transitions', transitions);
-          console.log('WSClient smoke latency', AppState.getState().latencyMs);
-          WSClient.__debug.resetTransportFactory();
-          unsubscribe();
-        }, 20);
-      }, 20);
-    }
+    // (smoke test harness removed)
   }
 
   init();

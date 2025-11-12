@@ -1,75 +1,65 @@
-BUILD_ID 1252c82
-app.js?v=1252c82:25 AskChip build: 1252c82
-app.js?v=1252c82:754 client.vad.state
-app.js?v=1252c82:754 client.appstate.delta
-app.js?v=1252c82:1567 evt=ws_open_attempt Object
-ws_client.js?v=1252c82:3732 evt=ws_client_open_params Object
-ws_client.js?v=1252c82:3736 WS opening Object
-ws_client.js?v=1252c82:3807 WebSocket open Object
-app.js?v=1252c82:754 client.ws
-ws_client.js?v=1252c82:4037 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=1252c82:4037Understand this warning
-ws_client.js?v=1252c82:4037 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=1252c82:4037Understand this warning
-app.js?v=1252c82:754 client.ws
-ws_client.js?v=1252c82:3532 evt=ws_linked AppState true WSClient true
-app.js?v=1252c82:754 client.ws
-app.js?v=1252c82:754 client.appstate.heartbeat
-ws_client.js?v=1252c82:2532 WS server banner Object
-app.js?v=1252c82:754 client.ws
-app.js?v=1252c82:754 client.appstate.delta
-app.js?v=1252c82:754 client.ws
-app.js?v=1252c82:754 client.audio.worklet_load_ok
-app.js?v=1252c82:754 client.mic
-ws_client.js?v=1252c82:2904 evt=ui_transcript_filter allow=true type=chat.message role=assistant
-app.js?v=1252c82:754 client.ws
-app.js?v=1252c82:754 client.mic
-app.js?v=1252c82:870 evt=mic_start timeslice_ms=unknown
-app.js?v=1252c82:754 client.mic
-app.js?v=1252c82:2276 diag=asr_ready
-app.js?v=1252c82:754 client.asr
-app.js?v=1252c82:754 client.ws_ready_check
-app.js?v=1252c82:754 client.turn.intent
-app.js?v=1252c82:754 client.vad.state
-app.js?v=1252c82:754 client.pcm.capture_start
-app.js?v=1252c82:754 client.vad.params
-app.js?v=1252c82:754 client.mic
-app.js?v=1252c82:754 client.pcm.capture_start
-app.js?v=1252c82:754 diag
-app.js?v=1252c82:754 client.asr_arm_clear
-app.js?v=1252c82:754 client.audio_header_send
-app.js?v=1252c82:2276 diag=asr_ready
-app.js?v=1252c82:754 client.stream.on
-4app.js?v=1252c82:754 client.appstate.delta
-app.js?v=1252c82:754 client.vad.meter
-5app.js?v=1252c82:754 client.appstate.delta
-app.js?v=1252c82:754 client.vad.meter
-5app.js?v=1252c82:754 client.appstate.delta
-app.js?v=1252c82:754 client.vad.meter
-app.js?v=1252c82:754 client.audio_first_chunk
-app.js?v=1252c82:754 client.pcm.chunk
-app.js?v=1252c82:754 client.pcm.first_frame
-2app.js?v=1252c82:754 client.vad.gate
-app.js?v=1252c82:754 client.audio_first_chunk
-11app.js?v=1252c82:754 client.pcm.chunk
-app.js?v=1252c82:754 client.vad.preroll_flush
-app.js?v=1252c82:754 client.vad.state
-app.js?v=1252c82:754 client.pcm.chunk
-ws_client.js?v=1252c82:2934 WS error frame Object
-handleErrorFrame @ ws_client.js?v=1252c82:2934Understand this error
-app.js?v=1252c82:754 client.pcm.capture_stop
-app.js?v=1252c82:754 client.ws
-app.js?v=1252c82:754 client.appstate.delta
-3app.js?v=1252c82:754 client.appstate.heartbeat
-app.js?v=1252c82:754 client.ws
-app.js?v=1252c82:754 client.stream.off
-app.js?v=1252c82:754 client.turn.intent
-app.js?v=1252c82:870 evt=mic_stop reason=end_button
-app.js?v=1252c82:754 client.mic
-2app.js?v=1252c82:754 client.vad.gate
-app.js?v=1252c82:754 client.vad.state
-app.js?v=1252c82:754 client.pcm.capture_stop
-ws_client.js?v=1252c82:4037 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=1252c82:4037Understand this warning
-app.js?v=1252c82:754 client.ws
-app.js?v=1252c82:754 client.appstate.delta
+BUILD_ID e687724
+app.js?v=e687724:25 AskChip build: e687724
+app.js?v=e687724:754 client.vad.state
+app.js?v=e687724:754 client.appstate.delta
+app.js?v=e687724:1567 evt=ws_open_attempt Object
+ws_client.js?v=e687724:3732 evt=ws_client_open_params Object
+ws_client.js?v=e687724:3736 WS opening Object
+app.js?v=e687724:754 client.appstate.delta
+ws_client.js?v=e687724:3807 WebSocket open Object
+app.js?v=e687724:754 client.ws
+ws_client.js?v=e687724:4037 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=e687724:4037Understand this warning
+ws_client.js?v=e687724:4037 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=e687724:4037Understand this warning
+app.js?v=e687724:754 client.ws
+ws_client.js?v=e687724:3532 evt=ws_linked AppState true WSClient true
+app.js?v=e687724:754 client.ws
+app.js?v=e687724:754 client.appstate.heartbeat
+ws_client.js?v=e687724:2532 WS server banner Object
+app.js?v=e687724:754 client.appstate.delta
+app.js?v=e687724:754 client.ws
+app.js?v=e687724:754 client.audio.worklet_load_ok
+2app.js?v=e687724:754 client.mic
+app.js?v=e687724:754 client.ws
+app.js?v=e687724:870 evt=mic_start timeslice_ms=unknown
+app.js?v=e687724:754 client.mic
+app.js?v=e687724:2276 diag=asr_ready
+app.js?v=e687724:754 client.asr
+app.js?v=e687724:754 client.ws_ready_check
+app.js?v=e687724:754 client.turn.intent
+app.js?v=e687724:754 client.vad.state
+app.js?v=e687724:754 client.pcm.capture_start
+app.js?v=e687724:754 client.vad.params
+app.js?v=e687724:754 client.mic
+app.js?v=e687724:754 client.pcm.capture_start
+app.js?v=e687724:754 diag
+app.js?v=e687724:754 client.asr_arm_clear
+app.js?v=e687724:754 client.audio_header_send
+app.js?v=e687724:2276 diag=asr_ready
+app.js?v=e687724:754 client.stream.on
+app.js?v=e687724:754 client.appstate.delta
+app.js?v=e687724:754 client.vad.meter
+app.js?v=e687724:754 client.appstate.delta
+ws_client.js?v=e687724:2904 evt=ui_transcript_filter allow=true type=chat.message role=assistant
+app.js?v=e687724:754 client.ws
+2app.js?v=e687724:754 client.appstate.delta
+app.js?v=e687724:754 client.vad.meter
+app.js?v=e687724:754 client.appstate.delta
+ws_client.js?v=e687724:2934 WS error frame Object
+handleErrorFrame @ ws_client.js?v=e687724:2934Understand this error
+app.js?v=e687724:754 client.pcm.capture_stop
+app.js?v=e687724:754 client.ws
+app.js?v=e687724:754 client.appstate.delta
+app.js?v=e687724:754 client.appstate.heartbeat
+app.js?v=e687724:754 client.ws
+app.js?v=e687724:754 client.stream.off
+app.js?v=e687724:754 client.turn.intent
+app.js?v=e687724:870 evt=mic_stop reason=end_button
+app.js?v=e687724:754 client.mic
+app.js?v=e687724:754 client.vad.state
+app.js?v=e687724:754 client.pcm.capture_stop
+ws_client.js?v=e687724:4037 WSClient.send queued (phase not ready) Object
+send @ ws_client.js?v=e687724:4037Understand this warning
+app.js?v=e687724:754 client.ws
+app.js?v=e687724:754 client.appstate.delta
