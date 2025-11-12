@@ -3007,6 +3007,30 @@ import { initVAD } from "./audio/vad_client.js";
       return;
     }
 
+    if (frame.type === "turn.begin") {
+      if (AppState?.setState) {
+        try {
+          AppState.setState({ turnActive: true });
+        } catch {}
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("turn.begin", { detail: frame }));
+      } catch {}
+      return;
+    }
+
+    if (frame.type === "turn.end") {
+      if (AppState?.setState) {
+        try {
+          AppState.setState({ turnActive: false });
+        } catch {}
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("turn.end", { detail: frame }));
+      } catch {}
+      return;
+    }
+
     if (frame.type === "audio.throttle") {
       const rawMs = Number(frame?.ms);
       const ms = Number.isFinite(rawMs) ? Math.max(0, rawMs) : 0;

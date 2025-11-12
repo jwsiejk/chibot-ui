@@ -133,6 +133,8 @@ _OUTBOUND_ALLOWED_TYPES = {
     "tts.start",
     "tts.end",
     "asr.ready",
+    "input.start",
+    "input.stop",
     "asr.input.start",
     "asr.input.stop",
     "asr.partial",
@@ -3328,10 +3330,12 @@ class ChatV2Adapter:
                 self._mark_input_start(ctx)
                 ctx.client_mic_open = True
             elif frame_type == "turn.end":
-                ctx.turn_active = False
-                ctx.client_mic_open = False
+                if ctx.turn_active:
+                    ctx.turn_active = False
+                    ctx.client_mic_open = False
             elif frame_type == "turn.begin":
-                ctx.turn_active = True
+                if not ctx.turn_active:
+                    ctx.turn_active = True
             elif frame_type == "asr.turn":
                 state_value = payload.get("state") if isinstance(payload, Mapping) else None
                 if state_value == "begin":
