@@ -622,6 +622,10 @@ class ChatV2Adapter:
         frame: Mapping[str, Any] | None,
     ) -> None:
         ctx.session.tts_active = False
+        # cancel spurious asr_ready deadline if armed
+        if ctx.asr_ready_deadline_task:
+            ctx.asr_ready_deadline_task.cancel()
+            ctx.asr_ready_deadline_task = None
         try:
             self._bus(
                 "tts.end",

@@ -1,73 +1,59 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 386a3f24a987d98a8f222fb6afaeed54b45fee7e..110602ff4697f730c6b4ab97f488a0fa5b049058 100644
+index 110602ff4697f730c6b4ab97f488a0fa5b049058..90b4a8f33b879f1d51a504b29a9a23d8cab24467 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -1939,50 +1939,68 @@ class ChatV2Adapter:
-             meta["error"] = "bad_json"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
-             return self._HandleResult(True)
+@@ -600,50 +600,54 @@ class ChatV2Adapter:
+             _log.exception("evt=asr_ready_emit_failed sid=%s where=%s", ctx.sid, label)
  
-         if not isinstance(frame, dict):
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
-             return self._HandleResult(True)
+     async def _handle_tts_start(
+         self,
+         send: Callable[[dict], Awaitable[None]] | None,
+         ctx: AdapterContext,
+         frame: Mapping[str, Any] | None,
+     ) -> None:
+         ctx.session.tts_active = True
+         self._cancel_no_audio_watchdog(ctx)
+         try:
+             self._bus(
+                 "tts.start",
+                 {"sid": ctx.sid, "utt_id": frame.get("utt_id") if isinstance(frame, Mapping) else None},
+             )
+         except Exception:
+             _log.exception("evt=tts_start_bus_failed sid=%s", ctx.sid)
  
-         frame_payload = frame
+     async def _handle_tts_end(
+         self,
+         send: Callable[[dict], Awaitable[None]] | None,
+         ctx: AdapterContext,
+         frame: Mapping[str, Any] | None,
+     ) -> None:
+         ctx.session.tts_active = False
++        # cancel spurious asr_ready deadline if armed
++        if ctx.asr_ready_deadline_task:
++            ctx.asr_ready_deadline_task.cancel()
++            ctx.asr_ready_deadline_task = None
+         try:
+             self._bus(
+                 "tts.end",
+                 {"sid": ctx.sid, "utt_id": frame.get("utt_id") if isinstance(frame, Mapping) else None},
+             )
+         except Exception:
+             _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
+         if not ctx.asr_ready_bundle_sent_ms:
+             await self._ensure_asr_ready(send, ctx, "tts_end")
  
-         raw_type = frame.get("type")
-         if not isinstance(raw_type, str):
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
-             return self._HandleResult(True)
+         self._schedule_no_audio_watchdog_rearm(ctx)
  
-         frame_type = raw_type
-         meta["frame_type"] = frame_type
-         now_ms = int(time.time() * 1000)
-         ctx.last_client_activity_ms = now_ms
+         if send is not None and not ctx.turn_active:
+             try:
+                 await self._send_json(send, ctx.sid, {"type": "turn.begin"})
+             except Exception:  # pragma: no cover - defensive logging
+                 _log.warning("evt=turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
+             else:
+                 ctx.turn_active = True
  
-+        if frame_type in (
-+            "client.banner",
-+            "client.metrics",
-+            "client.log",
-+            "client.pong",
-+        ):
-+            await self._publish(
-+                EVT_WS_JSON_RECV,
-+                ctx.sid,
-+                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
-+            )
-+            if frame_type == "client.pong":
-+                ctx.last_client_pong_ms = now_ms
-+            return self._HandleResult(True)
-+
-+        if frame_type in ("turn.begin", "turn.end"):
-+            return self._HandleResult(True)
-+
-         if frame_type not in _RATE_LIMIT_EXEMPT_TYPES:
-             limited = await self._check_rate_limit(ctx, send)
-             if limited is not None:
-                 return limited
- 
-         if frame_type == "client.ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
-                 client_ts = frame.get("ts")
-                 payload = {"type": "server.pong", "ts": now_ms}
-                 if isinstance(client_ts, int):
-                     payload["echo"] = client_ts
-                 await self._send_json(send, ctx.sid, payload)
-             return self._HandleResult(True)
- 
-         if frame_type == "client.pong":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             ctx.last_client_pong_ms = now_ms
-             return self._HandleResult(True)
- 
-         if frame_type == "ping":
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
-                 ctx.last_pong_sent_ms = now_ms
+     async def _arm_asr_ready_deadline(
+         self,
+         send: Callable[[dict], Awaitable[None]] | None,
+         ctx: AdapterContext,
+         deadline_ms: int,
