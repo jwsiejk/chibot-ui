@@ -355,62 +355,6 @@ body{
   color:rgba(255,255,255,.45);
 }
 
-.dev-tools{
-  margin:20px 16px;
-  display:flex;
-  flex-direction:column;
-  gap:12px;
-  align-items:flex-start;
-}
-
-.dev-inspector{
-  width:min(720px, 100%);
-  padding:16px;
-  border-radius:16px;
-  border:1px solid var(--border);
-  background:rgba(11,16,28,.9);
-  box-shadow:var(--shadow);
-  display:flex;
-  flex-direction:column;
-  gap:12px;
-}
-
-.dev-inspector__header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-}
-
-.dev-inspector__actions{
-  display:flex;
-  gap:8px;
-}
-
-.dev-inspector__actions button{
-  border-radius:999px;
-  border:1px solid rgba(255,255,255,.12);
-  background:rgba(255,255,255,.06);
-  color:var(--text);
-  padding:6px 14px;
-  cursor:pointer;
-  font-weight:600;
-}
-
-.dev-inspector__actions button:hover{
-  background:rgba(255,255,255,.14);
-}
-
-.dev-inspector a{
-  color:var(--accent);
-  text-decoration:none;
-}
-
-.dev-inspector a[aria-disabled="true"]{
-  opacity:.6;
-  pointer-events:none;
-}
-
 .modal{
   position:fixed;
   inset:0;
