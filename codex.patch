@@ -1,194 +1,70 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 24585afb352e14e366c525726e738d881d8ebaeb..44dd8e2341547a9068bb4c5865fd92f765549a05 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -2235,53 +2235,54 @@ window.addEventListener('asr.unavailable', (event) => {
-     }
-   }
-   if (diagHudEnabled()) {
-     const reasonText = reason ? String(reason).slice(0, 120) : '';
-     console.warn('diag=asr_unavailable', reasonText);
-     setBadge('asr:down');
-     sendDiagHudEvent(
-       'EVT_CLIENT_ASR_UNAVAILABLE',
-       reasonText ? { reason: reasonText } : undefined,
-       {
-         level: 'warn',
-         badge: 'asr:down',
-         message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
-       }
-     );
-   }
-   window.AppUI?.refresh?.();
- });
- 
- // START REWRITE: window.addEventListener('asr.ready', ...)
- window.addEventListener('asr.ready', (event) => {
-   // CRITICAL FIX: REMOVE ASYNCHRONOUS DEFERRAL TO BEAT SERVER TIMEOUT
- 
-   rearmSilenceWatchdogAfterDelay('asr.ready');
-   if (typeof AppState?.setState === 'function') {
--    AppState.setState({ asrReady: true });
-+    AppState.setState({ asrReady: true, turnActive: true });
-   } else if (AppState) {
-     AppState.asrReady = true;
-+    AppState.turnActive = true;
-   }
- 
-   // *** NEW STABLE LOGIC ***
-   // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
-   updateRecordingState(true, 'asr_ready_signal');
- 
-   // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
- 
-   try {
-     emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
-   } catch {}
-   if (diagHudEnabled()) {
-     console.info('diag=asr_ready');
-     setBadge('asr:ready');
-     sendDiagHudEvent(
-       'EVT_CLIENT_ASR_READY',
-       event && typeof event === 'object' ? event.detail : undefined,
-       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
-     );
-   }
- 
-   // Reset any retry count for ASR
-   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
-     try {
-       window.ChatView?.showSystemFromChip?.(
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index e5af83ce39d8c0fb95e9716c212e7f24108b4c1d..603e03fdd8252a0e68ab0c535687a676119d1b59 100644
+index 603e03fdd8252a0e68ab0c535687a676119d1b59..386a3f24a987d98a8f222fb6afaeed54b45fee7e 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -1242,53 +1242,66 @@ class ChatV2Adapter:
-             return
-         ctx.session.eot_armed = False
-         _log.info(
-             "evt=vad_eot sid=%s reason=%s fuse_mode=%s client_silence_ms=%d vendor_idle_ms=%d server_silence_ms=%d",
-             ctx.sid,
-             reason,
-             fuse_mode,
-             client_silence_ms,
-             vendor_idle_ms,
-             server_silence_ms,
-         )
-         meta = {
-             "reason": reason,
-             "fuse_mode": fuse_mode,
-             "client_silence_ms": int(client_silence_ms),
-             "vendor_idle_ms": int(vendor_idle_ms),
-             "server_silence_ms": int(server_silence_ms),
-         }
-         await self._publish("asr.turn_ended", ctx.sid, meta)
-         send = ctx.ws_send
-         turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
-         if send is not None:
-             try:
-                 if turn_end_payload is not None:
-                     await self._send_json(send, ctx.sid, turn_end_payload)
-+                if ctx.turn_active:
-+                    try:
-+                        await self._send_json(send, ctx.sid, {"type": "turn.end"})
-+                    except Exception:  # pragma: no cover - defensive logging
-+                        _log.warning(
-+                            "evt=turn_end_send_failed sid=%s reason=vad_eot",
-+                            ctx.sid,
-+                            exc_info=True,
-+                        )
-+                    finally:
-+                        ctx.turn_active = False
-                 await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
-             except Exception:  # pragma: no cover - defensive logging
-                 _log.warning("evt=vad_eot_send_failed sid=%s", ctx.sid, exc_info=True)
-+        else:
-+            ctx.turn_active = False
-         await self._close_asr(ctx, reason="eot")
+@@ -3352,59 +3352,60 @@ class ChatV2Adapter:
+             elif frame_type == "asr.turn":
+                 state_value = payload.get("state") if isinstance(payload, Mapping) else None
+                 if state_value == "begin":
+                     if not ctx.turn_active:
+                         ctx.turn_active = True
+                         _queue_payload({"type": "turn.begin"})
+                 elif state_value == "end":
+                     if ctx.turn_active:
+                         ctx.turn_active = False
+                         ctx.client_mic_open = False
+                         _queue_payload({"type": "turn.end"})
+             if frame_type == "asr.partial":
+                 self._offer_partial_frame(
+                     ctx,
+                     loop,
+                     payload,
+                     lambda frame: _queue_payload(frame, clone=False),
+                 )
+                 return
+             _queue_payload(payload)
  
-     def _handle_client_telemetry(
-         self, ctx: AdapterContext, event_name: str, meta: Mapping[str, Any]
-     ) -> None:
-         now_ms = self._now_ms()
-         if event_name == "client.vad.speech_start":
-             self._set_client_vad_state(ctx, True, now_ms)
-             ctx.client_vad_last_event_ms = now_ms
-             conf = self._coerce_float(meta.get("conf"), ctx.client_vad_confidence)
-             if conf is not None:
-                 ctx.client_vad_confidence = _clamp(conf, 0.0, 1.0)
-             energy = self._coerce_float(meta.get("energyDb"), ctx.client_vad_energy_db)
-             if energy is not None:
-                 ctx.client_vad_energy_db = energy
-             noise = self._coerce_float(meta.get("noiseDb"), ctx.client_vad_noise_db)
-             if noise is not None:
-                 ctx.client_vad_noise_db = noise
-         elif event_name == "client.vad.speech_end":
-             self._set_client_vad_state(ctx, False, now_ms)
-             ctx.client_vad_last_event_ms = now_ms
-             ctx.client_vad_last_speech_end_ms = now_ms
-         elif event_name == "client.vad.state":
-             speech_value = meta.get("speech")
-             if isinstance(speech_value, bool):
-@@ -5980,50 +5993,62 @@ class ChatV2Adapter:
-                 "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
-                 ctx.sid,
-                 mode,
-                 descriptor.get("mime", ""),
-                 timeslice_ms,
-                 vendor,
-             )
-         except Exception:
-             _log.warning("evt=asr_ready_bundle_send_failed sid=%s", ctx.sid, exc_info=True)
- 
-         self._mark_input_start(ctx)
-         await self._send_json(send, ctx.sid, input_start)
-         ctx.client_mic_open = True  # allow first audio chunk through immediately
-         ctx.pending_start_listening = dict(start_payload)
-         ctx.pending_start_listening_sent = False
-         if ctx.asr_ready:
-             await self._send_json(send, ctx.sid, start_payload)
-             ctx.pending_start_listening = None
-             ctx.pending_start_listening_sent = False
-         turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
-         if turn_begin_payload is not None:
-             try:
-                 await self._send_json(send, ctx.sid, turn_begin_payload)
-             except Exception:  # pragma: no cover - defensive logging
-                 _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
+         def _on_tts_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid:
+                 return
+             event_type = event.get("type")
+-            if event_type not in {EVT_TTS_START, EVT_TTS_END}:
++            if event_type == EVT_TTS_START:
++                handler = self._handle_tts_start
++            elif event_type == EVT_TTS_END:
++                handler = self._handle_tts_end
 +            else:
-+                if not ctx.turn_active:
-+                    try:
-+                        await self._send_json(send, ctx.sid, {"type": "turn.begin"})
-+                    except Exception:  # pragma: no cover - defensive logging
-+                        _log.warning(
-+                            "evt=turn_begin_send_failed sid=%s reason=ready_bundle",
-+                            ctx.sid,
-+                            exc_info=True,
-+                        )
-+                    else:
-+                        ctx.turn_active = True
+                 return
  
-         self._schedule_no_audio_watchdog_rearm(ctx)
-         
+             async def _run() -> None:
+                 try:
+-                    if event_type == EVT_TTS_START:
+-                        await self._handle_tts_start(send, ctx, event)
+-                    else:
+-                        await self._handle_tts_end(send, ctx, event)
++                    await handler(send, ctx, event)
+                 except asyncio.CancelledError:
+                     raise
+                 except Exception:
+                     _log.exception(
+                         "evt=ws_tts_event_failed sid=%s event_type=%s", ctx.sid, event_type
+                     )
  
-     @staticmethod
-     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
-         decoded: Dict[str, str] = {}
-         for key, value in headers:
-             decoded[key.decode("latin1").lower()] = value.decode("latin1")
-         return decoded
+             try:
+                 loop.call_soon_threadsafe(lambda: asyncio.create_task(_run()))
+             except RuntimeError:
+                 asyncio.create_task(_run())
  
-     @staticmethod
-     def _now_ms() -> int:
-         return int(time.time() * 1000)
+         def _handle_event(event: dict) -> None:
+             if event.get("sid") != ctx.sid or ctx.outbox is None:
+                 return
+             meta_obj = event.get("meta")
+             if isinstance(meta_obj, Mapping):
+                 ws_meta = meta_obj.get("ws")
+                 if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
+                     return
+             payload = self._extract_outbound_payload(ctx, event)
+             if payload is None:
+                 return
  
-     @staticmethod
-     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
-         if not payload:
-             return None
-         preview = payload.decode("utf-8", "replace")
-         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
-         if len(preview) > limit:
-             return f"{preview[: limit - 1]}…"
-         return preview
- 
+             def _on_loop() -> None:

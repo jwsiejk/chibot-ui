@@ -3374,15 +3374,16 @@ class ChatV2Adapter:
             if event.get("sid") != ctx.sid:
                 return
             event_type = event.get("type")
-            if event_type not in {EVT_TTS_START, EVT_TTS_END}:
+            if event_type == EVT_TTS_START:
+                handler = self._handle_tts_start
+            elif event_type == EVT_TTS_END:
+                handler = self._handle_tts_end
+            else:
                 return
 
             async def _run() -> None:
                 try:
-                    if event_type == EVT_TTS_START:
-                        await self._handle_tts_start(send, ctx, event)
-                    else:
-                        await self._handle_tts_end(send, ctx, event)
+                    await handler(send, ctx, event)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
