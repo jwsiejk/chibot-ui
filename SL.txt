@@ -1,279 +1,233 @@
-170.85.75.32:0 - "GET /static/css/styles.css?v=f99ddba HTTP/1.1" 200
-     [GET]200chibot-ui.onrender.com/clientIP="170.85.75.32" requestID="0fbd69b3-2036-4a5d" responseTimeMS=54 responseBytes=2869 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-170.85.75.32:0 - "GET /static/css/statusbar.css?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/ui/statusbar.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/auth_ui.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/app.js?v=f99ddba HTTP/1.1" 200
-     [GET]200chibot-ui.onrender.com/static/css/statusbar.css?v=f99ddbaclientIP="170.85.75.32" requestID="1d5710d5-1f16-4138" responseTimeMS=5 responseBytes=765 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/auth_ui.js?v=f99ddbaclientIP="170.85.75.32" requestID="5feaca6f-368e-40f8" responseTimeMS=2 responseBytes=2233 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-170.85.75.32:0 - "GET /static/sw.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /api/v1/admin/config HTTP/1.1" 200
 170.85.75.32:0 - "GET /api/v1/auth/me HTTP/1.1" 200
-170.85.75.32:0 - "GET /favicon.ico?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/state.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /version.json HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/version.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/audio_player.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/ws_client.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/transcript_view.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/errors.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/audio/pcm_recorder.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /admin/ui/config_panel.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/admin_logs.js?v=f99ddba HTTP/1.1" 200
-170.85.75.32:0 - "GET /static/js/audio/vad_client.js?v=f99ddba HTTP/1.1" 200
-     [GET]200chibot-ui.onrender.com/static/css/styles.css?v=f99ddbaclientIP="170.85.75.32" requestID="69e4a87b-ef7a-43a4" responseTimeMS=4 responseBytes=5431 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/chip/chip.png?v=f99ddbaclientIP="170.85.75.32" requestID="a8b6418e-3d4e-4533" responseTimeMS=50 responseBytes=1928251 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/ui/statusbar.js?v=f99ddbaclientIP="170.85.75.32" requestID="2483e381-30a7-4d5c" responseTimeMS=1 responseBytes=1222 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/app.js?v=f99ddbaclientIP="170.85.75.32" requestID="455afc14-62f2-40d1" responseTimeMS=5 responseBytes=20117 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/sw.js?v=f99ddbaclientIP="170.85.75.32" requestID="29b8361e-b0c5-4ecf" responseTimeMS=2 responseBytes=1049 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/api/v1/admin/configclientIP="170.85.75.32" requestID="e1ed0ffd-d838-4bf1" responseTimeMS=1 responseBytes=723 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/favicon.ico?v=f99ddbaclientIP="170.85.75.32" requestID="4120eee8-edf5-482e" responseTimeMS=1 responseBytes=621 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/state.js?v=f99ddbaclientIP="170.85.75.32" requestID="e731dac6-511e-425c" responseTimeMS=3 responseBytes=4480 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/version.js?v=f99ddbaclientIP="170.85.75.32" requestID="7cbc5fa3-4f5b-4a13" responseTimeMS=1 responseBytes=719 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/audio_player.js?v=f99ddbaclientIP="170.85.75.32" requestID="5a5e75ad-f517-4924" responseTimeMS=2 responseBytes=2645 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/transcript_view.js?v=f99ddbaclientIP="170.85.75.32" requestID="82dfd0ad-8ee1-4564" responseTimeMS=2 responseBytes=3273 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/errors.js?v=f99ddbaclientIP="170.85.75.32" requestID="7d77c407-0f0b-4d2d" responseTimeMS=2 responseBytes=3504 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/audio/pcm_recorder.js?v=f99ddbaclientIP="170.85.75.32" requestID="55071a21-f7c6-48aa" responseTimeMS=3 responseBytes=8176 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/audio/vad_client.js?v=f99ddbaclientIP="170.85.75.32" requestID="747b8b53-a1a5-4ed5" responseTimeMS=2 responseBytes=2623 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/api/v1/auth/meclientIP="170.85.75.32" requestID="e293befd-ddc8-48c9" responseTimeMS=38 responseBytes=345 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/version.jsonclientIP="170.85.75.32" requestID="6bf4662e-c9c3-46e5" responseTimeMS=1 responseBytes=276 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/ws_client.js?v=f99ddbaclientIP="170.85.75.32" requestID="cffd7aa7-0318-4eff" responseTimeMS=6 responseBytes=33991 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/admin/ui/config_panel.js?v=f99ddbaclientIP="170.85.75.32" requestID="fd5ec8d4-e402-4141" responseTimeMS=3 responseBytes=7296 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [GET]200chibot-ui.onrender.com/static/js/admin_logs.js?v=f99ddbaclientIP="170.85.75.32" requestID="584dc946-051a-482e" responseTimeMS=3 responseBytes=8606 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-170.85.75.32:0 - "GET /api/v1/auth/me HTTP/1.1" 200
-INFO:app.security.jwt_utils:evt=ws_jwt_mint sid=6f8971d5ead045c8953a0c602eaa29d3 ttl=60
-INFO:app.auth.http_handlers:evt=ws_token_mint sid=6f8971d5ead045c8953a0c602eaa29d3 ttl=60
+INFO:app.security.jwt_utils:evt=ws_jwt_mint sid=19cdecbc94c24dac947b0519df70d190 ttl=60
+INFO:app.auth.http_handlers:evt=ws_token_mint sid=19cdecbc94c24dac947b0519df70d190 ttl=60
 170.85.75.32:0 - "POST /api/v1/auth/ws-token HTTP/1.1" 200
-INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjZmODk3MWQ1ZWFkMDQ1Yzg5NTNhMGM2MDJlYWEyOWQzIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0NzYwMSwiZXhwIjoxNzYyOTQ3NjYxLCJqdGkiOiIyY2NlNTY4My1iYjBiLTQyYTUtOTBhZi02MGRhOWM5ODY2OWUiLCJpc19hZG1pbiI6dHJ1ZX0.ZipQk9IL2A5sDMvdQFfEP1O3uSryHRFE3wr3TXg681w'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjZmODk3MWQ1ZWFkMDQ1Yzg5NTNhMGM2MDJlYWEyOWQzIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0NzYwMSwiZXhwIjoxNzYyOTQ3NjYxLCJqdGkiOiIyY2NlNTY4My1iYjBiLTQyYTUtOTBhZi02MGRhOWM5ODY2OWUiLCJpc19hZG1pbiI6dHJ1ZX0.ZipQk9IL2A5sDMvdQFfEP1O3uSryHRFE3wr3TXg681w' root_path=
+INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjE5Y2RlY2JjOTRjMjRkYWM5NDdiMDUxOWRmNzBkMTkwIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0ODg2MywiZXhwIjoxNzYyOTQ4OTIzLCJqdGkiOiIwMmRmM2FhMi1lODcxLTRiODQtYTdjNi1lY2ZjZjkzNmI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.5BsSIvew4hVmOpPaqJls-i8_OXUXj7r0h-DrlK-hi1w'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjE5Y2RlY2JjOTRjMjRkYWM5NDdiMDUxOWRmNzBkMTkwIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0ODg2MywiZXhwIjoxNzYyOTQ4OTIzLCJqdGkiOiIwMmRmM2FhMi1lODcxLTRiODQtYTdjNi1lY2ZjZjkzNmI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.5BsSIvew4hVmOpPaqJls-i8_OXUXj7r0h-DrlK-hi1w' root_path=
 INFO:app.voice_v2.tts_runtime:evt=tts_provider_ready provider=elevenlabs
-INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjZmODk3MWQ1ZWFkMDQ1Yzg5NTNhMGM2MDJlYWEyOWQzIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0NzYwMSwiZXhwIjoxNzYyOTQ3NjYxLCJqdGkiOiIyY2NlNTY4My1iYjBiLTQyYTUtOTBhZi02MGRhOWM5ODY2OWUiLCJpc19hZG1pbiI6dHJ1ZX0.ZipQk9IL2A5sDMvdQFfEP1O3uSryHRFE3wr3TXg681w'] need='chat.v2'
-INFO:app.ws.adapter:evt=ws_accept_token_ok sid=6f8971d5ead045c8953a0c602eaa29d3
+INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjE5Y2RlY2JjOTRjMjRkYWM5NDdiMDUxOWRmNzBkMTkwIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0ODg2MywiZXhwIjoxNzYyOTQ4OTIzLCJqdGkiOiIwMmRmM2FhMi1lODcxLTRiODQtYTdjNi1lY2ZjZjkzNmI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.5BsSIvew4hVmOpPaqJls-i8_OXUXj7r0h-DrlK-hi1w'] need='chat.v2'
+INFO:app.ws.adapter:evt=ws_accept_token_ok sid=19cdecbc94c24dac947b0519df70d190
 INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2'
-[2025-11-12 11:40:02 +0000] [58] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjZmODk3MWQ1ZWFkMDQ1Yzg5NTNhMGM2MDJlYWEyOWQzIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0NzYwMSwiZXhwIjoxNzYyOTQ3NjYxLCJqdGkiOiIyY2NlNTY4My1iYjBiLTQyYTUtOTBhZi02MGRhOWM5ODY2OWUiLCJpc19hZG1pbiI6dHJ1ZX0.ZipQk9IL2A5sDMvdQFfEP1O3uSryHRFE3wr3TXg681w" [accepted]
-[2025-11-12 11:40:02 +0000] [58] [INFO] connection open
-INFO:app.ws.adapter:evt=server_banner build_id=f99ddba host=srv-d26hqi3e5dus73b43g10-hibernate-7db7fc4895-mc86g pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py
-INFO:app.ws.adapter:evt=ws_info_sent sid=6f8971d5ead045c8953a0c602eaa29d3
+[2025-11-12 12:01:04 +0000] [58] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjE5Y2RlY2JjOTRjMjRkYWM5NDdiMDUxOWRmNzBkMTkwIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0ODg2MywiZXhwIjoxNzYyOTQ4OTIzLCJqdGkiOiIwMmRmM2FhMi1lODcxLTRiODQtYTdjNi1lY2ZjZjkzNmI0MTkiLCJpc19hZG1pbiI6dHJ1ZX0.5BsSIvew4hVmOpPaqJls-i8_OXUXj7r0h-DrlK-hi1w" [accepted]
+[2025-11-12 12:01:04 +0000] [58] [INFO] connection open
+INFO:app.ws.adapter:evt=server_banner build_id=1252c82 host=srv-d26hqi3e5dus73b43g10-hibernate-7b67fb7885-jkgtw pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py
+INFO:app.ws.adapter:evt=ws_info_sent sid=19cdecbc94c24dac947b0519df70d190
 INFO:app.ws.adapter:asr_vendor_selected primary=speechmatics allowed=speechmatics reason=pcm16_only
-INFO:app.ws.adapter:evt=ws_open sid=6f8971d5ead045c8953a0c602eaa29d3
-INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=6f8971d5ead045c8953a0c602eaa29d3
-INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=6f8971d5ead045c8953a0c602eaa29d3
-DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=6f8971d5ead045c8953a0c602eaa29d3 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
-     [GET]200chibot-ui.onrender.com/api/v1/auth/meclientIP="170.85.75.32" requestID="aeeb3c7e-ef82-4ebc" responseTimeMS=39 responseBytes=345 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-     [POST]200chibot-ui.onrender.com/api/v1/auth/ws-tokenclientIP="170.85.75.32" requestID="ca9be739-3f88-4fee" responseTimeMS=40 responseBytes=538 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-10.225.27.244:46382 - "GET /api/v1/live HTTP/1.1" 200
+INFO:app.ws.adapter:evt=ws_open sid=19cdecbc94c24dac947b0519df70d190
+INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=19cdecbc94c24dac947b0519df70d190
+INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=19cdecbc94c24dac947b0519df70d190
+DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=19cdecbc94c24dac947b0519df70d190 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
 DEBUG:asyncio:Using selector: EpollSelector
-170.85.75.32:0 - "GET /static/js/audio/pcm-worklet-processor.js?v=f99ddba HTTP/1.1" 200
-     [GET]200chibot-ui.onrender.com/static/js/audio/pcm-worklet-processor.js?v=f99ddbaclientIP="170.85.75.32" requestID="a5775d1f-50d1-43f7" responseTimeMS=15 responseBytes=1616 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-ee24bccb-7f1a-478c-8016-3e0a53755996', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
+10.225.26.226:38794 - "GET /api/v1/live HTTP/1.1" 200
+DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-24a13962-b78c-44bc-b9a4-533f2fd36baf', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
 DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
 DEBUG:httpcore.connection:connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7821f15d1010>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7821f4be4ef0> server_hostname='api.openai.com' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7821f181fc50>
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x793f80e03b60>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x793f814c0050> server_hostname='api.openai.com' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x793f7e2c3750>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-10.225.27.244:56668 - "GET /api/v1/live HTTP/1.1" 200
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Wed, 12 Nov 2025 11:40:08 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'1107'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'1328'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_8b9cb67c79334dc8b446550bd96e505a'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=B6NB3DFvLiEvbSoJUU7VSVRPZ7AtmhkAPD2cYfe0Oag-1762947608-1.0.1.1-FIgzEpI6I.5irjM7yeeRE4uTbBEC_TlcLj0CJ7YoPBQzXFatpETKDhJ.w8vpJgeta0N9GekJQD3hOtkCDBXFJ9vNW3ozoP_ui9vP_UAsGIg; path=/; expires=Wed, 12-Nov-25 12:10:08 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=Q5Nh3bAJ8vmW3eijLV.RXrvK.D_jfLlfruYqy71Xiq4-1762947608097-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'99d5c0a8efb481ff-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Wed, 12 Nov 2025 12:01:07 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'718'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'925'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199892'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'32ms'), (b'x-request-id', b'req_c7948450576848b4b2f550f388a755c8'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=amUNRE6mV6piAS5dCRDe5jtMvCw16LqIfmGFNGiIUn4-1762948867-1.0.1.1-bvOprpkhlUUsJXtmnlblYWv12ex5_ELeTjAlAXwGRf_gvLCT7L325ZDBNbNpA81z1IgYP3alDFvWndHN3UZLMcAMtcz1IYq9o29Mc4MjT78; path=/; expires=Wed, 12-Nov-25 12:31:07 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=fiQhewoC47Ifke5ePll3f3gh6djxyedzq_aESFe6UPs-1762948867487-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'99d5df6f8c1823ad-IAD'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
 INFO:httpx:HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
 DEBUG:httpcore.http11:response_closed.complete
-DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Wed, 12 Nov 2025 11:40:08 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '1107'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '1328'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_8b9cb67c79334dc8b446550bd96e505a'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=B6NB3DFvLiEvbSoJUU7VSVRPZ7AtmhkAPD2cYfe0Oag-1762947608-1.0.1.1-FIgzEpI6I.5irjM7yeeRE4uTbBEC_TlcLj0CJ7YoPBQzXFatpETKDhJ.w8vpJgeta0N9GekJQD3hOtkCDBXFJ9vNW3ozoP_ui9vP_UAsGIg; path=/; expires=Wed, 12-Nov-25 12:10:08 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=Q5Nh3bAJ8vmW3eijLV.RXrvK.D_jfLlfruYqy71Xiq4-1762947608097-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '99d5c0a8efb481ff-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
-DEBUG:openai._base_client:request_id: req_8b9cb67c79334dc8b446550bd96e505a
-DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=6f8971d5ead045c8953a0c602eaa29d3 purpose=greet latency_ms=5928 model=gpt-4o-mini
+DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Wed, 12 Nov 2025 12:01:07 GMT'), ('content-type', 'application/json'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '718'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '925'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199892'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '32ms'), ('x-request-id', 'req_c7948450576848b4b2f550f388a755c8'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=amUNRE6mV6piAS5dCRDe5jtMvCw16LqIfmGFNGiIUn4-1762948867-1.0.1.1-bvOprpkhlUUsJXtmnlblYWv12ex5_ELeTjAlAXwGRf_gvLCT7L325ZDBNbNpA81z1IgYP3alDFvWndHN3UZLMcAMtcz1IYq9o29Mc4MjT78; path=/; expires=Wed, 12-Nov-25 12:31:07 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=fiQhewoC47Ifke5ePll3f3gh6djxyedzq_aESFe6UPs-1762948867487-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '99d5df6f8c1823ad-IAD'), ('content-encoding', 'gzip'), ('alt-svc', 'h3=":443"; ma=86400')])
+DEBUG:openai._base_client:request_id: req_c7948450576848b4b2f550f388a755c8
+DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=19cdecbc94c24dac947b0519df70d190 purpose=greet latency_ms=2945 model=gpt-4o-mini
+170.85.75.32:0 - "GET /static/js/audio/pcm-worklet-processor.js?v=1252c82 HTTP/1.1" 200
 DEBUG:httpcore.connection:connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.vad.state outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws outcome=bound attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=bound attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=connected attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws outcome=auth_ok attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=auth_ok attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.heartbeat outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.audio.worklet_load_ok outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws outcome=auth_ok attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=auth_ok attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws outcome=pong attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=pong attempts=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7821f15d27b0>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7821f4be6cc0> server_hostname='api.elevenlabs.io' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7821f15cd090>
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.state outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=bound attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=bound attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=connected attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=auth_ok attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=auth_ok attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.heartbeat outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=auth_ok attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=auth_ok attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.audio.worklet_load_ok outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=pong attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=pong attempts=None
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x793f7e0c5400>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x793f81503380> server_hostname='api.elevenlabs.io' timeout=5.0
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x793f7e2c39d0>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 12 Nov 2025 11:40:08 GMT'), (b'server', b'uvicorn'), (b'request-id', b'N7ZflPDSkQ2I6pKPgen6'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'KARGK5ZNYXdBivALy5qM'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'50'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'c499911881e5e0da04c3eaa263f9ab12'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 12 Nov 2025 12:01:07 GMT'), (b'server', b'uvicorn'), (b'request-id', b'K6bthC50s4iHpLWtk95h'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'HGpqpgvOqbqhvUv3Ajdk'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'45'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'702060b5f5ff4f99ee7a5a5f5a7d5188'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
 INFO:httpx:HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 "HTTP/1.1 200 OK"
 INFO:app.services.tts.elevenlabs_client:evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000
-INFO:app.voice_v2.tts_runtime:evt=tts_start sid=6f8971d5ead045c8953a0c602eaa29d3 provider=elevenlabs chars=50
-DEBUG:app.voice_v2.tts_runtime:evt=tts_start_details sid=6f8971d5ead045c8953a0c602eaa29d3 utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=50
+INFO:app.voice_v2.tts_runtime:evt=tts_start sid=19cdecbc94c24dac947b0519df70d190 provider=elevenlabs chars=45
+DEBUG:app.voice_v2.tts_runtime:evt=tts_start_details sid=19cdecbc94c24dac947b0519df70d190 utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=45
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=6f8971d5ead045c8953a0c602eaa29d3 utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=19cdecbc94c24dac947b0519df70d190 utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
 DEBUG:httpcore.http11:response_closed.complete
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=6f8971d5ead045c8953a0c602eaa29d3 utt_id=utt-00001 chunks=94 bytes=119092 total_bytes=120372
-INFO:app.voice_v2.tts_runtime:evt=tts_end sid=6f8971d5ead045c8953a0c602eaa29d3 ms_elapsed=548
-DEBUG:app.voice_v2.tts_runtime:evt=tts_end_stats sid=6f8971d5ead045c8953a0c602eaa29d3 utt_id=utt-00001 total_bytes=120372 ms_elapsed=548
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-WARNING:app.ws.adapter:evt=asr_ready_deadline sid=6f8971d5ead045c8953a0c602eaa29d3 action=force_emit
-INFO:app.ws.adapter:evt=asr_ready_deferred sid=6f8971d5ead045c8953a0c602eaa29d3 where=deadline
-INFO:app.ws.adapter:evt=audio_task_complete sid=6f8971d5ead045c8953a0c602eaa29d3 duration_ms=0
-INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=6f8971d5ead045c8953a0c602eaa29d3 input.mode=pcm16 input.mime=audio/raw;rate=16000;channels=1;format=s16le capture.timeslice_ms=200 vendor=speechmatics
-INFO:app.ws.adapter:evt=asr_ready_emit sid=6f8971d5ead045c8953a0c602eaa29d3 where=tts_end
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.mic outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.asr outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws_ready_check outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.turn.intent outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.vad.state outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.pcm.capture_start outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.vad.params outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.pcm.capture_start outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=diag outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.asr_arm_clear outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.audio_header_send outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.stream.on outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.vad.state outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.pcm.capture_start outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.vad.meter outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.vad.meter outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.vad.meter outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.pcm.capture_stop outcome=None attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.ws outcome=auth_fail attempts=None
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.delta outcome=None attempts=None
-10.225.27.244:56684 - "GET /api/v1/live HTTP/1.1" 200
-INFO:app.ws.adapter:evt=ws_client_log sid=6f8971d5ead045c8953a0c602eaa29d3 label=client.appstate.heartbeat outcome=None attempts=None
-10.225.27.244:43790 - "GET /api/v1/live HTTP/1.1" 200
-[2025-11-12 11:40:22 +0000] [58] [DEBUG] = connection is CLOSED
-[2025-11-12 11:40:22 +0000] [58] [INFO] connection closed
-INFO:app.ws.adapter:evt=audio_task_shutdown_drain sid=6f8971d5ead045c8953a0c602eaa29d3 completed=0 remaining=0
-10.225.27.244:43798 - "GET /api/v1/live HTTP/1.1" 200
-10.225.27.244:43804 - "GET /api/v1/live HTTP/1.1" 200
-     [GET]chibot-ui.onrender.com/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjZmODk3MWQ1ZWFkMDQ1Yzg5NTNhMGM2MDJlYWEyOWQzIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2Mjk0NzYwMSwiZXhwIjoxNzYyOTQ3NjYxLCJqdGkiOiIyY2NlNTY4My1iYjBiLTQyYTUtOTBhZi02MGRhOWM5ODY2OWUiLCJpc19hZG1pbiI6dHJ1ZX0.ZipQk9IL2A5sDMvdQFfEP1O3uSryHRFE3wr3TXg681wclientIP="170.85.75.32" requestID="" responseTimeMS=20826 responseBytes=0 userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-WARNING:app.ws.adapter:evt=asr_no_audio_after_header sid=6f8971d5ead045c8953a0c602eaa29d3 since_ms=1500 phase=closed
-10.225.27.244:34592 - "GET /api/v1/live HTTP/1.1" 200
-10.225.27.244:34600 - "GET /api/v1/live HTTP/1.1" 200
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=19cdecbc94c24dac947b0519df70d190 utt_id=utt-00001 chunks=73 bytes=92344 total_bytes=93624
+INFO:app.voice_v2.tts_runtime:evt=tts_end sid=19cdecbc94c24dac947b0519df70d190 ms_elapsed=399
+DEBUG:app.voice_v2.tts_runtime:evt=tts_end_stats sid=19cdecbc94c24dac947b0519df70d190 utt_id=utt-00001 total_bytes=93624 ms_elapsed=399
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=audio_task_complete sid=19cdecbc94c24dac947b0519df70d190 duration_ms=0
+INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=19cdecbc94c24dac947b0519df70d190 input.mode=pcm16 input.mime=audio/raw;rate=16000;channels=1;format=s16le capture.timeslice_ms=200 vendor=speechmatics
+INFO:app.ws.adapter:evt=asr_ready_emit sid=19cdecbc94c24dac947b0519df70d190 where=tts_end
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.mic outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.asr outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws_ready_check outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.turn.intent outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.state outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.capture_start outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.params outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.capture_start outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=diag outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.asr_arm_clear outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.audio_header_send outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.stream.on outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.meter outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+10.225.26.226:49100 - "GET /api/v1/live HTTP/1.1" 200
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.meter outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.meter outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.audio_first_chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.first_frame outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.gate outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.gate outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.audio_first_chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.preroll_flush outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.vad.state outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.chunk outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.pcm.capture_stop outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=auth_fail attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.delta outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.heartbeat outcome=None attempts=None
+10.225.26.226:49116 - "GET /api/v1/live HTTP/1.1" 200
+10.225.26.226:49126 - "GET /api/v1/live HTTP/1.1" 200
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.heartbeat outcome=None attempts=None
+10.225.26.226:46030 - "GET /api/v1/live HTTP/1.1" 200
+[2025-11-12 12:01:24 +0000] [58] [DEBUG] % sending keepalive ping
+[2025-11-12 12:01:24 +0000] [58] [DEBUG] % received keepalive pong
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.appstate.heartbeat outcome=None attempts=None
+INFO:app.ws.adapter:evt=ws_client_log sid=19cdecbc94c24dac947b0519df70d190 label=client.ws outcome=pong attempts=None
+10.225.26.226:46046 - "GET /api/v1/live HTTP/1.1" 200
+[2025-11-12 12:01:29 +0000] [58] [DEBUG] = connection is CLOSED
+[2025-11-12 12:01:29 +0000] [58] [INFO] connection closed
+INFO:app.ws.adapter:evt=audio_task_shutdown_drain sid=19cdecbc94c24dac947b0519df70d190 completed=0 remaining=0
+10.225.26.226:38806 - "GET /api/v1/live HTTP/1.1" 200
+WARNING:app.ws.adapter:evt=asr_no_audio_after_header sid=19cdecbc94c24dac947b0519df70d190 since_ms=1500 phase=closed
+10.225.26.226:38810 - "GET /api/v1/live HTTP/1.1" 200
+10.225.26.226:43910 - "GET /api/v1/live HTTP/1.1" 200

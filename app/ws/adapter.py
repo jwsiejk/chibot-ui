@@ -1961,6 +1961,24 @@ class ChatV2Adapter:
         now_ms = int(time.time() * 1000)
         ctx.last_client_activity_ms = now_ms
 
+        if frame_type in (
+            "client.banner",
+            "client.metrics",
+            "client.log",
+            "client.pong",
+        ):
+            await self._publish(
+                EVT_WS_JSON_RECV,
+                ctx.sid,
+                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+            )
+            if frame_type == "client.pong":
+                ctx.last_client_pong_ms = now_ms
+            return self._HandleResult(True)
+
+        if frame_type in ("turn.begin", "turn.end"):
+            return self._HandleResult(True)
+
         if frame_type not in _RATE_LIMIT_EXEMPT_TYPES:
             limited = await self._check_rate_limit(ctx, send)
             if limited is not None:

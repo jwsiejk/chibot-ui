@@ -1,70 +1,73 @@
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 603e03fdd8252a0e68ab0c535687a676119d1b59..386a3f24a987d98a8f222fb6afaeed54b45fee7e 100644
+index 386a3f24a987d98a8f222fb6afaeed54b45fee7e..110602ff4697f730c6b4ab97f488a0fa5b049058 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -3352,59 +3352,60 @@ class ChatV2Adapter:
-             elif frame_type == "asr.turn":
-                 state_value = payload.get("state") if isinstance(payload, Mapping) else None
-                 if state_value == "begin":
-                     if not ctx.turn_active:
-                         ctx.turn_active = True
-                         _queue_payload({"type": "turn.begin"})
-                 elif state_value == "end":
-                     if ctx.turn_active:
-                         ctx.turn_active = False
-                         ctx.client_mic_open = False
-                         _queue_payload({"type": "turn.end"})
-             if frame_type == "asr.partial":
-                 self._offer_partial_frame(
-                     ctx,
-                     loop,
-                     payload,
-                     lambda frame: _queue_payload(frame, clone=False),
-                 )
-                 return
-             _queue_payload(payload)
+@@ -1939,50 +1939,68 @@ class ChatV2Adapter:
+             meta["error"] = "bad_json"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
+             return self._HandleResult(True)
  
-         def _on_tts_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
-             event_type = event.get("type")
--            if event_type not in {EVT_TTS_START, EVT_TTS_END}:
-+            if event_type == EVT_TTS_START:
-+                handler = self._handle_tts_start
-+            elif event_type == EVT_TTS_END:
-+                handler = self._handle_tts_end
-+            else:
-                 return
+         if not isinstance(frame, dict):
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
+             return self._HandleResult(True)
  
-             async def _run() -> None:
-                 try:
--                    if event_type == EVT_TTS_START:
--                        await self._handle_tts_start(send, ctx, event)
--                    else:
--                        await self._handle_tts_end(send, ctx, event)
-+                    await handler(send, ctx, event)
-                 except asyncio.CancelledError:
-                     raise
-                 except Exception:
-                     _log.exception(
-                         "evt=ws_tts_event_failed sid=%s event_type=%s", ctx.sid, event_type
-                     )
+         frame_payload = frame
  
-             try:
-                 loop.call_soon_threadsafe(lambda: asyncio.create_task(_run()))
-             except RuntimeError:
-                 asyncio.create_task(_run())
+         raw_type = frame.get("type")
+         if not isinstance(raw_type, str):
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
+             return self._HandleResult(True)
  
-         def _handle_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid or ctx.outbox is None:
-                 return
-             meta_obj = event.get("meta")
-             if isinstance(meta_obj, Mapping):
-                 ws_meta = meta_obj.get("ws")
-                 if isinstance(ws_meta, Mapping) and ws_meta.get("from_adapter"):
-                     return
-             payload = self._extract_outbound_payload(ctx, event)
-             if payload is None:
-                 return
+         frame_type = raw_type
+         meta["frame_type"] = frame_type
+         now_ms = int(time.time() * 1000)
+         ctx.last_client_activity_ms = now_ms
  
-             def _on_loop() -> None:
++        if frame_type in (
++            "client.banner",
++            "client.metrics",
++            "client.log",
++            "client.pong",
++        ):
++            await self._publish(
++                EVT_WS_JSON_RECV,
++                ctx.sid,
++                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
++            )
++            if frame_type == "client.pong":
++                ctx.last_client_pong_ms = now_ms
++            return self._HandleResult(True)
++
++        if frame_type in ("turn.begin", "turn.end"):
++            return self._HandleResult(True)
++
+         if frame_type not in _RATE_LIMIT_EXEMPT_TYPES:
+             limited = await self._check_rate_limit(ctx, send)
+             if limited is not None:
+                 return limited
+ 
+         if frame_type == "client.ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 client_ts = frame.get("ts")
+                 payload = {"type": "server.pong", "ts": now_ms}
+                 if isinstance(client_ts, int):
+                     payload["echo"] = client_ts
+                 await self._send_json(send, ctx.sid, payload)
+             return self._HandleResult(True)
+ 
+         if frame_type == "client.pong":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             ctx.last_client_pong_ms = now_ms
+             return self._HandleResult(True)
+ 
+         if frame_type == "ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
