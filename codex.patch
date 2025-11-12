@@ -1,217 +1,73 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 20238f0c32e57a0669408aca02ea73949eea4f69..c6d382f7a92a4a99672a244c98abd0727ddde67b 100644
+index c6d382f7a92a4a99672a244c98abd0727ddde67b..957efa9092c9de519160396494a2e29f3a7154f7 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -3366,102 +3366,107 @@ import { initVAD } from "./audio/vad_client.js";
-     if (!frame || typeof frame !== "object") {
-       return null;
+@@ -1313,55 +1313,66 @@ import { initVAD } from "./audio/vad_client.js";
+         vadController.reset();
+       } catch (err) {
+         try {
+           console.warn("VAD reset failed", err);
+         } catch {}
+       }
      }
-     if (typeof frame.type === "string" && frame.type) {
-       return frame;
-     }
-     let inferredType = null;
-     if (typeof frame.kind === "string" && frame.kind) {
-       inferredType = frame.kind;
-     } else if (typeof frame.event === "string" && frame.event) {
-       inferredType = frame.event;
-     } else if (
-       typeof frame.code === "string" ||
-       typeof frame.detail === "string" ||
-       typeof frame.message === "string"
-     ) {
-       inferredType = "error";
-     }
-     if (!inferredType) {
-       return null;
-     }
-     return { ...frame, type: inferredType };
+     setListeningState(false);
+     try {
+       hubLog("client.pcm.capture_stop", { reason: stopReason });
+     } catch {}
    }
  
-   async function parseFrame(event) {
--    const { data } = event;
--    if (typeof data === "string") {
--      try {
--        const frame = JSON.parse(data);
--        if (frame && typeof frame.message === "string") {
--          if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-+    try {
-+      const { data } = event;
-+      if (typeof data === "string") {
-+        try {
-+          const frame = JSON.parse(data);
-+          if (frame && typeof frame.message === "string") {
-+            if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-+              return;
-+            }
-+          }
-+          const normalizedFrame = normalizeIncomingFrame(frame);
-+          if (!normalizedFrame) {
-+            console.warn("Dropping WS frame without recognizable type", frame);
-+            await handleErrorFrame({
-+              type: "error",
-+              code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
-+              detail:
-+                typeof frame?.detail === "string"
-+                  ? frame.detail
-+                  : "Frame missing type field",
-+            });
-             return;
-           }
-+          if (normalizedFrame.type === "server.ping") {
-+            send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
-+            return;
-+          }
-+          await handleMessageFrame(normalizedFrame);
-+        } catch (err) {
-+          console.error("Failed to parse WS frame", err, data);
-         }
--        const normalizedFrame = normalizeIncomingFrame(frame);
--        if (!normalizedFrame) {
--          console.warn("Dropping WS frame without recognizable type", frame);
--          await handleErrorFrame({
--            type: "error",
--            code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
--            detail:
--              typeof frame?.detail === "string"
--                ? frame.detail
--                : "Frame missing type field",
--          });
--          return;
--        }
--        if (normalizedFrame.type === "server.ping") {
--          send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
--          return;
--        }
--        await handleMessageFrame(normalizedFrame);
--      } catch (err) {
--        console.error("Failed to parse WS frame", err, data);
-+        return;
-       }
--      return;
--    }
--    if (data instanceof Blob) {
--      const audioPlayer = getAudioPlayer();
--      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
--        audioPlayer.enqueueChunk(data);
-+      if (data instanceof Blob) {
-+        const audioPlayer = getAudioPlayer();
-+        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-+          audioPlayer.enqueueChunk(data);
-+        }
-+        window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-+        return;
-       }
--      window.dispatchEvent(new CustomEvent("binary", { detail: data }));
--      return;
--    }
--    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
--      const chunk = data instanceof ArrayBuffer
--        ? data
--        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
--      const audioPlayer = getAudioPlayer();
--      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
--        audioPlayer.enqueueChunk(chunk);
-+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-+        const chunk = data instanceof ArrayBuffer
-+          ? data
-+          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-+        const audioPlayer = getAudioPlayer();
-+        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-+          audioPlayer.enqueueChunk(chunk);
-+        }
-+        window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-+        return;
-       }
--      window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
--      return;
-+      console.warn("Unknown WS frame type", data);
-+    } catch (outerErr) {
-+      console.error("Uncaught exception in parseFrame", outerErr);
-+      hubLog("client.ws.parse_crash", { error: outerErr?.message, frame_data: event?.data });
+   async function handleRecorderChunk(event) {
+     if (!event) {
+       return;
      }
--    console.warn("Unknown WS frame type", data);
-   }
- 
-   function attachSocket(ws) {
-     ws.__intentionalClose = false;
-     const handlers = {
-       open: () => {
-         // Write live socket and mark connected so UI gates on ws.open can run
-         setWsConnected(true);
-         setWsPhase("connected");
-         recordLastError(null, null);
+     const buffer = event.buffer instanceof ArrayBuffer
+       ? event.buffer
+       : (ArrayBuffer.isView(event.buffer)
+         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
+         : null);
+     if (!buffer) {
+       return;
+     }
++    const seq = Number(event.seq) || 0;
+     if (!__firstChunkSeen) {
+       __firstChunkSeen = true;
+-      try { hubLog("client.pcm.first_frame", {}); } catch {}
++      let firstFrameMs = null;
++      if (typeof __micRecordingStartAt === "number") {
++        firstFrameMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
++      }
++      const firstFrameDetail = {
++        seq,
++        bytes: buffer.byteLength || 0,
++      };
++      if (firstFrameMs !== null) {
++        firstFrameDetail.ms_since_recording_start = firstFrameMs;
++      }
++      try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
+     }
+-    const seq = Number(event.seq) || 0;
+     micLastChunkAt = Date.now();
+     scheduleAudioKeepalive();
+     recordRecorderChunk(micLastChunkAt);
+     const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
+       ? performance.now()
+       : Date.now();
+     if (vadController && typeof vadController.onPcmFrame === "function") {
+       try {
+         vadController.onPcmFrame(buffer, frameTimestamp);
+       } catch (err) {
          try {
-           if (typeof AppState.setState === "function") {
-             AppState.setState({ websocket: ws, connectionState: "connected" });
-           } else {
-             updateState({ websocket: ws, connectionState: "connected" });
-           }
-         } catch {
-           updateState({ websocket: ws, connectionState: "connected" });
-         }
-         try {
-           WSClient._ws = ws;
-           WSClient._connected = true;
+           console.warn("VAD frame processing failed", err);
          } catch {}
-         try {
-           window.ws = ws;
-@@ -3474,51 +3479,58 @@ import { initVAD } from "./audio/vad_client.js";
-           console.warn("AppState.hub.bindSocket open failed", err);
-         }
-         try {
-           if (!Array.isArray(WSClient._queue)) {
-             WSClient._queue = [];
-           }
-           if (WSClient._queue.length) {
-             for (const { data, isBinary } of WSClient._queue) {
-               send.call(WSClient, data, { binary: isBinary });
-             }
-             WSClient._queue.length = 0;
-           }
-         } catch {}
-         try {
-           window.dispatchEvent(new CustomEvent("ws.open", { detail: { websocket: ws } }));
-         } catch {}
-         try {
-           if (!WSClient._linkedProofLogged) {
-             console.info("evt=ws_linked AppState", !!AppState?.websocket, "WSClient", !!WSClient._ws);
-             WSClient._linkedProofLogged = true;
-           }
-         } catch {}
-         startHeartbeat();
-         logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || null });
-       },
--      message: parseFrame,
-+      message: (event) => {
-+        try {
-+          parseFrame(event);
-+        } catch (err) {
-+          console.error("WS message handler critical crash", err);
-+          hubLog("client.ws.crash", { error: err?.message, source: "onmessage" });
-+        }
-+      },
-       error: (event) => {
-         console.error("WebSocket error", event);
-         const message = event && typeof event?.message === "string" && event.message
-           ? event.message
-           : "socket_error";
-         recordLastError(null, message);
-         window.dispatchEvent(new CustomEvent("ws.error", { detail: event }));
-       },
-       close: (event) => {
-         const expected = ws.__intentionalClose === true;
-         const detailReason = event && typeof event?.reason === "string" && event.reason
-           ? event.reason
-           : (expected ? "intentional_close" : "ws_close");
-         if (_audioStreaming) {
-           const offReason = detailReason || (expected ? "intentional_close" : "ws_close");
-           hubLog("client.stream.off", {
-             reason: offReason,
-             code: typeof event?.code === "number" ? event.code : undefined,
-           });
-           _audioStreaming = false;
-         }
-         recordLastError(event && typeof event?.code === "number" ? event.code : null, detailReason);
-         setWsConnected(false);
-         setWsPhase("disconnected");
-         logStage('client.ws', { outcome: 'close', code: event?.code, reason: event?.reason });
+       }
+     }
+     // Do not block enqueue; flush path will honor readiness gates.
+     if (seq === 0) {
+       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
+     }
+     const frame = new Int16Array(buffer);
+     if (frame.length) {
+       let sumSq = 0;
+       for (let i = 0; i < frame.length; i += 1) {
+         const sample = frame[i] / 32768;
+         sumSq += sample * sample;

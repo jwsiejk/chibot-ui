@@ -1335,11 +1335,22 @@ import { initVAD } from "./audio/vad_client.js";
     if (!buffer) {
       return;
     }
+    const seq = Number(event.seq) || 0;
     if (!__firstChunkSeen) {
       __firstChunkSeen = true;
-      try { hubLog("client.pcm.first_frame", {}); } catch {}
+      let firstFrameMs = null;
+      if (typeof __micRecordingStartAt === "number") {
+        firstFrameMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
+      }
+      const firstFrameDetail = {
+        seq,
+        bytes: buffer.byteLength || 0,
+      };
+      if (firstFrameMs !== null) {
+        firstFrameDetail.ms_since_recording_start = firstFrameMs;
+      }
+      try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
     }
-    const seq = Number(event.seq) || 0;
     micLastChunkAt = Date.now();
     scheduleAudioKeepalive();
     recordRecorderChunk(micLastChunkAt);
