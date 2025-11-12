@@ -3717,6 +3717,55 @@ import { initVAD } from "./audio/vad_client.js";
 
     const tokenInfo = trackTokenFromUrl(wsUrl);
     const ws = transportFactory(wsUrl, wsProtocols);
+    const originalSend = typeof ws.send === "function" ? ws.send : null;
+    if (originalSend) {
+      const boundOriginalSend = originalSend.bind(ws);
+      ws.__originalSend = originalSend;
+      ws.send = function patchedSend(data, ...rest) {
+        if (data instanceof Blob || data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+          return boundOriginalSend(data, ...rest);
+        }
+
+        let payload = null;
+        let shouldValidate = false;
+
+        if (typeof data === "string") {
+          try {
+            const parsed = JSON.parse(data);
+            if (isTypedObjectPayload(parsed)) {
+              payload = parsed;
+              shouldValidate = true;
+            }
+          } catch (err) {
+            console.warn("WSClient send wrapper: failed to parse string payload", err);
+          }
+        } else if (isTypedObjectPayload(data)) {
+          payload = data;
+          shouldValidate = true;
+        }
+
+        if (shouldValidate) {
+          if (!validatePayloadForSend(payload)) {
+            return undefined;
+          }
+          if (typeof data === "string") {
+            return boundOriginalSend(data, ...rest);
+          }
+        }
+
+        if (isTypedObjectPayload(data)) {
+          try {
+            const serialized = JSON.stringify(data);
+            return boundOriginalSend(serialized, ...rest);
+          } catch (err) {
+            console.warn("WSClient send wrapper: failed to serialize payload", err);
+            return undefined;
+          }
+        }
+
+        return boundOriginalSend(data, ...rest);
+      };
+    }
     ws.__accessTokenInfo = tokenInfo;
     ws.__handshakeToastShown = false;
     try {
