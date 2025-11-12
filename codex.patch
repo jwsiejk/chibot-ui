@@ -1,95 +1,64 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 44dd8e2341547a9068bb4c5865fd92f765549a05..358e822f618c39accc24d91e34c6e05f89b6b169 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -2338,89 +2338,30 @@ window.addEventListener('ws.open', async () => {
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index bdbdbbaa8616ac6c40e36bec8ae18f7fc7f15bbc..68f16141f3de0b3a330c4bd573ef9e61e8136d2e 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -4084,59 +4084,52 @@ import { initVAD } from "./audio/vad_client.js";
+           return false;
+         }
+       }
+       logTransportMisuse("send_binary_invalid_payload");
+       return false;
+     }
+     const text = typeof data === "string" ? data : JSON.stringify(data);
+     try {
+       live.send(text);
+       return true;
+     } catch (err) {
+       console.error("WSClient send error", err);
+       return false;
      }
    }
-   const allowBanner = window.AppState?.debug?.allow_client_banner === true;
-   if (allowBanner) {
-     try {
-       if (WSClient && typeof WSClient.sendJSON === 'function') {
-         WSClient.sendJSON({
-           type: 'client.banner',
-           event: { label: 'ws.open', ts_ms: Date.now() },
-           info: { build: window.__BUILD_SHA__ ?? null }
-         });
-       } else if (WSClient && typeof WSClient.send === 'function') {
-         WSClient.send({
-           type: 'client.banner',
-           event: { label: 'ws.open', ts_ms: Date.now() },
-           info: { build: window.__BUILD_SHA__ ?? null }
-         });
-       }
-     } catch {}
-   }
- });
- window.addEventListener('ws.close', () => {
-   resetSuggestions();
- });
  
--    // --- Smoke test harness (opt-in via ?wsSmoke=1) ---
--    if (urlParams.get('wsSmoke') === '1') {
--      const transitions = [];
--      const unsubscribe = AppState.subscribe((s) => transitions.push(s.connectionState));
--
--      class MockSocket extends EventTarget {
--        constructor() {
--          super();
--          this.readyState = WebSocket.CONNECTING;
--          setTimeout(() => {
--            this.readyState = WebSocket.OPEN;
--            this.dispatchEvent(new Event('open'));
--          }, 0);
--        }
--        send(payload) {
--          this.lastSent = payload;
--        }
--        close(code = 1000, reason = '') {
--          this.readyState = WebSocket.CLOSED;
--          const ev = new Event('close');
--          ev.code = code;
--          ev.reason = reason;
--          ev.wasClean = true;
--          this.dispatchEvent(ev);
--        }
--        simulateMessage(frame) {
--          const payload = typeof frame === 'string' ? frame : JSON.stringify(frame);
--          const ev = new Event('message');
--          ev.data = payload;
--          this.dispatchEvent(ev);
--        }
--      }
--
--      const sockets = [];
--      WSClient.__debug.setTransportFactory(() => {
--        const mock = new MockSocket();
--        sockets.push(mock);
--        return mock;
--      });
--
--      startBtn.click();
--
--      setTimeout(() => {
--        const mock = sockets[0];
--        if (!mock) return;
--        mock.simulateMessage({
--          type: 'info',
--          meta: { sid: 'smoke-sid', resume_token: 'smoke-resume', resume_ttl_ms: 5000 }
--        });
--        WSClient.__debug.recordPing(Date.now() - 42);
--        mock.simulateMessage({ type: 'pong', t: Date.now() });
--        setTimeout(() => {
--          endBtn.click();
--          console.log('WSClient smoke transitions', transitions);
--          console.log('WSClient smoke latency', AppState.getState().latencyMs);
--          WSClient.__debug.resetTransportFactory();
--          unsubscribe();
--        }, 20);
--      }, 20);
--    }
-+    // (smoke test harness removed)
+   function getBufferedAmount() {
+     if (!socket) return 0;
+     return socket.bufferedAmount || 0;
    }
  
-   init();
- })();
+   const debug = {
+     simulateIncomingFrame(frame) {
+       return handleMessageFrame(frame);
+     },
+-    recordPing(ts) {
+-      lastPingAt = ts;
+-      updateState({ lastPingAt: ts });
+-    },
+     setTransportFactory(factory) {
+       transportFactory = typeof factory === "function" ? factory : transportFactory;
+-    },
+-    resetTransportFactory() {
+-      transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+     }
+   };
+ 
+   WSClient.sendJSON = function sendJSONPayload(obj) {
+     if (obj instanceof ArrayBuffer || ArrayBuffer.isView(obj)) {
+       logTransportMisuse("binary_sent_to_sendJSON");
+       console.error("WSClient.sendJSON: binary payload; use sendAudioChunk()");
+       return false;
+     }
+     if (!obj || typeof obj !== "object") {
+       return false;
+     }
+     const result = send.call(WSClient, obj, { binary: false });
+     if (result && typeof result.then === "function") {
+       return result.then(() => true).catch((err) => {
+         console.warn("sendJSON failed", err);
+         return false;
+       });
+     }
+     return result !== false;
+   };
+ 
+   WSClient.sendAudioChunk = function sendAudioChunk(buf, opts = {}) {
+     if (buf instanceof Blob) {
+       const blobResult = sendBinary(buf, { ...opts, lane: opts && typeof opts === "object" && typeof opts.lane !== "undefined" ? opts.lane : "mic" });

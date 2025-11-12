@@ -4106,15 +4106,8 @@ import { initVAD } from "./audio/vad_client.js";
     simulateIncomingFrame(frame) {
       return handleMessageFrame(frame);
     },
-    recordPing(ts) {
-      lastPingAt = ts;
-      updateState({ lastPingAt: ts });
-    },
     setTransportFactory(factory) {
       transportFactory = typeof factory === "function" ? factory : transportFactory;
-    },
-    resetTransportFactory() {
-      transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
     }
   };
 
