@@ -1965,6 +1965,16 @@ class ChatV2Adapter:
         now_ms = int(time.time() * 1000)
         ctx.last_client_activity_ms = now_ms
 
+        if frame_type == "audio.header":
+            await self._publish(
+                EVT_WS_JSON_RECV,
+                ctx.sid,
+                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+            )
+            ctx.client_mic_open = True
+            self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
+            return self._HandleResult(True)
+
         if frame_type in (
             "client.banner",
             "client.metrics",
@@ -2954,6 +2964,16 @@ class ChatV2Adapter:
         backpressure_ok = ctx.backpressure_state != "on"
 
         gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
+        if not gate_open:
+            _log.info(
+                "evt=audio_gate_block sid=%s mask=%s ready=%s mic=%s send=%s back=%s",
+                ctx.sid,
+                mask_open,
+                ready_gate,
+                mic_open,
+                send_open,
+                backpressure_ok,
+            )
 
         if gate_open:
             await self._flush_audio_backlog(ctx)
@@ -2988,6 +3008,13 @@ class ChatV2Adapter:
             queue_pre = True
         if reason in ("not_ready", "send_closed", "backpressure") and queue_pre:
             self._queue_audio_backlog(ctx, chunk, seq)
+            _log.info(
+                "evt=audio_backlog_enqueue sid=%s reason=%s pending=%d bytes=%d",
+                ctx.sid,
+                reason,
+                len(ctx.audio_backlog),
+                ctx.audio_backlog_bytes,
+            )
             return
         _log.info(
             "evt=audio_drop sid=%s len=%d reason=%s",
