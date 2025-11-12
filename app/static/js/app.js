@@ -2257,9 +2257,10 @@ window.addEventListener('asr.ready', (event) => {
 
   rearmSilenceWatchdogAfterDelay('asr.ready');
   if (typeof AppState?.setState === 'function') {
-    AppState.setState({ asrReady: true });
+    AppState.setState({ asrReady: true, turnActive: true });
   } else if (AppState) {
     AppState.asrReady = true;
+    AppState.turnActive = true;
   }
 
   // *** NEW STABLE LOGIC ***

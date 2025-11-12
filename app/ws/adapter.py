@@ -1264,9 +1264,22 @@ class ChatV2Adapter:
             try:
                 if turn_end_payload is not None:
                     await self._send_json(send, ctx.sid, turn_end_payload)
+                if ctx.turn_active:
+                    try:
+                        await self._send_json(send, ctx.sid, {"type": "turn.end"})
+                    except Exception:  # pragma: no cover - defensive logging
+                        _log.warning(
+                            "evt=turn_end_send_failed sid=%s reason=vad_eot",
+                            ctx.sid,
+                            exc_info=True,
+                        )
+                    finally:
+                        ctx.turn_active = False
                 await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
             except Exception:  # pragma: no cover - defensive logging
                 _log.warning("evt=vad_eot_send_failed sid=%s", ctx.sid, exc_info=True)
+        else:
+            ctx.turn_active = False
         await self._close_asr(ctx, reason="eot")
 
     def _handle_client_telemetry(
@@ -6002,6 +6015,18 @@ class ChatV2Adapter:
                 await self._send_json(send, ctx.sid, turn_begin_payload)
             except Exception:  # pragma: no cover - defensive logging
                 _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
+            else:
+                if not ctx.turn_active:
+                    try:
+                        await self._send_json(send, ctx.sid, {"type": "turn.begin"})
+                    except Exception:  # pragma: no cover - defensive logging
+                        _log.warning(
+                            "evt=turn_begin_send_failed sid=%s reason=ready_bundle",
+                            ctx.sid,
+                            exc_info=True,
+                        )
+                    else:
+                        ctx.turn_active = True
 
         self._schedule_no_audio_watchdog_rearm(ctx)
         

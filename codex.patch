@@ -1,196 +1,194 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 5ba1d42af4f3550d93433db6fba91c7af5ac153c..bdbdbbaa8616ac6c40e36bec8ae18f7fc7f15bbc 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -2985,50 +2985,74 @@ import { initVAD } from "./audio/vad_client.js";
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 24585afb352e14e366c525726e738d881d8ebaeb..44dd8e2341547a9068bb4c5865fd92f765549a05 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -2235,53 +2235,54 @@ window.addEventListener('asr.unavailable', (event) => {
+     }
+   }
+   if (diagHudEnabled()) {
+     const reasonText = reason ? String(reason).slice(0, 120) : '';
+     console.warn('diag=asr_unavailable', reasonText);
+     setBadge('asr:down');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_UNAVAILABLE',
+       reasonText ? { reason: reasonText } : undefined,
+       {
+         level: 'warn',
+         badge: 'asr:down',
+         message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
+       }
+     );
+   }
+   window.AppUI?.refresh?.();
+ });
+ 
+ // START REWRITE: window.addEventListener('asr.ready', ...)
+ window.addEventListener('asr.ready', (event) => {
+   // CRITICAL FIX: REMOVE ASYNCHRONOUS DEFERRAL TO BEAT SERVER TIMEOUT
+ 
+   rearmSilenceWatchdogAfterDelay('asr.ready');
+   if (typeof AppState?.setState === 'function') {
+-    AppState.setState({ asrReady: true });
++    AppState.setState({ asrReady: true, turnActive: true });
+   } else if (AppState) {
+     AppState.asrReady = true;
++    AppState.turnActive = true;
    }
  
-   async function handleMessageFrame(frame) {
-     if (!frame || typeof frame.type !== "string") {
-       console.warn("Ignoring WS frame without type", frame);
-       return;
-     }
-     if (frame.type === "keepalive") {
-       return;
-     }
+   // *** NEW STABLE LOGIC ***
+   // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
+   updateRecordingState(true, 'asr_ready_signal');
  
-     if (frame.type === "server.ping") {
-       const response = { type: "client.pong", ts: Date.now() };
-       if (typeof frame.ts === "number") {
-         response.echo = frame.ts;
-       }
-       sendJson(response);
-       return;
-     }
+   // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
  
-     if (frame.type === "ping") {
-       sendJson({ type: "pong", t: Date.now() });
-       return;
-     }
+   try {
+     emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
+   } catch {}
+   if (diagHudEnabled()) {
+     console.info('diag=asr_ready');
+     setBadge('asr:ready');
+     sendDiagHudEvent(
+       'EVT_CLIENT_ASR_READY',
+       event && typeof event === 'object' ? event.detail : undefined,
+       { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
+     );
+   }
  
-+    if (frame.type === "turn.begin") {
-+      if (AppState?.setState) {
-+        try {
-+          AppState.setState({ turnActive: true });
-+        } catch {}
-+      }
-+      try {
-+        window.dispatchEvent(new CustomEvent("turn.begin", { detail: frame }));
-+      } catch {}
-+      return;
-+    }
-+
-+    if (frame.type === "turn.end") {
-+      if (AppState?.setState) {
-+        try {
-+          AppState.setState({ turnActive: false });
-+        } catch {}
-+      }
-+      try {
-+        window.dispatchEvent(new CustomEvent("turn.end", { detail: frame }));
-+      } catch {}
-+      return;
-+    }
-+
-     if (frame.type === "audio.throttle") {
-       const rawMs = Number(frame?.ms);
-       const ms = Number.isFinite(rawMs) ? Math.max(0, rawMs) : 0;
-       const now = Date.now();
-       const until = ms > 0 ? now + ms : now;
-       __pauseSendUntil = ms > 0 ? Math.max(__pauseSendUntil, until) : now;
-       if (AppState && typeof AppState === "object") {
-         AppState._throttleUntil = __pauseSendUntil;
-       }
-       try {
-         hubLog("client.audio.throttle", { ms, until: __pauseSendUntil });
-       } catch {}
-       if (__throttleTimer) {
-         clearTimeout(__throttleTimer);
-         __throttleTimer = null;
-       }
-       if (ms > 0) {
-         const delay = Math.max(0, __pauseSendUntil - Date.now());
-         __throttleTimer = setTimeout(() => {
-           __throttleTimer = null;
-           if (AppState && typeof AppState === "object") {
-             AppState._throttleUntil = 0;
-           }
-           try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
-         }, delay);
+   // Reset any retry count for ASR
+   if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
+     try {
+       window.ChatView?.showSystemFromChip?.(
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index a4ce20d61d151c7905e3e3c61d3b23cc65afadcf..e5af83ce39d8c0fb95e9716c212e7f24108b4c1d 100644
+index e5af83ce39d8c0fb95e9716c212e7f24108b4c1d..603e03fdd8252a0e68ab0c535687a676119d1b59 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -111,50 +111,52 @@ _AUDIO_THROTTLE_QUEUE_THRESHOLD = QUEUE_ON_THRESHOLD
- _AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD = 4
- 
- _DEFAULT_WS_PING_INTERVAL_MS = 20_000
- _HEARTBEAT_TIMEOUT_MS = 30_000
- 
- EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
- EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
- 
- EVT_RATE_LIMIT = "EVT_RATE_LIMIT"
- 
- EVT_WS_OUTBOX_DROP = "EVT_WS_OUTBOX_DROP"
- 
- EVT_WS_JSON_SEND_SUMMARY = "ws.json.send_summary"
- EVT_WS_JSON_RECV_SUMMARY = "ws.json.recv_summary"
- ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
- 
- _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
- _MIC_OPEN_TIMEOUT_SECONDS = 2.5
- 
- _OUTBOUND_ALLOWED_TYPES = {
-     "policy.interaction",
-     "info",
-     "tts.start",
-     "tts.end",
-     "asr.ready",
-+    "input.start",
-+    "input.stop",
-     "asr.input.start",
-     "asr.input.stop",
-     "asr.partial",
-     "asr.final",
-     "asr.unavailable",
-     "error",
-     "chat.message",
-     "chat.history",
-     "dialog.plan",
-     "hud.nudge",
-     "turn.begin",
-     "turn.end",
- }
- 
- _RATE_LIMIT_EXEMPT_TYPES = {
-     "client.autostart",
-     "client.banner",
-     "client.diag",
-     "client.log",
-     "client.ping",
-     "client.telemetry",
- }
- 
- _OUTBOX_MAXSIZE = 256
- 
-@@ -3306,54 +3308,56 @@ class ChatV2Adapter:
-                 ctx.outbox.put_nowait(item)
-             except asyncio.QueueFull:
-                 now = ctx.outbox.qsize()
-                 try:
-                     asyncio.create_task(
-                         self._publish(
-                             EVT_WS_OUTBOX_DROP,
-                             ctx.sid,
-                             {"sid": ctx.sid, "dropped": 1, "now": now},
-                         )
-                     )
-                 except RuntimeError:
-                     pass
-                 _schedule_throttle("outbox_full")
-                 return
-             now = ctx.outbox.qsize()
-             if now >= _AUDIO_THROTTLE_QUEUE_THRESHOLD:
-                 _schedule_throttle("outbox_depth")
- 
-         def _enqueue(payload: Dict[str, Any]) -> None:
-             frame_type = payload.get("type")
-             if frame_type == "input.start":
-                 self._mark_input_start(ctx)
-                 ctx.client_mic_open = True
-             elif frame_type == "turn.end":
--                ctx.turn_active = False
--                ctx.client_mic_open = False
+@@ -1242,53 +1242,66 @@ class ChatV2Adapter:
+             return
+         ctx.session.eot_armed = False
+         _log.info(
+             "evt=vad_eot sid=%s reason=%s fuse_mode=%s client_silence_ms=%d vendor_idle_ms=%d server_silence_ms=%d",
+             ctx.sid,
+             reason,
+             fuse_mode,
+             client_silence_ms,
+             vendor_idle_ms,
+             server_silence_ms,
+         )
+         meta = {
+             "reason": reason,
+             "fuse_mode": fuse_mode,
+             "client_silence_ms": int(client_silence_ms),
+             "vendor_idle_ms": int(vendor_idle_ms),
+             "server_silence_ms": int(server_silence_ms),
+         }
+         await self._publish("asr.turn_ended", ctx.sid, meta)
+         send = ctx.ws_send
+         turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
+         if send is not None:
+             try:
+                 if turn_end_payload is not None:
+                     await self._send_json(send, ctx.sid, turn_end_payload)
 +                if ctx.turn_active:
-+                    ctx.turn_active = False
-+                    ctx.client_mic_open = False
-             elif frame_type == "turn.begin":
--                ctx.turn_active = True
-+                if not ctx.turn_active:
-+                    ctx.turn_active = True
-             elif frame_type == "asr.turn":
-                 state_value = payload.get("state") if isinstance(payload, Mapping) else None
-                 if state_value == "begin":
-                     if not ctx.turn_active:
-                         ctx.turn_active = True
-                         _queue_payload({"type": "turn.begin"})
-                 elif state_value == "end":
-                     if ctx.turn_active:
-                         ctx.turn_active = False
-                         ctx.client_mic_open = False
-                         _queue_payload({"type": "turn.end"})
-             if frame_type == "asr.partial":
-                 self._offer_partial_frame(
-                     ctx,
-                     loop,
-                     payload,
-                     lambda frame: _queue_payload(frame, clone=False),
-                 )
-                 return
-             _queue_payload(payload)
++                    try:
++                        await self._send_json(send, ctx.sid, {"type": "turn.end"})
++                    except Exception:  # pragma: no cover - defensive logging
++                        _log.warning(
++                            "evt=turn_end_send_failed sid=%s reason=vad_eot",
++                            ctx.sid,
++                            exc_info=True,
++                        )
++                    finally:
++                        ctx.turn_active = False
+                 await self._send_json(send, ctx.sid, {"type": "asr.close", "reason": "eot"})
+             except Exception:  # pragma: no cover - defensive logging
+                 _log.warning("evt=vad_eot_send_failed sid=%s", ctx.sid, exc_info=True)
++        else:
++            ctx.turn_active = False
+         await self._close_asr(ctx, reason="eot")
  
-         def _on_tts_event(event: dict) -> None:
-             if event.get("sid") != ctx.sid:
-                 return
-             event_type = event.get("type")
+     def _handle_client_telemetry(
+         self, ctx: AdapterContext, event_name: str, meta: Mapping[str, Any]
+     ) -> None:
+         now_ms = self._now_ms()
+         if event_name == "client.vad.speech_start":
+             self._set_client_vad_state(ctx, True, now_ms)
+             ctx.client_vad_last_event_ms = now_ms
+             conf = self._coerce_float(meta.get("conf"), ctx.client_vad_confidence)
+             if conf is not None:
+                 ctx.client_vad_confidence = _clamp(conf, 0.0, 1.0)
+             energy = self._coerce_float(meta.get("energyDb"), ctx.client_vad_energy_db)
+             if energy is not None:
+                 ctx.client_vad_energy_db = energy
+             noise = self._coerce_float(meta.get("noiseDb"), ctx.client_vad_noise_db)
+             if noise is not None:
+                 ctx.client_vad_noise_db = noise
+         elif event_name == "client.vad.speech_end":
+             self._set_client_vad_state(ctx, False, now_ms)
+             ctx.client_vad_last_event_ms = now_ms
+             ctx.client_vad_last_speech_end_ms = now_ms
+         elif event_name == "client.vad.state":
+             speech_value = meta.get("speech")
+             if isinstance(speech_value, bool):
+@@ -5980,50 +5993,62 @@ class ChatV2Adapter:
+                 "evt=asr_ready_bundle_sent sid=%s input.mode=%s input.mime=%s capture.timeslice_ms=%s vendor=%s",
+                 ctx.sid,
+                 mode,
+                 descriptor.get("mime", ""),
+                 timeslice_ms,
+                 vendor,
+             )
+         except Exception:
+             _log.warning("evt=asr_ready_bundle_send_failed sid=%s", ctx.sid, exc_info=True)
+ 
+         self._mark_input_start(ctx)
+         await self._send_json(send, ctx.sid, input_start)
+         ctx.client_mic_open = True  # allow first audio chunk through immediately
+         ctx.pending_start_listening = dict(start_payload)
+         ctx.pending_start_listening_sent = False
+         if ctx.asr_ready:
+             await self._send_json(send, ctx.sid, start_payload)
+             ctx.pending_start_listening = None
+             ctx.pending_start_listening_sent = False
+         turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
+         if turn_begin_payload is not None:
+             try:
+                 await self._send_json(send, ctx.sid, turn_begin_payload)
+             except Exception:  # pragma: no cover - defensive logging
+                 _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
++            else:
++                if not ctx.turn_active:
++                    try:
++                        await self._send_json(send, ctx.sid, {"type": "turn.begin"})
++                    except Exception:  # pragma: no cover - defensive logging
++                        _log.warning(
++                            "evt=turn_begin_send_failed sid=%s reason=ready_bundle",
++                            ctx.sid,
++                            exc_info=True,
++                        )
++                    else:
++                        ctx.turn_active = True
+ 
+         self._schedule_no_audio_watchdog_rearm(ctx)
+         
+ 
+     @staticmethod
+     def _decode_headers(headers: Iterable[tuple[bytes, bytes]]) -> Dict[str, str]:
+         decoded: Dict[str, str] = {}
+         for key, value in headers:
+             decoded[key.decode("latin1").lower()] = value.decode("latin1")
+         return decoded
+ 
+     @staticmethod
+     def _now_ms() -> int:
+         return int(time.time() * 1000)
+ 
+     @staticmethod
+     def _make_preview_from_bytes(payload: bytes, limit: int = 160) -> Optional[str]:
+         if not payload:
+             return None
+         preview = payload.decode("utf-8", "replace")
+         preview = preview.replace("\r", "\\r").replace("\n", "\\n")
+         if len(preview) > limit:
+             return f"{preview[: limit - 1]}…"
+         return preview
+ 
