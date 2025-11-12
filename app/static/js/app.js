@@ -5,6 +5,9 @@
   try {
     window.AppState = window.AppState || {};
     window.AppState.policy = window.AppState.policy || {};
+    if (typeof window.AppState.turnActive !== 'boolean') {
+      window.AppState.turnActive = false;
+    }
   } catch {}
 
   function hubLog(label, detail) {
@@ -2027,8 +2030,63 @@
 
     const asrRetry = { tries: 0, timer: null };
 
+    const SILENCE_WATCHDOG_RESUME_DELAY_MS = 350;
+    let silenceWatchdogResumeTimer = null;
+
+    function setWatchdogSuspended(suspended) {
+      const next = Boolean(suspended);
+      if (typeof AppState?.setState === 'function') {
+        AppState.setState({ watchdogSuspended: next });
+      } else if (AppState) {
+        AppState.watchdogSuspended = next;
+      }
+    }
+
+    function suspendSilenceWatchdog(reason = 'tts.start') {
+      clearTimeout(silenceWatchdogResumeTimer);
+      silenceWatchdogResumeTimer = null;
+      setWatchdogSuspended(true);
+      try { AppState?.emit?.('watchdog', { action: 'suspend', reason }); } catch {}
+      try { window.dispatchEvent(new CustomEvent('watchdog.suspend', { detail: { reason } })); } catch {}
+    }
+
+    function rearmSilenceWatchdogAfterDelay(
+      reason = 'asr.ready',
+      delayMs = SILENCE_WATCHDOG_RESUME_DELAY_MS
+    ) {
+      clearTimeout(silenceWatchdogResumeTimer);
+      const waitMs = Number.isFinite(delayMs)
+        ? Math.max(0, delayMs)
+        : SILENCE_WATCHDOG_RESUME_DELAY_MS;
+      silenceWatchdogResumeTimer = setTimeout(() => {
+        silenceWatchdogResumeTimer = null;
+        setWatchdogSuspended(false);
+        try { AppState?.emit?.('watchdog', { action: 'rearm', reason }); } catch {}
+        try { window.dispatchEvent(new CustomEvent('watchdog.rearm', { detail: { reason } })); } catch {}
+      }, waitMs);
+    }
+
+    function updateTurnActive(active) {
+      const next = Boolean(active);
+      if (typeof AppState?.setState === 'function') {
+        AppState.setState({ turnActive: next });
+      } else if (AppState) {
+        AppState.turnActive = next;
+      }
+      try { AppState?.emit?.('turnActive', { active: next }); } catch {}
+    }
+
+    window.addEventListener('turn.begin', () => {
+      updateTurnActive(true);
+    });
+
+    window.addEventListener('turn.end', () => {
+      updateTurnActive(false);
+    });
+
 window.addEventListener('tts.start', (event) => {
   const detail = event && event.detail;
+  suspendSilenceWatchdog('tts.start');
   if (detail) {
     updateVoiceState(extractVoiceLocale(detail));
   }
@@ -2197,6 +2255,7 @@ window.addEventListener('asr.unavailable', (event) => {
 window.addEventListener('asr.ready', (event) => {
   // CRITICAL FIX: REMOVE ASYNCHRONOUS DEFERRAL TO BEAT SERVER TIMEOUT
 
+  rearmSilenceWatchdogAfterDelay('asr.ready');
   if (typeof AppState?.setState === 'function') {
     AppState.setState({ asrReady: true });
   } else if (AppState) {

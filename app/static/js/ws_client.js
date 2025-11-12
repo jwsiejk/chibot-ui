@@ -1198,7 +1198,7 @@ import { initVAD } from "./audio/vad_client.js";
         return;
       }
     }
-    if (!AppState?.asrReady) {
+    if (!AppState?.asrReady || !AppState?.turnActive) {
       schedulePcmFlushTimer();
       return;
     }

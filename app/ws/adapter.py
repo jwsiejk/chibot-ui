@@ -68,6 +68,7 @@ from app.voice_v2 import (
     EVT_CLIENT_MIC_OPEN,
     EVT_HUD_STATE,
     EVT_SESSION_STEP,
+    EVT_TTS_START,
     EVT_TTS_END,
     EVT_TTS_MASK,
     EVT_CLIENT_LOG,
@@ -142,6 +143,8 @@ _OUTBOUND_ALLOWED_TYPES = {
     "chat.history",
     "dialog.plan",
     "hud.nudge",
+    "turn.begin",
+    "turn.end",
 }
 
 _RATE_LIMIT_EXEMPT_TYPES = {
@@ -481,9 +484,12 @@ class AdapterContext:
     pending_start_listening: Optional[Dict[str, Any]] = None
     pending_start_listening_sent: bool = False
     tts_end_subscription_token: Optional[str] = None
+    tts_bus_token_start: Optional[str] = None
+    tts_bus_token_end: Optional[str] = None
     turn_state_subscription_token: Optional[str] = None
     hud_state: Optional[str] = None
     client_mic_open: bool = False
+    turn_active: bool = False
     mic_open_timer: asyncio.TimerHandle | None = None
     mic_nudge_sent: bool = False
     await_user_req_id: Optional[str] = None
@@ -518,6 +524,7 @@ class AdapterContext:
     first_final_logged: bool = False
     active_asr_config: Optional[Dict[str, Any]] = None
     hub_log_last_turn: Optional[str] = None
+    no_audio_rearm_handle: asyncio.TimerHandle | None = None
     hub_log_seq: int = 0
     asr_turn_active: bool = False
     asr_turn_begin_sent: bool = False
@@ -597,6 +604,7 @@ class ChatV2Adapter:
         frame: Mapping[str, Any] | None,
     ) -> None:
         ctx.session.tts_active = True
+        self._cancel_no_audio_watchdog(ctx)
         try:
             self._bus(
                 "tts.start",
@@ -621,6 +629,16 @@ class ChatV2Adapter:
             _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
         if not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
+
+        self._schedule_no_audio_watchdog_rearm(ctx)
+
+        if send is not None and not ctx.turn_active:
+            try:
+                await self._send_json(send, ctx.sid, {"type": "turn.begin"})
+            except Exception:  # pragma: no cover - defensive logging
+                _log.warning("evt=turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
+            else:
+                ctx.turn_active = True
 
     async def _arm_asr_ready_deadline(
         self,
@@ -3308,6 +3326,23 @@ class ChatV2Adapter:
             frame_type = payload.get("type")
             if frame_type == "input.start":
                 self._mark_input_start(ctx)
+                ctx.client_mic_open = True
+            elif frame_type == "turn.end":
+                ctx.turn_active = False
+                ctx.client_mic_open = False
+            elif frame_type == "turn.begin":
+                ctx.turn_active = True
+            elif frame_type == "asr.turn":
+                state_value = payload.get("state") if isinstance(payload, Mapping) else None
+                if state_value == "begin":
+                    if not ctx.turn_active:
+                        ctx.turn_active = True
+                        _queue_payload({"type": "turn.begin"})
+                elif state_value == "end":
+                    if ctx.turn_active:
+                        ctx.turn_active = False
+                        ctx.client_mic_open = False
+                        _queue_payload({"type": "turn.end"})
             if frame_type == "asr.partial":
                 self._offer_partial_frame(
                     ctx,
@@ -3317,6 +3352,31 @@ class ChatV2Adapter:
                 )
                 return
             _queue_payload(payload)
+
+        def _on_tts_event(event: dict) -> None:
+            if event.get("sid") != ctx.sid:
+                return
+            event_type = event.get("type")
+            if event_type not in {EVT_TTS_START, EVT_TTS_END}:
+                return
+
+            async def _run() -> None:
+                try:
+                    if event_type == EVT_TTS_START:
+                        await self._handle_tts_start(send, ctx, event)
+                    else:
+                        await self._handle_tts_end(send, ctx, event)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.exception(
+                        "evt=ws_tts_event_failed sid=%s event_type=%s", ctx.sid, event_type
+                    )
+
+            try:
+                loop.call_soon_threadsafe(lambda: asyncio.create_task(_run()))
+            except RuntimeError:
+                asyncio.create_task(_run())
 
         def _handle_event(event: dict) -> None:
             if event.get("sid") != ctx.sid or ctx.outbox is None:
@@ -3386,6 +3446,9 @@ class ChatV2Adapter:
                 loop.call_soon_threadsafe(_on_loop)
             except RuntimeError:
                 pass
+
+        ctx.tts_bus_token_start = bus.subscribe(EVT_TTS_START, _on_tts_event)
+        ctx.tts_bus_token_end = bus.subscribe(EVT_TTS_END, _on_tts_event)
 
         ctx.subscription_token = bus.subscribe(EVT_WS_JSON_SEND, _handle_event)
 
@@ -3573,7 +3636,6 @@ class ChatV2Adapter:
                 ctx.await_user_req_id = None
             if ctx.last_tts_end_req_id == req_id:
                 ctx.last_tts_end_req_id = None
-            ctx.client_mic_open = False
             ctx.mic_nudge_sent = False
 
             self._emit_hud_state(ctx, "Listening")
@@ -4487,6 +4549,16 @@ class ChatV2Adapter:
         if tts_end_token:
             bus.unsubscribe(tts_end_token)
 
+        tts_bus_start = ctx.tts_bus_token_start
+        ctx.tts_bus_token_start = None
+        if tts_bus_start:
+            bus.unsubscribe(tts_bus_start)
+
+        tts_bus_end = ctx.tts_bus_token_end
+        ctx.tts_bus_token_end = None
+        if tts_bus_end:
+            bus.unsubscribe(tts_bus_end)
+
         task = ctx.outbound_task
         ctx.outbound_task = None
         if task:
@@ -4650,12 +4722,47 @@ class ChatV2Adapter:
         except RuntimeError:
             ctx.no_audio_timer = None
 
+    def _schedule_no_audio_watchdog_rearm(
+        self, ctx: AdapterContext, delay_ms: int = 350
+    ) -> None:
+        if ctx.asr_ready_bundle_sent_ms is None:
+            return
+        handle = ctx.no_audio_rearm_handle
+        if handle is not None:
+            try:
+                handle.cancel()
+            except Exception:
+                pass
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            ctx.no_audio_rearm_handle = None
+            return
+
+        delay_seconds = max(0.0, float(delay_ms) / 1000.0)
+
+        def _rearm() -> None:
+            ctx.no_audio_rearm_handle = None
+            self._arm_no_audio_watchdog(ctx)
+
+        try:
+            ctx.no_audio_rearm_handle = loop.call_later(delay_seconds, _rearm)
+        except RuntimeError:
+            ctx.no_audio_rearm_handle = None
+
     def _cancel_no_audio_watchdog(self, ctx: AdapterContext) -> None:
         timer = ctx.no_audio_timer
         ctx.no_audio_timer = None
         if timer is not None:
             try:
                 timer.cancel()
+            except Exception:
+                pass
+        rearm = ctx.no_audio_rearm_handle
+        ctx.no_audio_rearm_handle = None
+        if rearm is not None:
+            try:
+                rearm.cancel()
             except Exception:
                 pass
         ctx.no_audio_watchdog_t0_ms = None
@@ -5891,6 +5998,8 @@ class ChatV2Adapter:
                 await self._send_json(send, ctx.sid, turn_begin_payload)
             except Exception:  # pragma: no cover - defensive logging
                 _log.warning("evt=asr_turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
+
+        self._schedule_no_audio_watchdog_rearm(ctx)
         
 
     @staticmethod
