@@ -3895,6 +3895,38 @@ import { initVAD } from "./audio/vad_client.js";
     if (!isTypedObjectPayload(payload)) {
       return true;
     }
+    const structureTag = Object.prototype.toString.call(payload);
+    const isPlainJsonObject = structureTag === "[object Object]";
+    if (!isPlainJsonObject) {
+      const structure = Array.isArray(payload)
+        ? "Array"
+        : structureTag.slice(8, -1) || "Unknown";
+      const keys = Object.keys(payload || {});
+      const diagnostic = {
+        keys: keys.slice(0, 6),
+        payload,
+        raw: rawPayload,
+        source,
+        structure,
+      };
+      console.warn("WSClient send skipped payload with non type-preserving structure", diagnostic);
+      try {
+        recordClientBannerEvent("ws.send.invalid_payload", {
+          reason: "non_type_preserving_structure",
+          structure,
+          keys: diagnostic.keys,
+          source,
+        });
+      } catch {}
+      try {
+        logStage("client.ws", {
+          outcome: "send_skipped_non_type_preserving_structure",
+          structure,
+          source,
+        });
+      } catch {}
+      return false;
+    }
     const type = payload && typeof payload.type === "string" ? payload.type.trim() : "";
     if (type.length > 0) {
       return true;

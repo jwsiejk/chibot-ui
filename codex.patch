@@ -1,15 +1,8 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 8c490905d2d87c71fc703851cb5658e90e455cf4..8faab8b861975e805836f9e8c1ee3d49cf43bc7b 100644
+index 8faab8b861975e805836f9e8c1ee3d49cf43bc7b..ab35bf07e818a22321fce9466deb228c292d1908 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -3866,51 +3866,51 @@ import { initVAD } from "./audio/vad_client.js";
-     }
-     const ws = socket;
-     cleanupSocket(ws, reason);
-     clearHeartbeat();
-     clearRateLimitRetryTimer();
-     rateLimitRetryCount = 0;
-     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
+@@ -3873,50 +3873,82 @@ import { initVAD } from "./audio/vad_client.js";
        try {
          window.WSErrorUI.cancelRateLimitCountdown(reason);
        } catch (err) {
@@ -28,14 +21,45 @@ index 8c490905d2d87c71fc703851cb5658e90e455cf4..8faab8b861975e805836f9e8c1ee3d49
      if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
        return false;
      }
--    return Object.prototype.toString.call(payload) === "[object Object]";
-+    return true;
+     return true;
    }
  
    function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {
      if (!isTypedObjectPayload(payload)) {
        return true;
      }
++    const structureTag = Object.prototype.toString.call(payload);
++    const isPlainJsonObject = structureTag === "[object Object]";
++    if (!isPlainJsonObject) {
++      const structure = Array.isArray(payload)
++        ? "Array"
++        : structureTag.slice(8, -1) || "Unknown";
++      const keys = Object.keys(payload || {});
++      const diagnostic = {
++        keys: keys.slice(0, 6),
++        payload,
++        raw: rawPayload,
++        source,
++        structure,
++      };
++      console.warn("WSClient send skipped payload with non type-preserving structure", diagnostic);
++      try {
++        recordClientBannerEvent("ws.send.invalid_payload", {
++          reason: "non_type_preserving_structure",
++          structure,
++          keys: diagnostic.keys,
++          source,
++        });
++      } catch {}
++      try {
++        logStage("client.ws", {
++          outcome: "send_skipped_non_type_preserving_structure",
++          structure,
++          source,
++        });
++      } catch {}
++      return false;
++    }
      const type = payload && typeof payload.type === "string" ? payload.type.trim() : "";
      if (type.length > 0) {
        return true;
@@ -55,3 +79,75 @@ index 8c490905d2d87c71fc703851cb5658e90e455cf4..8faab8b861975e805836f9e8c1ee3d49
          source,
        });
      } catch {}
+     try {
+       logStage("client.ws", { outcome: "send_skipped_missing_type", keys: diagnostic.keys, source });
+     } catch {}
+     return false;
+   }
+ 
+diff --git a/scripts/ws_client_guard_repro.js b/scripts/ws_client_guard_repro.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..cd4fca9d79d8dc12674583b75319d67dbefdb260
+--- /dev/null
++++ b/scripts/ws_client_guard_repro.js
+@@ -0,0 +1,60 @@
++#!/usr/bin/env node
++"use strict";
++
++/**
++ * Regression repro script for the outbound payload guard.
++ *
++ * Run with `node scripts/ws_client_guard_repro.js` to verify that array payloads
++ * with a `type` property are rejected before serialization.
++ */
++
++function isTypedObjectPayload(payload) {
++  if (!payload || typeof payload !== "object") {
++    return false;
++  }
++  if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
++    return false;
++  }
++  return true;
++}
++
++function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {
++  if (!isTypedObjectPayload(payload)) {
++    return true;
++  }
++  const structureTag = Object.prototype.toString.call(payload);
++  const isPlainJsonObject = structureTag === "[object Object]";
++  if (!isPlainJsonObject) {
++    const structure = Array.isArray(payload)
++      ? "Array"
++      : structureTag.slice(8, -1) || "Unknown";
++    const keys = Object.keys(payload || {});
++    const diagnostic = {
++      keys: keys.slice(0, 6),
++      payload,
++      raw: rawPayload,
++      source,
++      structure,
++    };
++    console.warn("WSClient send skipped payload with non type-preserving structure", diagnostic);
++    return false;
++  }
++  const type = payload && typeof payload.type === "string" ? payload.type.trim() : "";
++  if (type.length > 0) {
++    return true;
++  }
++  console.warn("WSClient send skipped object payload without type", {
++    keys: Object.keys(payload || {}).slice(0, 6),
++    payload,
++    raw: rawPayload,
++    source,
++  });
++  return false;
++}
++
++const arrayPayload = ["foo", "bar"];
++arrayPayload.type = "client.ping";
++const objectPayload = { type: "client.ping" };
++
++console.log("Array payload allowed?", validateOutboundPayload(arrayPayload, { source: "repro_script" }));
++console.log("Object payload allowed?", validateOutboundPayload(objectPayload, { source: "repro_script" }));
