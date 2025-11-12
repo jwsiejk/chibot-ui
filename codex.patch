@@ -1,73 +1,276 @@
-diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index c6d382f7a92a4a99672a244c98abd0727ddde67b..957efa9092c9de519160396494a2e29f3a7154f7 100644
---- a/app/static/js/ws_client.js
-+++ b/app/static/js/ws_client.js
-@@ -1313,55 +1313,66 @@ import { initVAD } from "./audio/vad_client.js";
-         vadController.reset();
-       } catch (err) {
-         try {
-           console.warn("VAD reset failed", err);
-         } catch {}
-       }
+diff --git a/app/static/js/app.js b/app/static/js/app.js
+index 1b186f6b7848e6bdb485fa0af4f6a81f0651e01a..16aacbd10bf75aca0aed60f2b60d75e9e208d8b9 100644
+--- a/app/static/js/app.js
++++ b/app/static/js/app.js
+@@ -1707,152 +1707,242 @@
+       hideResumeBanner();
      }
-     setListeningState(false);
-     try {
-       hubLog("client.pcm.capture_stop", { reason: stopReason });
-     } catch {}
-   }
  
-   async function handleRecorderChunk(event) {
-     if (!event) {
-       return;
-     }
-     const buffer = event.buffer instanceof ArrayBuffer
-       ? event.buffer
-       : (ArrayBuffer.isView(event.buffer)
-         ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-         : null);
-     if (!buffer) {
-       return;
-     }
-+    const seq = Number(event.seq) || 0;
-     if (!__firstChunkSeen) {
-       __firstChunkSeen = true;
--      try { hubLog("client.pcm.first_frame", {}); } catch {}
-+      let firstFrameMs = null;
-+      if (typeof __micRecordingStartAt === "number") {
-+        firstFrameMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
-+      }
-+      const firstFrameDetail = {
-+        seq,
-+        bytes: buffer.byteLength || 0,
-+      };
-+      if (firstFrameMs !== null) {
-+        firstFrameDetail.ms_since_recording_start = firstFrameMs;
-+      }
-+      try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
-     }
--    const seq = Number(event.seq) || 0;
-     micLastChunkAt = Date.now();
-     scheduleAudioKeepalive();
-     recordRecorderChunk(micLastChunkAt);
-     const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
-       ? performance.now()
-       : Date.now();
-     if (vadController && typeof vadController.onPcmFrame === "function") {
+     resumeAction.addEventListener('click', () => {
+       resumeAction.disabled = true;
        try {
-         vadController.onPcmFrame(buffer, frameTimestamp);
+         WSClient.close('user_restart');
        } catch (err) {
-         try {
-           console.warn("VAD frame processing failed", err);
-         } catch {}
+         console.warn('Resume banner close failed', err);
        }
-     }
-     // Do not block enqueue; flush path will honor readiness gates.
-     if (seq === 0) {
-       logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-     }
-     const frame = new Int16Array(buffer);
-     if (frame.length) {
-       let sumSq = 0;
-       for (let i = 0; i < frame.length; i += 1) {
-         const sample = frame[i] / 32768;
-         sumSq += sample * sample;
+       if (typeof AppState.clearResume === 'function') {
+         AppState.clearResume();
+       }
+       AppState.setState({ resumeError: null });
+       Promise.resolve(handleStartSessionClick()).catch((err) => {
+         console.error('Failed to start new session', err);
+         AppState.setState({ connectionState: 'disconnected' });
+       }).finally(() => {
+         resumeAction.disabled = false;
+       });
+     });
+ 
+     // --- Waveform visual inside the Chip window ---
+     const Waveform = (() => {
+       const canvas = document.getElementById('waveCanvas');
+-      const ctx = canvas.getContext('2d', {alpha:false});
+-      let raf = 0, analyser = null, source = null, audioCtx = null, dataArray = null;
+-      let synthMode = true, t = 0;
++      const ctx = canvas.getContext('2d', { alpha: false });
++      const bgCanvas = document.createElement('canvas');
++      const bgCtx = bgCanvas.getContext('2d', { alpha: false });
++      let raf = 0,
++        analyser = null,
++        source = null,
++        audioCtx = null,
++        dataArray = null,
++        prevAnalyserSnapshot = null;
++      let synthMode = true,
++        t = 0,
++        lastDrawTime = 0;
++      const FRAME_INTERVAL = 1000 / 30;
++      let cachedDpr = 1,
++        bgPixelWidth = 0,
++        bgPixelHeight = 0;
++
++      function redrawBackgroundPattern() {
++        const w = canvas.clientWidth;
++        const h = canvas.clientHeight;
++        if (!w || !h) {
++          return;
++        }
++        bgCtx.clearRect(0, 0, w, h);
++        const gradient = bgCtx.createLinearGradient(0, 0, w, h);
++        gradient.addColorStop(0, '#0b1222');
++        gradient.addColorStop(1, '#0a0f1b');
++        bgCtx.fillStyle = gradient;
++        bgCtx.fillRect(0, 0, w, h);
++        bgCtx.strokeStyle = 'rgba(255,255,255,0.04)';
++        bgCtx.lineWidth = 1;
++        const gap = 24;
++        bgCtx.beginPath();
++        for (let x = 0; x < w; x += gap) {
++          bgCtx.moveTo(x, 0);
++          bgCtx.lineTo(x, h);
++        }
++        for (let y = 0; y < h; y += gap) {
++          bgCtx.moveTo(0, y);
++          bgCtx.lineTo(w, y);
++        }
++        bgCtx.stroke();
++      }
+ 
+-      function resizeCanvas(){
++      function ensureBackground(forceRedraw = false) {
+         const dpr = Math.max(1, window.devicePixelRatio || 1);
+-        canvas.width = canvas.clientWidth * dpr;
+-        canvas.height = canvas.clientHeight * dpr;
+-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
++        const cssWidth = canvas.clientWidth;
++        const cssHeight = canvas.clientHeight;
++        const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
++        const pixelHeight = Math.max(1, Math.round(cssHeight * dpr));
++        const sizeChanged =
++          pixelWidth !== bgPixelWidth || pixelHeight !== bgPixelHeight || dpr !== cachedDpr;
++        if (sizeChanged) {
++          cachedDpr = dpr;
++          bgPixelWidth = pixelWidth;
++          bgPixelHeight = pixelHeight;
++          canvas.width = pixelWidth;
++          canvas.height = pixelHeight;
++          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
++          bgCanvas.width = pixelWidth;
++          bgCanvas.height = pixelHeight;
++          bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
++          forceRedraw = true;
++        }
++        if (forceRedraw) {
++          redrawBackgroundPattern();
++        }
++      }
++
++      function resizeCanvas() {
++        ensureBackground(true);
++        drawBackground();
++        if (synthMode) {
++          drawSynth();
++        } else {
++          drawAnalyser(prevAnalyserSnapshot || dataArray);
++        }
+       }
+-      window.addEventListener('resize', resizeCanvas, {passive:true});
++      window.addEventListener('resize', resizeCanvas, { passive: true });
+       resizeCanvas();
+ 
+-      function drawBackground(){
+-        const w = canvas.clientWidth, h = canvas.clientHeight;
+-        const g = ctx.createLinearGradient(0,0,w,h);
+-        g.addColorStop(0,'#0b1222'); g.addColorStop(1,'#0a0f1b');
+-        ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
+-        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+-        ctx.lineWidth = 1;
+-        const gap = 24;
+-        ctx.beginPath();
+-        for(let x=0;x<w;x+=gap){ ctx.moveTo(x,0); ctx.lineTo(x,h); }
+-        for(let y=0;y<h;y+=gap){ ctx.moveTo(0,y); ctx.lineTo(w,y); }
+-        ctx.stroke();        
++      function drawBackground() {
++        ensureBackground(false);
++        ctx.drawImage(bgCanvas, 0, 0, canvas.clientWidth, canvas.clientHeight);
+       }
+ 
+-      function drawSynth(){
++      function drawSynth() {
+         const w = canvas.clientWidth, h = canvas.clientHeight;
+         const cx = w/2, cy = h/2; const amp = Math.min(120, h*0.28);
+         const bars = 96;
+         ctx.save();
+         ctx.translate(0, cy);
+         const hueA = 22;
+         const hueB = 204;
+         for(let i=0;i<bars;i++){
+           const k = i/(bars-1);
+           const phase = t*0.015 + k*6.283;
+           const value = Math.sin(phase) * Math.sin(k*Math.PI);
+           const y = value * amp * (0.85 + 0.15*Math.sin(t*0.01 + k*12));
+           const x = k * w;
+           const hue = hueA*(1-k) + hueB*k;
+           ctx.strokeStyle = `hsla(${hue}, 85%, ${40 + 15*Math.sin(t*0.02 + k*5)}%, 0.9)`;
+           ctx.lineWidth = 2.2;
+           ctx.beginPath();
+           ctx.moveTo(x, 0);
+           ctx.lineTo(x, y);
+           ctx.stroke();
+           ctx.beginPath();
+           ctx.moveTo(x, 0);
+           ctx.lineTo(x, -y*0.6);
+           ctx.stroke();
+         }
+         ctx.restore();
+         t += 1;
+       }
+ 
+-      function drawAnalyser(){
++      function drawAnalyser(currentData){
+         const w = canvas.clientWidth, h = canvas.clientHeight;
+-        if (!analyser || !dataArray){ drawSynth(); return; }
+-        analyser.getByteFrequencyData(dataArray);
++        if (!currentData || !currentData.length){ drawSynth(); return; }
+         const bars = 96;
+-        const step = Math.max(1, Math.floor(dataArray.length / bars));
++        const step = Math.max(1, Math.floor(currentData.length / bars));
+         ctx.save();
+         ctx.translate(0, h/2);
+         for(let i=0;i<bars;i++){
+-          const v = dataArray[i*step] / 255;
++          const v = currentData[i*step] / 255;
+           const y = (v*v) * (h*0.35);
+           const k = i/(bars-1);
+           ctx.strokeStyle = `hsla(${22*(1-k) + 204*k}, 85%, ${45 + v*20}%, .9)`;
+           ctx.lineWidth = 2.2;
+           ctx.beginPath(); ctx.moveTo(i*(w/(bars-1)), 0); ctx.lineTo(i*(w/(bars-1)), y); ctx.stroke();
+           ctx.beginPath(); ctx.moveTo(i*(w/(bars-1)), 0); ctx.lineTo(i*(w/(bars-1)), -y*0.6); ctx.stroke();
+         }
+         ctx.restore();
+       }
+ 
+-      function loop(){
+-        drawBackground();
+-        if (synthMode) drawSynth(); else drawAnalyser();
++      function loop(now = (typeof performance !== 'undefined' ? performance.now() : Date.now())){
+         raf = requestAnimationFrame(loop);
++        const elapsed = now - lastDrawTime;
++        let dataChanged = synthMode;
++        let currentData = null;
++
++        if (!synthMode && analyser && dataArray){
++          analyser.getByteFrequencyData(dataArray);
++          currentData = dataArray;
++          if (!prevAnalyserSnapshot || prevAnalyserSnapshot.length !== dataArray.length){
++            prevAnalyserSnapshot = new Uint8Array(dataArray.length);
++            prevAnalyserSnapshot.set(dataArray);
++            dataChanged = true;
++          } else {
++            const sampleStep = Math.max(1, Math.floor(dataArray.length / 32));
++            for(let i=0;i<dataArray.length;i+=sampleStep){
++              if (prevAnalyserSnapshot[i] !== dataArray[i]){ dataChanged = true; break; }
++            }
++            if (dataChanged){
++              prevAnalyserSnapshot.set(dataArray);
++            }
++          }
++        }
++
++        if (!dataChanged && elapsed < FRAME_INTERVAL){
++          return;
++        }
++
++        lastDrawTime = now;
++        drawBackground();
++        if (synthMode) drawSynth(); else drawAnalyser(currentData || prevAnalyserSnapshot);
+       }
+ 
+       async function start(){
+         if (raf) return;
+         try{
+           const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+           audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 48000});
+           analyser = audioCtx.createAnalyser();
+           analyser.fftSize = 2048;
+           dataArray = new Uint8Array(analyser.frequencyBinCount);
+           source = audioCtx.createMediaStreamSource(stream);
+           source.connect(analyser);
+           synthMode = false;
++          prevAnalyserSnapshot = null;
+         }catch(err){
+           console.warn("Mic not available; using synth waveform.", err);
+           synthMode = true;
++          prevAnalyserSnapshot = null;
+         }
++        lastDrawTime = 0;
+         loop();
+       }
+       function stop(){
+         cancelAnimationFrame(raf); raf = 0;
++        prevAnalyserSnapshot = null;
++        lastDrawTime = 0;
+         drawBackground(); drawSynth();
+         if (source){ try{ source.disconnect(); }catch{} source = null; }
+         if (audioCtx){ try{ audioCtx.close(); }catch{} audioCtx = null; }
+       }
+       drawBackground(); drawSynth();
+       return { start, stop };
+     })();
+ 
+     let previousConnectionState = AppState.getState().connectionState;
+     AppState.subscribe((state) => {
+       window.AppUI?.refresh?.();
+       sidText.textContent = state.sid || '—';
+       const active = state.connectionState !== 'disconnected';
+       startBtn.disabled = active;
+       endBtn.disabled = !active;
+       if (state.latencyMs != null) {
+         latencyHint.textContent = `Latency: ${Math.round(state.latencyMs)} ms`;
+       } else {
+         latencyHint.textContent = 'Latency: —';
+       }
+       if (state.connectionState === 'disconnected') {
+         resetVoiceState();
+         resetSuggestions();
+         updateRecordingState(false, 'appstate.disconnect');
+         policyCaptureLogged = false;
