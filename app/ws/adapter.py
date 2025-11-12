@@ -1980,6 +1980,19 @@ class ChatV2Adapter:
                 ctx.last_client_pong_ms = now_ms
             return self._HandleResult(True)
 
+        if frame_type in (
+            "client.ready",
+            "client.telemetry",
+            "client.diag",
+            "client.autostart",
+        ):
+            await self._publish(
+                EVT_WS_JSON_RECV,
+                ctx.sid,
+                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+            )
+            return self._HandleResult(True)
+
         if frame_type in ("turn.begin", "turn.end"):
             return self._HandleResult(True)
 

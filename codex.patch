@@ -1,64 +1,125 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index bdbdbbaa8616ac6c40e36bec8ae18f7fc7f15bbc..68f16141f3de0b3a330c4bd573ef9e61e8136d2e 100644
+index bdbdbbaa8616ac6c40e36bec8ae18f7fc7f15bbc..4aa13ea19087b8bcf0c5288cc3f19892ce1e3d98 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -4084,59 +4084,52 @@ import { initVAD } from "./audio/vad_client.js";
-           return false;
+@@ -2913,51 +2913,51 @@ import { initVAD } from "./audio/vad_client.js";
+       for (const message of messages) {
+         if (!transcriptFrameAllowed(message)) {
+           continue;
+         }
+         try {
+           view.handleChatMessage(message);
+         } catch (err) {
+           console.warn("TranscriptView chat history handler error", err);
+           break;
          }
        }
-       logTransportMisuse("send_binary_invalid_payload");
-       return false;
-     }
-     const text = typeof data === "string" ? data : JSON.stringify(data);
-     try {
-       live.send(text);
-       return true;
-     } catch (err) {
-       console.error("WSClient send error", err);
-       return false;
      }
    }
  
-   function getBufferedAmount() {
-     if (!socket) return 0;
-     return socket.bufferedAmount || 0;
-   }
+   async function handleErrorFrame(frame) {
+     const code = typeof frame?.code === "string" ? frame.code : "unknown";
+     const sig = `${code}|${frame?.detail || frame?.message || ""}`;
+     const now = Date.now();
+     if (__lastErrorSig === sig && (now - __lastErrorAt) < 1500) {
+       // Avoid console spam for the same error flooding in
+     } else {
+       console.error("WS error frame", frame);
+       __lastErrorSig = sig;
+       __lastErrorAt = now;
+     }
+-    if (code === "schema_invalid" || code === "unknown_type" || code === "bad_utf8") {
++    if (code === "schema_invalid" || code === "bad_utf8") {
+       try { stopInputCapture({ reason: code }); } catch {}
+       try { clearAudioKeepaliveTimer(); } catch {}
+       try { setAsrArmInFlight(false); } catch {}
+       __resetAudioHeaderSent();
+     }
+     const errorMeta = {};
+     if (frame && typeof frame.code === "string") {
+       errorMeta.code = truncateBannerString(frame.code, 64);
+     }
+     if (frame && typeof frame.detail === "string" && frame.detail) {
+       errorMeta.detail = truncateBannerString(frame.detail, 160);
+     } else if (frame && typeof frame.message === "string" && frame.message) {
+       errorMeta.detail = truncateBannerString(frame.message, 160);
+     }
+     if (Object.keys(errorMeta).length) {
+       recordClientBannerEvent("ws.error.frame", errorMeta);
+     } else {
+       recordClientBannerEvent("ws.error.frame", null);
+     }
+     const isResumeInvalid = frame && frame.code === "resume_invalid";
+     if (isResumeInvalid) {
+       clearResumeState();
+       updateState({ resumeError: "invalid" });
+     }
+     if (window.WSErrorUI && typeof window.WSErrorUI.handleFrame === "function") {
+diff --git a/app/ws/adapter.py b/app/ws/adapter.py
+index 90b4a8f33b879f1d51a504b29a9a23d8cab24467..3ce2c1690437b2a6553a87e95c2de8d1e65be18d 100644
+--- a/app/ws/adapter.py
++++ b/app/ws/adapter.py
+@@ -1958,50 +1958,63 @@ class ChatV2Adapter:
+             meta["error"] = "schema_invalid"
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
+             return self._HandleResult(True)
  
-   const debug = {
-     simulateIncomingFrame(frame) {
-       return handleMessageFrame(frame);
-     },
--    recordPing(ts) {
--      lastPingAt = ts;
--      updateState({ lastPingAt: ts });
--    },
-     setTransportFactory(factory) {
-       transportFactory = typeof factory === "function" ? factory : transportFactory;
--    },
--    resetTransportFactory() {
--      transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
-     }
-   };
+         frame_type = raw_type
+         meta["frame_type"] = frame_type
+         now_ms = int(time.time() * 1000)
+         ctx.last_client_activity_ms = now_ms
  
-   WSClient.sendJSON = function sendJSONPayload(obj) {
-     if (obj instanceof ArrayBuffer || ArrayBuffer.isView(obj)) {
-       logTransportMisuse("binary_sent_to_sendJSON");
-       console.error("WSClient.sendJSON: binary payload; use sendAudioChunk()");
-       return false;
-     }
-     if (!obj || typeof obj !== "object") {
-       return false;
-     }
-     const result = send.call(WSClient, obj, { binary: false });
-     if (result && typeof result.then === "function") {
-       return result.then(() => true).catch((err) => {
-         console.warn("sendJSON failed", err);
-         return false;
-       });
-     }
-     return result !== false;
-   };
+         if frame_type in (
+             "client.banner",
+             "client.metrics",
+             "client.log",
+             "client.pong",
+         ):
+             await self._publish(
+                 EVT_WS_JSON_RECV,
+                 ctx.sid,
+                 {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+             )
+             if frame_type == "client.pong":
+                 ctx.last_client_pong_ms = now_ms
+             return self._HandleResult(True)
  
-   WSClient.sendAudioChunk = function sendAudioChunk(buf, opts = {}) {
-     if (buf instanceof Blob) {
-       const blobResult = sendBinary(buf, { ...opts, lane: opts && typeof opts === "object" && typeof opts.lane !== "undefined" ? opts.lane : "mic" });
++        if frame_type in (
++            "client.ready",
++            "client.telemetry",
++            "client.diag",
++            "client.autostart",
++        ):
++            await self._publish(
++                EVT_WS_JSON_RECV,
++                ctx.sid,
++                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
++            )
++            return self._HandleResult(True)
++
+         if frame_type in ("turn.begin", "turn.end"):
+             return self._HandleResult(True)
+ 
+         if frame_type not in _RATE_LIMIT_EXEMPT_TYPES:
+             limited = await self._check_rate_limit(ctx, send)
+             if limited is not None:
+                 return limited
+ 
+         if frame_type == "client.ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 client_ts = frame.get("ts")
+                 payload = {"type": "server.pong", "ts": now_ms}
+                 if isinstance(client_ts, int):
+                     payload["echo"] = client_ts
+                 await self._send_json(send, ctx.sid, payload)
+             return self._HandleResult(True)
+ 
+         if frame_type == "client.pong":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             ctx.last_client_pong_ms = now_ms
+             return self._HandleResult(True)
+ 
+         if frame_type == "ping":

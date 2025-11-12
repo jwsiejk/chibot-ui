@@ -2935,7 +2935,7 @@ import { initVAD } from "./audio/vad_client.js";
       __lastErrorSig = sig;
       __lastErrorAt = now;
     }
-    if (code === "schema_invalid" || code === "unknown_type" || code === "bad_utf8") {
+    if (code === "schema_invalid" || code === "bad_utf8") {
       try { stopInputCapture({ reason: code }); } catch {}
       try { clearAudioKeepaliveTimer(); } catch {}
       try { setAsrArmInFlight(false); } catch {}
