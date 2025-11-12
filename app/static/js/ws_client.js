@@ -13,7 +13,7 @@ import { initVAD } from "./audio/vad_client.js";
     enable: true,
     sensitivity: 0.60,
     min_speech_ms: 160,
-    min_silence_ms: 300,
+    min_silence_ms: 500,
     hold_ms: 250,
     echo_suppression_db: 10,
     tts_threshold_boost_db: 12,

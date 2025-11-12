@@ -1,135 +1,47 @@
-diff --git a/app/static/js/app.js b/app/static/js/app.js
-index 16aacbd10bf75aca0aed60f2b60d75e9e208d8b9..3442ea268d27435bf99e45516390d74a2f2dddf0 100644
---- a/app/static/js/app.js
-+++ b/app/static/js/app.js
-@@ -2173,94 +2173,93 @@ window.addEventListener('asr.unavailable', (event) => {
-         reason = nested.reason;
-       } else if (typeof nested.details === 'string') {
-         reason = nested.details;
-       }
-     }
-   }
-   if (diagHudEnabled()) {
-     const reasonText = reason ? String(reason).slice(0, 120) : '';
-     console.warn('diag=asr_unavailable', reasonText);
-     setBadge('asr:down');
-     sendDiagHudEvent(
-       'EVT_CLIENT_ASR_UNAVAILABLE',
-       reasonText ? { reason: reasonText } : undefined,
-       {
-         level: 'warn',
-         badge: 'asr:down',
-         message: reasonText ? `diag=asr_unavailable ${reasonText}` : 'diag=asr_unavailable',
-       }
-     );
-   }
-   window.AppUI?.refresh?.();
- });
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index ab35bf07e818a22321fce9466deb228c292d1908..9c4ab09d88e79f805231d2eea877c241ef800d4c 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -1,41 +1,41 @@
+ // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
+ /* __BUILD_MARKER__: FULL_DUPLEX_01 */
+ import { initVAD } from "./audio/vad_client.js";
+ (() => {
+   const HEARTBEAT_INTERVAL_MS = 20000;
+   const DEFAULT_CLOSE_REASON = "client_shutdown";
+   const SUBPROTOCOL = "chat.v2";
+   const INFO_DEADLINE_MS = 20000;
+   const TOKEN_EXPIRY_MS = 60 * 1000;
+   const TOAST_STYLE_ID = "wsclient-toast-styles";
+   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+   const CLIENT_VAD_POLICY = Object.freeze({
+     enable: true,
+     sensitivity: 0.60,
+     min_speech_ms: 160,
+-    min_silence_ms: 300,
++    min_silence_ms: 500,
+     hold_ms: 250,
+     echo_suppression_db: 10,
+     tts_threshold_boost_db: 12,
+     debounce_ms: 40,
+     // Enable true gating; preroll remains handled internally by the VAD.
+     stream_gate: "gate",          // keep gating if you want to save bandwidth
+     max_gate_silence_ms: 3000,
+     // Optional: per-deployment configurable warmup in ms
+     warmup_ms: 1200,
+     // If your input is very quiet, allow threshold override via policy
+   });
+   const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
+   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
  
- // START REWRITE: window.addEventListener('asr.ready', ...)
- window.addEventListener('asr.ready', (event) => {
--  // DEFER THE ENTIRE BLOCK TO PREVENT RACE CONDITIONS AND SYNCHRONOUS MIC START ERRORS
--  setTimeout(() => {
--    if (typeof AppState?.setState === 'function') {
--      AppState.setState({ asrReady: true });
--    } else if (AppState) {
--      AppState.asrReady = true;
--    }
-+  // CRITICAL FIX: REMOVE ASYNCHRONOUS DEFERRAL TO BEAT SERVER TIMEOUT
-+
-+  if (typeof AppState?.setState === 'function') {
-+    AppState.setState({ asrReady: true });
-+  } else if (AppState) {
-+    AppState.asrReady = true;
-+  }
-+
-+  // *** NEW STABLE LOGIC ***
-+  // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
-+  updateRecordingState(true, 'asr_ready_signal');
+   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
  
--    // *** NEW STABLE LOGIC ***
--    // Directly force the UI/state to "listening" which triggers WSClient.js to start streaming.
--    updateRecordingState(true, 'asr_ready_signal');
-+  // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
- 
--    // REMOVED: All silence watchdog and redundant mic capture logic (arm, schedule, etc.)
-+  try {
-+    emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
-+  } catch {}
-+  if (diagHudEnabled()) {
-+    console.info('diag=asr_ready');
-+    setBadge('asr:ready');
-+    sendDiagHudEvent(
-+      'EVT_CLIENT_ASR_READY',
-+      event && typeof event === 'object' ? event.detail : undefined,
-+      { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
-+    );
-+  }
- 
-+  // Reset any retry count for ASR
-+  if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
-     try {
--      emitConsoleBusEvent('client.ui_badge', { state: 'Listening' });
--    } catch {}
--    if (diagHudEnabled()) {
--      console.info('diag=asr_ready');
--      setBadge('asr:ready');
--      sendDiagHudEvent(
--        'EVT_CLIENT_ASR_READY',
--        event && typeof event === 'object' ? event.detail : undefined,
--        { level: 'info', badge: 'asr:ready', message: 'diag=asr_ready' }
-+      window.ChatView?.showSystemFromChip?.(
-+        "Voice is back. You can speak again when you’re ready."
-       );
-+    } catch (err) {
-+      console.warn('Failed to show voice restoration message', err);
-     }
-+    asrRetry.tries = 0;
-+    clearTimeout(asrRetry.timer);
-+    asrRetry.timer = null;
-+  }
- 
--    // Reset any retry count for ASR
--    if (asrRetry && typeof asrRetry === 'object' && asrRetry.tries > 0) {
--      try {
--        window.ChatView?.showSystemFromChip?.(
--          "Voice is back. You can speak again when you’re ready."
--        );
--      } catch (err) {
--        console.warn('Failed to show voice restoration message', err);
--      }
--      asrRetry.tries = 0;
--      clearTimeout(asrRetry.timer);
--      asrRetry.timer = null;
--    }
--
--    // Final UI refresh is mandatory
--    window.AppUI?.refresh?.();
--  }, 0); // DEFERRAL
-+  // Final UI refresh is mandatory
-+  window.AppUI?.refresh?.();
- });
- // END REWRITE: window.addEventListener('asr.ready', ...)
- 
- window.addEventListener('assistant.suggestions', (event) => {
-   const detail = event && event.detail;
-   applySuggestionsFrame(detail);
- });
- 
- 
- // Start mic immediately on ws.open as a safety net; send diag banner
- window.addEventListener('ws.open', async () => {
-   const pol = (window.AppState && window.AppState.policy) || {};
-   const shouldAutoStart = pol?.audio?.start_on_ws_open === true;
-   if (shouldAutoStart) {
-     try {
-       if (typeof window.beginWarmup === 'function') {
-         window.beginWarmup(1400);
-       }
-     } catch (err) {
-       console.warn('ws.open warmup failed', err);
-     }
-     try {
-       const recorder = window.AudioRecorder;
-       if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
-         const micReady = await recorder.startMicCaptureIfIdle();
+   // ---- Golden-path turn trace & mic outcomes (additive) ----
+   // ---- Telemetry (additive) ----
+   const MIC_OUTCOME = {
+     PERM_GRANTED: 'perm_granted',
+     ARMED: 'armed',
+     STREAMING: 'streaming',
+     STREAMING_HEARTBEAT: 'streaming_heartbeat',
+     STOPPED: 'stopped',
+     ERROR_DENIED: 'error_denied',
