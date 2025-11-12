@@ -3888,7 +3888,7 @@ import { initVAD } from "./audio/vad_client.js";
     if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
       return false;
     }
-    return Object.prototype.toString.call(payload) === "[object Object]";
+    return true;
   }
 
   function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {

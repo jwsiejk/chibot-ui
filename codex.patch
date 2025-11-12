@@ -1,140 +1,11 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index bff4572c1314d94680b63482629be94a42d5c038..8c490905d2d87c71fc703851cb5658e90e455cf4 100644
+index 8c490905d2d87c71fc703851cb5658e90e455cf4..8faab8b861975e805836f9e8c1ee3d49cf43bc7b 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -3698,94 +3698,98 @@ import { initVAD } from "./audio/vad_client.js";
-         .map((proto) => truncateBannerString(proto, 48))
-         .slice(0, 4)
-       : (typeof wsProtocols === "string" && wsProtocols ? truncateBannerString(wsProtocols, 48) : undefined);
-     recordClientBannerEvent("ws.open.request", {
-       resume: isResuming,
-       skip_rate_limit_cancel: Boolean(skipRateLimitCancel),
-       has_access_token: hasAccessToken,
-       url: bannerUrlMeta,
-       protocols: bannerProtocols,
-     });
-     console.log("evt=ws_client_open_params", { url: wsUrl, protocols: wsProtocols });
-     const logPayload = Array.isArray(wsProtocols)
-       ? { url: wsUrl, protocols: wsProtocols }
-       : { url: wsUrl, subprotocol: wsProtocols };
-     console.log("WS opening", logPayload);
- 
-     setWsConnected(false);
-     setWsPhase(resumeTokenValue ? "resuming" : "connecting");
-     recordLastError(null, null);
- 
-     const tokenInfo = trackTokenFromUrl(wsUrl);
-     const ws = transportFactory(wsUrl, wsProtocols);
-     const originalSend = typeof ws.send === "function" ? ws.send : null;
-     if (originalSend) {
-       const boundOriginalSend = originalSend.bind(ws);
--      ws.__originalSend = originalSend;
--      ws.send = function patchedSend(data, ...rest) {
--        if (data instanceof Blob || data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
--          return boundOriginalSend(data, ...rest);
--        }
- 
--        let payload = null;
--        let shouldValidate = false;
-+      const patchedSend = function patchedSend(data, ...rest) {
-+        const target = (this && typeof this === "object") ? this : ws;
-+        const isBinaryPayload = data instanceof Blob || data instanceof ArrayBuffer || ArrayBuffer.isView(data);
- 
--        if (typeof data === "string") {
--          try {
--            const parsed = JSON.parse(data);
--            if (isTypedObjectPayload(parsed)) {
--              payload = parsed;
--              shouldValidate = true;
-+        if (!isBinaryPayload) {
-+          let typedPayload = null;
-+
-+          if (typeof data === "string") {
-+            try {
-+              const parsed = JSON.parse(data);
-+              if (isTypedObjectPayload(parsed)) {
-+                typedPayload = parsed;
-+              }
-+            } catch (err) {
-+              console.warn("WSClient send wrapper: failed to parse string payload", err);
-             }
--          } catch (err) {
--            console.warn("WSClient send wrapper: failed to parse string payload", err);
-+          } else if (isTypedObjectPayload(data)) {
-+            typedPayload = data;
-           }
--        } else if (isTypedObjectPayload(data)) {
--          payload = data;
--          shouldValidate = true;
--        }
- 
--        if (shouldValidate) {
--          if (!validatePayloadForSend(payload)) {
--            return undefined;
-+          if (typedPayload) {
-+            if (!validateOutboundPayload(typedPayload, { rawPayload: data, source: "ws_instance" })) {
-+              return undefined;
-+            }
-           }
--          if (typeof data === "string") {
--            return boundOriginalSend(data, ...rest);
-+
-+          if (isTypedObjectPayload(data)) {
-+            try {
-+              data = JSON.stringify(data);
-+            } catch (err) {
-+              console.warn("WSClient send wrapper: failed to serialize payload", err);
-+              return undefined;
-+            }
-           }
-         }
- 
--        if (isTypedObjectPayload(data)) {
--          try {
--            const serialized = JSON.stringify(data);
--            return boundOriginalSend(serialized, ...rest);
--          } catch (err) {
--            console.warn("WSClient send wrapper: failed to serialize payload", err);
--            return undefined;
--          }
-+        try {
-+          target.__wsClientGuarding = true;
-+          return boundOriginalSend(data, ...rest);
-+        } finally {
-+          try { delete target.__wsClientGuarding; } catch { target.__wsClientGuarding = undefined; }
-         }
-+      };
- 
--        return boundOriginalSend(data, ...rest);
-+      ws.send = patchedSend;
-+      ws.__originalSend = function delegatingOriginalSend(data, ...rest) {
-+        return patchedSend.call(ws, data, ...rest);
-       };
+@@ -3866,51 +3866,51 @@ import { initVAD } from "./audio/vad_client.js";
      }
-     ws.__accessTokenInfo = tokenInfo;
-     ws.__handshakeToastShown = false;
-     try {
-       ws.binaryType = "arraybuffer";
-     } catch (err) {
-       console.warn("Failed to set WebSocket binaryType", err);
-     }
- 
-     ws.onopen = () => {
-       // Lightweight breadcrumb; keep as console.log
-       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
-       logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || (typeof wsProtocols === "string" ? wsProtocols : null) });
-       recordClientBannerEvent("ws.socket.open", {
-         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
-       });
-       flushClientBannerQueue();
-     };
- 
-     ws.onerror = (e) => {
-       console.error("WebSocket error", e, { readyState: ws.readyState });
-       const message = e && typeof e?.message === "string" && e.message
-         ? e.message
-         : "socket_error";
-@@ -3865,86 +3869,93 @@ import { initVAD } from "./audio/vad_client.js";
+     const ws = socket;
+     cleanupSocket(ws, reason);
      clearHeartbeat();
      clearRateLimitRetryTimer();
      rateLimitRetryCount = 0;
@@ -157,164 +28,30 @@ index bff4572c1314d94680b63482629be94a42d5c038..8c490905d2d87c71fc703851cb5658e9
      if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
        return false;
      }
-     return Object.prototype.toString.call(payload) === "[object Object]";
+-    return Object.prototype.toString.call(payload) === "[object Object]";
++    return true;
    }
  
--  function validatePayloadForSend(payload) {
-+  function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {
+   function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {
      if (!isTypedObjectPayload(payload)) {
        return true;
      }
--    const { type } = payload;
--    if (typeof type === "string" && type.trim().length > 0) {
-+    const type = payload && typeof payload.type === "string" ? payload.type.trim() : "";
-+    if (type.length > 0) {
+     const type = payload && typeof payload.type === "string" ? payload.type.trim() : "";
+     if (type.length > 0) {
        return true;
      }
      const keys = Object.keys(payload || {});
--    console.warn("WSClient send skipped object payload without type", { keys, payload });
-+    const diagnostic = {
-+      keys: keys.slice(0, 6),
-+      payload,
-+      raw: rawPayload,
-+      source,
-+    };
-+    console.warn("WSClient send skipped object payload without type", diagnostic);
+     const diagnostic = {
+       keys: keys.slice(0, 6),
+       payload,
+       raw: rawPayload,
+       source,
+     };
+     console.warn("WSClient send skipped object payload without type", diagnostic);
      try {
        recordClientBannerEvent("ws.send.invalid_payload", {
          reason: "missing_type",
--        keys: keys.slice(0, 6),
-+        keys: diagnostic.keys,
-+        source,
+         keys: diagnostic.keys,
+         source,
        });
      } catch {}
-     try {
--      logStage("client.ws", { outcome: "send_skipped_missing_type", keys: keys.slice(0, 6) });
-+      logStage("client.ws", { outcome: "send_skipped_missing_type", keys: diagnostic.keys, source });
-     } catch {}
-     return false;
-   }
- 
-   function send(payload, { binary = false, skipPhaseCheck = false } = {}) {
-     const client = (this && typeof this === "object") ? this : WSClient;
-     if (!Array.isArray(client._queue)) {
-       client._queue = [];
-     }
-     let data = payload;
- 
-     if (!binary && (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload))) {
-       console.debug("WSClient.send: binary payload ignored by JSON helper");
-       return false;
-     }
- 
-     if (!binary) {
--      if (!validatePayloadForSend(data)) {
-+      if (!validateOutboundPayload(data, { source: "wsclient.send" })) {
-         return false;
-       }
-       if (!data || typeof data !== "object") {
-         console.warn("WSClient.send blocked: missing or invalid type", payload);
-         return false;
-       }
-       if (typeof data.type !== "string") {
-         console.warn("WSClient.send blocked: missing or invalid type", payload);
-         return false;
-       }
-       if (data.type === "audio.header") {
-         if (data.format !== "pcm16" ||
-             typeof data.sample_rate !== "number" ||
-             typeof data.channels !== "number") {
-           console.warn("WSClient.send blocked: invalid audio.header schema", payload);
-           return false;
-         }
-         data = {
-           type: "audio.header",
-           format: "pcm16",
-           sample_rate: Number(data.sample_rate),
-           channels: Number(data.channels)
-         };
-       }
-     }
-@@ -4183,26 +4194,82 @@ import { initVAD } from "./audio/vad_client.js";
-       const phase = s.wsPhase || s.connectionState || null;
-       const phaseOk = typeof phase === "string" ? WS_READY_PHASES.has(phase) : true;
-       return !!socket && socket.readyState === WebSocket.OPEN && phaseOk;
-     } catch {
-       return !!socket && socket.readyState === WebSocket.OPEN;
-     }
-   };
-   WSClient.__debug = debug;
-   window.WSClient = WSClient;
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-     window.addEventListener("ws.close", () => {
-       __resetAudioHeaderSent();
-       resetTurnIntent("ws.close");
-     });
-     window.addEventListener("ws.resume_invalid", () => {
-       __resetAudioHeaderSent();
-       resetTurnIntent("ws.resume_invalid");
-     });
-   }
-   if (typeof WSClient._linkedProofLogged !== "boolean") {
-     WSClient._linkedProofLogged = false;
-   }
-+
-+  if (typeof WebSocket !== "undefined" && WebSocket?.prototype && !WebSocket.prototype.__wsClientGuarded) {
-+    const originalProtoSend = WebSocket.prototype.send;
-+    if (typeof originalProtoSend === "function") {
-+      WebSocket.prototype.send = function wsClientGuardedSend(data, ...rest) {
-+        if (this && this.__wsClientGuarding) {
-+          return originalProtoSend.apply(this, [data, ...rest]);
-+        }
-+
-+        const isBinaryPayload = data instanceof Blob || data instanceof ArrayBuffer || ArrayBuffer.isView(data);
-+        if (!isBinaryPayload) {
-+          let typedPayload = null;
-+
-+          if (typeof data === "string") {
-+            try {
-+              const parsed = JSON.parse(data);
-+              if (isTypedObjectPayload(parsed)) {
-+                typedPayload = parsed;
-+              }
-+            } catch (err) {
-+              console.warn("WebSocket.prototype.send: failed to parse string payload", err);
-+            }
-+          } else if (isTypedObjectPayload(data)) {
-+            typedPayload = data;
-+          }
-+
-+          if (typedPayload) {
-+            if (!validateOutboundPayload(typedPayload, { rawPayload: data, source: "ws_prototype" })) {
-+              return undefined;
-+            }
-+            if (isTypedObjectPayload(data)) {
-+              try {
-+                data = JSON.stringify(data);
-+              } catch (err) {
-+                console.warn("WebSocket.prototype.send: failed to serialize payload", err);
-+                return undefined;
-+              }
-+            }
-+          }
-+        }
-+
-+        try {
-+          this.__wsClientGuarding = true;
-+          return originalProtoSend.apply(this, [data, ...rest]);
-+        } finally {
-+          try { delete this.__wsClientGuarding; } catch { this.__wsClientGuarding = undefined; }
-+        }
-+      };
-+      Object.defineProperty(WebSocket.prototype, "__wsClientGuarded", {
-+        value: true,
-+        configurable: true,
-+        enumerable: false,
-+        writable: false,
-+      });
-+    }
-+  }
- })();
