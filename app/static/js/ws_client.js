@@ -48,6 +48,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     ERROR_UNKNOWN: 'error_unknown',
   };
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+  const PCM_TARGET_SAMPLE_RATE = 16000;
   const DEFAULT_ASR_VENDOR = 'gcp';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
 
@@ -498,7 +499,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   let pcmSender = null;
   let pcmSenderInitPromise = null;
   let pcmLastSeq = 0;
-  let pcmSampleRate = null;
+  let pcmSampleRate = PCM_TARGET_SAMPLE_RATE;
+  let pcmHardwareSampleRate = null;
 
   let __hubLoggingInFlight = false;
 
@@ -1125,18 +1127,31 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
   }
 
-  function handleSampleRate(value) {
-    const sr = Number(value);
-    if (!Number.isFinite(sr) || sr <= 0) {
-      return;
+  function handleSampleRate(value, meta = {}) {
+    const hardwareRate = Number(value);
+    if (Number.isFinite(hardwareRate) && hardwareRate > 0) {
+      pcmHardwareSampleRate = hardwareRate;
+      console.log("client.pcm.hardware_sample_rate", hardwareRate);
     }
-    pcmSampleRate = sr;
-    console.log("client.pcm.sample_rate", sr);
+    const targetRate = Number(meta?.targetSampleRate);
+    if (Number.isFinite(targetRate) && targetRate > 0) {
+      pcmSampleRate = targetRate;
+    } else {
+      pcmSampleRate = PCM_TARGET_SAMPLE_RATE;
+    }
+    console.log("client.pcm.target_sample_rate", pcmSampleRate);
+    console.log("client.pcm.sample_rate", pcmSampleRate);
     if (AppState && typeof AppState === "object") {
       const audioState = AppState.audio && typeof AppState.audio === "object"
         ? { ...AppState.audio }
         : {};
-      audioState.sampleRate = sr;
+      if (Number.isFinite(pcmSampleRate)) {
+        audioState.sampleRate = pcmSampleRate;
+        audioState.targetSampleRate = pcmSampleRate;
+      }
+      if (Number.isFinite(pcmHardwareSampleRate)) {
+        audioState.hardwareSampleRate = pcmHardwareSampleRate;
+      }
       AppState.audio = audioState;
       updateState({ audio: audioState });
     }
@@ -1145,6 +1160,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   function handlePcmFrame(frame, meta = {}) {
     if (!(frame instanceof Int16Array) || !frame.length) {
       return;
+    }
+    const metaSampleRate = Number(meta.sampleRate);
+    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
+      pcmSampleRate = metaSampleRate;
     }
     pcmLastSeq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
 
@@ -1208,6 +1227,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
     const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
     const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
+    const metaSampleRate = Number(meta.sampleRate);
+    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
+      pcmSampleRate = metaSampleRate;
+    }
     const bytes = chunk.byteLength;
     logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount });
     __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + chunkCount;
