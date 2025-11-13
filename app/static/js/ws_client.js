@@ -1034,8 +1034,17 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       if (!entry || typeof entry !== "object") {
         continue;
       }
-      const { data, isBinary } = entry;
+      const { data, isBinary, options } = entry;
       try {
+        if (isBinary) {
+          const result = sendBinary(data, options || {});
+          if (result && typeof result.then === "function") {
+            result.catch((err) => {
+              console.warn("WSClient queued binary send failed", err);
+            });
+          }
+          continue;
+        }
         send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
       } catch (err) {
         console.warn("WSClient queue flush send failed", err);
@@ -2323,8 +2332,34 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       WSClient._queue = WSClient._queue || [];
       const queued = cloneQueuedPayload(payload, true);
-      WSClient._queue.push({ type: "binary", payload, options: opts, data: queued, isBinary: true });
+      const queueOptions = opts && typeof opts === "object" ? { ...opts } : undefined;
+      WSClient._queue.push({ type: "binary", payload, options: queueOptions, data: queued, isBinary: true });
       return false;
+    }
+    if (payload instanceof Blob) {
+      return payload.arrayBuffer().then((buf) => {
+        const jsonCandidate = handleBinaryJsonPayload(buf, { source: "wsclient.binary_blob" });
+        if (jsonCandidate === false) {
+          return false;
+        }
+        if (jsonCandidate) {
+          return send.call(WSClient, jsonCandidate, { binary: false });
+        }
+        try {
+          ws.send(buf);
+        } catch (err) {
+          console.warn("ws.binary send failed", err);
+          throw err;
+        }
+        return true;
+      });
+    }
+    const jsonCandidate = handleBinaryJsonPayload(payload, { source: "wsclient.binary" });
+    if (jsonCandidate === false) {
+      return false;
+    }
+    if (jsonCandidate) {
+      return send.call(WSClient, jsonCandidate, { binary: false });
     }
     try {
       ws.send(payload);
@@ -4054,6 +4089,72 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     return true;
   }
 
+  const BINARY_JSON_GUARD_MAX_BYTES = 512;
+
+  function extractArrayBuffer(payload) {
+    if (payload instanceof ArrayBuffer) {
+      return payload;
+    }
+    if (ArrayBuffer.isView(payload)) {
+      try {
+        return payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+      } catch (err) {
+        try { console.warn("WSClient binary guard: buffer slice failed", err); } catch (_) {}
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function decodeBinaryJsonCandidate(payload) {
+    const buffer = extractArrayBuffer(payload);
+    if (!buffer) {
+      return null;
+    }
+    if (!buffer.byteLength || buffer.byteLength > BINARY_JSON_GUARD_MAX_BYTES) {
+      return null;
+    }
+    try {
+      const view = new Uint8Array(buffer);
+      for (let i = 0; i < view.length; i += 1) {
+        if (view[i] === 0) {
+          return null;
+        }
+      }
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(view).trim();
+      if (!text || (text[0] !== "{" && text[0] !== "[")) {
+        return null;
+      }
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object") {
+        return null;
+      }
+      return { parsed, text };
+    } catch (err) {
+      try { console.warn("WSClient binary guard: decode failed", err); } catch (_) {}
+      return null;
+    }
+  }
+
+  function handleBinaryJsonPayload(payload, { source = "wsclient.binary" } = {}) {
+    const decoded = decodeBinaryJsonCandidate(payload);
+    if (!decoded) {
+      return null;
+    }
+    const candidate = decoded.parsed;
+    if (!validateOutboundPayload(candidate, { rawPayload: decoded.text, source })) {
+      return false;
+    }
+    logTransportMisuse("binary_json_payload");
+    try {
+      recordClientBannerEvent("ws.send.invalid_payload", {
+        reason: "binary_json_payload",
+        source,
+      });
+    } catch (_) {}
+    return candidate;
+  }
+
   function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {
     if (!isTypedObjectPayload(payload)) {
       return true;
@@ -4443,6 +4544,19 @@ import { initPcmSender } from "./audio/pcm_sender.js";
                 console.warn("WebSocket.prototype.send: failed to serialize payload", err);
                 return undefined;
               }
+            }
+          }
+        } else {
+          const candidate = handleBinaryJsonPayload(data, { source: "ws_prototype_binary" });
+          if (candidate === false) {
+            return undefined;
+          }
+          if (candidate) {
+            try {
+              data = JSON.stringify(candidate);
+            } catch (err) {
+              console.warn("WebSocket.prototype.send: failed to stringify binary JSON payload", err);
+              return undefined;
             }
           }
         }
