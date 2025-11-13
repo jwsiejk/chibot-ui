@@ -2158,32 +2158,12 @@ window.addEventListener('tts.end', () => {
 });
 // END REWRITE: window.addEventListener('tts.end', ...)
 
-const FINAL_REARM_COOLDOWN_MS = 1500;
-
 window.addEventListener('asr.final', () => {
   try {
     window.AppState.processing = true;
     // REMOVED: window.AppState.state.processing = true;
     window.AppUI?.refresh?.();
   } catch {}
-  const now = Date.now();
-  if (AppState && typeof AppState === 'object') {
-    AppState.__no_rearm_until = now + FINAL_REARM_COOLDOWN_MS;
-  }
-  let recorder = null;
-  try {
-    recorder = typeof window !== 'undefined' ? window.AudioRecorder : null;
-  } catch (_) {
-    recorder = null;
-  }
-  try {
-    recorder?.stopListening?.({ reason: 'final' });
-  } catch (err) {
-    console.warn('AudioRecorder stopListening on asr.final failed', err);
-  }
-  if (isRecorderListening()) {
-    updateRecordingState(false, 'final');
-  }
 });
 
 window.addEventListener('response', (event) => {
