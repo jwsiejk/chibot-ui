@@ -127,34 +127,10 @@ export async function initPcmSender(ws, {
     }
   }
 
-  function sendConfigFrame(targetWs) {
-    if (!targetWs || typeof targetWs.send !== "function") {
-      return;
-    }
-    const payload = JSON.stringify({ type: "config", sampleRate });
-    const attemptSend = () => {
-      try {
-        targetWs.send(payload);
-      } catch (err) {
-        if (typeof onError === "function") {
-          try { onError(err); } catch (_) {}
-        }
-        console.warn("[pcm_sender] failed to send config frame", err);
-      }
-    };
-    if (targetWs.readyState === WebSocket.OPEN) {
-      attemptSend();
-    } else {
-      const handleOpen = () => {
-        targetWs.removeEventListener("open", handleOpen);
-        attemptSend();
-      };
-      targetWs.addEventListener("open", handleOpen);
-    }
-  }
-
+  // Notify listeners of the detected input rate. Protocol metadata is sent via
+  // the dedicated audio.header path in ws_client.js; avoid emitting legacy
+  // config frames that the server no longer understands.
   invokeSampleRate(sampleRate);
-  sendConfigFrame(activeWs);
 
   function scheduleFlush() {
     if (!flushTimer) {
@@ -300,9 +276,6 @@ export async function initPcmSender(ws, {
       return;
     }
     activeWs = nextWs || null;
-    if (activeWs) {
-      sendConfigFrame(activeWs);
-    }
   }
 
   async function destroy() {
