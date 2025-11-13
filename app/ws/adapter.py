@@ -2170,6 +2170,7 @@ class ChatV2Adapter:
             )
             ctx.client_mic_open = True
             self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
+            _log.info("evt=mic_gate_open sid=%s reason=audio_header", ctx.sid)
             expected = {"format": "pcm16", "sample_rate": 16000, "channels": 1}
             fmt = frame.get("format")
             sample_rate = frame.get("sample_rate")
@@ -2349,6 +2350,7 @@ class ChatV2Adapter:
                 source="ws.audio",
             )
             self._emit_asr_turn_armed(ctx)
+            return self._HandleResult(True)
 
         if frame_type == "asr.rearm.request":
             keep_warm_ms = self._policy_keep_warm_ms(ctx)

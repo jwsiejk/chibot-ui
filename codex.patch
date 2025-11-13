@@ -1,61 +1,179 @@
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index ccc733ef06e9d0bc34f91c5bdd614c8d13ed2a8a..603036a7597db5a78da4b71b4bbd2c1681fbb85c 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -3785,50 +3785,66 @@ import { initVAD } from "./audio/vad_client.js";
+           try { delete target.__wsClientGuarding; } catch { target.__wsClientGuarding = undefined; }
+         }
+       };
+ 
+       ws.send = patchedSend;
+       ws.__originalSend = function delegatingOriginalSend(data, ...rest) {
+         return patchedSend.call(ws, data, ...rest);
+       };
+     }
+     ws.__accessTokenInfo = tokenInfo;
+     ws.__handshakeToastShown = false;
+     try {
+       ws.binaryType = "arraybuffer";
+     } catch (err) {
+       console.warn("Failed to set WebSocket binaryType", err);
+     }
+ 
+     ws.onopen = () => {
+       // Lightweight breadcrumb; keep as console.log
+       console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
+       logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || (typeof wsProtocols === "string" ? wsProtocols : null) });
+       recordClientBannerEvent("ws.socket.open", {
+         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
+       });
+       flushClientBannerQueue();
++
++      // after ws opens
++      try {
++        const ws = WSClient._ws || window.ws;
++        if (ws && typeof ws.send === 'function') {
++          const _send = ws.send.bind(ws);
++          ws.send = (data) => {
++            try {
++              const kind = (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) ? 'binary' : typeof data;
++              const size = (data && data.byteLength) || (data && data.size) || null;
++              console.log('WS SEND', kind, size);
++            } catch (_) {}
++            return _send(data);
++          };
++        }
++      } catch (_) {}
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+       const message = e && typeof e?.message === "string" && e.message
+         ? e.message
+         : "socket_error";
+       recordLastError(null, message);
+       maybeShowHandshakeToast(ws, null);
+       recordClientBannerEvent("ws.socket.error", {
+         ready_state: ws.readyState,
+       });
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
+         code: e.code,
+         reason: e.reason,
+         wasClean: e.wasClean,
+         readyState: ws.readyState,
+       });
+       const detailReason = typeof e.reason === "string" && e.reason ? e.reason : "handshake_close";
+       recordLastError(typeof e.code === "number" ? e.code : null, detailReason);
+       setWsConnected(false);
+       setWsPhase("disconnected");
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 0204a65a03793b5f713e07c8710f4bac9627b91c..0bebd4f66ffc768f4ec45f357662f31d35e73e4a 100644
+index 0bebd4f66ffc768f4ec45f357662f31d35e73e4a..e5f8987ce1543354bb67f4686eaf6a7960ae357e 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -2953,53 +2953,53 @@ class ChatV2Adapter:
-         now_ms = self._now_ms()
-         self._maybe_update_server_vad(ctx, chunk, now_ms)
-         if ctx.audio_chunks_recv == 1:
+@@ -2148,50 +2148,51 @@ class ChatV2Adapter:
+         if frame_type == "asr.close":
+             if ctx.session.asr_state in {"opening", "open"}:
+                 await self._publish(
+                     EVT_ASR_CLOSE,
+                     ctx.sid,
+                     {"state": ctx.session.asr_state},
+                 )
+                 await self._close_asr(ctx, reason="client_request")
+             else:
+                 await self._publish(
+                     ASR_CLOSE_DEDUP,
+                     ctx.sid,
+                     {"state": ctx.session.asr_state},
+                 )
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             return self._HandleResult(True)
+ 
+         if frame_type == "audio.header":
+             await self._publish(
+                 EVT_WS_JSON_RECV,
+                 ctx.sid,
+                 {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+             )
+             ctx.client_mic_open = True
+             self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
++            _log.info("evt=mic_gate_open sid=%s reason=audio_header", ctx.sid)
+             expected = {"format": "pcm16", "sample_rate": 16000, "channels": 1}
+             fmt = frame.get("format")
+             sample_rate = frame.get("sample_rate")
+             channels = frame.get("channels")
+             normalized_fmt = fmt or expected["format"]
+             if normalized_fmt == "pcm":
+                 normalized_fmt = expected["format"]
+             normalized_sr = (
+                 sample_rate if sample_rate is not None else expected["sample_rate"]
+             )
+             normalized_ch = (
+                 channels if channels is not None else expected["channels"]
+             )
+             if (
+                 normalized_fmt != expected["format"]
+                 or normalized_sr != expected["sample_rate"]
+                 or normalized_ch != expected["channels"]
+             ):
+                 meta["error"] = "bad_header"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                 await self._send_json(
+                     send,
+                     ctx.sid,
+                     {
+                         "type": "asr.error",
+@@ -2327,50 +2328,51 @@ class ChatV2Adapter:
+                 ctx.audio_highest_seq = ctx.audio_seq - 1
+                 ctx.audio_buffer.clear()
+             audio_meta = {
+                 key: value
+                 for key, value in (
+                     ("format", profile.get("format")),
+                     ("sample_rate", profile.get("sample_rate")),
+                     ("channels", profile.get("channels")),
+                     ("seq_start", profile.get("seq_start")),
+                 )
+                 if value is not None
+             }
+             await self._publish(
+                 WS_AUDIO_HEADER_ACCEPT,
+                 ctx.sid,
+                 audio_meta,
+             )
              self._emit_session_step(
                  ctx.sid,
-                 "audio.stream_started",
-                 summary="Received first audio chunk",
-                 meta={"byte_count": byte_count},
+                 "audio.header.accepted",
+                 summary="Accepted audio header",
+                 meta=audio_meta,
                  source="ws.audio",
              )
-         self._handle_client_audio_activity(ctx)
-         mask_phase = ctx.tts_mask_phase or "off"
-         mask_open = mask_phase == "off"
-         ready_gate = ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR
-         mic_open = ctx.client_mic_open
-         send_open = not ctx.audio_send_closed
-         backpressure_ok = ctx.backpressure_state != "on"
+             self._emit_asr_turn_armed(ctx)
++            return self._HandleResult(True)
  
-         gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
-         if not gate_open:
+         if frame_type == "asr.rearm.request":
+             keep_warm_ms = self._policy_keep_warm_ms(ctx)
              _log.info(
-                 "evt=audio_gate_block sid=%s mask=%s ready=%s mic=%s send=%s back=%s",
+                 "evt=asr_prearm_requested sid=%s source=client keep_stream_warm_ms=%s",
                  ctx.sid,
-                 mask_open,
-                 ready_gate,
--                ctx.client_mic_open,
--                not ctx.audio_send_closed,
--                ctx.backpressure_state != "on",
-+                mic_open,
-+                send_open,
-+                backpressure_ok,
+                 keep_warm_ms,
              )
+             # --- START FIX: Explicitly send HUD state to fix the UI badge ---
+             self._emit_hud_state(ctx, "Listening")
+             # --- END FIX ---
+             try:
+                 await self._send_asr_ready_bundle(send, ctx)
+             except Exception:  # pragma: no cover - defensive logging
+                 _log.exception("evt=ws_asr_ready_bundle_failed sid=%s", ctx.sid)
  
-         if gate_open:
-             await self._flush_audio_backlog(ctx)
-             _log.info(
-                 "evt=audio_ingress sid=%s len=%d gate_open=%s tts_mask=%s client_mic_open=%s audio_send_closed=%s backpressure_state=%s",
-                 ctx.sid,
-                 byte_count,
-                 gate_open,
-                 mask_phase,
-                 mic_open,
-                 ctx.audio_send_closed,
-                 ctx.backpressure_state,
-             )
-             await self._forward_audio_chunk(ctx, chunk, seq)
-             return
- 
-         if not mask_open:
-             reason = "mask"
-         elif not ready_gate:
-             reason = "not_ready"
-         elif not mic_open:
-             reason = "mic_closed"
-         elif not send_open:
-             reason = "send_closed"
+         if frame_type == "client.ready":
+             mic_info = frame.get("mic")
+             if isinstance(mic_info, dict):
+                 state = mic_info.get("state")
+                 if isinstance(state, str) and state.lower() == "open":
+                     vendor = mic_info.get("vendor")
+                     opened_ts = mic_info.get("ts")
+                     ts_value = opened_ts if isinstance(opened_ts, int) else None
+                     self._emit_client_mic_open(

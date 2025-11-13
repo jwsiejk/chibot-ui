@@ -3807,6 +3807,22 @@ import { initVAD } from "./audio/vad_client.js";
         protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
       });
       flushClientBannerQueue();
+
+      // after ws opens
+      try {
+        const ws = WSClient._ws || window.ws;
+        if (ws && typeof ws.send === 'function') {
+          const _send = ws.send.bind(ws);
+          ws.send = (data) => {
+            try {
+              const kind = (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) ? 'binary' : typeof data;
+              const size = (data && data.byteLength) || (data && data.size) || null;
+              console.log('WS SEND', kind, size);
+            } catch (_) {}
+            return _send(data);
+          };
+        }
+      } catch (_) {}
     };
 
     ws.onerror = (e) => {
