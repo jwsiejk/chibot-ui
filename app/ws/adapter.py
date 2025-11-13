@@ -1965,16 +1965,6 @@ class ChatV2Adapter:
         now_ms = int(time.time() * 1000)
         ctx.last_client_activity_ms = now_ms
 
-        if frame_type == "audio.header":
-            await self._publish(
-                EVT_WS_JSON_RECV,
-                ctx.sid,
-                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
-            )
-            ctx.client_mic_open = True
-            self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
-            return self._HandleResult(True)
-
         if frame_type in (
             "client.banner",
             "client.metrics",
@@ -2165,6 +2155,13 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         if frame_type == "audio.header":
+            await self._publish(
+                EVT_WS_JSON_RECV,
+                ctx.sid,
+                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+            )
+            ctx.client_mic_open = True
+            self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
             expected = {"format": "pcm16", "sample_rate": 16000, "channels": 1}
             fmt = frame.get("format")
             sample_rate = frame.get("sample_rate")
@@ -2970,9 +2967,9 @@ class ChatV2Adapter:
                 ctx.sid,
                 mask_open,
                 ready_gate,
-                mic_open,
-                send_open,
-                backpressure_ok,
+                ctx.client_mic_open,
+                not ctx.audio_send_closed,
+                ctx.backpressure_state != "on",
             )
 
         if gate_open:
