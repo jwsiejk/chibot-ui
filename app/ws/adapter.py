@@ -685,6 +685,12 @@ class ChatV2Adapter:
         if send is not None and not ctx.turn_active:
             try:
                 await self._send_json(send, ctx.sid, {"type": "turn.begin"})
+            except RuntimeError:
+                _log.warning(
+                    "evt=turn_begin_send_failed sid=%s reason=asgi_closed",
+                    ctx.sid,
+                    exc_info=True,
+                )
             except Exception:  # pragma: no cover - defensive logging
                 _log.warning("evt=turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
             else:
