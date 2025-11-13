@@ -571,6 +571,49 @@ class ChatV2Adapter:
         # (no-op if unused; helps explicitness)
         self._noop = None
 
+    async def _call_openai(self, ctx: AdapterContext, transcript: str) -> str:
+        """Execute an OpenAI Chat Completions request without blocking the event loop."""
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            _log.error("evt=llm_error reason=api_key_missing sid=%s", ctx.sid)
+            return "I'm sorry, my language model key is not configured."
+
+        try:
+            from openai import OpenAI  # Local import to avoid hard dependency at import time.
+        except ImportError:
+            return "OpenAI SDK not correctly installed on the server."
+
+        try:
+            client = OpenAI(api_key=api_key)
+            response = await asyncio.to_thread(
+                client.chat.completions.create,
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a friendly and concise AI assistant. Respond to the "
+                            "following user message concisely."
+                        ),
+                    },
+                    {"role": "user", "content": transcript},
+                ],
+                temperature=0.7,
+                max_tokens=150,
+            )
+            choice = response.choices[0]
+            message = getattr(choice, "message", None)
+            content = getattr(message, "content", None)
+            if isinstance(content, str):
+                return content.strip()
+            return ""
+        except NotImplementedError:
+            return "OpenAI SDK not correctly installed on the server."
+        except Exception as exc:  # pragma: no cover - defensive logging
+            _log.error("evt=llm_openai_call_failed sid=%s error=%s", ctx.sid, str(exc))
+            _log.exception("evt=llm_openai_call_failed_trace sid=%s", ctx.sid)
+            return "I encountered an error while processing your request."
+
     def _server_policy(self, ctx: AdapterContext) -> Mapping[str, Any]:
         pol = getattr(ctx.session, "policy", None) or {}
         if not isinstance(pol, Mapping):
@@ -642,6 +685,12 @@ class ChatV2Adapter:
         if send is not None and not ctx.turn_active:
             try:
                 await self._send_json(send, ctx.sid, {"type": "turn.begin"})
+            except RuntimeError:
+                _log.warning(
+                    "evt=turn_begin_send_failed sid=%s reason=asgi_closed",
+                    ctx.sid,
+                    exc_info=True,
+                )
             except Exception:  # pragma: no cover - defensive logging
                 _log.warning("evt=turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
             else:
@@ -3245,7 +3294,6 @@ class ChatV2Adapter:
         payload: Dict[str, Any],
     ) -> None:
         text = json.dumps(payload, separators=(",", ":"))
-        await send({"type": "websocket.send", "text": text})
         payload_bytes = text.encode("utf-8")
         byte_count = len(payload_bytes)
         meta: Dict[str, Any] = {
@@ -3269,6 +3317,24 @@ class ChatV2Adapter:
             frame_payload = dict(parsed_frame)
         else:
             frame_payload = dict(payload)
+
+        try:
+            await send({"type": "websocket.send", "text": text})
+        except RuntimeError as e:
+            if "websocket.close" in str(e) or "response already completed" in str(e):
+                _log.warning(
+                    "evt=ws_send_skipped sid=%s reason=asgi_closed type=%s",
+                    sid,
+                    payload.get("type"),
+                )
+                meta_ws = meta.setdefault("ws", {})
+                meta_ws["send_skipped"] = True
+                meta_ws["skipped_reason"] = "asgi_closed"
+                self._log_asr_control_summary(sid, payload)
+                await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
+                return
+            raise
+
         self._log_asr_control_summary(sid, payload)
         await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
 

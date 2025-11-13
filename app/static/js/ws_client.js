@@ -48,6 +48,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     ERROR_UNKNOWN: 'error_unknown',
   };
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+  const PCM_TARGET_SAMPLE_RATE = 16000;
   const DEFAULT_ASR_VENDOR = 'gcp';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
 
@@ -498,7 +499,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   let pcmSender = null;
   let pcmSenderInitPromise = null;
   let pcmLastSeq = 0;
-  let pcmSampleRate = null;
+  let pcmSampleRate = PCM_TARGET_SAMPLE_RATE;
+  let pcmHardwareSampleRate = null;
 
   let __hubLoggingInFlight = false;
 
@@ -1032,8 +1034,17 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       if (!entry || typeof entry !== "object") {
         continue;
       }
-      const { data, isBinary } = entry;
+      const { data, isBinary, options } = entry;
       try {
+        if (isBinary) {
+          const result = sendBinary(data, options || {});
+          if (result && typeof result.then === "function") {
+            result.catch((err) => {
+              console.warn("WSClient queued binary send failed", err);
+            });
+          }
+          continue;
+        }
         send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
       } catch (err) {
         console.warn("WSClient queue flush send failed", err);
@@ -1125,18 +1136,31 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
   }
 
-  function handleSampleRate(value) {
-    const sr = Number(value);
-    if (!Number.isFinite(sr) || sr <= 0) {
-      return;
+  function handleSampleRate(value, meta = {}) {
+    const hardwareRate = Number(value);
+    if (Number.isFinite(hardwareRate) && hardwareRate > 0) {
+      pcmHardwareSampleRate = hardwareRate;
+      console.log("client.pcm.hardware_sample_rate", hardwareRate);
     }
-    pcmSampleRate = sr;
-    console.log("client.pcm.sample_rate", sr);
+    const targetRate = Number(meta?.targetSampleRate);
+    if (Number.isFinite(targetRate) && targetRate > 0) {
+      pcmSampleRate = targetRate;
+    } else {
+      pcmSampleRate = PCM_TARGET_SAMPLE_RATE;
+    }
+    console.log("client.pcm.target_sample_rate", pcmSampleRate);
+    console.log("client.pcm.sample_rate", pcmSampleRate);
     if (AppState && typeof AppState === "object") {
       const audioState = AppState.audio && typeof AppState.audio === "object"
         ? { ...AppState.audio }
         : {};
-      audioState.sampleRate = sr;
+      if (Number.isFinite(pcmSampleRate)) {
+        audioState.sampleRate = pcmSampleRate;
+        audioState.targetSampleRate = pcmSampleRate;
+      }
+      if (Number.isFinite(pcmHardwareSampleRate)) {
+        audioState.hardwareSampleRate = pcmHardwareSampleRate;
+      }
       AppState.audio = audioState;
       updateState({ audio: audioState });
     }
@@ -1145,6 +1169,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   function handlePcmFrame(frame, meta = {}) {
     if (!(frame instanceof Int16Array) || !frame.length) {
       return;
+    }
+    const metaSampleRate = Number(meta.sampleRate);
+    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
+      pcmSampleRate = metaSampleRate;
     }
     pcmLastSeq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
 
@@ -1208,6 +1236,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
     const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
     const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
+    const metaSampleRate = Number(meta.sampleRate);
+    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
+      pcmSampleRate = metaSampleRate;
+    }
     const bytes = chunk.byteLength;
     logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount });
     __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + chunkCount;
@@ -1266,7 +1298,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   }
 
 
-  async function stopRecorder(reason) {
+  async function performStopRecorder(reason) {
     _audioStreaming = false;
     __firstChunkSeen = false;
     __armingGraceUntil = 0;
@@ -1297,6 +1329,110 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     try {
       hubLog("client.pcm.capture_stop", { reason: stopReason });
     } catch {}
+  }
+
+  const USER_INITIATED_STOP_REASONS = new Set([
+    "user_requested",
+    "user_restart",
+    "user_end",
+    "client_stop",
+    "client_shutdown",
+    "resume_invalid",
+  ]);
+
+  const SERVER_ERROR_STOP_REASONS = new Set([
+    "server_requested",
+    "server_error",
+    "server_restart",
+    "bad_info_frame",
+    "bad_info_sequence",
+    "resume_invalid",
+    "asr_unavailable",
+    "tts_start",
+    "handshake_close",
+    "schema_invalid",
+    "bad_utf8",
+    "ws_close",
+    "client_shutdown",
+    "rate_limited",
+  ]);
+
+  const SERVER_ERROR_REASON_PATTERNS = [
+    /error/,
+    /fail/,
+    /denied/,
+    /timeout/,
+    /invalid/,
+    /unavailable/,
+    /disconnect/,
+    /refus/,
+    /forbidden/,
+    /shutdown/,
+  ];
+
+  const VAD_OR_MIC_REASON_PATTERNS = [
+    /\bvad(?:[_-]|$)/,
+    /\bvoice_activity\b/,
+    /\bmic(?:_|-|\s)(?:state|status|pause|paused|mute|muted|off|inactive)/,
+  ];
+
+  function toReasonLabel(value) {
+    const label = normalizeReason(value);
+    return typeof label === "string" ? label : "unspecified";
+  }
+
+  function reasonLooksLikeVadOrMic(key) {
+    if (!key) {
+      return false;
+    }
+    return VAD_OR_MIC_REASON_PATTERNS.some((pattern) => pattern.test(key));
+  }
+
+  function reasonLooksUserInitiated(key) {
+    return USER_INITIATED_STOP_REASONS.has(key);
+  }
+
+  function reasonLooksServerError(key) {
+    if (SERVER_ERROR_STOP_REASONS.has(key)) {
+      return true;
+    }
+    return SERVER_ERROR_REASON_PATTERNS.some((pattern) => pattern.test(key));
+  }
+
+  function evaluateStopRecorderReason(reason, fallbackReason) {
+    const label = toReasonLabel(reason);
+    const key = label.trim().toLowerCase();
+    if (reasonLooksLikeVadOrMic(key)) {
+      return { allowed: false, blocked: true, label };
+    }
+    if (reasonLooksUserInitiated(key) || reasonLooksServerError(key)) {
+      return { allowed: true, blocked: false, label };
+    }
+    if (fallbackReason) {
+      const fallbackLabel = toReasonLabel(fallbackReason);
+      const fallbackKey = fallbackLabel.trim().toLowerCase();
+      if (!reasonLooksLikeVadOrMic(fallbackKey) && (reasonLooksUserInitiated(fallbackKey) || reasonLooksServerError(fallbackKey))) {
+        return { allowed: true, blocked: false, label: fallbackLabel };
+      }
+    }
+    return { allowed: false, blocked: false, label };
+  }
+
+  async function stopRecorder(reason, options = {}) {
+    const { fallbackReason = null, source = null } = options || {};
+    const { allowed, blocked, label } = evaluateStopRecorderReason(reason, fallbackReason);
+    if (!allowed) {
+      try {
+        const meta = { reason: label, source };
+        if (blocked) {
+          console.info("stopRecorder skipped for VAD/mic trigger", meta);
+        } else {
+          console.info("stopRecorder skipped for non user/server trigger", meta);
+        }
+      } catch {}
+      return false;
+    }
+    return performStopRecorder(label);
   }
 
   async function startRecorderStreaming(policy, reason) {
@@ -2154,13 +2290,76 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     return true;
   }
 
+  function cloneQueuedPayload(payload, isBinary = false) {
+    if (isBinary) {
+      if (payload instanceof ArrayBuffer) {
+        try {
+          return payload.slice(0);
+        } catch (err) {
+          console.warn("WSClient queue clone failed (ArrayBuffer)", err);
+          return payload;
+        }
+      }
+      if (ArrayBuffer.isView(payload)) {
+        try {
+          const view = payload;
+          return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+        } catch (err) {
+          console.warn("WSClient queue clone failed (TypedArray)", err);
+          try {
+            return payload.slice ? payload.slice(0) : payload;
+          } catch {
+            return payload;
+          }
+        }
+      }
+      return payload;
+    }
+    if (!payload || typeof payload !== "object") {
+      return payload;
+    }
+    try {
+      return { ...payload };
+    } catch (err) {
+      console.warn("WSClient queue clone failed", err);
+      return payload;
+    }
+  }
+
   function sendBinary(payload, opts = {}) {
     // Always send PCM when the socket is OPEN. Do not phase-gate audio.
     const ws = WSClient?._ws || window.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       WSClient._queue = WSClient._queue || [];
-      WSClient._queue.push({ type: "binary", payload, options: opts, data: payload, isBinary: true });
+      const queued = cloneQueuedPayload(payload, true);
+      const queueOptions = opts && typeof opts === "object" ? { ...opts } : undefined;
+      WSClient._queue.push({ type: "binary", payload, options: queueOptions, data: queued, isBinary: true });
       return false;
+    }
+    if (payload instanceof Blob) {
+      return payload.arrayBuffer().then((buf) => {
+        const jsonCandidate = handleBinaryJsonPayload(buf, { source: "wsclient.binary_blob" });
+        if (jsonCandidate === false) {
+          return false;
+        }
+        if (jsonCandidate) {
+          return send.call(WSClient, jsonCandidate, { binary: false });
+        }
+        try {
+          ws.send(buf);
+        } catch (err) {
+          console.warn("ws.binary send failed", err);
+          throw err;
+        }
+        return true;
+      });
+    }
+    const jsonCandidate = handleBinaryJsonPayload(payload, { source: "wsclient.binary" });
+    if (jsonCandidate === false) {
+      return false;
+    }
+    if (jsonCandidate) {
+      return send.call(WSClient, jsonCandidate, { binary: false });
     }
     try {
       ws.send(payload);
@@ -2824,9 +3023,11 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   function transcriptFrameAllowed(frame) {
     const type = typeof frame?.type === "string" ? frame.type : "";
     const role = typeof frame?.role === "string" ? frame.role : "";
-    const canonicalType = type === "message" || type === "chat.message";
-    const canonicalRole = role === "user" || role === "assistant";
-    const allow = canonicalType && canonicalRole;
+    const isASR = type === "asr.partial" || type === "asr.final";
+    const isChatMessage =
+      (type === "message" || type === "chat.message") &&
+      (role === "user" || role === "assistant");
+    const allow = isASR || isChatMessage;
     try {
       console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
     } catch {}
@@ -3112,14 +3313,14 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       });
       return;
     } else if (frame.type === "stop_listening") {
+      const rawStopReason = typeof frame?.reason === "string" && frame.reason
+        ? frame.reason
+        : frame?.type || "stop_listening";
       if (_audioStreaming) {
-        const reason = typeof frame?.reason === "string" && frame.reason
-          ? frame.reason
-          : frame?.type || "stop_listening";
-        hubLog("client.stream.off", { reason });
+        hubLog("client.stream.off", { reason: rawStopReason });
       }
       _audioStreaming = false;
-      await stopRecorder("server_requested");
+      await stopRecorder({ reason: rawStopReason }, { fallbackReason: "server_requested", source: "server.stop_listening" });
       setAsrArmInFlight(false);
       try {
         const hub = AppState?.hub;
@@ -3826,23 +4027,32 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   }
 
   async function close(reason = DEFAULT_CLOSE_REASON) {
+    const normalizedReason = toReasonLabel(reason || DEFAULT_CLOSE_REASON);
+    const reasonKey = normalizedReason.trim().toLowerCase();
+    if (reasonLooksLikeVadOrMic(reasonKey) && !(reasonLooksUserInitiated(reasonKey) || reasonLooksServerError(reasonKey))) {
+      try {
+        console.info("WSClient.close ignored for VAD/mic trigger", { reason: normalizedReason });
+      } catch {}
+      return;
+    }
+    const closeReason = normalizedReason || DEFAULT_CLOSE_REASON;
     if (_audioStreaming) {
-      const offReason = typeof reason === "string" && reason ? reason : "client_shutdown";
+      const offReason = closeReason || "client_shutdown";
       hubLog("client.stream.off", { reason: offReason });
     }
     _audioStreaming = false;
-    recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
+    recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(closeReason || "", 80) });
     // Reset header state so the next session emits header again
     try { typeof __resetAudioHeaderSent === 'function' && __resetAudioHeaderSent(); } catch {}
-    await stopRecorder(reason || "client_shutdown");
+    await stopRecorder(closeReason || "client_shutdown", { source: "ws.close" });
     setAsrArmInFlight(false);
     setAppStateValue("ttsActive", false);
     setWsPhase("closing");
     setWsConnected(false);
     const emitResumeInvalid = () => {
-      if (reason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      if (closeReason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
         try {
-          window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason } }));
+          window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason: closeReason } }));
         } catch {}
       }
     };
@@ -3853,13 +4063,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       return;
     }
     const ws = socket;
-    cleanupSocket(ws, reason);
+    cleanupSocket(ws, closeReason);
     clearHeartbeat();
     clearRateLimitRetryTimer();
     rateLimitRetryCount = 0;
     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
       try {
-        window.WSErrorUI.cancelRateLimitCountdown(reason);
+        window.WSErrorUI.cancelRateLimitCountdown(closeReason);
       } catch (err) {
         console.warn("Failed to cancel countdown on close", err);
       }
@@ -3877,6 +4087,72 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       return false;
     }
     return true;
+  }
+
+  const BINARY_JSON_GUARD_MAX_BYTES = 512;
+
+  function extractArrayBuffer(payload) {
+    if (payload instanceof ArrayBuffer) {
+      return payload;
+    }
+    if (ArrayBuffer.isView(payload)) {
+      try {
+        return payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+      } catch (err) {
+        try { console.warn("WSClient binary guard: buffer slice failed", err); } catch (_) {}
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function decodeBinaryJsonCandidate(payload) {
+    const buffer = extractArrayBuffer(payload);
+    if (!buffer) {
+      return null;
+    }
+    if (!buffer.byteLength || buffer.byteLength > BINARY_JSON_GUARD_MAX_BYTES) {
+      return null;
+    }
+    try {
+      const view = new Uint8Array(buffer);
+      for (let i = 0; i < view.length; i += 1) {
+        if (view[i] === 0) {
+          return null;
+        }
+      }
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(view).trim();
+      if (!text || (text[0] !== "{" && text[0] !== "[")) {
+        return null;
+      }
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object") {
+        return null;
+      }
+      return { parsed, text };
+    } catch (err) {
+      try { console.warn("WSClient binary guard: decode failed", err); } catch (_) {}
+      return null;
+    }
+  }
+
+  function handleBinaryJsonPayload(payload, { source = "wsclient.binary" } = {}) {
+    const decoded = decodeBinaryJsonCandidate(payload);
+    if (!decoded) {
+      return null;
+    }
+    const candidate = decoded.parsed;
+    if (!validateOutboundPayload(candidate, { rawPayload: decoded.text, source })) {
+      return false;
+    }
+    logTransportMisuse("binary_json_payload");
+    try {
+      recordClientBannerEvent("ws.send.invalid_payload", {
+        reason: "binary_json_payload",
+        source,
+      });
+    } catch (_) {}
+    return candidate;
   }
 
   function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {
@@ -3997,7 +4273,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       try {
         const phase = AppState?.wsPhase || AppState?.connectionState;
         if (!WS_READY_PHASES.has(phase)) {
-          client._queue.push({ data, isBinary: false });
+          const queued = cloneQueuedPayload(data, false);
+          client._queue.push({ data: queued, isBinary: false });
           console.warn("WSClient.send queued (phase not ready)", { phase });
           return true;
         }
@@ -4005,7 +4282,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
 
     if (!open) {
-      client._queue.push({ data, isBinary: !!binary });
+      const queued = cloneQueuedPayload(data, !!binary);
+      client._queue.push({ data: queued, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");
       return true;
     }
@@ -4266,6 +4544,19 @@ import { initPcmSender } from "./audio/pcm_sender.js";
                 console.warn("WebSocket.prototype.send: failed to serialize payload", err);
                 return undefined;
               }
+            }
+          }
+        } else {
+          const candidate = handleBinaryJsonPayload(data, { source: "ws_prototype_binary" });
+          if (candidate === false) {
+            return undefined;
+          }
+          if (candidate) {
+            try {
+              data = JSON.stringify(candidate);
+            } catch (err) {
+              console.warn("WebSocket.prototype.send: failed to stringify binary JSON payload", err);
+              return undefined;
             }
           }
         }

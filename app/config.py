@@ -80,6 +80,19 @@ def get_env(name: str, default=None):
 
 _log = logging.getLogger(__name__)
 
+_GCP_CREDS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if _GCP_CREDS_PATH:
+    if os.path.exists(_GCP_CREDS_PATH):
+        _log.info(
+            "evt=gcp_auth_check status=FILE_FOUND path=%s",
+            _GCP_CREDS_PATH,
+        )
+    else:
+        _log.error(
+            "evt=gcp_auth_check status=FILE_NOT_FOUND path=%s",
+            _GCP_CREDS_PATH,
+        )
+
 _ADMIN_SETTINGS_LOCK = threading.RLock()
 _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
 _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel

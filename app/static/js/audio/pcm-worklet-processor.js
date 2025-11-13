@@ -20,6 +20,13 @@ class PCMWorkletProcessor extends AudioWorkletProcessor {
     this._pendingOutput = [];
     this._int16Max = 0x7fff;
     this._int16Min = -0x8000;
+    this.port.onmessage = (event) => {
+      const message = event && event.data ? event.data : null;
+      if (!message || message.type !== 'flush') {
+        return;
+      }
+      this.flush();
+    };
   }
 
   static get parameterDescriptors() {
