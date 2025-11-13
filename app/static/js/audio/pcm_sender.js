@@ -2,6 +2,7 @@
 
 const DEFAULT_CHUNK_MS = 60;
 const DEFAULT_FLUSH_MS = 50;
+const TARGET_SAMPLE_RATE = 16000;
 
 function floatTo16PCM(float32Samples) {
   if (!float32Samples || typeof float32Samples.length !== "number") {
@@ -19,6 +20,38 @@ function floatTo16PCM(float32Samples) {
     view.setInt16(i * 2, intSample, true);
   }
   return new Int16Array(buffer);
+}
+
+function downsampleTo16k(float32Samples, inputSampleRate) {
+  if (!float32Samples || typeof float32Samples.length !== "number") {
+    return new Float32Array(0);
+  }
+  if (!float32Samples.length) {
+    return new Float32Array(0);
+  }
+  const source = float32Samples;
+  if (!Number.isFinite(inputSampleRate) || inputSampleRate <= 0) {
+    return source;
+  }
+  if (inputSampleRate === TARGET_SAMPLE_RATE) {
+    return source;
+  }
+  const ratio = inputSampleRate / TARGET_SAMPLE_RATE;
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    return source;
+  }
+  const expectedLength = source.length / ratio;
+  const outLength = Math.max(1, Math.round(expectedLength));
+  const result = new Float32Array(outLength);
+  for (let i = 0; i < outLength; i += 1) {
+    const srcPosition = i * ratio;
+    const srcIndex = Math.floor(srcPosition);
+    const nextIndex = Math.min(source.length - 1, srcIndex + 1);
+    const interp = srcPosition - srcIndex;
+    const sample = source[srcIndex] + (source[nextIndex] - source[srcIndex]) * interp;
+    result[i] = sample;
+  }
+  return result;
 }
 
 function ensureAudioContext() {
@@ -66,7 +99,8 @@ export async function initPcmSender(ws, {
 
   const sampleRate = audioCtx.sampleRate;
   console.log("[pcm_sender] audioCtx.sampleRate", sampleRate);
-  const samplesPerMs = sampleRate / 1000;
+  const targetSampleRate = TARGET_SAMPLE_RATE;
+  const samplesPerMs = targetSampleRate / 1000;
 
   function clearFlushTimer() {
     if (flushTimer) {
@@ -84,7 +118,9 @@ export async function initPcmSender(ws, {
   function invokeSampleRate(sampleRateValue) {
     if (typeof onSampleRate === "function") {
       try {
-        onSampleRate(sampleRateValue);
+        onSampleRate(sampleRateValue, {
+          targetSampleRate,
+        });
       } catch (err) {
         console.warn("[pcm_sender] onSampleRate callback failed", err);
       }
@@ -176,6 +212,7 @@ export async function initPcmSender(ws, {
             samples: out.length,
             bytes: out.byteLength,
             chunkCount,
+            sampleRate: targetSampleRate,
           });
         } catch (err) {
           console.warn("[pcm_sender] onSend callback failed", err);
@@ -196,7 +233,11 @@ export async function initPcmSender(ws, {
     if (!channelData || !channelData.length) {
       return;
     }
-    const pcm16 = floatTo16PCM(channelData);
+    const downsampled = downsampleTo16k(channelData, sampleRate);
+    if (!downsampled.length) {
+      return;
+    }
+    const pcm16 = floatTo16PCM(downsampled);
     pcm16.__seq = seq;
 
     if (typeof onFrame === "function") {
@@ -205,6 +246,7 @@ export async function initPcmSender(ws, {
           seq,
           bytes: pcm16.byteLength,
           samples: pcm16.length,
+          sampleRate: targetSampleRate,
           timestamp: (typeof performance !== "undefined" && typeof performance.now === "function")
             ? performance.now()
             : Date.now(),
@@ -299,4 +341,4 @@ export async function initPcmSender(ws, {
   };
 }
 
-export { floatTo16PCM };
+export { floatTo16PCM, downsampleTo16k };
