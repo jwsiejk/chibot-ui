@@ -26,6 +26,7 @@ class SessionCtx:
     last_pcm_ms: Optional[float] = None
     last_vendor_activity_ms: Optional[float] = None
     eot_armed: bool = False
+    audio_profile: Any | None = None
 
 
 def can_open(ctx: SessionCtx) -> bool:

@@ -76,7 +76,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
-from app.services.asr.gcp_engine import GCPStreamingASREngine
+from app.services.asr.gcp_engine import ASREngine, GCPStreamingASREngine
 from app.ws.validator import validate_audio_header_against_policy, validate_frame
 from app.ws.state import SessionCtx, can_open, mark
 from app.ws.policy import normalize_policy
@@ -450,6 +450,7 @@ class AdapterContext:
     asr_partial_subscription_token: Optional[str] = None
     asr_final_subscription_token: Optional[str] = None
     asr_closed_subscription_token: Optional[str] = None
+    asr_open: bool = False
     asr_recovering_until: float = 0.0
     asr_recovering_reason: Optional[str] = None
     asr_recovering_audio_logged: bool = False
@@ -2302,6 +2303,7 @@ class ChatV2Adapter:
                 self._emit_hub_log(ctx, "policy.violation", log_detail)
                 return self._HandleResult(False, 4400, "policy_violation")
             ctx.audio_profile = profile
+            ctx.session.audio_profile = profile
             self._arm_no_audio_watchdog(ctx)
             if getattr(ctx, "await_user_vad_check_pending", False):
                 ctx.await_user_vad_check_pending = False
@@ -5688,7 +5690,7 @@ class ChatV2Adapter:
             max_utterance_ms = 0
 
     def _resolve_asr_config(self, ctx: AdapterContext) -> Dict[str, Any]:
-        default_language = getattr(config, "GCP_ASR_DEFAULT_LANGUAGE", "en-US")
+        default_language = getattr(config, "GCP_STT_DEFAULT_LANGUAGE", "en-US")
         language = default_language if isinstance(default_language, str) and default_language else "en-US"
         enable_partials = True
 
@@ -5719,45 +5721,28 @@ class ChatV2Adapter:
         return config_map
 
     def _resolve_asr_sample_rate(self, ctx: AdapterContext) -> int:
-        candidates: List[Any] = []
-        profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
+        profile = getattr(ctx.session, "audio_profile", None)
         if isinstance(profile, Mapping):
-            candidates.append(profile.get("sample_rate"))
-
-        if isinstance(ctx.session_capture_policy, Mapping):
-            capture_block = ctx.session_capture_policy.get("capture")
-            if isinstance(capture_block, Mapping):
-                candidates.append(capture_block.get("sample_rate"))
-
-        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
-            capture_block = ctx.policy_snapshot.get("capture")
-            if isinstance(capture_block, Mapping):
-                candidates.append(capture_block.get("sample_rate"))
-
-        policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
-        if isinstance(policy_block, Mapping):
-            capture_block = policy_block.get("capture")
-            if isinstance(capture_block, Mapping):
-                candidates.append(capture_block.get("sample_rate"))
-
-        for candidate in candidates:
+            candidate = profile.get("sample_rate")
             try:
-                rate_value = int(candidate)
+                parsed = int(candidate)
             except (TypeError, ValueError):
-                continue
-            if rate_value > 0:
-                return rate_value
+                parsed = None
+            if parsed == 16000:
+                return parsed
 
-        default_rate = getattr(config, "GCP_ASR_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ)
+        default_rate = getattr(config, "GCP_STT_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ)
         try:
             fallback_rate = int(default_rate)
         except (TypeError, ValueError):
             fallback_rate = _DEFAULT_GCP_SAMPLE_RATE_HZ
-
-        _log.warning("evt=asr_sample_rate_fallback sid=%s sample_rate=%s", ctx.sid, fallback_rate)
+        if fallback_rate <= 0:
+            fallback_rate = _DEFAULT_GCP_SAMPLE_RATE_HZ
         return fallback_rate
 
-    def _create_asr_engine(self, ctx: AdapterContext) -> GCPStreamingASREngine:
+    def _create_asr_engine(self, ctx: AdapterContext) -> ASREngine:
+        """Create the ASR engine for the session."""
+
         return GCPStreamingASREngine()
 
     async def _handle_asr_result(
@@ -5826,7 +5811,6 @@ class ChatV2Adapter:
         ctx.asr_silence_hold_logged = False
         ctx.asr_silence_eot_logged = False
         ctx.asr_vendor = "gcp"
-        ctx.session.asr_engine = self._create_asr_engine(ctx)
 
         try:
             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
@@ -5839,17 +5823,28 @@ class ChatV2Adapter:
         if send is None:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
+            ctx.asr_open = False
             return
 
         engine = ctx.session.asr_engine
-        if engine is None:
-            mark(ctx.session, "closed")
+        if engine is not None and not getattr(engine, "_closed", True):
+            _log.info("evt=asr_open_dedup sid=%s vendor=gcp", ctx.sid)
+            await self._publish(
+                ASR_OPEN_DEDUP,
+                ctx.sid,
+                {"state": ctx.session.asr_state, "vendor": "gcp"},
+            )
             ctx.asr_open_task = None
             return
 
+        engine = self._create_asr_engine(ctx)
+        ctx.session.asr_engine = engine
+
         asr_config = self._resolve_asr_config(ctx)
         sample_rate = self._resolve_asr_sample_rate(ctx)
-        language = asr_config.get("language", "en-US")
+        language = asr_config.get("language") or getattr(
+            config, "GCP_STT_DEFAULT_LANGUAGE", "en-US"
+        )
 
         async def _on_result(transcript: str, is_final: bool) -> None:
             await self._handle_asr_result(ctx, transcript, is_final)
@@ -5870,11 +5865,13 @@ class ChatV2Adapter:
         except asyncio.CancelledError:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
+            ctx.asr_open = False
             raise
         except Exception:
             ctx.session.asr_engine = None
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
+            ctx.asr_open = False
             _log.exception("evt=asr_open_failed sid=%s vendor=gcp", ctx.sid)
             try:
                 await self._send_json(
@@ -5897,6 +5894,7 @@ class ChatV2Adapter:
         ctx.asr_opened_ms = self._now_ms()
         ctx.asr_close_reason = None
         ctx.session.first_chunk_sent = False
+        ctx.asr_open = True
 
         await self._publish(
             ASR_SINGLE_STREAM_INVARIANT,
@@ -5938,6 +5936,7 @@ class ChatV2Adapter:
 
         engine = ctx.session.asr_engine
         ctx.session.asr_engine = None
+        ctx.asr_open = False
 
         if ctx.session.asr_state in {"opening", "open"}:
             mark(ctx.session, "closing")
