@@ -1,6 +1,7 @@
 // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
 /* __BUILD_MARKER__: FULL_DUPLEX_01 */
 import { initVAD } from "./audio/vad_client.js";
+import { initPcmSender } from "./audio/pcm_sender.js";
 (() => {
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
@@ -489,14 +490,15 @@ import { initVAD } from "./audio/vad_client.js";
     }
     updateState({ senderPaused });
     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+    updatePcmSenderState();
   }
   const PCM_TARGET_BATCH_MS = 60;
   const PCM_FLUSH_TIMER_MS = 50;
-  const PCM_SAMPLE_RATE = 16000;
-  const PCM_SAMPLES_PER_MS = PCM_SAMPLE_RATE / 1000;
-  let pcmBatchQueue = [];
-  let pcmBatchSampleCount = 0;
-  let pcmFlushTimerId = null;
+
+  let pcmSender = null;
+  let pcmSenderInitPromise = null;
+  let pcmLastSeq = 0;
+  let pcmSampleRate = null;
 
   let __hubLoggingInFlight = false;
 
@@ -955,21 +957,8 @@ import { initVAD } from "./audio/vad_client.js";
   let lastTokenValue = null;
   let lastTokenMintedAt = null;
 
-  let recorderInstance = null;
   let micKeepaliveTimerId = null;
   let micLastChunkAt = 0;
-
-  function getRecorder() {
-    if (recorderInstance && typeof recorderInstance.startListening === "function") {
-      return recorderInstance;
-    }
-    const candidate = typeof window !== "undefined" ? window.AudioRecorder : null;
-    if (!candidate || typeof candidate.startListening !== "function") {
-      return null;
-    }
-    recorderInstance = candidate;
-    return recorderInstance;
-  }
 
   function normalizeReason(reason) {
     if (typeof reason === "string" && reason) {
@@ -1004,6 +993,7 @@ import { initVAD } from "./audio/vad_client.js";
     if (!listening && AppState.wsConnected) {
       setWsPhase("connected");
     }
+    updatePcmSenderState();
   }
 
   function setAsrArmInFlight(inFlight) {
@@ -1126,161 +1116,155 @@ import { initVAD } from "./audio/vad_client.js";
     }, AUDIO_KEEPALIVE_MS);
   }
 
-  function clearPcmFlushTimer() {
-    if (pcmFlushTimerId) {
-      clearTimeout(pcmFlushTimerId);
-      pcmFlushTimerId = null;
+  function handlePcmError(err) {
+    try {
+      logStage("client.pcm", { outcome: "send_error", message: err?.message || "pcm_sender" });
+    } catch (_) {}
+    if (err) {
+      console.warn("pcm.sender.error", err);
     }
   }
 
-  function resetPcmBatchState() {
-    pcmBatchQueue = [];
-    pcmBatchSampleCount = 0;
-    clearPcmFlushTimer();
-  }
-
-  function schedulePcmFlushTimer() {
-    if (!pcmFlushTimerId) {
-      pcmFlushTimerId = setTimeout(async () => {
-        pcmFlushTimerId = null;
-        await flushPcmBatch();
-      }, PCM_FLUSH_TIMER_MS);
-    }
-  }
-
-  async function enqueuePcmFrame(frame, meta) {
-    if (!(frame instanceof Int16Array) || frame.length === 0) {
+  function handleSampleRate(value) {
+    const sr = Number(value);
+    if (!Number.isFinite(sr) || sr <= 0) {
       return;
     }
-    const metadata = meta && typeof meta === "object" ? { ...meta } : {};
-    pcmBatchQueue.push({ frame, meta: metadata });
-    pcmBatchSampleCount += frame.length;
-    schedulePcmFlushTimer();
-    const accumulatedMs = pcmBatchSampleCount / PCM_SAMPLES_PER_MS;
-    if (accumulatedMs >= PCM_TARGET_BATCH_MS) {
-      await flushPcmBatch();
+    pcmSampleRate = sr;
+    console.log("client.pcm.sample_rate", sr);
+    if (AppState && typeof AppState === "object") {
+      const audioState = AppState.audio && typeof AppState.audio === "object"
+        ? { ...AppState.audio }
+        : {};
+      audioState.sampleRate = sr;
+      AppState.audio = audioState;
+      updateState({ audio: audioState });
     }
   }
 
-  async function flushPcmBatch() {
-    if (!pcmBatchQueue.length || pcmBatchSampleCount <= 0) {
-      resetPcmBatchState();
+  function handlePcmFrame(frame, meta = {}) {
+    if (!(frame instanceof Int16Array) || !frame.length) {
       return;
     }
-    const totalSamples = pcmBatchSampleCount;
-    // GREET-FIRST: skip batch until server is ready and header can be sent
-    if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent) {
-      if (!AppState?.asrReady) {
-        schedulePcmFlushTimer();
-        return;
-      }
-      // Ensure header is actually sent before first chunk
-      try {
-        const maybe = sendAudioHeader(AppState?.policy || {});
-        if (maybe && typeof maybe.then === "function") {
-          const ok = await maybe;
-          if (!ok) {
-            console.warn('pcm.flush: header send failed; skipping batch');
-            schedulePcmFlushTimer();
-            return;
-          }
-        } else if (!__audioHeaderSent) {
-          console.warn('pcm.flush: header send failed; skipping batch');
-          schedulePcmFlushTimer();
-          return;
-        }
-      } catch (err) {
-        console.warn('pcm.flush: header send threw', err);
-        schedulePcmFlushTimer();
-        return;
-      }
-    }
-    if (!AppState?.asrReady || !AppState?.turnActive) {
-      schedulePcmFlushTimer();
-      return;
-    }
-    const frames = pcmBatchQueue;
-    pcmBatchQueue = [];
-    pcmBatchSampleCount = 0;
-    clearPcmFlushTimer();
-    if (!totalSamples) {
-      return;
-    }
+    pcmLastSeq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
+
     if (!_audioStreaming) {
-      resetPcmBatchState();
       return;
     }
 
-    const out = new Int16Array(totalSamples);
-    let offset = 0;
-    let firstSeq = 0;
-    let batchChunks = 0;
-    for (const entry of frames) {
-      if (!batchChunks && entry && entry.meta && Number.isFinite(entry.meta.seq)) {
-        firstSeq = Number(entry.meta.seq);
+    if (!__firstChunkSeen) {
+      __firstChunkSeen = true;
+      let firstFrameMs = null;
+      if (typeof __micRecordingStartAt === "number") {
+        firstFrameMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
       }
-      if (entry && entry.frame) {
-        out.set(entry.frame, offset);
-        offset += entry.frame.length;
-        batchChunks += 1;
+      const firstFrameDetail = {
+        seq: pcmLastSeq,
+        bytes: frame.byteLength,
+      };
+      if (firstFrameMs !== null) {
+        firstFrameDetail.ms_since_recording_start = firstFrameMs;
       }
+      try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
+      try { logStage("client.audio_first_chunk", { bytes: frame.byteLength }); } catch {}
     }
-    if (!batchChunks) {
-      return;
-    }
-    if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent) {
+
+    const now = Date.now();
+    micLastChunkAt = now;
+    scheduleAudioKeepalive();
+    recordRecorderChunk(now);
+
+    const frameTimestamp = Number.isFinite(meta.timestamp)
+      ? meta.timestamp
+      : ((typeof performance !== "undefined" && typeof performance.now === "function")
+        ? performance.now()
+        : now);
+
+    if (vadController && typeof vadController.onPcmFrame === "function") {
       try {
-        const maybe = sendAudioHeader(AppState?.policy || {});
-        if (maybe && typeof maybe.then === "function") {
-          const ok = await maybe;
-          if (!ok) {
-            console.warn('pcm.flush: header send failed; skipping batch');
-            return;
-          }
-        } else if (!__audioHeaderSent) {
-          console.warn('pcm.flush: header send failed; skipping batch');
-          return;
-        }
+        vadController.onPcmFrame(frame.buffer, frameTimestamp);
       } catch (err) {
-        console.warn('pcm.flush: header send threw', err);
-        return;
-      }
-      if (!__audioHeaderSent) {
-        console.warn('pcm.flush: header send failed; skipping batch');
-        return;
+        try { console.warn("VAD frame processing failed", err); } catch (_) {}
       }
     }
-    const bytes = out.byteLength;
-    logStage("client.audio_chunk_send", { seq: firstSeq, bytes, batch_chunks: batchChunks });
-    const liveSocket = socket || (WSClient && WSClient._ws) || null;
-    const ws = wsOpen();
-    if (!ws) {
-      console.warn("pcm.send.skipped", { readyState: liveSocket ? liveSocket.readyState : undefined });
-      return;
+
+    let sumSq = 0;
+    for (let i = 0; i < frame.length; i += 1) {
+      const sample = frame[i] / 32768;
+      sumSq += sample * sample;
     }
-    const sendResult = WSClient.sendAudioChunk(out, { lane: "mic", ts: Date.now() });
-    if (sendResult && typeof sendResult.then === "function") {
-      sendResult
-        .then(() => {
-          __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-          __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
-        })
-        .catch((err) => {
-          console.warn("pcm.send.error", err);
-        });
-      return;
+    if (frame.length) {
+      const rms = Math.sqrt(sumSq / frame.length);
+      if (AppState && typeof AppState === "object") {
+        AppState.micRms = rms;
+      }
+      window.StatusBar?.updateMeter?.(rms);
     }
-    if (!sendResult) {
-      console.warn("pcm.send.error", { reason: "send_audio_chunk_failed" });
-      return;
-    }
-    if ((Math.random() * 50 | 0) === 0) {
-      const ms_est = Math.round(out.length / PCM_SAMPLES_PER_MS);
-      hubLog("client.pcm.flush", { samples: out.length, ms_est, ws_state: ws.readyState });
-    }
-    __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + batchChunks;
-    __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
   }
+
+  function handlePcmSend(chunk, meta = {}) {
+    if (!(chunk instanceof Int16Array) || !chunk.length) {
+      return;
+    }
+    const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
+    const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
+    const bytes = chunk.byteLength;
+    logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount });
+    __micChunks = (Number.isFinite(__micChunks) ? __micChunks : 0) + chunkCount;
+    __micBytes = (Number.isFinite(__micBytes) ? __micBytes : 0) + bytes;
+    if (pcmSampleRate && Number.isFinite(pcmSampleRate)) {
+      const samplesPerMs = pcmSampleRate / 1000;
+      if (samplesPerMs > 0 && ((Math.random() * 50) | 0) === 0) {
+        const ms_est = Math.round(chunk.length / samplesPerMs);
+        hubLog("client.pcm.flush", { samples: chunk.length, ms_est, ws_state: (socket || WSClient?._ws)?.readyState });
+      }
+    }
+    scheduleAudioKeepalive();
+  }
+
+  function updatePcmSenderState() {
+    if (!pcmSender || typeof pcmSender.setEnabled !== "function") {
+      return;
+    }
+    const asrReady = Boolean(AppState?.asrReady);
+    const turnActive = AppState && Object.prototype.hasOwnProperty.call(AppState, "turnActive")
+      ? Boolean(AppState.turnActive)
+      : true;
+    const shouldSend = Boolean(_audioStreaming && !senderPaused && _canCaptureNow() && asrReady && turnActive);
+    pcmSender.setEnabled(shouldSend);
+  }
+
+  async function ensurePcmSender() {
+    if (pcmSender) {
+      return pcmSender;
+    }
+    if (pcmSenderInitPromise) {
+      return pcmSenderInitPromise;
+    }
+    const ws = socket || (WSClient && WSClient._ws) || null;
+    if (!ws) {
+      throw new Error("WebSocket unavailable for PCM sender");
+    }
+    pcmSenderInitPromise = initPcmSender(ws, {
+      onSampleRate: handleSampleRate,
+      onFrame: handlePcmFrame,
+      onSend: handlePcmSend,
+      onError: handlePcmError,
+      chunkMs: PCM_TARGET_BATCH_MS,
+      flushIntervalMs: PCM_FLUSH_TIMER_MS,
+    }).then((sender) => {
+      pcmSender = sender;
+      pcmSenderInitPromise = null;
+      updatePcmSenderState();
+      return sender;
+    }).catch((err) => {
+      pcmSenderInitPromise = null;
+      handlePcmError(err);
+      throw err;
+    });
+    return pcmSenderInitPromise;
+  }
+
 
   async function stopRecorder(reason) {
     _audioStreaming = false;
@@ -1290,21 +1274,15 @@ import { initVAD } from "./audio/vad_client.js";
     resetTurnIntent(stopReason);
     clearAudioKeepaliveTimer();
     clearVadSilenceTimer();
-    const recorder = getRecorder();
-    if (!recorder) {
-      setListeningState(false);
-      try {
-        hubLog("client.pcm.capture_stop", { reason: stopReason });
-      } catch {}
-      return;
-    }
-    try {
-      recorder.stopListening({ reason: stopReason });
-    } catch (err) {
-      console.warn("Recorder stopListening failed", err);
-    }
     syncSenderPaused(false);
-    await flushPcmBatch();
+    if (pcmSender && typeof pcmSender.setEnabled === "function") {
+      try {
+        pcmSender.setEnabled(false);
+      } catch (err) {
+        console.warn("pcm.sender.disable_failed", err);
+      }
+    }
+    __micRecordingStartAt = null;
     if (vadController && typeof vadController.reset === "function") {
       try {
         vadController.reset();
@@ -1315,72 +1293,10 @@ import { initVAD } from "./audio/vad_client.js";
       }
     }
     setListeningState(false);
+    updatePcmSenderState();
     try {
       hubLog("client.pcm.capture_stop", { reason: stopReason });
     } catch {}
-  }
-
-  async function handleRecorderChunk(event) {
-    if (!event) {
-      return;
-    }
-    const buffer = event.buffer instanceof ArrayBuffer
-      ? event.buffer
-      : (ArrayBuffer.isView(event.buffer)
-        ? event.buffer.buffer.slice(event.buffer.byteOffset, event.buffer.byteOffset + event.buffer.byteLength)
-        : null);
-    if (!buffer) {
-      return;
-    }
-    const seq = Number(event.seq) || 0;
-    if (!__firstChunkSeen) {
-      __firstChunkSeen = true;
-      let firstFrameMs = null;
-      if (typeof __micRecordingStartAt === "number") {
-        firstFrameMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
-      }
-      const firstFrameDetail = {
-        seq,
-        bytes: buffer.byteLength || 0,
-      };
-      if (firstFrameMs !== null) {
-        firstFrameDetail.ms_since_recording_start = firstFrameMs;
-      }
-      try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
-    }
-    micLastChunkAt = Date.now();
-    scheduleAudioKeepalive();
-    recordRecorderChunk(micLastChunkAt);
-    const frameTimestamp = typeof performance !== "undefined" && typeof performance.now === "function"
-      ? performance.now()
-      : Date.now();
-    if (vadController && typeof vadController.onPcmFrame === "function") {
-      try {
-        vadController.onPcmFrame(buffer, frameTimestamp);
-      } catch (err) {
-        try {
-          console.warn("VAD frame processing failed", err);
-        } catch {}
-      }
-    }
-    // Do not block enqueue; flush path will honor readiness gates.
-    if (seq === 0) {
-      logStage("client.audio_first_chunk", { bytes: buffer.byteLength });
-    }
-    const frame = new Int16Array(buffer);
-    if (frame.length) {
-      let sumSq = 0;
-      for (let i = 0; i < frame.length; i += 1) {
-        const sample = frame[i] / 32768;
-        sumSq += sample * sample;
-      }
-      const rms = Math.sqrt(sumSq / frame.length);
-      if (AppState && typeof AppState === "object") {
-        AppState.micRms = rms;
-      }
-      window.StatusBar?.updateMeter?.(rms);
-    }
-    await enqueuePcmFrame(frame, { seq, bytes: buffer.byteLength });
   }
 
   async function startRecorderStreaming(policy, reason) {
@@ -1389,16 +1305,14 @@ import { initVAD } from "./audio/vad_client.js";
       return true;
     }
     __firstChunkSeen = false;
-    resetPcmBatchState();
     clearVadSilenceTimer();
-    const recorder = getRecorder();
-    if (!recorder) {
-      console.warn("AudioRecorder unavailable; cannot start streaming");
-      return false;
-    }
     const captureReason = typeof reason === "string" && reason ? reason : "auto";
     try {
-      await recorder.start({ onChunk: handleRecorderChunk, policy });
+      const sender = await ensurePcmSender();
+      if (!sender) {
+        console.warn("PCM sender unavailable; cannot start streaming");
+        return false;
+      }
       resetRecorderTelemetry();
       syncSenderPaused(false);
       if (vadController && typeof vadController.reset === "function") {
@@ -1410,13 +1324,28 @@ import { initVAD } from "./audio/vad_client.js";
           } catch {}
         }
       }
-      await recorder.startListening(policy);
+      if (typeof sender.resume === "function") {
+        await sender.resume();
+      }
+      __micRecordingStartAt = Date.now();
+      _audioStreaming = true;
+      updatePcmSenderState();
       micLastChunkAt = Date.now();
       scheduleAudioKeepalive();
       // Set the single authoritative state flag:
       setListeningState(true);
       // allow the *first* PCM to pass even if VAD pauses immediately
       __armingGraceUntil = Date.now() + 1200; // ~1.2s
+      if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent && AppState?.asrReady) {
+        try {
+          const maybe = sendAudioHeader(AppState?.policy || {});
+          if (maybe && typeof maybe.then === "function") {
+            await maybe;
+          }
+        } catch (err) {
+          console.warn("Audio header send failed", err);
+        }
+      }
       try {
         hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
       } catch {}
@@ -1426,6 +1355,7 @@ import { initVAD } from "./audio/vad_client.js";
         logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
       }
       setListeningState(false);
+      _audioStreaming = false;
       throw err;
     }
   }
@@ -2382,9 +2312,8 @@ import { initVAD } from "./audio/vad_client.js";
     // We only call openTurnOnce here to ensure the turn is registered early
     const asrReady = Boolean(AppState?.asrReady);
     if (asrReady) {
-       try {
+        try {
           await startRecorderStreaming(frame?.policy || {}, "input.start_asr_ready");
-          _audioStreaming = true;
         } catch (err) {
           console.error("input.start deferred start failed", err);
         }
@@ -2539,6 +2468,7 @@ import { initVAD } from "./audio/vad_client.js";
     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
     beginWarmup(getWarmupMs());
     updateState({ asrReady: true, asrVendor: AppState.asrVendor });
+    updatePcmSenderState();
     window.requestAnimationFrame(() => window.AppUI?.refresh?.());
     if (typeof AppState.emit === "function") {
       AppState.emit("asrReady", {
@@ -3010,6 +2940,7 @@ import { initVAD } from "./audio/vad_client.js";
           AppState.setState({ turnActive: true });
         } catch {}
       }
+      updatePcmSenderState();
       try {
         window.dispatchEvent(new CustomEvent("turn.begin", { detail: frame }));
       } catch {}
@@ -3022,6 +2953,7 @@ import { initVAD } from "./audio/vad_client.js";
           AppState.setState({ turnActive: false });
         } catch {}
       }
+      updatePcmSenderState();
       try {
         window.dispatchEvent(new CustomEvent("turn.end", { detail: frame }));
       } catch {}
@@ -3309,6 +3241,7 @@ import { initVAD } from "./audio/vad_client.js";
       AppState.asrReady = false;
       AppState.asrVendor = null;
       updateState({ asrReady: false, asrVendor: null });
+      updatePcmSenderState();
       await stopRecorder("asr_unavailable");
       __resetAudioHeaderSent();
       resetTurnIntent(frame?.type || "asr.unavailable");
@@ -3640,6 +3573,15 @@ import { initVAD } from "./audio/vad_client.js";
         hubLog("client.stream.off", { reason: offReason });
       }
       _audioStreaming = false;
+      if (pcmSender && typeof pcmSender.setWebSocket === "function") {
+        try {
+          pcmSender.setWebSocket(null);
+        } catch (err) {
+          if (typeof console !== "undefined" && typeof console.warn === "function") {
+            console.warn("pcm.sender.detach_failed", err);
+          }
+        }
+      }
       stopInputCapture();
       try {
         if (window.ws === ws) {
@@ -3861,6 +3803,15 @@ import { initVAD } from "./audio/vad_client.js";
     };
 
     socket = ws;
+    if (pcmSender && typeof pcmSender.setWebSocket === "function") {
+      try {
+        pcmSender.setWebSocket(ws);
+      } catch (err) {
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          console.warn("pcm.sender.attach_failed", err);
+        }
+      }
+    }
     updateState({
       connectionState: resumeTokenValue ? "resuming" : "connecting",
       websocket: ws,
