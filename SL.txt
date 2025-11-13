@@ -10,7 +10,7 @@ INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2'
 [2025-11-13 03:31:47 +0000] [58] [INFO] connection open
 INFO:app.ws.adapter:evt=server_banner build_id=260df7b host=srv-d26hqi3e5dus73b43g10-hibernate-85b86f4fd6-z4wk2 pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py
 INFO:app.ws.adapter:evt=ws_info_sent sid=bc3a7013c4554a9090c3cf6d371ad609
-INFO:app.ws.adapter:asr_vendor_selected primary=speechmatics allowed=speechmatics reason=pcm16_only
+INFO:app.ws.adapter:asr_vendor_selected primary=gcp allowed=gcp reason=pcm16_only
 INFO:app.ws.adapter:evt=ws_open sid=bc3a7013c4554a9090c3cf6d371ad609
 INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=bc3a7013c4554a9090c3cf6d371ad609
 INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=bc3a7013c4554a9090c3cf6d371ad609
@@ -159,7 +159,7 @@ INFO:app.ws.adapter:evt=audio_task_complete sid=bc3a7013c4554a9090c3cf6d371ad609
 WARNING:app.ws.adapter:evt=asr_ready_deadline sid=bc3a7013c4554a9090c3cf6d371ad609 action=force_emit
 INFO:app.ws.adapter:evt=asr_ready_deferred sid=bc3a7013c4554a9090c3cf6d371ad609 where=deadline
 INFO:app.ws.adapter:evt=audio_task_complete sid=bc3a7013c4554a9090c3cf6d371ad609 duration_ms=0
-INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=bc3a7013c4554a9090c3cf6d371ad609 input.mode=pcm16 input.mime=audio/raw;rate=16000;channels=1;format=s16le capture.timeslice_ms=200 vendor=speechmatics
+INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=bc3a7013c4554a9090c3cf6d371ad609 input.mode=pcm16 input.mime=audio/raw;rate=16000;channels=1;format=s16le capture.timeslice_ms=200 vendor=gcp
 INFO:app.ws.adapter:evt=asr_ready_emit sid=bc3a7013c4554a9090c3cf6d371ad609 where=tts_end
 10.225.24.137:34078 - "GET /api/v1/live HTTP/1.1" 200
 10.225.24.137:48840 - "GET /api/v1/live HTTP/1.1" 200

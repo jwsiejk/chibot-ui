@@ -36,7 +36,7 @@ On successful upgrade, the server emits an initial `info` frame with connection 
   ```json
   {
     "type": "asr.ready",
-    "vendor": "speechmatics",
+    "vendor": "gcp",
     "input": { "container": "raw", "codec": "pcm_s16le", "rate_hz": 16000, "channels": 1 }
   }
   ```
@@ -203,7 +203,7 @@ Copy code
 {"type":"tts.start","utt_id":"u-123","voice_id":"alloy-en-US-001","locale":"en-US","post_hold_ms":200}
 {"type":"tts.end","utt_id":"u-123"}
 
-{"type":"asr.ready","vendor":"speechmatics","input":{"container":"raw","codec":"pcm_s16le","rate_hz":16000,"channels":1}}
+{"type":"asr.ready","vendor":"gcp","input":{"container":"raw","codec":"pcm_s16le","rate_hz":16000,"channels":1}}
 {"type":"asr.partial","req_id":"r-1","text":"...","confidence":0.73}
 {"type":"asr.final","req_id":"r-1","text":"...","confidence":0.91}
 
@@ -281,7 +281,7 @@ Copy code
   "turn_id":"turn-uuid",
   "req_id":"req-uuid",
   "who":"client|server|asr|tts|llm",
-  "source":"webapp|ws_server|deepgram|speechmatics|elevenlabs|openai|policy",
+  "source":"webapp|ws_server|deepgram|gcp|elevenlabs|openai|policy",
   "level":"debug",
   "meta":{...}
 }
@@ -305,7 +305,7 @@ Copy code
 {"type":"EVT_ASR_READY","vendor":"deepgram"}
 {"type":"EVT_ASR_PARTIAL","req_id":"r-1","text":"...","confidence":0.8}
 {"type":"EVT_ASR_FINAL","req_id":"r-1","text":"...","confidence":0.92}
-vendor: deepgram | speechmatics
+vendor: deepgram | gcp
 
 One FINAL per turn.
 

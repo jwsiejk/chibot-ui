@@ -48,7 +48,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     ERROR_UNKNOWN: 'error_unknown',
   };
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-  const DEFAULT_ASR_VENDOR = 'speechmatics';
+  const DEFAULT_ASR_VENDOR = 'gcp';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
 
   // ---- Debug toggles (runtime-settable) ----
@@ -2485,7 +2485,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     return sanitized;
   }
 
-  const ASR_VENDOR_OPTIONS = ['speechmatics'];
+  const ASR_VENDOR_OPTIONS = ['gcp'];
   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
 
   const DEFAULT_POLICY_FLAGS = {
@@ -2497,7 +2497,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       commit_on_vad_silence: true,
       commit_silence_ms: 900,
       max_utterance_ms: 8000,
-      vendor: { primary: 'speechmatics', secondary: null },
+      vendor: { primary: 'gcp', secondary: null },
     },
     routing: { ws_version: 'v2' },
     audio: { pipeline: { mode: 'pcm16' } },
@@ -2677,7 +2677,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
           maxUtterance = Math.round(parsed);
         }
       }
-      const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: 'speechmatics', secondary: null };
+      const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: 'gcp', secondary: null };
       const vendorBlock = asr && typeof asr.vendor === 'object' ? asr.vendor : null;
       const vendor = { ...vendorDefaults };
       if (vendorBlock) {
