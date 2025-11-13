@@ -2847,9 +2847,11 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   function transcriptFrameAllowed(frame) {
     const type = typeof frame?.type === "string" ? frame.type : "";
     const role = typeof frame?.role === "string" ? frame.role : "";
-    const canonicalType = type === "message" || type === "chat.message";
-    const canonicalRole = role === "user" || role === "assistant";
-    const allow = canonicalType && canonicalRole;
+    const isASR = type === "asr.partial" || type === "asr.final";
+    const isChatMessage =
+      (type === "message" || type === "chat.message") &&
+      (role === "user" || role === "assistant");
+    const allow = isASR || isChatMessage;
     try {
       console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
     } catch {}
