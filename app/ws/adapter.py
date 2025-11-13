@@ -2037,6 +2037,14 @@ class ChatV2Adapter:
                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
             return self._HandleResult(True)
 
+        if frame_type in ("input.start", "input.stop", "start_listening", "stop_listening"):
+            await self._publish(
+                EVT_WS_JSON_RECV,
+                ctx.sid,
+                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+            )
+            return self._HandleResult(True)
+
         if frame_type == "chat.user":
             text = frame.get("text")
             if not isinstance(text, str):

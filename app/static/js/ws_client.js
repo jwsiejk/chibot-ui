@@ -383,9 +383,6 @@ import { initVAD } from "./audio/vad_client.js";
       return false;
     }
     const reasonLabel = reason || (dbg("audio_safe_mode") ? "safe_mode" : "auto");
-    try {
-      WSClient.send({ type: "input.start", reason: reasonLabel });
-    } catch {}
     __turnOpen = true;
     __turnOpenAt = Date.now();
     try {

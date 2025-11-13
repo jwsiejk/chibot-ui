@@ -1,167 +1,121 @@
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+index c15ec86511a9d36737e4c2294be825ec0318aa8d..ccc733ef06e9d0bc34f91c5bdd614c8d13ed2a8a 100644
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -361,53 +361,50 @@ import { initVAD } from "./audio/vad_client.js";
+   function wsOpen() {
+     const ws = WSClient._ws || window.ws;
+     return ws && ws.readyState === WebSocket.OPEN ? ws : null;
+   }
+ 
+   function isControlFrame(frame) {
+     if (!frame || typeof frame !== "object") return false;
+     const t = typeof frame.type === "string" ? frame.type : "";
+     return t === "input.start" || t === "input.stop" || t === "audio.header" || t === "ping" || t === "pong";
+   }
+ 
+   // ---- Turn opener (idempotent + retry) ----
+   let __turnOpen = false, __turnOpenAt = 0;
+   async function openTurnOnce(reason) {
+     if (__turnOpen) return true;
+     const ws = () => (WSClient?._ws || window.ws);
+     const deadline = Date.now() + 1200;
+     while ((!ws() || ws().readyState !== WebSocket.OPEN) && Date.now() < deadline) {
+       await new Promise((r) => setTimeout(r, 50));
+     }
+     if (!ws() || ws().readyState !== WebSocket.OPEN) {
+       console.warn("openTurnOnce: socket not open");
+       return false;
+     }
+     const reasonLabel = reason || (dbg("audio_safe_mode") ? "safe_mode" : "auto");
+-    try {
+-      WSClient.send({ type: "input.start", reason: reasonLabel });
+-    } catch {}
+     __turnOpen = true;
+     __turnOpenAt = Date.now();
+     try {
+       hubLog("client.turn.intent", { action: "open", reason: reasonLabel });
+     } catch {}
+     return true;
+   }
+ 
+   function resetTurnIntent(reason) {
+     if (!__turnOpen) return;
+     __turnOpen = false;
+     __turnOpenAt = 0;
+     try {
+       hubLog("client.turn.intent", { action: "close", reason: reason || "reset" });
+     } catch {}
+   }
+ 
+   function canSendInputControl() {
+     let phase = null;
+     try {
+       phase = AppState?.wsPhase || AppState?.connectionState || null;
+     } catch {}
+     const inReadyPhase = (typeof phase === "string" && phase) ? WS_READY_PHASES.has(phase) : true;
+     let connected = false;
+     try {
 diff --git a/app/ws/adapter.py b/app/ws/adapter.py
-index 3ce2c1690437b2a6553a87e95c2de8d1e65be18d..0f0ec2d86a694399879573dde5e8d461380e423c 100644
+index 83855953cb5928939516611e26a55518fb7249a6..0204a65a03793b5f713e07c8710f4bac9627b91c 100644
 --- a/app/ws/adapter.py
 +++ b/app/ws/adapter.py
-@@ -1943,50 +1943,60 @@ class ChatV2Adapter:
-             meta["error"] = "bad_json"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
-             return self._HandleResult(True)
- 
-         if not isinstance(frame, dict):
-             meta["error"] = "schema_invalid"
-             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame must be a JSON object")
-             return self._HandleResult(True)
- 
-         frame_payload = frame
- 
-         raw_type = frame.get("type")
-         if not isinstance(raw_type, str):
-             meta["error"] = "schema_invalid"
+@@ -2005,50 +2005,58 @@ class ChatV2Adapter:
              await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 client_ts = frame.get("ts")
+                 payload = {"type": "server.pong", "ts": now_ms}
+                 if isinstance(client_ts, int):
+                     payload["echo"] = client_ts
+                 await self._send_json(send, ctx.sid, payload)
              return self._HandleResult(True)
  
-         frame_type = raw_type
-         meta["frame_type"] = frame_type
-         now_ms = int(time.time() * 1000)
-         ctx.last_client_activity_ms = now_ms
+         if frame_type == "client.pong":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             ctx.last_client_pong_ms = now_ms
+             return self._HandleResult(True)
  
-+        if frame_type == "audio.header":
+         if frame_type == "ping":
+             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
+                 ctx.last_pong_sent_ms = now_ms
+                 reply_ts = frame.get("t")
+                 if not isinstance(reply_ts, int):
+                     reply_ts = now_ms
+                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
+             return self._HandleResult(True)
+ 
++        if frame_type in ("input.start", "input.stop", "start_listening", "stop_listening"):
 +            await self._publish(
 +                EVT_WS_JSON_RECV,
 +                ctx.sid,
 +                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
 +            )
-+            ctx.client_mic_open = True
-+            self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
 +            return self._HandleResult(True)
 +
-         if frame_type in (
-             "client.banner",
-             "client.metrics",
-             "client.log",
-             "client.pong",
-         ):
-             await self._publish(
-                 EVT_WS_JSON_RECV,
-                 ctx.sid,
-                 {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
-             )
-             if frame_type == "client.pong":
-                 ctx.last_client_pong_ms = now_ms
-             return self._HandleResult(True)
+         if frame_type == "chat.user":
+             text = frame.get("text")
+             if not isinstance(text, str):
+                 meta["error"] = "schema_invalid"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                 await self._send_error(
+                     send,
+                     ctx.sid,
+                     "schema_invalid",
+                     "chat.user requires a string text field",
+                 )
+                 return self._HandleResult(False, 1003, "schema_invalid")
  
-         if frame_type in (
-             "client.ready",
-             "client.telemetry",
-             "client.diag",
-             "client.autostart",
-         ):
-             await self._publish(
-                 EVT_WS_JSON_RECV,
-                 ctx.sid,
-                 {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
-@@ -2932,84 +2942,101 @@ class ChatV2Adapter:
-         meta = {
-             "byte_count": byte_count,
-             "seq": seq,
-             "ws": {"dir": "in", "size": byte_count},
-         }
-         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-         now_ms = self._now_ms()
-         self._maybe_update_server_vad(ctx, chunk, now_ms)
-         if ctx.audio_chunks_recv == 1:
-             self._emit_session_step(
-                 ctx.sid,
-                 "audio.stream_started",
-                 summary="Received first audio chunk",
-                 meta={"byte_count": byte_count},
-                 source="ws.audio",
-             )
-         self._handle_client_audio_activity(ctx)
-         mask_phase = ctx.tts_mask_phase or "off"
-         mask_open = mask_phase == "off"
-         ready_gate = ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR
-         mic_open = ctx.client_mic_open
-         send_open = not ctx.audio_send_closed
-         backpressure_ok = ctx.backpressure_state != "on"
- 
-         gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
-+        if not gate_open:
-+            _log.info(
-+                "evt=audio_gate_block sid=%s mask=%s ready=%s mic=%s send=%s back=%s",
-+                ctx.sid,
-+                mask_open,
-+                ready_gate,
-+                mic_open,
-+                send_open,
-+                backpressure_ok,
-+            )
- 
-         if gate_open:
-             await self._flush_audio_backlog(ctx)
-             _log.info(
-                 "evt=audio_ingress sid=%s len=%d gate_open=%s tts_mask=%s client_mic_open=%s audio_send_closed=%s backpressure_state=%s",
-                 ctx.sid,
-                 byte_count,
-                 gate_open,
-                 mask_phase,
-                 mic_open,
-                 ctx.audio_send_closed,
-                 ctx.backpressure_state,
-             )
-             await self._forward_audio_chunk(ctx, chunk, seq)
-             return
- 
-         if not mask_open:
-             reason = "mask"
-         elif not ready_gate:
-             reason = "not_ready"
-         elif not mic_open:
-             reason = "mic_closed"
-         elif not send_open:
-             reason = "send_closed"
-         else:
-             reason = "backpressure"
- 
-         sp = self._server_policy(ctx)
-         try:
-             queue_pre = bool(sp.get("queue_pre_ready_audio", True))
-         except Exception:
-             queue_pre = True
-         if reason in ("not_ready", "send_closed", "backpressure") and queue_pre:
-             self._queue_audio_backlog(ctx, chunk, seq)
-+            _log.info(
-+                "evt=audio_backlog_enqueue sid=%s reason=%s pending=%d bytes=%d",
-+                ctx.sid,
-+                reason,
-+                len(ctx.audio_backlog),
-+                ctx.audio_backlog_bytes,
-+            )
-             return
-         _log.info(
-             "evt=audio_drop sid=%s len=%d reason=%s",
-             ctx.sid,
-             byte_count,
-             reason,
-         )
-         return
- 
-     def _queue_audio_backlog(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
-         backlog = ctx.audio_backlog
-         backlog.append((seq, bytes(chunk)))
-         ctx.audio_backlog_bytes += len(chunk)
-         _log.info(
-             "evt=audio_backlog_queue sid=%s len=%d total_bytes=%d pending=%d",
-             ctx.sid,
-             len(chunk),
-             ctx.audio_backlog_bytes,
-             len(backlog),
-         )
-         while ctx.audio_backlog_bytes > self.THROTTLE_RING_BUFFER_MAX_BYTES and backlog:
-             _seq, drop_chunk = backlog.popleft()
-             ctx.audio_backlog_bytes -= len(drop_chunk)
-             _log.info(
-                 "evt=audio_backlog_trim sid=%s len=%d total_bytes=%d pending=%d",
+             try:
+                 text_bytes = text.encode("utf-8")
+             except UnicodeEncodeError:
+                 meta["error"] = "bad_utf8"
+                 await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                 await self._send_error(
+                     send,
+                     ctx.sid,
+                     "bad_utf8",
+                     "chat.user text must be valid UTF-8",
+                 )
+                 return self._HandleResult(False, 1007, "bad_utf8")
