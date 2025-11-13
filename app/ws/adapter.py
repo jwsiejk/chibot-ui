@@ -3294,17 +3294,6 @@ class ChatV2Adapter:
         payload: Dict[str, Any],
     ) -> None:
         text = json.dumps(payload, separators=(",", ":"))
-        try:
-            await send({"type": "websocket.send", "text": text})
-        except RuntimeError as e:
-            if "websocket.close" in str(e) or "response already completed" in str(e):
-                _log.warning(
-                    "evt=ws_send_skipped sid=%s reason=asgi_closed type=%s",
-                    sid,
-                    payload.get("type"),
-                )
-                return
-            raise
         payload_bytes = text.encode("utf-8")
         byte_count = len(payload_bytes)
         meta: Dict[str, Any] = {
@@ -3328,6 +3317,24 @@ class ChatV2Adapter:
             frame_payload = dict(parsed_frame)
         else:
             frame_payload = dict(payload)
+
+        try:
+            await send({"type": "websocket.send", "text": text})
+        except RuntimeError as e:
+            if "websocket.close" in str(e) or "response already completed" in str(e):
+                _log.warning(
+                    "evt=ws_send_skipped sid=%s reason=asgi_closed type=%s",
+                    sid,
+                    payload.get("type"),
+                )
+                meta_ws = meta.setdefault("ws", {})
+                meta_ws["send_skipped"] = True
+                meta_ws["skipped_reason"] = "asgi_closed"
+                self._log_asr_control_summary(sid, payload)
+                await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
+                return
+            raise
+
         self._log_asr_control_summary(sid, payload)
         await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
 
