@@ -2975,9 +2975,9 @@ class ChatV2Adapter:
                 ctx.sid,
                 mask_open,
                 ready_gate,
-                ctx.client_mic_open,
-                not ctx.audio_send_closed,
-                ctx.backpressure_state != "on",
+                mic_open,
+                send_open,
+                backpressure_ok,
             )
 
         if gate_open:
