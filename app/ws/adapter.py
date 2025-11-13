@@ -3294,7 +3294,17 @@ class ChatV2Adapter:
         payload: Dict[str, Any],
     ) -> None:
         text = json.dumps(payload, separators=(",", ":"))
-        await send({"type": "websocket.send", "text": text})
+        try:
+            await send({"type": "websocket.send", "text": text})
+        except RuntimeError as e:
+            if "websocket.close" in str(e) or "response already completed" in str(e):
+                _log.warning(
+                    "evt=ws_send_skipped sid=%s reason=asgi_closed type=%s",
+                    sid,
+                    payload.get("type"),
+                )
+                return
+            raise
         payload_bytes = text.encode("utf-8")
         byte_count = len(payload_bytes)
         meta: Dict[str, Any] = {
