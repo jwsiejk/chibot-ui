@@ -2281,12 +2281,49 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     return true;
   }
 
+  function cloneQueuedPayload(payload, isBinary = false) {
+    if (isBinary) {
+      if (payload instanceof ArrayBuffer) {
+        try {
+          return payload.slice(0);
+        } catch (err) {
+          console.warn("WSClient queue clone failed (ArrayBuffer)", err);
+          return payload;
+        }
+      }
+      if (ArrayBuffer.isView(payload)) {
+        try {
+          const view = payload;
+          return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+        } catch (err) {
+          console.warn("WSClient queue clone failed (TypedArray)", err);
+          try {
+            return payload.slice ? payload.slice(0) : payload;
+          } catch {
+            return payload;
+          }
+        }
+      }
+      return payload;
+    }
+    if (!payload || typeof payload !== "object") {
+      return payload;
+    }
+    try {
+      return { ...payload };
+    } catch (err) {
+      console.warn("WSClient queue clone failed", err);
+      return payload;
+    }
+  }
+
   function sendBinary(payload, opts = {}) {
     // Always send PCM when the socket is OPEN. Do not phase-gate audio.
     const ws = WSClient?._ws || window.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       WSClient._queue = WSClient._queue || [];
-      WSClient._queue.push({ type: "binary", payload, options: opts, data: payload, isBinary: true });
+      const queued = cloneQueuedPayload(payload, true);
+      WSClient._queue.push({ type: "binary", payload, options: opts, data: queued, isBinary: true });
       return false;
     }
     try {
@@ -4135,7 +4172,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       try {
         const phase = AppState?.wsPhase || AppState?.connectionState;
         if (!WS_READY_PHASES.has(phase)) {
-          client._queue.push({ data, isBinary: false });
+          const queued = cloneQueuedPayload(data, false);
+          client._queue.push({ data: queued, isBinary: false });
           console.warn("WSClient.send queued (phase not ready)", { phase });
           return true;
         }
@@ -4143,7 +4181,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
 
     if (!open) {
-      client._queue.push({ data, isBinary: !!binary });
+      const queued = cloneQueuedPayload(data, !!binary);
+      client._queue.push({ data: queued, isBinary: !!binary });
       console.warn("WSClient.send queued (socket not open)");
       return true;
     }
