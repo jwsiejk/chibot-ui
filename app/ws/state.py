@@ -16,7 +16,7 @@ class SessionCtx:
     sid: str
     policy: Any
     asr_state: ASRState = "closed"
-    asr: Any = None
+    asr_engine: Any = None
     tts_active: bool = False
     queued_arm: bool = False
     first_chunk_sent: bool = False
