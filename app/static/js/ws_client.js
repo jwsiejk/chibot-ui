@@ -1289,7 +1289,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   }
 
 
-  async function stopRecorder(reason) {
+  async function performStopRecorder(reason) {
     _audioStreaming = false;
     __firstChunkSeen = false;
     __armingGraceUntil = 0;
@@ -1320,6 +1320,110 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     try {
       hubLog("client.pcm.capture_stop", { reason: stopReason });
     } catch {}
+  }
+
+  const USER_INITIATED_STOP_REASONS = new Set([
+    "user_requested",
+    "user_restart",
+    "user_end",
+    "client_stop",
+    "client_shutdown",
+    "resume_invalid",
+  ]);
+
+  const SERVER_ERROR_STOP_REASONS = new Set([
+    "server_requested",
+    "server_error",
+    "server_restart",
+    "bad_info_frame",
+    "bad_info_sequence",
+    "resume_invalid",
+    "asr_unavailable",
+    "tts_start",
+    "handshake_close",
+    "schema_invalid",
+    "bad_utf8",
+    "ws_close",
+    "client_shutdown",
+    "rate_limited",
+  ]);
+
+  const SERVER_ERROR_REASON_PATTERNS = [
+    /error/,
+    /fail/,
+    /denied/,
+    /timeout/,
+    /invalid/,
+    /unavailable/,
+    /disconnect/,
+    /refus/,
+    /forbidden/,
+    /shutdown/,
+  ];
+
+  const VAD_OR_MIC_REASON_PATTERNS = [
+    /\bvad(?:[_-]|$)/,
+    /\bvoice_activity\b/,
+    /\bmic(?:_|-|\s)(?:state|status|pause|paused|mute|muted|off|inactive)/,
+  ];
+
+  function toReasonLabel(value) {
+    const label = normalizeReason(value);
+    return typeof label === "string" ? label : "unspecified";
+  }
+
+  function reasonLooksLikeVadOrMic(key) {
+    if (!key) {
+      return false;
+    }
+    return VAD_OR_MIC_REASON_PATTERNS.some((pattern) => pattern.test(key));
+  }
+
+  function reasonLooksUserInitiated(key) {
+    return USER_INITIATED_STOP_REASONS.has(key);
+  }
+
+  function reasonLooksServerError(key) {
+    if (SERVER_ERROR_STOP_REASONS.has(key)) {
+      return true;
+    }
+    return SERVER_ERROR_REASON_PATTERNS.some((pattern) => pattern.test(key));
+  }
+
+  function evaluateStopRecorderReason(reason, fallbackReason) {
+    const label = toReasonLabel(reason);
+    const key = label.trim().toLowerCase();
+    if (reasonLooksLikeVadOrMic(key)) {
+      return { allowed: false, blocked: true, label };
+    }
+    if (reasonLooksUserInitiated(key) || reasonLooksServerError(key)) {
+      return { allowed: true, blocked: false, label };
+    }
+    if (fallbackReason) {
+      const fallbackLabel = toReasonLabel(fallbackReason);
+      const fallbackKey = fallbackLabel.trim().toLowerCase();
+      if (!reasonLooksLikeVadOrMic(fallbackKey) && (reasonLooksUserInitiated(fallbackKey) || reasonLooksServerError(fallbackKey))) {
+        return { allowed: true, blocked: false, label: fallbackLabel };
+      }
+    }
+    return { allowed: false, blocked: false, label };
+  }
+
+  async function stopRecorder(reason, options = {}) {
+    const { fallbackReason = null, source = null } = options || {};
+    const { allowed, blocked, label } = evaluateStopRecorderReason(reason, fallbackReason);
+    if (!allowed) {
+      try {
+        const meta = { reason: label, source };
+        if (blocked) {
+          console.info("stopRecorder skipped for VAD/mic trigger", meta);
+        } else {
+          console.info("stopRecorder skipped for non user/server trigger", meta);
+        }
+      } catch {}
+      return false;
+    }
+    return performStopRecorder(label);
   }
 
   async function startRecorderStreaming(policy, reason) {
@@ -3137,14 +3241,14 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       });
       return;
     } else if (frame.type === "stop_listening") {
+      const rawStopReason = typeof frame?.reason === "string" && frame.reason
+        ? frame.reason
+        : frame?.type || "stop_listening";
       if (_audioStreaming) {
-        const reason = typeof frame?.reason === "string" && frame.reason
-          ? frame.reason
-          : frame?.type || "stop_listening";
-        hubLog("client.stream.off", { reason });
+        hubLog("client.stream.off", { reason: rawStopReason });
       }
       _audioStreaming = false;
-      await stopRecorder("server_requested");
+      await stopRecorder({ reason: rawStopReason }, { fallbackReason: "server_requested", source: "server.stop_listening" });
       setAsrArmInFlight(false);
       try {
         const hub = AppState?.hub;
@@ -3851,23 +3955,32 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   }
 
   async function close(reason = DEFAULT_CLOSE_REASON) {
+    const normalizedReason = toReasonLabel(reason || DEFAULT_CLOSE_REASON);
+    const reasonKey = normalizedReason.trim().toLowerCase();
+    if (reasonLooksLikeVadOrMic(reasonKey) && !(reasonLooksUserInitiated(reasonKey) || reasonLooksServerError(reasonKey))) {
+      try {
+        console.info("WSClient.close ignored for VAD/mic trigger", { reason: normalizedReason });
+      } catch {}
+      return;
+    }
+    const closeReason = normalizedReason || DEFAULT_CLOSE_REASON;
     if (_audioStreaming) {
-      const offReason = typeof reason === "string" && reason ? reason : "client_shutdown";
+      const offReason = closeReason || "client_shutdown";
       hubLog("client.stream.off", { reason: offReason });
     }
     _audioStreaming = false;
-    recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(reason || "", 80) });
+    recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(closeReason || "", 80) });
     // Reset header state so the next session emits header again
     try { typeof __resetAudioHeaderSent === 'function' && __resetAudioHeaderSent(); } catch {}
-    await stopRecorder(reason || "client_shutdown");
+    await stopRecorder(closeReason || "client_shutdown", { source: "ws.close" });
     setAsrArmInFlight(false);
     setAppStateValue("ttsActive", false);
     setWsPhase("closing");
     setWsConnected(false);
     const emitResumeInvalid = () => {
-      if (reason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      if (closeReason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
         try {
-          window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason } }));
+          window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason: closeReason } }));
         } catch {}
       }
     };
@@ -3878,13 +3991,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       return;
     }
     const ws = socket;
-    cleanupSocket(ws, reason);
+    cleanupSocket(ws, closeReason);
     clearHeartbeat();
     clearRateLimitRetryTimer();
     rateLimitRetryCount = 0;
     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
       try {
-        window.WSErrorUI.cancelRateLimitCountdown(reason);
+        window.WSErrorUI.cancelRateLimitCountdown(closeReason);
       } catch (err) {
         console.warn("Failed to cancel countdown on close", err);
       }
