@@ -1,4 +1,4 @@
-# // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; legacy Speechmatics removed.
+# // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram.
 """chat.v2 WebSocket adapter for AskChip."""
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ from typing import (
 )
 
 import json
-import urllib.request
 from urllib.parse import parse_qs
 
 from app import config
@@ -77,7 +76,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
-from app.services.asr.sm_rt import SMRealtimeClient
+from app.services.asr.gcp_engine import GCPStreamingASREngine
 from app.ws.validator import validate_audio_header_against_policy, validate_frame
 from app.ws.state import SessionCtx, can_open, mark
 from app.ws.policy import normalize_policy
@@ -109,6 +108,8 @@ _AUDIO_THROTTLE_HINT_MS = 250
 _AUDIO_THROTTLE_COOLDOWN_MS = 600
 _AUDIO_THROTTLE_QUEUE_THRESHOLD = QUEUE_ON_THRESHOLD
 _AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD = 4
+
+_DEFAULT_GCP_SAMPLE_RATE_HZ = 16000
 
 _DEFAULT_WS_PING_INTERVAL_MS = 20_000
 _HEARTBEAT_TIMEOUT_MS = 30_000
@@ -177,8 +178,6 @@ _POLICY_STABLE_KEYS = (
 )
 
 _log = logging.getLogger(__name__)
-
-_SM_JWT_CACHE = {"token": None, "exp": 0}
 
 _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
@@ -464,6 +463,7 @@ class AdapterContext:
     asr_first_packet_logged: bool = False
     asr_silence_hold_logged: bool = False
     asr_silence_eot_logged: bool = False
+    asr_first_packet_monotonic: Optional[float] = None
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
     send_lock: asyncio.Lock | None = None
@@ -885,7 +885,7 @@ class ChatV2Adapter:
 
     @staticmethod
     def _allowed_asr_vendors() -> List[str]:
-        return ["speechmatics"]
+        return ["gcp"]
 
     @staticmethod
     def _coerce_non_negative_int(value: Any, default: int) -> int:
@@ -1130,13 +1130,15 @@ class ChatV2Adapter:
                 if not should_close:
                     continue
                 min_stream_ms = 1200
-                asr_client = ctx.session.asr
-                bytes_streamed = getattr(asr_client, "bytes_streamed", 0) if asr_client else 0
-                stream_age_ms = (
-                    getattr(asr_client, "ms_since_first_packet", min_stream_ms)
-                    if asr_client
-                    else min_stream_ms
-                )
+                bytes_streamed = ctx.asr_bytes_sent
+                if isinstance(bytes_streamed, int) and bytes_streamed >= 0:
+                    bytes_streamed = int(bytes_streamed)
+                else:
+                    bytes_streamed = 0
+                if isinstance(ctx.asr_opened_ms, int):
+                    stream_age_ms = max(0, self._now_ms() - ctx.asr_opened_ms)
+                else:
+                    stream_age_ms = min_stream_ms
                 base_meta: Dict[str, Any] = {
                     "sid": ctx.sid,
                     "fuse_mode": fuse_mode,
@@ -1646,7 +1648,7 @@ class ChatV2Adapter:
         policy_snapshot = self._policy_snapshot() if FEATURE_LEGACY_POLICY else None
         legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
         session_policy_v2 = self._build_session_policy(legacy_hits=legacy_hits)
-        allowed_asr_vendors = ["speechmatics"]
+        allowed_asr_vendors = ["gcp"]
         snapshot_mapping: Mapping[str, Any] | None
         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, Mapping):
             snapshot_mapping = policy_snapshot
@@ -1669,7 +1671,7 @@ class ChatV2Adapter:
         provisional_ctx.policy = dict(session_policy_v2)
         provisional_ctx.session.policy = provisional_ctx.policy
         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-        selected_vendor = "speechmatics"
+        selected_vendor = "gcp"
         selection_reason = "pcm16_only"
         if FEATURE_LEGACY_POLICY and policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
@@ -1714,7 +1716,7 @@ class ChatV2Adapter:
         )
         ctx.asr_vendor_logged = True
         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
-        if ctx.asr_vendor == "speechmatics":
+        if ctx.asr_vendor == "gcp":
             ctx.audio_pipeline_mode = "pcm16"
         mode = ctx.audio_pipeline_mode or "pcm16"
         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
@@ -1817,7 +1819,7 @@ class ChatV2Adapter:
                 self._stop_asr_ready_tracker(ctx)
                 await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
                 vendor_meta = {
-                    "vendor": ctx.asr_vendor or "speechmatics",
+                    "vendor": ctx.asr_vendor or "gcp",
                     "bytes": ctx.asr_bytes_sent,
                 }
                 await self._publish(ASR_VENDOR_BYTES_TOTAL, ctx.sid, vendor_meta)
@@ -2433,7 +2435,7 @@ class ChatV2Adapter:
                     outcome,
                     attempts,
                 )
-                if vendor_value == "speechmatics" and stage_value in {"ready", "started", "closed"}:
+                if vendor_value == "gcp" and stage_value in {"ready", "started", "closed"}:
                     bus.publish(
                         {
                             "type": EVT_WS_JSON_RECV_SUMMARY,
@@ -2442,7 +2444,7 @@ class ChatV2Adapter:
                             "source": "ws.adapter",
                             "meta": {
                                 "kind": stage_value,
-                                "vendor": "speechmatics",
+                                "vendor": "gcp",
                             },
                         }
                     )
@@ -2766,7 +2768,7 @@ class ChatV2Adapter:
             )
 
         if (
-            ctx.asr_vendor == "speechmatics"
+            ctx.asr_vendor == "gcp"
             and ctx.audio_chunks_recv == 0
             and data.startswith(b"\x1A\x45\xDF\xA3")
         ):
@@ -2776,17 +2778,17 @@ class ChatV2Adapter:
                 "ws": {"dir": "in", "size": byte_count},
             }
             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-            detail = "speechmatics requires raw pcm audio"
+            detail = "gcp streaming requires raw pcm audio"
             await self._send_error(send, ctx.sid, "audio_container_mismatch", detail)
             self._emit_session_step(
                 ctx.sid,
                 "audio.stream_closed",
                 summary="Closed audio stream due to unexpected container",
-                meta={"reason": "unexpected_container", "vendor": "speechmatics"},
+                meta={"reason": "unexpected_container", "vendor": "gcp"},
                 source="ws.audio",
             )
             _log.error(
-                "asr_stream_closed reason=unexpected_container vendor=speechmatics sid=%s",
+                "asr_stream_closed reason=unexpected_container vendor=gcp sid=%s",
                 ctx.sid,
             )
             return self._HandleResult(False, 1003, "unexpected_container")
@@ -3079,24 +3081,21 @@ class ChatV2Adapter:
                 "source": "ws_server",
             }
         )
-        asr_client = ctx.session.asr
-        if ctx.session.asr_state == "open" and asr_client is not None:
+        engine = ctx.session.asr_engine
+        if ctx.session.asr_state == "open" and engine is not None:
             try:
-                await asr_client.send_pcm(chunk)
+                await engine.write(chunk)
             except Exception:
                 _log.warning("evt=asr_pcm_send_failed sid=%s", ctx.sid, exc_info=True)
             else:
                 ctx.asr_bytes_sent += byte_count
                 if not ctx.session.first_chunk_sent:
                     ctx.session.first_chunk_sent = True
-                streamed = getattr(asr_client, "bytes_streamed", 0) or 0
-                streamed += byte_count
-                setattr(asr_client, "bytes_streamed", streamed)
                 now_mono = time.monotonic()
-                first_packet = getattr(asr_client, "first_packet_monotonic", None)
+                first_packet = ctx.asr_first_packet_monotonic
                 if not isinstance(first_packet, (int, float)):
                     first_packet = now_mono
-                    setattr(asr_client, "first_packet_monotonic", first_packet)
+                    ctx.asr_first_packet_monotonic = first_packet
                 if not ctx.asr_first_packet_logged:
                     try:
                         self._bus(
@@ -3107,8 +3106,7 @@ class ChatV2Adapter:
                         pass
                     else:
                         ctx.asr_first_packet_logged = True
-                elapsed_ms = max(0, int((now_mono - first_packet) * 1000.0))
-                setattr(asr_client, "ms_since_first_packet", elapsed_ms)
+                ctx.asr_opened_ms = ctx.asr_opened_ms or self._now_ms()
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -3123,13 +3121,13 @@ class ChatV2Adapter:
             else:
                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
 
-    def _log_speechmatics_control_summary(
+    def _log_asr_control_summary(
         self, sid: str, payload: Mapping[str, Any]
     ) -> None:
         if not isinstance(payload, Mapping):
             return
         vendor = payload.get("vendor")
-        if not (isinstance(vendor, str) and vendor.strip().lower() == "speechmatics"):
+        if not (isinstance(vendor, str) and vendor.strip().lower() == "gcp"):
             return
         command_value = payload.get("command")
         if not isinstance(command_value, str):
@@ -3193,7 +3191,7 @@ class ChatV2Adapter:
             normalized_rate = rate_value if rate_value is not None else 16000
             normalized_channels = channels_value if channels_value is not None else 1
             _log.info(
-                "evt=ws_json_send_summary sid=%s kind=start vendor=speechmatics format=%s rate=%d channels=%d",
+                "evt=ws_json_send_summary sid=%s kind=start vendor=gcp format=%s rate=%d channels=%d",
                 sid,
                 normalized_format,
                 normalized_rate,
@@ -3207,7 +3205,7 @@ class ChatV2Adapter:
                     "source": "ws.adapter",
                     "meta": {
                         "kind": "start",
-                        "vendor": "speechmatics",
+                        "vendor": "gcp",
                         "format": normalized_format,
                         "rate": normalized_rate,
                         "channels": normalized_channels,
@@ -3216,7 +3214,7 @@ class ChatV2Adapter:
             )
         elif command == "stop":
             _log.info(
-                "evt=ws_json_send_summary sid=%s kind=stop vendor=speechmatics",
+                "evt=ws_json_send_summary sid=%s kind=stop vendor=gcp",
                 sid,
             )
             bus.publish(
@@ -3227,13 +3225,13 @@ class ChatV2Adapter:
                     "source": "ws.adapter",
                     "meta": {
                         "kind": "stop",
-                        "vendor": "speechmatics",
+                        "vendor": "gcp",
                     },
                 }
             )
         elif command in {"ping", "pong"}:
             _log.info(
-                "evt=ws_json_send_summary sid=%s kind=%s vendor=speechmatics",
+                "evt=ws_json_send_summary sid=%s kind=%s vendor=gcp",
                 sid,
                 command,
             )
@@ -3269,7 +3267,7 @@ class ChatV2Adapter:
             frame_payload = dict(parsed_frame)
         else:
             frame_payload = dict(payload)
-        self._log_speechmatics_control_summary(sid, payload)
+        self._log_asr_control_summary(sid, payload)
         await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
 
     async def _send_error(
@@ -3621,7 +3619,7 @@ class ChatV2Adapter:
                 lower_reason = reason.lower() if isinstance(reason, str) else ""
                 lower_detail = detail_text.lower()
                 concurrency_likely = False
-                if ctx.asr_vendor == "speechmatics":
+                if ctx.asr_vendor == "gcp":
                     if "concurrent_session" in lower_detail:
                         concurrency_likely = True
                     elif "concurrent_session" in lower_reason:
@@ -4008,12 +4006,6 @@ class ChatV2Adapter:
         else:
             return None
 
-        source = event.get("source")
-        if isinstance(source, str) and source == "speechmatics_client":
-            vendor = event.get("vendor")
-            if not isinstance(vendor, str) or vendor.lower() != "speechmatics":
-                return None
-
         raw_meta = event.get("meta")
         meta = raw_meta if isinstance(raw_meta, Mapping) else None
         text = event.get("text")
@@ -4072,7 +4064,7 @@ class ChatV2Adapter:
                 else:
                     vendor = None
         if isinstance(vendor, str) and vendor:
-            frame["vendor"] = vendor.lower() if vendor.lower() == "speechmatics" else vendor
+            frame["vendor"] = vendor
 
         if meta is not None:
             partial_seq = meta.get("partial_seq")
@@ -4275,14 +4267,14 @@ class ChatV2Adapter:
                 else:
                     ctx.policy_snapshot = None
                 self._replace_policy(ctx, policy_payload)
-                ctx.allowed_asr_vendors = ["speechmatics"]
+                ctx.allowed_asr_vendors = ["gcp"]
                 if FEATURE_LEGACY_POLICY:
                     snapshot_mapping = policy_payload
                 else:
                     snapshot_mapping = (
                         ctx.policy if isinstance(ctx.policy, Mapping) else None
                     )
-                ctx.asr_vendor = "speechmatics"
+                ctx.asr_vendor = "gcp"
                 if not ctx.asr_vendor_logged:
                     allowed_display = ",".join(ctx.allowed_asr_vendors)
                     _log.info(
@@ -4527,7 +4519,7 @@ class ChatV2Adapter:
             isinstance(payload, dict)
             and "message" in payload
             and isinstance(ctx.asr_vendor, str)
-            and ctx.asr_vendor.lower() == "speechmatics"
+            and ctx.asr_vendor.lower() == "gcp"
         ):
             return
         lock = self._ensure_send_lock(ctx)
@@ -4535,7 +4527,7 @@ class ChatV2Adapter:
             frame_type = payload.get("type")
             if frame_type in {"asr.partial", "asr.final"}:
                 vendor = payload.get("vendor")
-                if isinstance(vendor, str) and vendor.lower() == "speechmatics":
+                if isinstance(vendor, str) and vendor.lower() == "gcp":
                     log_event = (
                         "evt=asr_partial_sent"
                         if frame_type == "asr.partial"
@@ -4543,7 +4535,7 @@ class ChatV2Adapter:
                     )
                     text_value = payload.get("text")
                     text_len = len(text_value) if isinstance(text_value, str) else 0
-                    _log.info("%s vendor=speechmatics chars=%d", log_event, text_len)
+                    _log.info("%s vendor=gcp chars=%d", log_event, text_len)
             await self._send_json(send, ctx.sid, payload)
 
     async def _send_audio_frame(
@@ -5438,7 +5430,7 @@ class ChatV2Adapter:
 
         audio_mode = (pipeline_block.get("mode") if pipeline_block else None) or ""
         audio_mode = str(audio_mode).strip().lower()
-        should_apply_defaults = (vendor_primary == "speechmatics" or audio_mode == "pcm16")
+        should_apply_defaults = (vendor_primary == "gcp" or audio_mode == "pcm16")
 
         if should_apply_defaults:
             if isinstance(media_block, dict) and "asr_input" in media_block:
@@ -5695,67 +5687,11 @@ class ChatV2Adapter:
         except (TypeError, ValueError):
             max_utterance_ms = 0
 
-    @staticmethod
-    def _speechmatics_rt_url() -> str:
-        url = config.SPEECHMATICS_REALTIME_URL
-        if not isinstance(url, str) or not url.strip():
-            raise RuntimeError("speechmatics realtime url not configured")
-        return url
-
-    def _mint_speechmatics_jwt(self, ctx: AdapterContext) -> str | None:
-        """Ask Speechmatics for a short-lived realtime JWT."""
-
-        api_key = os.getenv("SPEECHMATICS_API_KEY", "").strip()
-        if not api_key:
-            _log.warning("evt=sm_jwt_skip reason=no_api_key")
-            return None
-
-        now = int(time.time())
-        cache_token = _SM_JWT_CACHE.get("token")
-        cache_exp = int(_SM_JWT_CACHE.get("exp") or 0)
-        if cache_token and cache_exp > now + 10:
-            return cache_token
-
-        request = urllib.request.Request(
-            "https://mp.speechmatics.com/v1/api_keys?type=rt",
-            data=json.dumps({"ttl": 60}).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except Exception as exc:  # pragma: no cover - network call
-            _log.error("evt=sm_jwt_mint_failed err=%s", exc)
-            return None
-
-        token = (
-            payload.get("key")
-            or payload.get("jwt")
-            or payload.get("token")
-            or payload.get("key_value")
-        )
-        if not token:
-            _log.error("evt=sm_jwt_response_missing_token obj=%s", payload)
-            return None
-
-        ttl_raw = payload.get("ttl", 60)  # many responses omit TTL for temp keys
-        try:
-            ttl = int(ttl_raw)
-        except (TypeError, ValueError):
-            ttl = 60
-
-        _SM_JWT_CACHE.update({"token": token, "exp": now + max(ttl, 1)})
-        _log.info("evt=sm_jwt_minted ttl=%s", ttl)
-        return token
-
-    def _policy_to_sm_params(self, ctx: AdapterContext) -> Dict[str, Any]:
-        language = "en"
+    def _resolve_asr_config(self, ctx: AdapterContext) -> Dict[str, Any]:
+        default_language = getattr(config, "GCP_ASR_DEFAULT_LANGUAGE", "en-US")
+        language = default_language if isinstance(default_language, str) and default_language else "en-US"
         enable_partials = True
+
         if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
             policy_block = (
                 ctx.policy_snapshot.get("policy")
@@ -5764,78 +5700,112 @@ class ChatV2Adapter:
             )
         else:
             policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
+
         if isinstance(policy_block, Mapping):
             nlu_block = policy_block.get("nlu")
             if isinstance(nlu_block, Mapping):
                 lang_candidate = nlu_block.get("language")
                 if isinstance(lang_candidate, str) and lang_candidate.strip():
                     language = lang_candidate.strip()
-            transcription_block = policy_block.get("asr")
-            if isinstance(transcription_block, Mapping):
-                partials_flag = transcription_block.get("enable_partials")
+
+            asr_block = policy_block.get("asr")
+            if isinstance(asr_block, Mapping):
+                partials_flag = asr_block.get("enable_partials")
                 if isinstance(partials_flag, bool):
                     enable_partials = partials_flag
 
-        ctx.active_asr_config = {"language": language, "enable_partials": enable_partials}
-        # Minimal, spec-exact StartRecognition envelope
-        return {
-            "message": "StartRecognition",
-            "audio_format": {"type": "raw", "encoding": "pcm_s16le", "sample_rate": 16000},
-            "transcription_config": {"language": language},
-        }
+        config_map = {"language": language, "enable_partials": enable_partials}
+        ctx.active_asr_config = dict(config_map)
+        return config_map
 
-    def _create_sm_client(self, ctx: AdapterContext) -> SMRealtimeClient:
-        loop = asyncio.get_running_loop()
+    def _resolve_asr_sample_rate(self, ctx: AdapterContext) -> int:
+        candidates: List[Any] = []
+        profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
+        if isinstance(profile, Mapping):
+            candidates.append(profile.get("sample_rate"))
 
-        def _publish_invariant(state: str, ok: bool, extra: Optional[Dict[str, Any]] = None) -> None:
-            meta: Dict[str, Any] = {"state": state, "ok": ok}
-            if extra:
-                meta.update(extra)
+        if isinstance(ctx.session_capture_policy, Mapping):
+            capture_block = ctx.session_capture_policy.get("capture")
+            if isinstance(capture_block, Mapping):
+                candidates.append(capture_block.get("sample_rate"))
+
+        if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
+            capture_block = ctx.policy_snapshot.get("capture")
+            if isinstance(capture_block, Mapping):
+                candidates.append(capture_block.get("sample_rate"))
+
+        policy_block = ctx.policy if isinstance(ctx.policy, Mapping) else None
+        if isinstance(policy_block, Mapping):
+            capture_block = policy_block.get("capture")
+            if isinstance(capture_block, Mapping):
+                candidates.append(capture_block.get("sample_rate"))
+
+        for candidate in candidates:
             try:
-                loop.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
-            except RuntimeError:
-                try:
-                    asyncio.create_task(self._publish(ASR_SINGLE_STREAM_INVARIANT, ctx.sid, meta))
-                except RuntimeError:
-                    _log.debug("evt=asr_invariant_emit_skipped sid=%s", ctx.sid)
+                rate_value = int(candidate)
+            except (TypeError, ValueError):
+                continue
+            if rate_value > 0:
+                return rate_value
 
-        def _on_ready(_meta: Dict[str, Any]) -> None:
-            mark(ctx.session, "open")
-            ctx.asr_opened_ms = self._now_ms()
-            ctx.asr_close_reason = None
-            ctx.session.first_chunk_sent = False
-            _publish_invariant("open", True)
-            # Notify the adapter bus that the Speechmatics stream is ready so trackers fire.
-            bus.publish(
-                {
-                    "type": EVT_ASR_READY,
-                    "sid": ctx.sid,
-                    "who": "server",
-                    "source": "ws.adapter",
-                    "vendor": "speechmatics",
-                }
-            )
+        default_rate = getattr(config, "GCP_ASR_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ)
+        try:
+            fallback_rate = int(default_rate)
+        except (TypeError, ValueError):
+            fallback_rate = _DEFAULT_GCP_SAMPLE_RATE_HZ
 
-        def _on_closed(reason: str) -> None:
-            ctx.session.asr = None
-            mark(ctx.session, "closed")
-            ctx.asr_close_reason = reason
-            ctx.asr_open_task = None
-            _publish_invariant("closed", True, {"reason": reason})
+        _log.warning("evt=asr_sample_rate_fallback sid=%s sample_rate=%s", ctx.sid, fallback_rate)
+        return fallback_rate
 
-        def _on_notice(meta: Dict[str, Any]) -> None:
-            _log.info("evt=sm_notice sid=%s meta=%s", ctx.sid, meta)
+    def _create_asr_engine(self, ctx: AdapterContext) -> GCPStreamingASREngine:
+        return GCPStreamingASREngine()
 
-        client = SMRealtimeClient(
-            ctx.sid,
-            on_ready=_on_ready,
-            on_notice=_on_notice,
-            on_closed=_on_closed,
-        )
-        setattr(client, "bytes_streamed", 0)
-        setattr(client, "first_packet_monotonic", None)
-        setattr(client, "ms_since_first_packet", 0)
-        return client
+    async def _handle_asr_result(
+        self, ctx: AdapterContext, transcript: str | None, is_final: bool
+    ) -> None:
+        text = transcript or ""
+        vendor = "gcp"
+
+        if not isinstance(text, str):
+            text = str(text)
+
+        meta: Dict[str, Any] = {"vendor": vendor}
+        event_payload: Dict[str, Any]
+
+        if not is_final:
+            ctx.partial_seq += 1
+            meta["partial_seq"] = ctx.partial_seq
+            event_payload = {
+                "type": EVT_ASR_PARTIAL,
+                "sid": ctx.sid,
+                "text": text,
+                "vendor": vendor,
+                "meta": dict(meta),
+            }
+        else:
+            if not text.strip():
+                meta["no_speech"] = True
+            event_payload = {
+                "type": EVT_ASR_FINAL,
+                "sid": ctx.sid,
+                "text": text,
+                "vendor": vendor,
+                "meta": dict(meta),
+            }
+
+        bus.publish(event_payload)
+
+        now_ms = self._now_ms()
+        ctx.session.last_vendor_activity_ms = float(now_ms)
+
+        if not is_final:
+            req_id = ctx.await_user_req_id if isinstance(ctx.await_user_req_id, str) else ""
+            await self._invoke_engine("on_asr_partial", ctx.sid, req_id, 1.0, text)
+            return
+
+        req_id_final = ctx.await_user_req_id if isinstance(ctx.await_user_req_id, str) else None
+        await self._invoke_engine("on_asr_final", ctx.sid, text, req_id_final)
+        await self._close_asr(ctx, reason="final_transcript")
 
     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
         if ctx.ws_send is None:
@@ -5844,6 +5814,7 @@ class ChatV2Adapter:
             return
         if ctx.asr_open_task and not ctx.asr_open_task.done():
             return
+
         mark(ctx.session, "opening")
         ctx.asr_bytes_sent = 0
         ctx.asr_opened_ms = None
@@ -5854,7 +5825,9 @@ class ChatV2Adapter:
         ctx.asr_first_packet_logged = False
         ctx.asr_silence_hold_logged = False
         ctx.asr_silence_eot_logged = False
-        ctx.session.asr = self._create_sm_client(ctx)
+        ctx.asr_vendor = "gcp"
+        ctx.session.asr_engine = self._create_asr_engine(ctx)
+
         try:
             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
         except RuntimeError:
@@ -5867,34 +5840,42 @@ class ChatV2Adapter:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
             return
-        client = ctx.session.asr
-        if client is None:
+
+        engine = ctx.session.asr_engine
+        if engine is None:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
             return
-        try:
-            params = self._policy_to_sm_params(ctx)
-            # Force header-only auth when configured; otherwise allow JWT minting (optional)
-            from app import config as _cfg
 
-            token = None if _cfg.SPEECHMATICS_FORCE_HEADER_AUTH else self._mint_speechmatics_jwt(ctx)
-            _log.info("evt=sm_auth_mode sid=%s mode=%s", ctx.sid, "api_key_header" if token is None else "jwt")
-            endpoint_url = self._speechmatics_rt_url()
-            _log.info("evt=asr_open_begin sid=%s endpoint=%s", ctx.sid, endpoint_url)
-            await client.open(endpoint_url=endpoint_url, jwt_token=token, params=params)
+        asr_config = self._resolve_asr_config(ctx)
+        sample_rate = self._resolve_asr_sample_rate(ctx)
+        language = asr_config.get("language", "en-US")
+
+        async def _on_result(transcript: str, is_final: bool) -> None:
+            await self._handle_asr_result(ctx, transcript, is_final)
+
+        try:
+            _log.info(
+                "evt=asr_open_begin sid=%s vendor=gcp sample_rate=%s language=%s",
+                ctx.sid,
+                sample_rate,
+                language,
+            )
+            await engine.open(
+                sample_rate=sample_rate,
+                language=language,
+                sid=ctx.sid,
+                on_result=_on_result,
+            )
         except asyncio.CancelledError:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
             raise
         except Exception:
-            try:
-                _log.error("evt=asr_open_endpoint sid=%s endpoint=%s", ctx.sid, endpoint_url)
-            except Exception:
-                pass
-            ctx.session.asr = None
+            ctx.session.asr_engine = None
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
-            _log.exception("evt=asr_open_failed sid=%s", ctx.sid)
+            _log.exception("evt=asr_open_failed sid=%s vendor=gcp", ctx.sid)
             try:
                 await self._send_json(
                     send,
@@ -5909,8 +5890,38 @@ class ChatV2Adapter:
                 {"state": "closed", "ok": False, "reason": "open_failed"},
             )
             return
+
         ctx.asr_open_task = None
         ctx.session.queued_arm = False
+        mark(ctx.session, "open")
+        ctx.asr_opened_ms = self._now_ms()
+        ctx.asr_close_reason = None
+        ctx.session.first_chunk_sent = False
+
+        await self._publish(
+            ASR_SINGLE_STREAM_INVARIANT,
+            ctx.sid,
+            {"state": "open", "ok": True, "vendor": "gcp"},
+        )
+
+        bus.publish(
+            {
+                "type": EVT_ASR_OPEN,
+                "sid": ctx.sid,
+                "who": "server",
+                "source": "ws.adapter",
+                "vendor": "gcp",
+            }
+        )
+        bus.publish(
+            {
+                "type": EVT_ASR_READY,
+                "sid": ctx.sid,
+                "who": "server",
+                "source": "ws.adapter",
+                "vendor": "gcp",
+            }
+        )
 
     async def _close_asr(
         self,
@@ -5924,23 +5935,19 @@ class ChatV2Adapter:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        client = ctx.session.asr
-        ctx.session.asr = None
+
+        engine = ctx.session.asr_engine
+        ctx.session.asr_engine = None
+
         if ctx.session.asr_state in {"opening", "open"}:
             mark(ctx.session, "closing")
-        if client is not None:
+
+        if engine is not None:
             try:
-                client.turn_id = getattr(ctx.session, "turn_id", None)
-            except AttributeError:
-                client.turn_id = None
-            try:
-                await client.send_end_of_stream()
+                await engine.close()
             except Exception:
-                _log.warning("evt=asr_send_eos_failed sid=%s", ctx.sid, exc_info=True)
-            try:
-                await client.close()
-            except Exception:
-                _log.warning("evt=asr_close_failed sid=%s", ctx.sid, exc_info=True)
+                _log.warning("evt=asr_close_failed sid=%s vendor=gcp", ctx.sid, exc_info=True)
+
         mark(ctx.session, "closed")
         ctx.session.first_chunk_sent = False
         ctx.session.queued_arm = False
@@ -5950,6 +5957,22 @@ class ChatV2Adapter:
         ctx.session.eot_armed = False
         ctx.session.server_vad_speech = False
         ctx.session.server_vad_since_ms = None
+
+        await self._publish(
+            ASR_SINGLE_STREAM_INVARIANT,
+            ctx.sid,
+            {"state": "closed", "ok": True, "reason": reason, "vendor": "gcp"},
+        )
+
+        bus.publish(
+            {
+                "type": EVT_ASR_CLOSED,
+                "sid": ctx.sid,
+                "who": "server",
+                "source": "ws.adapter",
+                "vendor": "gcp",
+            }
+        )
 
     def _policy_keep_warm_ms(self, ctx: AdapterContext) -> int:
         if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
@@ -5983,11 +6006,8 @@ class ChatV2Adapter:
         ctx.asr_first_packet_logged = False
         ctx.asr_silence_hold_logged = False
         ctx.asr_silence_eot_logged = False
-        asr_client = ctx.session.asr
-        if asr_client is not None:
-            setattr(asr_client, "bytes_streamed", 0)
-            setattr(asr_client, "first_packet_monotonic", None)
-            setattr(asr_client, "ms_since_first_packet", 0)
+        ctx.asr_bytes_sent = 0
+        ctx.asr_first_packet_monotonic = None
         self._bus("asr.turn.begin", {"sid": ctx.sid, "reason": reason})
         return {"type": "asr.turn", "state": "begin"}
 
@@ -6016,7 +6036,7 @@ class ChatV2Adapter:
         mode = ctx.audio_pipeline_mode or "pcm16"
         descriptor = dict(self._input_descriptor_for_mode(mode))
         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
-        vendor = ctx.asr_vendor or "speechmatics"
+        vendor = ctx.asr_vendor or "gcp"
         session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
         now_ms = int(time.time() * 1000)
         input_payload = dict(descriptor)
