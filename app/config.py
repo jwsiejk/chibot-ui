@@ -46,6 +46,31 @@ ASR_IDLE_CLOSE_MS = 15000
 ASR_TRACE = env_bool("ASR_TRACE", False)
 
 
+def _env_int(name: str, default: int, *, minimum: Optional[int] = None) -> int:
+    try:
+        candidate = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return int(default)
+    if minimum is not None and candidate < minimum:
+        return minimum
+    return candidate
+
+
+def _env_float(name: str, default: float, *, minimum: Optional[float] = None) -> float:
+    try:
+        candidate = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return float(default)
+    if minimum is not None and candidate < minimum:
+        return minimum
+    return candidate
+
+
+GCP_STT_DEFAULT_SAMPLE_RATE = _env_int("GCP_STT_DEFAULT_SAMPLE_RATE", 16000, minimum=1)
+GCP_STT_DEFAULT_LANGUAGE = os.getenv("GCP_STT_DEFAULT_LANGUAGE", "en-US") or "en-US"
+GCP_STT_INPUT_GAIN = _env_float("GCP_STT_INPUT_GAIN", 1.0, minimum=0.0)
+
+
 def get_env(name: str, default=None):
     """Retrieve an environment variable with an optional default."""
 
