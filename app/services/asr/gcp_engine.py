@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-import audioop
 import logging
+from array import array
 from typing import Awaitable, Callable, Optional
 
 from google.cloud import speech
@@ -15,6 +15,32 @@ logger = logging.getLogger(__name__)
 
 
 ResultCallback = Callable[[str, bool], Optional[Awaitable[None]]]
+
+
+def _apply_linear16_gain(pcm: bytes, gain: float) -> bytes:
+    """Apply a gain factor to 16-bit linear PCM audio."""
+
+    if not pcm:
+        return pcm
+
+    if len(pcm) % 2:
+        raise ValueError("PCM buffer length must be a multiple of 2 bytes for LINEAR16 audio")
+
+    samples = array("h")  # signed short (16-bit)
+    samples.frombytes(pcm)
+
+    max_sample = 32767
+    min_sample = -32768
+
+    for index, sample in enumerate(samples):
+        amplified = int(round(sample * gain))
+        if amplified > max_sample:
+            amplified = max_sample
+        elif amplified < min_sample:
+            amplified = min_sample
+        samples[index] = amplified
+
+    return samples.tobytes()
 
 
 class ASREngine:
@@ -104,7 +130,7 @@ class GCPStreamingASREngine(ASREngine):
             raise RuntimeError("Engine not open or already closed")
         if self._input_gain and self._input_gain != 1.0:
             try:
-                pcm = audioop.mul(pcm, 2, self._input_gain)
+                pcm = _apply_linear16_gain(pcm, self._input_gain)
             except Exception:  # pragma: no cover - defensive
                 logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
         await self._queue.put(pcm)
