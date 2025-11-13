@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import audioop
 import logging
 from typing import Awaitable, Callable, Optional
 
 from google.cloud import speech
+
+from app import config
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,9 @@ class GCPStreamingASREngine(ASREngine):
         self._sid: Optional[str] = None
         self._closed = False
         self._streaming_config: Optional[speech.StreamingRecognitionConfig] = None
+        self._sample_rate: Optional[int] = None
+        self._language: Optional[str] = None
+        self._input_gain = config.GCP_STT_INPUT_GAIN
 
     async def open(
         self,
@@ -64,23 +70,43 @@ class GCPStreamingASREngine(ASREngine):
         self._sid = sid
         self._closed = False
 
-        config = speech.RecognitionConfig(
+        resolved_sample_rate = (
+            sample_rate if sample_rate and sample_rate > 0 else config.GCP_STT_DEFAULT_SAMPLE_RATE
+        )
+        if resolved_sample_rate <= 0:
+            resolved_sample_rate = config.GCP_STT_DEFAULT_SAMPLE_RATE
+        resolved_language = (language or "").strip() or config.GCP_STT_DEFAULT_LANGUAGE
+
+        self._sample_rate = resolved_sample_rate
+        self._language = resolved_language
+
+        recognition_config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=sample_rate,
-            language_code=language,
+            sample_rate_hertz=resolved_sample_rate,
+            language_code=resolved_language,
         )
         self._streaming_config = speech.StreamingRecognitionConfig(
-            config=config,
+            config=recognition_config,
             interim_results=True,
         )
 
-        logger.info("evt=asr_open vendor=gcp sid=%s sample_rate=%s language=%s", sid, sample_rate, language)
+        logger.info(
+            "evt=asr_open vendor=gcp sid=%s sample_rate=%s language=%s",
+            sid,
+            resolved_sample_rate,
+            resolved_language,
+        )
 
         self._response_future = asyncio.create_task(self._run_streaming())
 
     async def write(self, pcm: bytes) -> None:
         if self._queue is None or self._closed:
             raise RuntimeError("Engine not open or already closed")
+        if self._input_gain and self._input_gain != 1.0:
+            try:
+                pcm = audioop.mul(pcm, 2, self._input_gain)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
         await self._queue.put(pcm)
 
     async def close(self) -> None:
@@ -96,11 +122,18 @@ class GCPStreamingASREngine(ASREngine):
             finally:
                 self._response_future = None
 
-        logger.info("evt=asr_close vendor=gcp sid=%s", self._sid)
+        logger.info(
+            "evt=asr_close vendor=gcp sid=%s sample_rate=%s language=%s",
+            self._sid,
+            self._sample_rate,
+            self._language,
+        )
 
         self._queue = None
         self._on_result = None
         self._sid = None
+        self._sample_rate = None
+        self._language = None
         self._streaming_config = None
 
     # Internal helpers -------------------------------------------------
