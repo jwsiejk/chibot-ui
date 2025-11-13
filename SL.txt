@@ -7,6 +7,7 @@ INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1Ni
 INFO:app.ws.adapter:evt=ws_accept_token_ok sid=c019a618f282484391aa79cfce4747c7
 INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2'
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 [2025-11-13 03:31:47 +0000] [58] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImJjM2E3MDEzYzQ1NTRhOTA5MGMzY2Y2ZDM3MWFkNjA5IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzAwNDcwNywiZXhwIjoxNzYzMDA0NzY3LCJqdGkiOiI5MzA2MzIxZC05YzZjLTRiOGItYTc4ZS1jMTgzOWQzM2NhYzUiLCJpc19hZG1pbiI6dHJ1ZX0.umS--uFgC8cZhkJ3PFkpuXZkw_uqFX3ofkG7x2VENro" [accepted]
 [2025-11-13 03:31:47 +0000] [58] [INFO] connection open
 INFO:app.ws.adapter:evt=server_banner build_id=260df7b host=srv-d26hqi3e5dus73b43g10-hibernate-85b86f4fd6-z4wk2 pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py
@@ -17,6 +18,8 @@ INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=bc3a7013c4554a9090c3cf6d371a
 INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=bc3a7013c4554a9090c3cf6d371ad609
 DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=bc3a7013c4554a9090c3cf6d371ad609 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
 =======
+=======
+>>>>>>> Stashed changes
 [2025-11-13 03:46:42 +0000] [58] [INFO] 170.85.75.32:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImMwMTlhNjE4ZjI4MjQ4NDM5MWFhNzljZmNlNDc0N2M3IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzAwNTYwMiwiZXhwIjoxNzYzMDA1NjYyLCJqdGkiOiI3M2FkMWZiNi1mNWQ1LTRiNDktYWU3Yi00NDdjNGE1M2RkNmIiLCJpc19hZG1pbiI6dHJ1ZX0.N2oMS3X9Lt5RumydUZuxSOKWpfdubZfLri1OSwOE4K8" [accepted]
 [2025-11-13 03:46:42 +0000] [58] [INFO] connection open
 INFO:app.ws.adapter:evt=server_banner build_id=3a3ad2f host=srv-d26hqi3e5dus73b43g10-hibernate-55879d8d9b-5m62r pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py
@@ -26,6 +29,9 @@ INFO:app.ws.adapter:evt=ws_open sid=c019a618f282484391aa79cfce4747c7
 INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=c019a618f282484391aa79cfce4747c7
 INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=c019a618f282484391aa79cfce4747c7
 DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=c019a618f282484391aa79cfce4747c7 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 DEBUG:asyncio:Using selector: EpollSelector
 DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-bd5fd4ed-c166-456b-b1e0-504ef130a237', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'temperature': 0.4}}
@@ -88,6 +94,7 @@ INFO:app.ws.adapter:evt=audio_task_complete sid=c019a618f282484391aa79cfce4747c7
 INFO:app.ws.adapter:evt=audio_task_complete sid=c019a618f282484391aa79cfce4747c7 duration_ms=0
 DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=c019a618f282484391aa79cfce4747c7 utt_id=utt-00001 chunks=73 bytes=93440 total_bytes=94720
 DEBUG:httpcore.http11:response_closed.complete
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
 INFO:app.ws.adapter:evt=audio_task_complete sid=bc3a7013c4554a9090c3cf6d371ad609 duration_ms=0
 INFO:app.ws.adapter:evt=audio_task_complete sid=bc3a7013c4554a9090c3cf6d371ad609 duration_ms=0
@@ -181,6 +188,8 @@ INFO:app.ws.adapter:evt=audio_task_shutdown_drain sid=bc3a7013c4554a9090c3cf6d37
 WARNING:app.ws.adapter:evt=asr_no_audio_after_header sid=bc3a7013c4554a9090c3cf6d371ad609 since_ms=1500 phase=closed
 10.225.24.137:35500 - "GET /api/v1/live HTTP/1.1" 200
 =======
+=======
+>>>>>>> Stashed changes
 INFO:app.ws.adapter:evt=audio_task_complete sid=c019a618f282484391aa79cfce4747c7 duration_ms=0
 INFO:app.ws.adapter:evt=audio_task_complete sid=c019a618f282484391aa79cfce4747c7 duration_ms=0
 INFO:app.ws.adapter:evt=audio_task_complete sid=c019a618f282484391aa79cfce4747c7 duration_ms=0
@@ -257,5 +266,9 @@ INFO:app.ws.adapter:evt=audio_task_shutdown_drain sid=c019a618f282484391aa79cfce
 10.225.26.106:60856 - "GET /api/v1/live HTTP/1.1" 200
 WARNING:app.ws.adapter:evt=asr_no_audio_after_header sid=c019a618f282484391aa79cfce4747c7 since_ms=1499 phase=closed
 10.225.26.106:60864 - "GET /api/v1/live HTTP/1.1" 200
+<<<<<<< Updated upstream
+10.225.26.106:43646 - "GET /api/v1/live HTTP/1.1" 200
+>>>>>>> Stashed changes
+=======
 10.225.26.106:43646 - "GET /api/v1/live HTTP/1.1" 200
 >>>>>>> Stashed changes
