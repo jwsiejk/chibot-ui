@@ -31,7 +31,7 @@ class CapturePolicy:
 class ASRVendorPolicy:
     """Describe how ASR vendors should be selected at runtime."""
 
-    primary: str = "speechmatics"
+    primary: str = "gcp"
     secondary: Optional[str] = None
 
 

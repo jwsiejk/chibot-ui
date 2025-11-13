@@ -39,71 +39,6 @@ FEATURE_WEBRTC_AEC = env_bool("FEATURE_WEBRTC_AEC", True)
 # ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
 DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
 ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
-ASR_SPEECHMATICS_ENABLED = env_bool("ASR_SPEECHMATICS_ENABLED", True)
-SPEECHMATICS_API_KEY = os.getenv("SPEECHMATICS_API_KEY")
-# Force server → Speechmatics RT to use header auth only (no ?jwt=)
-# Set SPEECHMATICS_FORCE_HEADER_AUTH=1 in env to enable.
-SPEECHMATICS_FORCE_HEADER_AUTH = os.getenv("SPEECHMATICS_FORCE_HEADER_AUTH", "0") == "1"
-def _resolve_speechmatics_realtime_url() -> str:
-    """Return the configured Speechmatics realtime endpoint URL.
-
-    Historically the deployment accepted short region tokens (``wus``) or a bare
-    hostname (``wus.rt.speechmatics.com``).  The Speechmatics client, however,
-    requires a fully qualified ``wss://`` URL.  Render environments that still
-    provide the short form were failing DNS lookups which manifested as
-    ``socket.gaierror: [Errno -2]`` during the websocket connection attempt.
-
-    To remain backwards compatible we normalise older inputs into the canonical
-    URL shape while still validating explicit URLs for correctness.
-    """
-
-    default_url = "wss://wus.rt.speechmatics.com/v2"
-    raw_value = os.getenv("SPEECHMATICS_REALTIME_URL")
-    expanded_value = os.path.expandvars(raw_value or "")
-    expanded_value = os.path.expanduser(expanded_value)
-    # Normalize common “invisible” characters that break DNS
-    candidate = expanded_value.strip().replace("\u200b", "").replace("\u00a0", "")
-
-    if not candidate:
-        return default_url
-
-    lowered = candidate.lower()
-    if "://" in candidate:
-        if not lowered.startswith("wss://"):
-            raise ValueError(
-                f"SPEECHMATICS_REALTIME_URL must start with wss:// (got {candidate!r})"
-            )
-        return candidate
-
-    # Support legacy tokens such as "wus" or "wus.rt.speechmatics.com/v2".
-    legacy = candidate.lstrip("/")
-    host_part, _, path_part = legacy.partition("/")
-    host_part = host_part.strip().lower()
-    if not host_part:
-        raise ValueError(
-            f"SPEECHMATICS_REALTIME_URL host missing (got {candidate!r})"
-        )
-
-    allowed_regions = {"wus", "eu1", "ap1"}
-    if "." not in host_part:
-        # Region token only
-        if host_part not in allowed_regions:
-            raise ValueError(
-                f"SPEECHMATICS_REALTIME_URL region must be one of {sorted(allowed_regions)} (got {host_part!r})"
-            )
-        host_part = f"{host_part}.rt.speechmatics.com"
-    else:
-        # If a host is provided, enforce Speechmatics RT domain
-        if not host_part.endswith(".rt.speechmatics.com"):
-            raise ValueError(
-                f"SPEECHMATICS_REALTIME_URL must point to *.rt.speechmatics.com (got {host_part!r})"
-            )
-
-    path = f"/{path_part}" if path_part else "/v2"
-    return f"wss://{host_part}{path}"
-
-
-SPEECHMATICS_REALTIME_URL = _resolve_speechmatics_realtime_url()
 ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
 )
@@ -126,7 +61,7 @@ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or se
 _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
 
 _ALLOWED_ASR_INPUTS = {"pcm_16k"}
-_SUPPORTED_ASR_VENDORS = {"speechmatics"}
+_SUPPORTED_ASR_VENDORS = {"gcp"}
 _AUDIO_PIPELINE_MODES = {"pcm16"}
 _CAPTURE_TIMESLICE_MIN_MS = 20
 
@@ -156,7 +91,7 @@ _DEFAULT_POLICY_INPUT = {
 _DEFAULT_POLICY_ASR = {
     "prearm_on_tts_end": False,
     "keep_stream_warm_ms": 30000,
-    "vendor": {"primary": "speechmatics", "secondary": None},
+    "vendor": {"primary": "gcp", "secondary": None},
     "commit_on_vad_silence": True,
     # Make VAD slightly more patient so we do not clip trailing speech.
     "commit_silence_ms": 900,
@@ -1003,11 +938,8 @@ __all__ = [
     "ASR_DUP_FINAL_SUPPRESS_MS",
     "ASR_DEDUPE_NORMALIZE",
     "ASR_DEEPGRAM_ENABLED",
-    "ASR_SPEECHMATICS_ENABLED",
     "AUDIO_GUARDRAILS",
     "DEEPGRAM_API_KEY",
-    "SPEECHMATICS_API_KEY",
-    "SPEECHMATICS_REALTIME_URL",
     "DIAG_AUDIO_GUARD",
     "DIAG_CHUNK_SAMPLE_N",
     "DIAG_CLIENT_HUD",

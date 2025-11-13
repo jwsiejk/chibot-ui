@@ -126,7 +126,7 @@ def validate_audio_header_against_policy(
     rate = header.get("sample_rate")
     channels = header.get("channels")
 
-    if vendor == "speechmatics":
+    if vendor == "gcp":
         normalized_fmt = fmt
         if normalized_fmt == "pcm":
             normalized_fmt = "pcm16"
@@ -154,9 +154,9 @@ def validate_audio_header_against_policy(
             )
             _emit_validator_log(
                 "WARNING",
-                "audio.header_rejected reason=vendor_requires_pcm vendor=speechmatics",
+                "audio.header_rejected reason=vendor_requires_pcm vendor=gcp",
             )
-            return "speechmatics requires pcm@16k mono"
+            return "gcp requires pcm@16k mono"
 
     if policy is None:
         return None

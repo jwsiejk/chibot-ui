@@ -16,7 +16,7 @@ class TestASRAdapterBasic(unittest.TestCase):
     def test_ready_bundle_uses_pcm_policy(self) -> None:
         adapter = ChatV2Adapter()
         ctx = AdapterContext(sid="sid-ready-bundle", headers={})
-        ctx.asr_vendor = "speechmatics"
+        ctx.asr_vendor = "gcp"
         ctx.audio_pipeline_mode = "pcm16"
         ctx.session_capture_policy = adapter._session_capture_policy_for_mode("pcm16")
 
@@ -39,7 +39,7 @@ class TestASRAdapterBasic(unittest.TestCase):
         )
 
         ready_frame = frames[0]
-        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+        self.assertEqual(ready_frame.get("vendor"), "gcp")
         input_desc = ready_frame.get("input")
         self.assertIsInstance(input_desc, dict)
         self.assertEqual(input_desc.get("mode"), "pcm16")
@@ -89,7 +89,7 @@ class TestASRAdapterBasic(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(frames), 1)
         ready_frame = frames[0]
-        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+        self.assertEqual(ready_frame.get("vendor"), "gcp")
 
     async def _emit_ready_bundle(
         self, adapter: ChatV2Adapter, ctx: AdapterContext

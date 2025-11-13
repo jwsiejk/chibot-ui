@@ -89,7 +89,7 @@ class TestASRReadinessGate(unittest.TestCase):
                 sid = engine.open_sid
                 if sid is None:  # pragma: no cover - defensive
                     raise RuntimeError("sid not set")
-                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "speechmatics"})
+                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "gcp"})
 
             chunk = b"\x00" * 4
             await queue.put({"type": "websocket.receive", "bytes": chunk})
@@ -108,7 +108,7 @@ class TestASRReadinessGate(unittest.TestCase):
 
         return sent, engine, audio_events
 
-    async def _exercise_speechmatics_concurrency(self) -> tuple[List[dict], Dict[str, Any]]:
+    async def _exercise_gcp_concurrency(self) -> tuple[List[dict], Dict[str, Any]]:
         adapter = ChatV2Adapter()
         engine = RecordingEngine()
         adapter.engine = engine
@@ -222,7 +222,7 @@ class TestASRReadinessGate(unittest.TestCase):
         ]
         self.assertEqual(len(ready_frames), 1)
         ready_frame = ready_frames[0]
-        self.assertEqual(ready_frame.get("vendor"), "speechmatics")
+        self.assertEqual(ready_frame.get("vendor"), "gcp")
 
         close_frames = [msg for msg in sent if msg.get("type") == "websocket.close"]
         self.assertFalse(close_frames)
@@ -237,11 +237,11 @@ class TestASRReadinessGate(unittest.TestCase):
         self.assertEqual(audio_events[0]["meta"]["seq"], 0)
         self.assertEqual(audio_events[0]["meta"]["byte_count"], len(call[1]))
 
-    @patch.object(ChatV2Adapter, "_allowed_asr_vendors", return_value=["speechmatics"])
-    def test_speechmatics_concurrency_sets_grace(self, _mock_allowed: Any) -> None:
-        sent, snapshot = asyncio.run(self._exercise_speechmatics_concurrency())
+    @patch.object(ChatV2Adapter, "_allowed_asr_vendors", return_value=["gcp"])
+    def test_gcp_concurrency_sets_grace(self, _mock_allowed: Any) -> None:
+        sent, snapshot = asyncio.run(self._exercise_gcp_concurrency())
 
-        self.assertEqual(snapshot["vendor"], "speechmatics")
+        self.assertEqual(snapshot["vendor"], "gcp")
         self.assertEqual(snapshot["recovering_reason"], "concurrent_session")
         self.assertTrue(snapshot["audio_logged"])
         self.assertGreater(snapshot["recovering_until"], time.monotonic())
