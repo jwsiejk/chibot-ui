@@ -328,6 +328,60 @@ export async function initPcmSender(ws, {
     }
   }
 
+  function sendImmediate(pcm16, meta = {}) {
+    if (!pcm16 || typeof pcm16.length !== "number" || pcm16.length === 0) {
+      return false;
+    }
+    if (!activeWs || activeWs.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    let typed = pcm16 instanceof Int16Array ? pcm16 : null;
+    if (!typed) {
+      try {
+        typed = new Int16Array(pcm16);
+      } catch (err) {
+        console.warn("[pcm_sender] sendImmediate failed to coerce chunk", err);
+        return false;
+      }
+    }
+    if (!(typed instanceof Int16Array)) {
+      return false;
+    }
+    if (typed.byteOffset !== 0 || typed.byteLength !== typed.buffer.byteLength) {
+      typed = typed.slice();
+    }
+    const view = new Uint8Array(typed.buffer);
+    resetQueue();
+    try {
+      activeWs.send(view);
+      if (typeof onSend === "function") {
+        const chunkCount = Number.isFinite(meta?.chunkCount) && meta.chunkCount > 0
+          ? Number(meta.chunkCount)
+          : 1;
+        const sampleRateMeta = Number.isFinite(meta?.sampleRate) && meta.sampleRate > 0
+          ? Number(meta.sampleRate)
+          : effectiveSampleRate;
+        try {
+          onSend(typed, {
+            seq,
+            samples: typed.length,
+            bytes: typed.byteLength,
+            chunkCount,
+            sampleRate: sampleRateMeta,
+          });
+        } catch (err) {
+          console.warn("[pcm_sender] sendImmediate onSend failed", err);
+        }
+      }
+      seq += 1;
+      return true;
+    } catch (err) {
+      notifyError(err);
+      console.warn("[pcm_sender] sendImmediate send failed", err);
+      return false;
+    }
+  }
+
   if (usingWorklet && workletPort) {
     workletPort.onmessage = (event) => {
       const message = event && event.data ? event.data : null;
@@ -467,6 +521,7 @@ export async function initPcmSender(ws, {
     resume,
     setEnabled,
     setWebSocket,
+    sendImmediate,
     destroy,
   };
 }

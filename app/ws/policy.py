@@ -57,7 +57,7 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
         "sync_ready_on_tts_end": True,
         "asr_ready_deadline_ms": 8000,
         # server_no_speech_timeout_ms should be ≥ 2 × MAX_GATE_SILENCE_MS to let the client close the turn cleanly.
-        "no_speech_timeout_ms": 7000,
+        "no_speech_timeout_ms": 10000,
         "throttle_grace_ms": 2000,
         "queue_pre_ready_audio": True,
         "drop_pre_tts_audio_ms": 0,
