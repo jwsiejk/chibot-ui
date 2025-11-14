@@ -10,6 +10,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   const TOKEN_EXPIRY_MS = 60 * 1000;
   const TOAST_STYLE_ID = "wsclient-toast-styles";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
+  const MAX_GATE_SILENCE_MS = 3000;
+  // server_no_speech_timeout_ms should be ≥ 2 × MAX_GATE_SILENCE_MS to let the client close the turn cleanly.
   const CLIENT_VAD_POLICY = Object.freeze({
     enable: true,
     sensitivity: 0.60,
@@ -21,7 +23,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     debounce_ms: 40,
     // Enable true gating; preroll remains handled internally by the VAD.
     stream_gate: "gate",          // keep gating if you want to save bandwidth
-    max_gate_silence_ms: 3000,
+    max_gate_silence_ms: MAX_GATE_SILENCE_MS,
     // Optional: per-deployment configurable warmup in ms
     warmup_ms: 1200,
     // If your input is very quiet, allow threshold override via policy
@@ -153,7 +155,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
   const P0 = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
   const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
-  const DEFAULT_POLICY_WATCHDOG = { partial_wait_ms_first_turn: 2500 };
+  const DEFAULT_POLICY_WATCHDOG = {
+    partial_wait_ms_first_turn: 3500,
+    partial_wait_ms: 2500,
+  };
   const DEFAULT_POLICY_STATUS = { require_active_turn: true };
 
   const cloneValue = (value) => {
@@ -710,7 +715,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     if (Number.isFinite(candidate) && candidate > 0) {
       return Math.round(candidate);
     }
-    const fallback = Number(CLIENT_VAD_POLICY.max_gate_silence_ms);
+    const fallback = Number(MAX_GATE_SILENCE_MS);
     if (Number.isFinite(fallback) && fallback > 0) {
       return Math.round(fallback);
     }
@@ -3141,35 +3146,91 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     logStage('client.ws', { outcome: 'pong', rtt_ms: rtt });
   }
 
+  const pendingTranscriptFrames = [];
+
+  function queueForTranscript(frame) {
+    pendingTranscriptFrames.push(frame);
+  }
+
   function transcriptFrameAllowed(frame) {
     const type = typeof frame?.type === "string" ? frame.type : "";
     const role = typeof frame?.role === "string" ? frame.role : "";
-    const isASR = type === "asr.partial" || type === "asr.final";
-    const isChatMessage =
-      (type === "message" || type === "chat.message") &&
-      (role === "user" || role === "assistant");
-    const allow = isASR || isChatMessage;
+    const allow = type === "asr.partial" || type === "asr.final";
     try {
       console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
     } catch {}
     return allow;
   }
 
-  function handleChatHistoryFrame(frame) {
-    const view = window.TranscriptView;
-    const messages = Array.isArray(frame.messages) ? frame.messages : [];
-    if (view && typeof view.handleChatMessage === "function" && messages.length) {
-      for (const message of messages) {
-        if (!transcriptFrameAllowed(message)) {
-          continue;
-        }
-        try {
-          view.handleChatMessage(message);
-        } catch (err) {
-          console.warn("TranscriptView chat history handler error", err);
-          break;
-        }
+  function deliverAsr(frame) {
+    if (!frame || typeof frame !== "object") {
+      return;
+    }
+    if (frame.type === "asr.final" && typeof frame.sid === "string" && frame.sid) {
+      if (AppState.asrSid && AppState.asrSid !== frame.sid) {
+        console.warn("asr.final sid mismatch", { expected: AppState.asrSid, sid: frame.sid });
+      } else {
+        AppState.asrSid = frame.sid;
       }
+    }
+    const view = window.TranscriptView;
+    if (!view) {
+      return;
+    }
+    try {
+      if (frame.type === "asr.partial" && typeof view.handlePartial === "function") {
+        view.handlePartial(frame);
+      } else if (frame.type === "asr.final" && typeof view.handleFinal === "function") {
+        view.handleFinal(frame);
+      }
+    } catch (err) {
+      console.warn("TranscriptView ASR handler error", err);
+    }
+  }
+
+  function deliverChat(frame) {
+    if (!frame || typeof frame !== "object") {
+      console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "invalid_frame" });
+      return;
+    }
+    const view = window.TranscriptView;
+    if (view && typeof view.handleChatMessage === "function") {
+      try {
+        view.handleChatMessage(frame);
+      } catch (err) {
+        console.warn("TranscriptView chat handler error", err);
+      }
+    } else {
+      queueForTranscript(frame);
+    }
+  }
+
+  window.attachTranscriptView = function attachTranscriptView(view) {
+    window.TranscriptView = view;
+    if (!view || typeof view.handleChatMessage !== "function") {
+      if (pendingTranscriptFrames.length) {
+        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "invalid_transcript_view" });
+      }
+      return;
+    }
+    while (pendingTranscriptFrames.length) {
+      const frame = pendingTranscriptFrames.shift();
+      try {
+        view.handleChatMessage(frame);
+      } catch (err) {
+        console.warn("flush chat error", err);
+        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "transcript_flush_error" });
+      }
+    }
+  };
+
+  function handleChatHistoryFrame(frame) {
+    const messages = Array.isArray(frame.messages) ? frame.messages : [];
+    if (!messages.length) {
+      return;
+    }
+    for (const message of messages) {
+      deliverChat(message);
     }
   }
 
@@ -3262,6 +3323,33 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       } catch (err) {
         console.warn("WSClient frame emit failed", err);
       }
+    }
+
+    let handledByTranscriptDispatch = false;
+    switch (frame.type) {
+      case "chat.message":
+      case "message":
+        deliverChat(frame);
+        handledByTranscriptDispatch = true;
+        break;
+
+      case "asr.partial":
+      case "asr.final":
+        if (transcriptFrameAllowed(frame)) {
+          deliverAsr(frame);
+        } else {
+          logStage("ui_transcript_filter", { allow: false, type: frame.type });
+        }
+        handledByTranscriptDispatch = true;
+        break;
+
+      default:
+        break;
+    }
+
+    if (handledByTranscriptDispatch) {
+      dispatchFrame(frame);
+      return;
     }
 
     if (frame.type === "turn.begin") {
@@ -3586,17 +3674,6 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       // Send the header once. If startRecorderStreaming() already sent it
       // (policy: audio.header_on_first_chunk), this call will no-op.
       sendAudioHeader(frame);
-    } else if (frame.type === "asr.partial") {
-      transcriptFrameAllowed(frame);
-    } else if (frame.type === "asr.final") {
-      if (typeof frame.sid === "string" && frame.sid) {
-        if (AppState.asrSid && AppState.asrSid !== frame.sid) {
-          console.warn("asr.final sid mismatch", { expected: AppState.asrSid, sid: frame.sid });
-        } else {
-          AppState.asrSid = frame.sid;
-        }
-      }
-      transcriptFrameAllowed(frame);
     } else if (frame.type === "asr.unavailable") {
       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
       const details = frame && typeof frame.details === "string"
@@ -3672,19 +3749,6 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       } catch {}
       if (!begin) {
         resetTurnIntent(frame?.state || "turn.end");
-      }
-    } else if (frame.type === "chat.message" || frame.type === "message") {
-      if (!transcriptFrameAllowed(frame)) {
-        // Keep frame flowing to other listeners without rendering in transcript.
-      } else {
-        const view = window.TranscriptView;
-        if (view && typeof view.handleChatMessage === "function") {
-          try {
-            view.handleChatMessage(frame);
-          } catch (err) {
-            console.warn("TranscriptView chat handler error", err);
-          }
-        }
       }
     } else if (frame.type === "chat.history") {
       handleChatHistoryFrame(frame);

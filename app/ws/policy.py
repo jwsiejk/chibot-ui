@@ -50,11 +50,14 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
     },
     "watchdog": {
         "partial_wait_ms_first_turn": 3500,
+        "partial_wait_ms": 2500,
     },
     "server": {
         "buffer_prestart_audio_ms": 300,
         "sync_ready_on_tts_end": True,
         "asr_ready_deadline_ms": 8000,
+        # server_no_speech_timeout_ms should be ≥ 2 × MAX_GATE_SILENCE_MS to let the client close the turn cleanly.
+        "no_speech_timeout_ms": 7000,
         "throttle_grace_ms": 2000,
         "queue_pre_ready_audio": True,
         "drop_pre_tts_audio_ms": 0,
