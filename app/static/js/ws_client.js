@@ -3,6 +3,7 @@
 import { initVAD } from "./audio/vad_client.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
+import { createPolicyRuntime } from "./ws/policy_runtime.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import {
   MIC_OUTCOME,
@@ -538,6 +539,16 @@ import {
   }
 
   installClientVadPolicySnapshot();
+
+  const policyRuntime = createPolicyRuntime(AppState);
+
+  const {
+    getCurrentPolicy,
+    applyPolicySnapshotFromSource: runtimeApplyPolicySnapshotFromSource,
+    installClientVadPolicySnapshot: runtimeInstallClientVadPolicySnapshot,
+    shouldAutoRearmAfterClosed: runtimeShouldAutoRearmAfterClosed,
+    getClientVadPolicyRoot,
+  } = policyRuntime;
 
   // Derive POLICY *after* defaults are merged in
   const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
