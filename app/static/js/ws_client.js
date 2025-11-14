@@ -54,6 +54,52 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   const DEFAULT_ASR_VENDOR = 'gcp';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
 
+  class PcmRingBuffer {
+    constructor({ millis, sampleRate, channels = 1 }) {
+      this.sampleRate = sampleRate;
+      this.channels = channels;
+      this.maxSamples = Math.ceil((millis / 1000) * sampleRate) * channels;
+      this.buf = new Int16Array(this.maxSamples);
+      this.write = 0;
+      this.filled = false;
+    }
+    push(int16Chunk) {
+      const data = int16Chunk;
+      const n = data.length;
+      if (n >= this.maxSamples) {
+        this.buf.set(data.subarray(n - this.maxSamples));
+        this.write = 0;
+        this.filled = true;
+        return;
+      }
+      const end = this.write + n;
+      if (end <= this.maxSamples) {
+        this.buf.set(data, this.write);
+      } else {
+        const first = this.maxSamples - this.write;
+        this.buf.set(data.subarray(0, first), this.write);
+        this.buf.set(data.subarray(first), 0);
+      }
+      this.write = (end % this.maxSamples);
+      if (this.write === 0) this.filled = true;
+    }
+    tailMillis(millis) {
+      const samples = Math.min(this.maxSamples, Math.ceil((millis / 1000) * this.sampleRate) * this.channels);
+      const out = new Int16Array(samples);
+      if (!this.filled && this.write === 0) return [];
+      const start = (this.write - samples + this.maxSamples) % this.maxSamples;
+      if (start + samples <= this.maxSamples) {
+        out.set(this.buf.subarray(start, start + samples), 0);
+      } else {
+        const first = this.maxSamples - start;
+        out.set(this.buf.subarray(start), 0);
+        out.set(this.buf.subarray(0, samples - first), first);
+      }
+      return [out];
+    }
+    clear() { this.write = 0; this.filled = false; }
+  }
+
   // ---- Debug toggles (runtime-settable) ----
   function dbg(key, fallback = false) {
     try {
@@ -81,6 +127,11 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   let pendingAsrClosedSeq = null;
   let awaitingTurnEndForRearm = false;
   let pendingRearmReason = null;
+  let asrRecovering = false;
+  const primedSessionIds = new Set();
+  let partialWatchdogTimer = null;
+  let partialWatchdogDeadline = 0;
+  let partialWatchdogFirstTurn = true;
 
   if (typeof window !== "undefined") {
     try {
@@ -151,6 +202,14 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   const AppState = window.AppState;
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
+  }
+  const ASR_RATE = (AppState?.targetSampleRate || 16000);
+  if (typeof window !== "undefined") {
+    window.__pcmRing ||= new PcmRingBuffer({ millis: 1500, sampleRate: ASR_RATE, channels: 1 });
+  }
+  const pcmRing = (typeof window !== "undefined") ? window.__pcmRing : null;
+  if (typeof AppState._recoverPrimePending === "undefined") {
+    AppState._recoverPrimePending = false;
   }
   const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
   const P0 = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
@@ -748,12 +807,21 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     if (event === "client.vad.speech_start") {
       clearVadSilenceTimer();
       emitConsoleBusEvent("client.vad.start_speech");
+      if (typeof pcmRing?.clear === 'function') {
+        try {
+          pcmRing.clear();
+        } catch (err) {
+          try { console.warn("pcmRing.clear failed", err); } catch (_) {}
+        }
+      }
+      schedulePartialWatchdog("vad_speech_start");
     } else if (event === "client.vad.speech_end") {
       const durationValue = Number(payload && payload.duration_ms);
       const durationMs = Number.isFinite(durationValue) ? Math.max(0, Math.round(durationValue)) : null;
       const detail = durationMs !== null ? { duration_ms: durationMs } : undefined;
       emitConsoleBusEvent("client.vad.end_speech", detail);
       scheduleVadSilenceTimer();
+      clearPartialWatchdog();
     }
     hubLog(event, payload);
   }
@@ -1227,10 +1295,121 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
   }
 
-  function handlePcmFrame(frame, meta = {}) {
-    if (!(frame instanceof Int16Array) || !frame.length) {
+  function* chunk20ms(int16, sampleRate) {
+    const size = Math.round(sampleRate * 0.02);
+    if (!Number.isFinite(size) || size <= 0) {
       return;
     }
+    for (let i = 0; i + size <= int16.length; i += size) {
+      yield int16.subarray(i, i + size);
+    }
+  }
+
+  function clearPartialWatchdog() {
+    if (partialWatchdogTimer) {
+      clearTimeout(partialWatchdogTimer);
+      partialWatchdogTimer = null;
+    }
+    partialWatchdogDeadline = 0;
+  }
+
+  function schedulePartialWatchdog(reason) {
+    if (!_audioStreaming || asrRecovering) {
+      return;
+    }
+    const firstMs = Number(POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms_first_turn);
+    const nextMs = Number(POLICY_WATCHDOG?.partial_wait_ms ?? DEFAULT_POLICY_WATCHDOG.partial_wait_ms);
+    let ms = null;
+    if (partialWatchdogFirstTurn && Number.isFinite(firstMs) && firstMs > 0) {
+      ms = firstMs;
+    } else if (Number.isFinite(nextMs) && nextMs > 0) {
+      ms = nextMs;
+    }
+    if (!Number.isFinite(ms) || ms <= 0) {
+      return;
+    }
+    clearPartialWatchdog();
+    partialWatchdogDeadline = Date.now() + ms;
+    partialWatchdogTimer = setTimeout(() => {
+      partialWatchdogTimer = null;
+      partialWatchdogDeadline = 0;
+      void recoverFromAsrFault("partial_watchdog");
+    }, ms);
+    partialWatchdogFirstTurn = false;
+    try {
+      hubLog("client.watchdog.partial_arm", { reason, ms });
+    } catch {}
+  }
+
+  function primeAsrStreamFromRing(sid) {
+    if (!pcmRing || typeof pcmRing.tailMillis !== 'function') {
+      return;
+    }
+    const tails = pcmRing.tailMillis(900);
+    if (!Array.isArray(tails) || !tails.length) {
+      return;
+    }
+    const sessionId = sid || `${Date.now()}`;
+    if (primedSessionIds.has(sessionId)) {
+      return;
+    }
+    try {
+      for (const tail of tails) {
+        if (!(tail instanceof Int16Array)) {
+          continue;
+        }
+        for (const chunk of chunk20ms(tail, ASR_RATE)) {
+          if (chunk && chunk.length) {
+            WSClient.sendAudioChunk(chunk);
+          }
+        }
+      }
+      primedSessionIds.add(sessionId);
+      if (primedSessionIds.size > 32) {
+        const oldest = primedSessionIds.values().next();
+        if (!oldest.done && oldest.value !== sessionId) {
+          primedSessionIds.delete(oldest.value);
+        }
+      }
+    } catch (err) {
+      try { console.warn("primeAsrStreamFromRing failed", err); } catch (_) {}
+    }
+  }
+
+  function handlePcmFrame(frame, meta = {}) {
+    if (!frame || !frame.length) {
+      return;
+    }
+    let wire = frame;
+    if (wire instanceof ArrayBuffer) {
+      wire = new Int16Array(wire);
+    } else if (ArrayBuffer.isView(wire) && !(wire instanceof Int16Array)) {
+      const view = wire;
+      if (view.BYTES_PER_ELEMENT === 2) {
+        wire = new Int16Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
+      } else {
+        return;
+      }
+    }
+    if (!(wire instanceof Int16Array)) {
+      return;
+    }
+    // If your pipeline might deliver non-wire format, normalize here.
+    // Ensure 'wire' is Int16, mono, and at ASR_RATE (16k by default).
+    // Example (uncomment/adapt if needed):
+    // if (!(wire instanceof Int16Array)) { wire = float32ToInt16(wire); }
+    // if ((meta?.sampleRate && meta.sampleRate !== ASR_RATE) || (AppState?.micSampleRate && AppState.micSampleRate !== ASR_RATE)) {
+    //   wire = resampleInt16Mono(wire, meta?.sampleRate || AppState.micSampleRate || ASR_RATE, ASR_RATE);
+    // }
+
+    try {
+      if (typeof pcmRing?.push === 'function') {
+        pcmRing.push(wire);
+      }
+    } catch (e) {
+      console.warn("pcmRing.push failed", e);
+    }
+
     const metaSampleRate = Number(meta.sampleRate);
     if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
       pcmSampleRate = metaSampleRate;
@@ -1249,13 +1428,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       }
       const firstFrameDetail = {
         seq: pcmLastSeq,
-        bytes: frame.byteLength,
+        bytes: wire.byteLength,
       };
       if (firstFrameMs !== null) {
         firstFrameDetail.ms_since_recording_start = firstFrameMs;
       }
       try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
-      try { logStage("client.audio_first_chunk", { bytes: frame.byteLength }); } catch {}
+      try { logStage("client.audio_first_chunk", { bytes: wire.byteLength }); } catch {}
     }
 
     const now = Date.now();
@@ -1271,19 +1450,19 @@ import { initPcmSender } from "./audio/pcm_sender.js";
 
     if (vadController && typeof vadController.onPcmFrame === "function") {
       try {
-        vadController.onPcmFrame(frame.buffer, frameTimestamp);
+        vadController.onPcmFrame(wire.buffer, frameTimestamp);
       } catch (err) {
         try { console.warn("VAD frame processing failed", err); } catch (_) {}
       }
     }
 
     let sumSq = 0;
-    for (let i = 0; i < frame.length; i += 1) {
-      const sample = frame[i] / 32768;
+    for (let i = 0; i < wire.length; i += 1) {
+      const sample = wire[i] / 32768;
       sumSq += sample * sample;
     }
-    if (frame.length) {
-      const rms = Math.sqrt(sumSq / frame.length);
+    if (wire.length) {
+      const rms = Math.sqrt(sumSq / wire.length);
       if (AppState && typeof AppState === "object") {
         AppState.micRms = rms;
       }
@@ -1367,6 +1546,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     resetTurnIntent(stopReason);
     clearAudioKeepaliveTimer();
     clearVadSilenceTimer();
+    clearPartialWatchdog();
     syncSenderPaused(false);
     if (pcmSender && typeof pcmSender.setEnabled === "function") {
       try {
@@ -1567,12 +1747,45 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
   }
 
+  function openAsr(opts = {}) {
+    const options = opts && typeof opts === "object" ? { ...opts } : {};
+    if (!options.recover && typeof pcmRing?.clear === 'function') {
+      try { pcmRing.clear(); } catch (err) { try { console.warn("pcmRing.clear failed", err); } catch (_) {} }
+    }
+    if (!options.recover && primedSessionIds.size) {
+      primedSessionIds.clear();
+    }
+    if (!options.recover) {
+      AppState._recoverPrimePending = false;
+    }
+    const payload = { type: "asr.open" };
+    if (typeof options.vendor === "string" && options.vendor) {
+      payload.vendor = options.vendor;
+    }
+    if (Number.isFinite(options.sample_rate)) {
+      payload.sample_rate = Number(options.sample_rate);
+    }
+    if (typeof options.language === "string" && options.language) {
+      payload.language = options.language;
+    }
+    if (typeof options.reason === "string" && options.reason) {
+      payload.reason = options.reason;
+    }
+    if (options && typeof options.metadata === "object" && options.metadata) {
+      payload.metadata = { ...options.metadata };
+    }
+    if (typeof options.recover === "boolean") {
+      payload.recover = options.recover;
+    }
+    return WSClient.sendJSON(payload);
+  }
+
   function requestAsrArm(reason) {
     const label = normalizeReason(reason);
     try {
       setAsrArmInFlight(true);
       logStage("client.asr_rearm_request", { reason: label });
-      WSClient.sendJSON({ type: "asr.open" }); // send first so it's not phase-blocked
+      openAsr({ reason: label }); // send first so it's not phase-blocked
       setWsPhase("arming");
     } catch (err) {
       setAsrArmInFlight(false);
@@ -1620,6 +1833,47 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     }
     await stopRecorder(label);
     return ack;
+  }
+
+  async function recoverFromAsrFault(reason) {
+    if (asrRecovering) {
+      return;
+    }
+    asrRecovering = true;
+    const label = typeof reason === "string" && reason ? reason : "unknown";
+    clearPartialWatchdog();
+    try {
+      await WSClient.requestAsrClose(`recover:${label}`);
+    } catch (err) {
+      try { console.warn("ASR recovery close failed", err); } catch (_) {}
+    }
+
+    try {
+      await WSClient.openAsr({
+        vendor: AppState?.asrVendor || DEFAULT_ASR_VENDOR,
+        sample_rate: ASR_RATE,
+        language: AppState?.language || "en-US",
+        recover: true,
+      });
+    } catch (err) {
+      try { console.warn("ASR recovery open failed", err); } catch (_) {}
+    }
+
+    try {
+      if (typeof WSClient.waitForOnce === 'function') {
+        const readyFrame = await WSClient.waitForOnce('asr.ready', () => true, 2000);
+        const sid = readyFrame?.sid || AppState?.asrSid || `${Date.now()}`;
+        primeAsrStreamFromRing(sid);
+        AppState._recoverPrimePending = false;
+      } else {
+        AppState._recoverPrimePending = true;
+      }
+    } catch (err) {
+      AppState._recoverPrimePending = true;
+      try { console.warn("ASR recovery wait_for_ready failed", err); } catch (_) {}
+    } finally {
+      asrRecovering = false;
+    }
   }
 
   const CLIENT_BANNER_TYPE = "client.banner";
@@ -3334,7 +3588,17 @@ import { initPcmSender } from "./audio/pcm_sender.js";
         break;
 
       case "asr.partial":
+        schedulePartialWatchdog("asr.partial");
+        if (transcriptFrameAllowed(frame)) {
+          deliverAsr(frame);
+        } else {
+          logStage("ui_transcript_filter", { allow: false, type: frame.type });
+        }
+        handledByTranscriptDispatch = true;
+        break;
+
       case "asr.final":
+        clearPartialWatchdog();
         if (transcriptFrameAllowed(frame)) {
           deliverAsr(frame);
         } else {
@@ -3382,6 +3646,12 @@ import { initPcmSender } from "./audio/pcm_sender.js";
           requestAsrArm(reason);
         }
       }
+      return;
+    }
+
+    if (frame.type === "asr.timeout") {
+      dispatchFrame(frame);
+      void recoverFromAsrFault("timeout");
       return;
     }
 
@@ -3582,6 +3852,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       await openTurnOnce(reason); 
       await handleInputStartFrame(frame);
     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
+      clearPartialWatchdog();
       __resetAudioHeaderSent();
       if (frame.type === "asr.closed") {
         AppState.asrSid = null;
@@ -3674,6 +3945,11 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       // Send the header once. If startRecorderStreaming() already sent it
       // (policy: audio.header_on_first_chunk), this call will no-op.
       sendAudioHeader(frame);
+      if (AppState._recoverPrimePending) {
+        const sid = frame?.sid || AppState?.asrSid || `${Date.now()}`;
+        primeAsrStreamFromRing(sid);
+        AppState._recoverPrimePending = false;
+      }
     } else if (frame.type === "asr.unavailable") {
       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
       const details = frame && typeof frame.details === "string"
@@ -4681,7 +4957,9 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   WSClient.sendBinary = (payload, opts = {}) => sendBinary(payload, opts);
   WSClient.getBufferedAmount = getBufferedAmount;
   WSClient.requestAsrArm = requestAsrArm;
+  WSClient.openAsr = openAsr;
   WSClient.requestAsrClose = requestAsrClose;
+  WSClient.recoverFromAsrFault = recoverFromAsrFault;
   WSClient.selfTestAudio = async function selfTestAudio() {
     console.log("[selfTestAudio] starting");
     try {
