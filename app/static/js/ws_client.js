@@ -3402,6 +3402,22 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   }
 
   const pendingTranscriptFrames = [];
+  const ASR_MATCH_WINDOW_MS = 4000;
+  const lastUserBySid = new Map();
+  let provisionalSidCounter = 0;
+
+  function generateProvisionalSid() {
+    provisionalSidCounter = (provisionalSidCounter + 1) % Number.MAX_SAFE_INTEGER;
+    return `sid:${Date.now()}:${provisionalSidCounter}`;
+  }
+
+  function pruneStaleUserSids(now = Date.now()) {
+    for (const [sid, record] of lastUserBySid.entries()) {
+      if (!record || typeof record.ts !== "number" || (now - record.ts) > ASR_MATCH_WINDOW_MS) {
+        lastUserBySid.delete(sid);
+      }
+    }
+  }
 
   function queueForTranscript(frame) {
     pendingTranscriptFrames.push(frame);
@@ -3429,6 +3445,21 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       }
     }
     const view = window.TranscriptView;
+    const now = Date.now();
+    if (frame.type === "asr.final" && typeof frame.text === "string" && frame.text) {
+      const sid = (typeof frame.sid === "string" && frame.sid) || generateProvisionalSid();
+      lastUserBySid.set(sid, { text: frame.text, ts: now });
+      pruneStaleUserSids(now);
+      if (view && typeof view.upsertUser === "function") {
+        try {
+          view.upsertUser({ key: sid, text: frame.text, provisional: true });
+        } catch (err) {
+          console.warn("TranscriptView upsertUser error", err);
+        }
+      }
+    } else {
+      pruneStaleUserSids(now);
+    }
     if (!view) {
       return;
     }
@@ -3449,15 +3480,51 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       return;
     }
     const view = window.TranscriptView;
-    if (view && typeof view.handleChatMessage === "function") {
-      try {
-        view.handleChatMessage(frame);
-      } catch (err) {
-        console.warn("TranscriptView chat handler error", err);
-      }
-    } else {
+    pruneStaleUserSids();
+    if (!view || typeof view.handleChatMessage !== "function") {
       queueForTranscript(frame);
+      return;
     }
+
+    const isUserChat =
+      frame.type === "chat.message" &&
+      frame.role === "user" &&
+      typeof frame.text === "string" &&
+      frame.text;
+
+    if (isUserChat) {
+      const sid =
+        (typeof frame.sid === "string" && frame.sid) ||
+        findNearestSid(frame.text);
+      if (sid && lastUserBySid.has(sid) && typeof view.upsertUser === "function") {
+        try {
+          view.upsertUser({ key: sid, text: frame.text, provisional: false });
+          lastUserBySid.delete(sid);
+          return;
+        } catch (err) {
+          console.warn("TranscriptView upsertUser error", err);
+        }
+      }
+    }
+
+    try {
+      view.handleChatMessage(frame);
+    } catch (err) {
+      console.warn("TranscriptView chat handler error", err);
+    }
+  }
+
+  function findNearestSid(text) {
+    if (typeof text !== "string" || !text) {
+      return null;
+    }
+    const now = Date.now();
+    for (const [sid, record] of lastUserBySid.entries()) {
+      if (record && record.text === text && (now - record.ts) < ASR_MATCH_WINDOW_MS) {
+        return sid;
+      }
+    }
+    return null;
   }
 
   window.attachTranscriptView = function attachTranscriptView(view) {
@@ -3471,7 +3538,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     while (pendingTranscriptFrames.length) {
       const frame = pendingTranscriptFrames.shift();
       try {
-        view.handleChatMessage(frame);
+        deliverChat(frame);
       } catch (err) {
         console.warn("flush chat error", err);
         console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "transcript_flush_error" });
@@ -3585,8 +3652,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       case "chat.message":
       case "message":
         deliverChat(frame);
-        handledByTranscriptDispatch = true;
-        break;
+        dispatchFrame(frame);
+        return;
 
       case "asr.partial":
         schedulePartialWatchdog("asr.partial");
@@ -4065,16 +4132,17 @@ import { initPcmSender } from "./audio/pcm_sender.js";
         try {
           const frame = JSON.parse(data);
           if (frame && typeof frame.message === "string") {
-            if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-              const normalizedType =
-                (typeof frame.type === "string" && frame.type) ||
-                (typeof frame.kind === "string" && frame.kind) ||
-                (typeof frame.event === "string" && frame.event) ||
-                null;
-              if (normalizedType === "chat.message") {
-                console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
+            const normalizedType =
+              (typeof frame.type === "string" && frame.type) ||
+              (typeof frame.kind === "string" && frame.kind) ||
+              (typeof frame.event === "string" && frame.event) ||
+              null;
+            if (normalizedType !== "chat.message") {
+              if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+                return;
               }
-              return;
+            } else if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+              console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
             }
           }
           const normalizedFrame = normalizeIncomingFrame(frame);
