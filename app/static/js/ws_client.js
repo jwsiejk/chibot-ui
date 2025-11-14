@@ -3402,6 +3402,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   }
 
   const pendingTranscriptFrames = [];
+  const assistantStreamingTurns = new Map();
   const ASR_MATCH_WINDOW_MS = 4000;
   const lastUserBySid = new Map();
   let provisionalSidCounter = 0;
@@ -3415,6 +3416,106 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     for (const [sid, record] of lastUserBySid.entries()) {
       if (!record || typeof record.ts !== "number" || (now - record.ts) > ASR_MATCH_WINDOW_MS) {
         lastUserBySid.delete(sid);
+      }
+    }
+  }
+
+  function handleAssistantStreamingBegin(frame) {
+    const turnId = typeof frame?.id === "string" ? frame.id : null;
+    if (!turnId) return;
+    let record = assistantStreamingTurns.get(turnId);
+    if (!record) {
+      record = { text: "", totalLen: 0, committed: false, ended: false, reqId: null };
+      assistantStreamingTurns.set(turnId, record);
+    }
+    if (typeof frame?.req_id === "string" && frame.req_id) {
+      record.reqId = frame.req_id;
+    }
+    const view = window.TranscriptView;
+    if (view && typeof view.beginAssistantStreaming === "function") {
+      try {
+        view.beginAssistantStreaming({ turnId, reqId: record.reqId || null });
+      } catch (err) {
+        console.warn("TranscriptView beginAssistantStreaming error", err);
+      }
+    }
+  }
+
+  function handleAssistantStreamingDelta(frame) {
+    const turnId = typeof frame?.id === "string" ? frame.id : null;
+    if (!turnId) return;
+    if (!assistantStreamingTurns.has(turnId)) {
+      handleAssistantStreamingBegin(frame);
+    }
+    const record = assistantStreamingTurns.get(turnId);
+    if (!record) return;
+    const append = typeof frame?.append === "string" ? frame.append : "";
+    if (typeof frame?.req_id === "string" && frame.req_id) {
+      record.reqId = frame.req_id;
+    }
+    if (append) {
+      record.text = `${record.text || ""}${append}`;
+    }
+    if (typeof frame?.total_len === "number") {
+      record.totalLen = frame.total_len;
+    } else if (append) {
+      record.totalLen = (record.totalLen || 0) + append.length;
+    }
+    const view = window.TranscriptView;
+    if (append && view && typeof view.appendAssistantStreaming === "function") {
+      try {
+        view.appendAssistantStreaming(turnId, append);
+      } catch (err) {
+        console.warn("TranscriptView appendAssistantStreaming error", err);
+      }
+    }
+  }
+
+  function handleAssistantStreamingCommit(frame) {
+    const turnId = typeof frame?.id === "string" ? frame.id : null;
+    if (!turnId) return;
+    if (!assistantStreamingTurns.has(turnId)) {
+      handleAssistantStreamingBegin(frame);
+    }
+    const record = assistantStreamingTurns.get(turnId);
+    if (!record) return;
+    if (typeof frame?.total_len === "number") {
+      record.totalLen = frame.total_len;
+    }
+    if (typeof frame?.text === "string") {
+      record.text = frame.text;
+    }
+    record.committed = true;
+    const view = window.TranscriptView;
+    if (view && typeof view.commitAssistantStreaming === "function") {
+      try {
+        view.commitAssistantStreaming(turnId, {
+          text: record.text,
+          reqId: record.reqId || null,
+        });
+      } catch (err) {
+        console.warn("TranscriptView commitAssistantStreaming error", err);
+      }
+    }
+  }
+
+  function handleAssistantStreamingEnd(frame) {
+    const turnId = typeof frame?.id === "string" ? frame.id : null;
+    if (!turnId) return;
+    const record = assistantStreamingTurns.get(turnId);
+    if (!record) {
+      return;
+    }
+    record.ended = true;
+    const view = window.TranscriptView;
+    if (view && typeof view.commitAssistantStreaming === "function") {
+      try {
+        view.commitAssistantStreaming(turnId, {
+          text: record.text,
+          reqId: record.reqId || null,
+        });
+      } catch (err) {
+        console.warn("TranscriptView commitAssistantStreaming error", err);
       }
     }
   }
@@ -3483,6 +3584,29 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     pruneStaleUserSids();
     if (!view || typeof view.handleChatMessage !== "function") {
       queueForTranscript(frame);
+      return;
+    }
+
+    const turnId = typeof frame.turn_id === "string" ? frame.turn_id : null;
+    if (
+      turnId &&
+      frame.role === "assistant" &&
+      assistantStreamingTurns.has(turnId) &&
+      typeof view.commitAssistantStreaming === "function"
+    ) {
+      const record = assistantStreamingTurns.get(turnId) || {};
+      const finalText = typeof frame.text === "string" ? frame.text : record.text || "";
+      try {
+        view.commitAssistantStreaming(turnId, {
+          text: finalText,
+          messageId: typeof frame.id === "string" ? frame.id : null,
+          reqId: typeof frame.req_id === "string" ? frame.req_id : record.reqId || null,
+          final: true,
+        });
+      } catch (err) {
+        console.warn("TranscriptView final commit error", err);
+      }
+      assistantStreamingTurns.delete(turnId);
       return;
     }
 
@@ -3649,6 +3773,26 @@ import { initPcmSender } from "./audio/pcm_sender.js";
 
     let handledByTranscriptDispatch = false;
     switch (frame.type) {
+      case "chat.begin":
+        handleAssistantStreamingBegin(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "chat.delta":
+        handleAssistantStreamingDelta(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "chat.commit":
+        handleAssistantStreamingCommit(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "chat.end":
+        handleAssistantStreamingEnd(frame);
+        dispatchFrame(frame);
+        return;
+
       case "chat.message":
       case "message":
         deliverChat(frame);

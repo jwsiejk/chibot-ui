@@ -10,7 +10,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
 
 from app import config
 from app.logging_config import apply_logging_policy
@@ -75,6 +75,19 @@ LISTENING = "Listening"
 THINKING = "Thinking"
 RESPONDING = "Responding"
 CONFIRMING_BARGE = "ConfirmingBarge"
+
+_SENTENCE_CHUNK_RE = re.compile(r"[^.?!…]+(?:[.?!…]+|\Z)", re.DOTALL)
+
+
+def _iter_sentence_chunks(text: str) -> Iterable[str]:
+    """Yield sentence-like chunks while preserving whitespace."""
+
+    if not isinstance(text, str) or not text:
+        return
+    for match in _SENTENCE_CHUNK_RE.finditer(text):
+        chunk = match.group(0)
+        if chunk:
+            yield chunk
 
 _STATE_ORDER = {
     READY: 0,
@@ -1915,6 +1928,7 @@ class EngineV2:
         self._publish(nlg_event)
         session.nlg_emitted = True
 
+        self._emit_assistant_streaming_chat(sid, session, req_id, response_text)
         self._llm.publish_chat_message(req_id, response_text)
 
     def _emit_user_chat_message(
@@ -1951,6 +1965,75 @@ class EngineV2:
         payload = {"meta": meta, "frame": frame}
         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
         self._publish(event)
+
+    def _publish_chat_frame(self, sid: str, frame: Dict[str, Any]) -> None:
+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+        payload = {
+            "meta": {
+                "ws": {
+                    "dir": "out",
+                    "size": len(serialized.encode("utf-8")),
+                    "preview": serialized,
+                }
+            },
+            "frame": frame,
+        }
+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(event)
+
+    def _emit_assistant_streaming_chat(
+        self, sid: str, session: _TurnSession, req_id: str, text: str
+    ) -> None:
+        if not isinstance(req_id, str) or not req_id:
+            return
+
+        turn_id = session.turn_id
+        if not isinstance(turn_id, str) or not turn_id:
+            turn_id = f"turn-{uuid.uuid4().hex}"
+            session.turn_id = turn_id
+
+        begin_frame = {
+            "type": "chat.begin",
+            "id": turn_id,
+            "role": "assistant",
+            "turn_id": turn_id,
+            "req_id": req_id,
+            "ts_ms": _now_ms(),
+        }
+        self._publish_chat_frame(sid, begin_frame)
+
+        total_len = 0
+        for chunk in _iter_sentence_chunks(text):
+            total_len += len(chunk)
+            delta_frame = {
+                "type": "chat.delta",
+                "id": turn_id,
+                "append": chunk,
+                "total_len": total_len,
+                "turn_id": turn_id,
+                "req_id": req_id,
+                "ts_ms": _now_ms(),
+            }
+            self._publish_chat_frame(sid, delta_frame)
+
+        commit_frame = {
+            "type": "chat.commit",
+            "id": turn_id,
+            "total_len": total_len,
+            "turn_id": turn_id,
+            "req_id": req_id,
+            "ts_ms": _now_ms(),
+        }
+        self._publish_chat_frame(sid, commit_frame)
+
+        end_frame = {
+            "type": "chat.end",
+            "id": turn_id,
+            "turn_id": turn_id,
+            "req_id": req_id,
+            "ts_ms": _now_ms(),
+        }
+        self._publish_chat_frame(sid, end_frame)
 
     def _prepare_llm_history(
         self, sid: str, session: _TurnSession, req_id: str
