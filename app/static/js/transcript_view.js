@@ -28,6 +28,7 @@
     const messageNodesById = new Map();
     const messageNodesByClientId = new Map();
     const messageNodesByReqId = new Map();
+    const assistantStreamingByTurnId = new Map();
 
     function setNodeRole(node, role) {
       if (!node) return;
@@ -181,6 +182,96 @@
       if (removeNode) {
         partialNode = null;
       }
+    }
+
+    function beginAssistantStreaming({ turnId, reqId } = {}) {
+      if (typeof turnId !== "string" || !turnId) {
+        return null;
+      }
+      let record = assistantStreamingByTurnId.get(turnId) || null;
+      if (record && record.node && record.node.isConnected) {
+        if (reqId) {
+          record.reqId = reqId;
+          record.node.dataset.reqId = reqId;
+        }
+        return record;
+      }
+      const node = createMessage("assistant", "", { partial: true });
+      node.dataset.turnId = turnId;
+      if (reqId) {
+        node.dataset.reqId = reqId;
+      }
+      container.appendChild(node);
+      scrollToBottom();
+      record = { node, text: "", reqId: reqId || null, committed: false };
+      assistantStreamingByTurnId.set(turnId, record);
+      return record;
+    }
+
+    function appendAssistantStreaming(turnId, append) {
+      if (typeof turnId !== "string" || !turnId) return;
+      if (typeof append !== "string" || !append) append = "";
+      const record = beginAssistantStreaming({ turnId }) || assistantStreamingByTurnId.get(turnId);
+      if (!record || !record.node) return;
+      record.text = `${record.text || ""}${append}`;
+      setNodeText(record.node, record.text);
+      updateMeta(record.node, "assistant", { partial: true });
+      record.node.classList.add("partial");
+      record.node.dataset.partial = "true";
+      scrollToBottom();
+    }
+
+    function commitAssistantStreaming(turnId, { text, messageId, reqId, final = false } = {}) {
+      if (typeof turnId !== "string" || !turnId) {
+        return false;
+      }
+      const record = assistantStreamingByTurnId.get(turnId);
+      if (!record) {
+        if (typeof text === "string" && text) {
+          const node = createMessage("assistant", text);
+          node.dataset.turnId = turnId;
+          if (reqId) node.dataset.reqId = reqId;
+          container.appendChild(node);
+          scrollToBottom();
+        }
+        return false;
+      }
+      const node = record.node;
+      const resolvedText = typeof text === "string" ? text : record.text || "";
+      record.text = resolvedText;
+      setNodeText(node, resolvedText);
+      updateMeta(node, "assistant", { partial: false });
+      node.classList.remove("partial");
+      delete node.dataset.partial;
+      node.dataset.turnId = turnId;
+      if (reqId || record.reqId) {
+        const assignedReq = reqId || record.reqId;
+        if (assignedReq) {
+          node.dataset.reqId = assignedReq;
+          record.reqId = assignedReq;
+        }
+      }
+      if (typeof messageId === "string" && messageId) {
+        messageNodesById.set(messageId, node);
+        node.dataset.messageId = messageId;
+        record.messageId = messageId;
+      }
+      record.committed = true;
+      if (final || (record.messageId && record.messageId.length)) {
+        assistantStreamingByTurnId.delete(turnId);
+      } else {
+        assistantStreamingByTurnId.set(turnId, record);
+      }
+      scrollToBottom();
+      return true;
+    }
+
+    function hasAssistantStreaming(turnId) {
+      if (typeof turnId !== "string" || !turnId) {
+        return false;
+      }
+      const record = assistantStreamingByTurnId.get(turnId);
+      return !!(record && record.node && record.node.isConnected);
     }
 
     function handlePartial(frame) {
@@ -409,6 +500,10 @@
     view.handlePartial = handlePartial;
     view.handleFinal = handleFinal;
     view.handleChatMessage = handleChatMessage;
+    view.beginAssistantStreaming = beginAssistantStreaming;
+    view.appendAssistantStreaming = appendAssistantStreaming;
+    view.commitAssistantStreaming = commitAssistantStreaming;
+    view.hasAssistantStreaming = hasAssistantStreaming;
     view.addUserMessage = addUserMessage;
     view.reset = () => clearPartial({ removeNode: true });
     view.showSystemFromChip = showSystemFromChip;
