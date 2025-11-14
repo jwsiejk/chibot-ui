@@ -1,67 +1,11 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 98c5861d626ad0c3c273ca2c49d3a2bb3a018e68..8100b44031fa68dabcfb3dd6668c404cae6fe1f8 100644
+index 8100b44031fa68dabcfb3dd6668c404cae6fe1f8..9e8fdb1868558f0c85b4a3cb07f82c8ab70c4319 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -1,31 +1,32 @@
- // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
- /* __BUILD_MARKER__: FULL_DUPLEX_01 */
- import { initVAD } from "./audio/vad_client.js";
- import { initPcmSender } from "./audio/pcm_sender.js";
- import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
- (() => {
-+  // ===== Shared constants, policy defaults, tiny helpers =====
-   const HEARTBEAT_INTERVAL_MS = 20000;
-   const DEFAULT_CLOSE_REASON = "client_shutdown";
-   const JSON_SUBPROTOCOL = "chat.v2";
-   const MSGPACK_SUBPROTOCOL = "chip-msgpack";
-   const REQUESTED_CONTROL_CODEC = detectControlFramesCodec();
-   const DEFAULT_SUBPROTOCOLS = REQUESTED_CONTROL_CODEC === "msgpack"
-     ? [MSGPACK_SUBPROTOCOL, JSON_SUBPROTOCOL]
-     : JSON_SUBPROTOCOL;
-   const INFO_DEADLINE_MS = 20000;
-   const TOKEN_EXPIRY_MS = 60 * 1000;
-   const TOAST_STYLE_ID = "wsclient-toast-styles";
-   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
-   const MAX_GATE_SILENCE_MS = 3000;
-   // server_no_speech_timeout_ms should be ≥ 2 × MAX_GATE_SILENCE_MS to let the client close the turn cleanly.
-   const CLIENT_VAD_POLICY = Object.freeze({
-     enable: true,
-     sensitivity: 0.60,
-     min_speech_ms: 160,
-     min_silence_ms: 500,
-     hold_ms: 250,
-     echo_suppression_db: 10,
-     tts_threshold_boost_db: 12,
-     debounce_ms: 40,
-     // Enable true gating; preroll remains handled internally by the VAD.
-     stream_gate: "gate",          // keep gating if you want to save bandwidth
-@@ -39,72 +40,74 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
- 
-   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
- 
-   function detectControlFramesCodec() {
-     const normalize = (value) => {
-       if (typeof value !== "string") return null;
-       const lowered = value.trim().toLowerCase();
-       return lowered === "msgpack" ? "msgpack" : lowered === "json" ? "json" : null;
-     };
-     try {
-       const debugValue = normalize(window?.AppState?.debug?.controlFrames);
-       if (debugValue) return debugValue;
-     } catch {}
-     try {
-       const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search || "") : null;
-       const queryValue = params ? normalize(params.get("controlFrames")) : null;
-       if (queryValue) return queryValue;
-     } catch {}
-     try {
-       const stored = typeof window !== "undefined" && window.localStorage ? normalize(window.localStorage.getItem("controlFrames")) : null;
-       if (stored) return stored;
-     } catch {}
-     return "json";
+@@ -63,50 +63,314 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
    }
  
-+  // ===== Mic + VAD state, breadcrumbs, and telemetry wiring =====
+   // ===== Mic + VAD state, breadcrumbs, and telemetry wiring =====
    // ---- Golden-path turn trace & mic outcomes (additive) ----
    // ---- Telemetry (additive) ----
    const MIC_OUTCOME = {
@@ -84,7 +28,271 @@ index 98c5861d626ad0c3c273ca2c49d3a2bb3a018e68..8100b44031fa68dabcfb3dd6668c404c
    const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
    let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
  
-+  // ===== PCM sender + ring buffer + ASR priming =====
++  function getGateSnapshot() {
++    let snapshot = null;
++    try {
++      snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
++    } catch {}
++    const asrValue = snapshot && typeof snapshot.asrReady === "boolean"
++      ? snapshot.asrReady
++      : Boolean(AppState?.asrReady);
++    const ttsValue = snapshot && typeof snapshot.ttsActive === "boolean"
++      ? snapshot.ttsActive
++      : Boolean(AppState?.ttsActive);
++    let micPermValue = __micPermissionGranted;
++    if (snapshot && typeof snapshot.micPermissionGranted === "boolean") {
++      micPermValue = snapshot.micPermissionGranted;
++    } else if (typeof AppState?.micPermissionGranted === "boolean") {
++      micPermValue = AppState.micPermissionGranted;
++    }
++    return {
++      asrReady: Boolean(asrValue),
++      micPerm: Boolean(micPermValue),
++      ttsActive: Boolean(ttsValue),
++    };
++  }
++
++  function emitMicBreadcrumb(detail = {}) {
++    try {
++      const payload = { ...detail };
++      payload.gates = getGateSnapshot();
++      hubLog('client.mic', payload);
++    } catch (err) {
++      try {
++        console.warn("Mic breadcrumb log failed", err);
++      } catch {}
++    }
++  }
++
++  function logMic(detail = {}) {
++    try {
++      const holdFlags = {
++        ttsActive: !!AppState?.ttsActive,
++        systemHold: !!AppState?.systemHold,
++        userMuted: !!AppState?.userMuted,
++      };
++      const base = {
++        trace_id: __turnTraceId || null,
++        attempts: __micAttempts,
++        chunks: __micChunks,
++        bytes: __micBytes,
++        phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
++        hold_flags: holdFlags,
++      };
++      const outcome = typeof detail?.outcome === "string" ? detail.outcome : null;
++      const permLabel = typeof detail?.perm === "string" ? detail.perm : null;
++      if (permLabel !== null) {
++        const granted = permLabel === "granted";
++        __micPermissionGranted = granted;
++        try { AppState.micPermissionGranted = granted; } catch {}
++      } else if (outcome === MIC_OUTCOME.ERROR_DENIED) {
++        __micPermissionGranted = false;
++        try { AppState.micPermissionGranted = false; } catch {}
++      }
++      if (outcome === MIC_OUTCOME.PERM_GRANTED || permLabel === "granted") {
++        emitMicBreadcrumb({ event: "armed" });
++      }
++      if (outcome === MIC_OUTCOME.STREAMING && !__micFirstChunkBreadcrumbSent) {
++        __micFirstChunkBreadcrumbSent = true;
++        let msSinceStart = 0;
++        if (typeof __micRecordingStartAt === "number") {
++          msSinceStart = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
++        } else if (Number.isFinite(Number(detail?.first_chunk_ms))) {
++          const fallback = Number(detail.first_chunk_ms);
++          msSinceStart = Math.max(0, Math.round(fallback));
++        }
++        const bytesRaw = Number.isFinite(__micBytes) ? __micBytes : 0;
++        const bytesSent = bytesRaw >= 0 ? bytesRaw : 0;
++        emitMicBreadcrumb({
++          event: "first_chunk_sent",
++          bytes: bytesSent,
++          ms_since_recording_start: msSinceStart,
++        });
++      }
++      if (outcome === MIC_OUTCOME.STOPPED) {
++        let totalMs = 0;
++        if (typeof __micRecordingStartAt === "number") {
++          totalMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
++        }
++        const reason = typeof detail?.reason === "string" && detail.reason ? detail.reason : null;
++        emitMicBreadcrumb({
++          event: "stopped",
++          reason,
++          ms_total_recording: totalMs,
++        });
++        __micRecordingStartAt = null;
++        __micFirstChunkBreadcrumbSent = false;
++      }
++      hubLog('client.mic', { ...base, ...detail });
++    } catch {}
++  }
++
++  function logStage(label, detail = {}) {
++    try {
++      hubLog(label, { trace_id: __turnTraceId || null, ...detail });
++    } catch {}
++  }
++
++  function normalizeErrorDetail(detail) {
++    if (detail === null || detail === undefined) {
++      return null;
++    }
++    if (typeof detail === "string") {
++      return truncateBannerString(detail, 240);
++    }
++    if (typeof detail === "number" || typeof detail === "boolean") {
++      return truncateBannerString(String(detail), 240);
++    }
++    try {
++      const serialized = JSON.stringify(detail);
++      return truncateBannerString(serialized, 240);
++    } catch (err) {
++      try {
++        return truncateBannerString(String(detail), 240);
++      } catch {
++        return null;
++      }
++    }
++  }
++
++  function recordLastError(code, detail) {
++    const normalizedCode = Number.isFinite(code) ? code : null;
++    const normalizedDetail = normalizeErrorDetail(detail);
++    setAppStateValue("lastErrorCode", normalizedCode);
++    setAppStateValue("lastErrorDetail", normalizedDetail);
++  }
++
++  const CLIENT_BANNER_TYPE = "client.banner";
++  const CLIENT_BANNER_MAX_HISTORY = 24;
++  const CLIENT_BANNER_MAX_QUEUE = 24;
++  const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
++  const CLIENT_BANNER_STRING_MAX = 240;
++
++  let clientBannerQueue = [];
++  let toastRoot = null;
++
++  function ensureClientBannerState() {
++    const state = AppState.getState();
++    const existing = state && state.clientBanner && typeof state.clientBanner === "object" ? state.clientBanner : null;
++    if (existing && existing.info) {
++      return {
++        info: existing.info,
++        events: Array.isArray(existing.events) ? existing.events : [],
++      };
++    }
++    const info = collectClientBannerInfo();
++    const snapshot = { info, events: [] };
++    updateState({ clientBanner: snapshot });
++    return snapshot;
++  }
++
++  function updateClientBannerState(info, events) {
++    const state = {
++      info,
++      events,
++    };
++    updateState({ clientBanner: state });
++    return state;
++  }
++
++  function queueClientBannerPayload(payload) {
++    if (!payload || typeof payload !== "object") {
++      return;
++    }
++    clientBannerQueue = clientBannerQueue.concat([payload]);
++    if (clientBannerQueue.length > CLIENT_BANNER_MAX_QUEUE) {
++      clientBannerQueue = clientBannerQueue.slice(clientBannerQueue.length - CLIENT_BANNER_MAX_QUEUE);
++    }
++    flushClientBannerQueue();
++  }
++
++  function flushClientBannerQueue() {
++    if (!socket || socket.readyState !== WebSocket.OPEN) {
++      return;
++    }
++    while (clientBannerQueue.length) {
++      const next = clientBannerQueue[0];
++      try {
++        sendJson(next);
++        clientBannerQueue.shift();
++      } catch (err) {
++        console.warn("Failed to flush client banner", err);
++        break;
++      }
++    }
++  }
++
++  function recordClientBannerEvent(label, meta) {
++    if (typeof label !== "string" || !label) {
++      return;
++    }
++    const baseState = ensureClientBannerState();
++    const info = collectClientBannerInfo();
++    const events = Array.isArray(baseState.events) ? baseState.events.slice() : [];
++    const entry = {
++      label: truncateBannerString(label, CLIENT_BANNER_EVENT_LABEL_MAX),
++      ts_ms: Date.now(),
++    };
++    const sanitizedMeta = sanitizeBannerValue(meta);
++    if (sanitizedMeta && typeof sanitizedMeta === "object" && Object.keys(sanitizedMeta).length) {
++      entry.meta = sanitizedMeta;
++    }
++    events.push(entry);
++    if (events.length > CLIENT_BANNER_MAX_HISTORY) {
++      events.splice(0, events.length - CLIENT_BANNER_MAX_HISTORY);
++    }
++    updateClientBannerState(info, events);
++    queueClientBannerPayload({
++      type: CLIENT_BANNER_TYPE,
++      info,
++      event: entry,
++    });
++  }
++
++  function ensureToastRoot() {
++    toastRoot = toastRoot && toastRoot.isConnected ? toastRoot : document.getElementById("toast-root");
++    if (!toastRoot) {
++      toastRoot = document.createElement("div");
++      toastRoot.id = "toast-root";
++      toastRoot.className = "toast-container";
++      document.body.appendChild(toastRoot);
++    }
++    if (
++      !document.getElementById("inline-toast-styles") &&
++      !document.getElementById("ws-error-styles") &&
++      !document.getElementById(TOAST_STYLE_ID)
++    ) {
++      const styleTag = document.createElement("style");
++      styleTag.id = TOAST_STYLE_ID;
++      styleTag.textContent = TOAST_STYLE_TEXT;
++      document.head.appendChild(styleTag);
++    }
++    return toastRoot;
++  }
++
++  function showConnectionToast(message) {
++    if (!message) return;
++    const host = ensureToastRoot();
++    if (!host) return;
++    const toast = document.createElement("div");
++    toast.className = "toast";
++    toast.setAttribute("role", "alert");
++    const body = document.createElement("div");
++    body.className = "toast-body";
++    body.textContent = message;
++    toast.appendChild(body);
++    host.appendChild(toast);
++    setTimeout(() => {
++      toast.classList.add("toast-exit");
++      setTimeout(() => {
++        if (toast.parentNode) {
++          toast.parentNode.removeChild(toast);
++        }
++      }, 220);
++    }, 3600);
++  }
++
+   // ===== PCM sender + ring buffer + ASR priming =====
    class PcmRingBuffer {
      constructor({ millis, sampleRate, channels = 1 }) {
        this.sampleRate = sampleRate;
@@ -109,212 +317,625 @@ index 98c5861d626ad0c3c273ca2c49d3a2bb3a018e68..8100b44031fa68dabcfb3dd6668c404c
        } else {
          const first = this.maxSamples - this.write;
          this.buf.set(data.subarray(0, first), this.write);
-         this.buf.set(data.subarray(first), 0);
-@@ -206,50 +209,51 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
-         set(value) {
-           __micPermissionGranted = !!value;
-         },
-       });
-       Object.defineProperty(window, "__micRecordingStartAt", {
-         configurable: true,
-         get() { return __micRecordingStartAt; },
-         set(value) {
-           if (Number.isFinite(value) || value === null) {
-             __micRecordingStartAt = value;
-           }
-         },
-       });
-       Object.defineProperty(window, "__turnTraceId", {
-         configurable: true,
-         get() { return __turnTraceId; },
-         set(value) {
-           if (typeof value === "string" || value === null) {
-             __turnTraceId = value;
-           }
-         },
-       });
-     } catch {}
+@@ -917,188 +1181,83 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+     if (event === "client.vad.speech_start") {
+       clearVadSilenceTimer();
+       emitConsoleBusEvent("client.vad.start_speech");
+       if (typeof pcmRing?.clear === 'function') {
+         try {
+           pcmRing.clear();
+         } catch (err) {
+           try { console.warn("pcmRing.clear failed", err); } catch (_) {}
+         }
+       }
+       schedulePartialWatchdog("vad_speech_start");
+     } else if (event === "client.vad.speech_end") {
+       const durationValue = Number(payload && payload.duration_ms);
+       const durationMs = Number.isFinite(durationValue) ? Math.max(0, Math.round(durationValue)) : null;
+       const detail = durationMs !== null ? { duration_ms: durationMs } : undefined;
+       emitConsoleBusEvent("client.vad.end_speech", detail);
+       scheduleVadSilenceTimer();
+       clearPartialWatchdog();
+     }
+     hubLog(event, payload);
    }
  
-+  // ===== Client policy runtime (applyPolicySnapshotFromSource, etc.) =====
-   const AppState = window.AppState;
-   if (!AppState) {
-     throw new Error("AppState store is required before loading WSClient");
+   function handleVadGateChange(action) {
+     if (action === "pause") {
+       syncSenderPaused(true);
+-    } else if (action === "resume") {
+-      syncSenderPaused(false);
+-    }
+-    try {
+-      const state = action;
+-      hubLog("client.vad.gate", { action, state, senderPaused: AppState?.senderPaused });
+-    } catch {}
+-  }
+-
+-  try {
+-    vadController = initVAD({
+-      getPolicy: () => getVadPolicySnapshot(),
+-      getTtsActive: () => getTtsActiveSnapshot(),
+-      onGateChange: handleVadGateChange,
+-      setAppState: (patch) => setVadAppState(patch),
+-      publish: (event, payload) => publishVad(event, payload),
+-    });
+-  } catch (err) {
+-    try {
+-      console.warn("VAD initialization failed", err);
+-    } catch {}
+-    vadController = null;
+-  }
+-
+-  function getGateSnapshot() {
+-    let snapshot = null;
+-    try {
+-      snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
+-    } catch {}
+-    const asrValue = snapshot && typeof snapshot.asrReady === "boolean"
+-      ? snapshot.asrReady
+-      : Boolean(AppState?.asrReady);
+-    const ttsValue = snapshot && typeof snapshot.ttsActive === "boolean"
+-      ? snapshot.ttsActive
+-      : Boolean(AppState?.ttsActive);
+-    let micPermValue = __micPermissionGranted;
+-    if (snapshot && typeof snapshot.micPermissionGranted === "boolean") {
+-      micPermValue = snapshot.micPermissionGranted;
+-    } else if (typeof AppState?.micPermissionGranted === "boolean") {
+-      micPermValue = AppState.micPermissionGranted;
+-    }
+-    return {
+-      asrReady: Boolean(asrValue),
+-      micPerm: Boolean(micPermValue),
+-      ttsActive: Boolean(ttsValue),
+-    };
++    } else if (action === "resume") {
++      syncSenderPaused(false);
++    }
++    try {
++      const state = action;
++      hubLog("client.vad.gate", { action, state, senderPaused: AppState?.senderPaused });
++    } catch {}
    }
-   const ASR_RATE = (AppState?.targetSampleRate || 16000);
+ 
+-  function emitMicBreadcrumb(detail = {}) {
++  try {
++    vadController = initVAD({
++      getPolicy: () => getVadPolicySnapshot(),
++      getTtsActive: () => getTtsActiveSnapshot(),
++      onGateChange: handleVadGateChange,
++      setAppState: (patch) => setVadAppState(patch),
++      publish: (event, payload) => publishVad(event, payload),
++    });
++  } catch (err) {
+     try {
+-      const payload = { ...detail };
+-      payload.gates = getGateSnapshot();
+-      hubLog('client.mic', payload);
+-    } catch (err) {
+-      try {
+-        console.warn("Mic breadcrumb log failed", err);
+-      } catch {}
+-    }
++      console.warn("VAD initialization failed", err);
++    } catch {}
++    vadController = null;
+   }
+ 
+   try {
+     if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
+       Object.defineProperty(AppState, "websocket", {
+         configurable: true, enumerable: false,
+         get() { try { return AppState.getState().websocket || null; } catch { return null; } }
+       });
+     }
+   } catch {}
+ 
+-  function logMic(detail = {}) {
+-    try {
+-      const holdFlags = {
+-        ttsActive: !!AppState?.ttsActive,
+-        systemHold: !!AppState?.systemHold,
+-        userMuted: !!AppState?.userMuted,
+-      };
+-      const base = {
+-        trace_id: __turnTraceId || null,
+-        attempts: __micAttempts,
+-        chunks: __micChunks,
+-        bytes: __micBytes,
+-        phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
+-        hold_flags: holdFlags,
+-      };
+-      const outcome = typeof detail?.outcome === "string" ? detail.outcome : null;
+-      const permLabel = typeof detail?.perm === "string" ? detail.perm : null;
+-      if (permLabel !== null) {
+-        const granted = permLabel === "granted";
+-        __micPermissionGranted = granted;
+-        try { AppState.micPermissionGranted = granted; } catch {}
+-      } else if (outcome === MIC_OUTCOME.ERROR_DENIED) {
+-        __micPermissionGranted = false;
+-        try { AppState.micPermissionGranted = false; } catch {}
+-      }
+-      if (outcome === MIC_OUTCOME.PERM_GRANTED || permLabel === "granted") {
+-        emitMicBreadcrumb({ event: "armed" });
+-      }
+-      if (outcome === MIC_OUTCOME.STREAMING && !__micFirstChunkBreadcrumbSent) {
+-        __micFirstChunkBreadcrumbSent = true;
+-        let msSinceStart = 0;
+-        if (typeof __micRecordingStartAt === "number") {
+-          msSinceStart = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
+-        } else if (Number.isFinite(Number(detail?.first_chunk_ms))) {
+-          const fallback = Number(detail.first_chunk_ms);
+-          msSinceStart = Math.max(0, Math.round(fallback));
+-        }
+-        const bytesRaw = Number.isFinite(__micBytes) ? __micBytes : 0;
+-        const bytesSent = bytesRaw >= 0 ? bytesRaw : 0;
+-        emitMicBreadcrumb({
+-          event: "first_chunk_sent",
+-          bytes: bytesSent,
+-          ms_since_recording_start: msSinceStart,
+-        });
+-      }
+-      if (outcome === MIC_OUTCOME.STOPPED) {
+-        let totalMs = 0;
+-        if (typeof __micRecordingStartAt === "number") {
+-          totalMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
+-        }
+-        const reason = typeof detail?.reason === "string" && detail.reason ? detail.reason : null;
+-        emitMicBreadcrumb({
+-          event: "stopped",
+-          reason,
+-          ms_total_recording: totalMs,
+-        });
+-        __micRecordingStartAt = null;
+-        __micFirstChunkBreadcrumbSent = false;
+-      }
+-      hubLog('client.mic', { ...base, ...detail });
+-    } catch {}
+-  }
+-
+-  function logStage(label, detail = {}) {
+-    try {
+-      hubLog(label, { trace_id: __turnTraceId || null, ...detail });
+-    } catch {}
+-  }
+-
    if (typeof window !== "undefined") {
-     window.__pcmRing ||= new PcmRingBuffer({ millis: 1500, sampleRate: ASR_RATE, channels: 1 });
-   }
-   const pcmRing = (typeof window !== "undefined") ? window.__pcmRing : null;
-   if (typeof AppState._recoverPrimePending === "undefined") {
-     AppState._recoverPrimePending = false;
-   }
-   const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
-   const P0 = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-   const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
-   const DEFAULT_POLICY_WATCHDOG = {
-     partial_wait_ms_first_turn: 3500,
-     partial_wait_ms: 2500,
-   };
-   const DEFAULT_POLICY_STATUS = { require_active_turn: true };
- 
-   const cloneValue = (value) => {
-     if (Array.isArray(value)) {
-       return value.slice();
-     }
-@@ -403,50 +407,51 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
-   const SENDER_GATE_ON_TTS = Boolean(
-     POLICY_VAD?.sender_gate_on_tts ?? DEFAULT_POLICY_VAD.sender_gate_on_tts,
-   );
-   const REQUIRE_ACTIVE_TURN = Boolean(
-     POLICY_STATUS?.require_active_turn ?? DEFAULT_POLICY_STATUS.require_active_turn,
-   );
- 
-   const appStateEventEmitter = createEventEmitter();
-   if (typeof AppState.on !== "function") {
-     AppState.on = (event, handler) => appStateEventEmitter.on(event, handler);
-   }
-   if (typeof AppState.emit !== "function") {
-     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
-   }
-   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
-     AppState.__pcmBreadcrumbHandlersInstalled = true;
-     AppState.on("recordingStarted", () => {
-       __micRecordingStartAt = Date.now();
-       __micFirstChunkBreadcrumbSent = false;
-       emitMicBreadcrumb({ event: "recording_start", policy: { ...PCM_BREADCRUMB_POLICY } });
-     });
+     try { window.__logMic = logMic; } catch {}
+     try { window.__logStage = logStage; } catch {}
+     try { window.__MIC_OUTCOME = MIC_OUTCOME; } catch {}
    }
  
-   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
- 
-+  // ===== WebSocket connection + queue + outbound send helpers =====
-   const WSClient = window.WSClient = window.WSClient || {};
-   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
-     window.ws = null;
+   const AUDIO_HEADER_FRAME = Object.freeze({
+     type: "audio.header",
+     format: "pcm16",
+     sample_rate: 16000,
+     channels: 1,
+   });
+   // --- Begin: header idempotency + strict schema ---
+   let __audioHeaderSent = false;
+   function __resetAudioHeaderSent() {
+     __audioHeaderSent = false;
    }
-   const wsEventEmitter = WSClient.__events = WSClient.__events || createEventEmitter();
-   setNegotiatedControlCodec(REQUESTED_CONTROL_CODEC);
-   WSClient.on = function on(event, handler) {
-     return wsEventEmitter.on(event, handler);
-   };
-   WSClient.off = function off(event, handler) {
-     return wsEventEmitter.off(event, handler);
-   };
-   WSClient.emit = function emit(event, detail) {
-     return wsEventEmitter.emit(event, detail);
-   };
-   WSClient._ws = WSClient._ws || null;
-   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
-   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
-   WSClient.__firstChunkSeen = () => __firstChunkSeen === true;
-   const getAudioPlayer = () => window.AudioPlayer;
- 
-   WSClient.waitForOnce = function waitForOnce(type, predicate, timeoutMs = 2000) {
-     return new Promise((resolve, reject) => {
-       let done = false;
-       const timer = setTimeout(() => {
-@@ -3077,50 +3082,51 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
-     if (Date.now() >= resume.expiresAt) {
-       clearResumeState();
-       updateState({ resumeError: "invalid" });
-       recordClientBannerEvent("ws.auto_resume.expired", { expires_at_ms: resume.expiresAt });
-       return false;
-     }
-     const state = AppState.getState();
-     if (autoResumeAttemptToken === resume.token) {
-       return false;
-     }
-     autoResumeAttemptToken = resume.token;
-     updateState({ connectionState: "resuming", resumeError: null });
-     recordClientBannerEvent("ws.auto_resume.start", { resume_token_present: true, expires_at_ms: resume.expiresAt });
-     try {
-       open({ resumeToken: resume.token, skipRateLimitCancel: true });
-       return true;
-     } catch (err) {
-       console.error("Auto-resume open failed", err);
-       autoResumeAttemptToken = null;
-       updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-       recordClientBannerEvent("ws.auto_resume.failed", { message: getErrorMessage(err) });
-       return false;
-     }
-   }
- 
-+  // ===== Frame dispatchers (ASR, chat, policy, config, etc.) =====
-   function dispatchFrame(frame) {
-     if (!frame || typeof frame.type !== "string") return;
-     const type = frame.type;
-     try {
-       window.dispatchEvent(new CustomEvent(type, { detail: frame }));
-       if (type.includes(".")) {
-         const baseType = type.split(".")[0];
-         window.dispatchEvent(new CustomEvent(baseType, { detail: frame }));
+   function __buildStrictAudioHeader(frameOrPolicy) {
+     const base = AUDIO_HEADER_FRAME;
+     const source = (frameOrPolicy?.policy || frameOrPolicy) || {};
+     const audioPolicy = source && typeof source.audio === "object" ? source.audio : {};
+     const formatCandidate = audioPolicy.format ?? base.format;
+     const rateCandidate =
+       audioPolicy.sample_rate ??
+       audioPolicy.rate ??
+@@ -1172,51 +1331,50 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
        }
      } catch (err) {
-       console.warn("WSClient dispatch error", err);
+       console.warn("Failed to send audio header", err);
+       return false;
+     }
+ 
+     console.warn("Failed to send audio header: transport returned false");
+     return false;
+   }
+   function sendAudioHeader(frameOrPolicy = AppState?.policy) {
+     return __sendAudioHeaderOnce(frameOrPolicy);
+   }
+   // --- End: header idempotency + strict schema ---
+   let __lastErrorSig = null, __lastErrorAt = 0;
+   const AUDIO_KEEPALIVE_MS = 20000;
+ 
+   let socket = null;
+   let heartbeatTimerId = null;
+   let expectInfoFrame = true;
+   let infoWatchdogTimerId = null;
+   let lastPingAt = null;
+   let transportFactory = (url, protocols = DEFAULT_SUBPROTOCOLS) => new WebSocket(url, protocols);
+   let rateLimitRetryTimerId = null;
+   let rateLimitRetryCount = 0;
+   let autoResumeAttemptToken = null;
+-  let toastRoot = null;
+   let lastTokenValue = null;
+   let lastTokenMintedAt = null;
+ 
+   let micKeepaliveTimerId = null;
+   let micLastChunkAt = 0;
+ 
+   function normalizeReason(reason) {
+     if (typeof reason === "string" && reason) {
+       return reason;
+     }
+     if (reason && typeof reason === "object" && typeof reason.reason === "string" && reason.reason) {
+       return reason.reason;
+     }
+     return "unspecified";
+   }
+ 
+   function setAppStateValue(key, value) {
+     if (typeof key !== "string" || !key) {
+       return;
+     }
+     const state = typeof AppState.getState === "function" ? AppState.getState() : null;
+     const hasKey = state && Object.prototype.hasOwnProperty.call(state, key);
+     const current = hasKey ? state[key] : AppState[key];
+     if (Object.is(current, value)) {
+       AppState[key] = value;
+@@ -1287,79 +1445,50 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+         send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
+       } catch (err) {
+         console.warn("WSClient queue flush send failed", err);
+       }
      }
    }
  
-   function startInputCapture(frame) {
-     const policy = frame?.policy || {};
-     const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
-     const source = frame?.type || "input.start";
-     const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
+   function resetRecorderTelemetry() {
+     setAppStateValue("chunkCount", 0);
+     setAppStateValue("lastChunkTs", null);
+     __firstChunkSeen = false;
+     __armingGraceUntil = 0;
+   }
  
-     if (unifiedRecorder) {
-       try {
-         logStage("client.input.capture", { source, hasPolicy, skipped: "unified_recorder" });
-       } catch {}
-       // In unified mode we don't start here; asr.ready will trigger streaming.
-@@ -5380,50 +5386,51 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
-     }
-     const text = typeof data === "string" ? data : JSON.stringify(data);
-     try {
-       live.send(text);
-       return true;
-     } catch (err) {
-       console.error("WSClient send error", err);
-       return false;
+   function recordRecorderChunk(timestampMs) {
+     const now = Number.isFinite(timestampMs) ? timestampMs : Date.now();
+     const currentCount = typeof AppState.chunkCount === "number"
+       ? AppState.chunkCount
+       : (typeof AppState.getState === "function" ? (AppState.getState().chunkCount || 0) : 0);
+     const nextCount = currentCount + 1;
+     AppState.chunkCount = nextCount;
+     AppState.lastChunkTs = now;
+     updateState({ chunkCount: nextCount, lastChunkTs: now });
+   }
+ 
+-  function normalizeErrorDetail(detail) {
+-    if (detail === null || detail === undefined) {
+-      return null;
+-    }
+-    if (typeof detail === "string") {
+-      return truncateBannerString(detail, 240);
+-    }
+-    if (typeof detail === "number" || typeof detail === "boolean") {
+-      return truncateBannerString(String(detail), 240);
+-    }
+-    try {
+-      const serialized = JSON.stringify(detail);
+-      return truncateBannerString(serialized, 240);
+-    } catch (err) {
+-      try {
+-        return truncateBannerString(String(detail), 240);
+-      } catch {
+-        return null;
+-      }
+-    }
+-  }
+-
+-  function recordLastError(code, detail) {
+-    const normalizedCode = Number.isFinite(code) ? code : null;
+-    const normalizedDetail = normalizeErrorDetail(detail);
+-    setAppStateValue("lastErrorCode", normalizedCode);
+-    setAppStateValue("lastErrorDetail", normalizedDetail);
+-  }
+-
+   function clearAudioKeepaliveTimer() {
+     if (micKeepaliveTimerId) {
+       clearTimeout(micKeepaliveTimerId);
+       micKeepaliveTimerId = null;
      }
    }
  
-   function getBufferedAmount() {
-     if (!socket) return 0;
-     return socket.bufferedAmount || 0;
-   }
- 
-   const debug = {
-     simulateIncomingFrame(frame) {
-       return handleMessageFrame(frame);
-     },
-     setTransportFactory(factory) {
-       transportFactory = typeof factory === "function" ? factory : transportFactory;
-     }
-   };
- 
-+  // ===== Public WSClient API wiring (window.WSClient = …) =====
-   WSClient.sendJSON = function sendJSONPayload(obj) {
-     if (obj instanceof ArrayBuffer || ArrayBuffer.isView(obj)) {
-       logTransportMisuse("binary_sent_to_sendJSON");
-       console.error("WSClient.sendJSON: binary payload; use sendAudioChunk()");
-       return false;
-     }
-     if (!obj || typeof obj !== "object") {
-       return false;
-     }
-     const result = send.call(WSClient, obj, { binary: false });
-     if (result && typeof result.then === "function") {
-       return result.then(() => true).catch((err) => {
-         console.warn("sendJSON failed", err);
-         return false;
+   function scheduleAudioKeepalive() {
+     clearAudioKeepaliveTimer();
+     micKeepaliveTimerId = setTimeout(() => {
+       micKeepaliveTimerId = null;
+       const listening = Boolean(AppState.listening);
+       const now = Date.now();
+       if (!listening) {
+         return;
+       }
+       if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
+         try {
+           WSClient.sendJSON({ type: "client.ping" });
+           logStage("client.ping", { lane: "mic" });
+         } catch (err) {
+           console.warn("client.ping send failed", err);
+         }
+       }
+       scheduleAudioKeepalive();
+@@ -2140,58 +2269,50 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+         sample_rate: ASR_RATE,
+         language: AppState?.language || "en-US",
+         recover: true,
        });
+     } catch (err) {
+       try { console.warn("ASR recovery open failed", err); } catch (_) {}
      }
-     return result !== false;
-   };
  
-   WSClient.sendAudioChunk = function sendAudioChunk(buf, opts = {}) {
-     if (buf instanceof Blob) {
-       const blobResult = sendBinary(buf, { ...opts, lane: opts && typeof opts === "object" && typeof opts.lane !== "undefined" ? opts.lane : "mic" });
-       if (blobResult && typeof blobResult.then === "function") {
-         return blobResult;
+     try {
+       if (typeof WSClient.waitForOnce === 'function') {
+         const readyFrame = await WSClient.waitForOnce('asr.ready', () => true, 2000);
+         const sid = readyFrame?.sid || AppState?.asrSid || `${Date.now()}`;
+         primeAsrStreamFromRing(sid);
+         AppState._recoverPrimePending = false;
+       } else {
+         AppState._recoverPrimePending = true;
        }
+     } catch (err) {
+       AppState._recoverPrimePending = true;
+       try { console.warn("ASR recovery wait_for_ready failed", err); } catch (_) {}
+     } finally {
+       asrRecovering = false;
+     }
+   }
+ 
+-  const CLIENT_BANNER_TYPE = "client.banner";
+-  const CLIENT_BANNER_MAX_HISTORY = 24;
+-  const CLIENT_BANNER_MAX_QUEUE = 24;
+-  const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
+-  const CLIENT_BANNER_STRING_MAX = 240;
+-
+-  let clientBannerQueue = [];
+-
+   // Initialize the client banner state only after related constants are defined.
+   ensureClientBannerState();
+ 
+   const USER_GESTURE_EVENTS = ["pointerdown", "touchstart", "keydown"];
+ 
+   let gestureListenerCleanup = null;
+ 
+   function createEventEmitter() {
+     const registry = new Map();
+ 
+     function off(event, handler) {
+       if (typeof event !== "string" || !event) {
+         return;
+       }
+       const listeners = registry.get(event);
+       if (!listeners || !listeners.size) {
+         return;
+       }
+       if (typeof handler === "function") {
+         listeners.delete(handler);
+       } else if (handler == null) {
+         listeners.clear();
+       }
+       if (!listeners.size) {
+         registry.delete(event);
+@@ -2583,128 +2704,50 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+         info.referrer = truncateBannerString(document.referrer);
+       }
+       if (typeof document.visibilityState === "string" && document.visibilityState) {
+         info.visibility_state = truncateBannerString(document.visibilityState, 32);
+       }
+     }
+     if (typeof window.matchMedia === "function") {
+       try {
+         const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+         if (prefersDark && typeof prefersDark.matches === "boolean") {
+           info.prefers_dark = prefersDark.matches;
+         }
+       } catch (err) {
+         // ignore matchMedia errors
+       }
+     }
+     if (typeof window.location !== "undefined") {
+       const locationInfo = sanitizeUrlForBanner(window.location.href);
+       if (locationInfo) {
+         info.location = locationInfo;
+       }
+     }
+     return info;
+   }
+ 
+-  function ensureClientBannerState() {
+-    const state = AppState.getState();
+-    const existing = state && state.clientBanner && typeof state.clientBanner === "object" ? state.clientBanner : null;
+-    if (existing && existing.info) {
+-    return {
+-        info: existing.info,
+-        events: Array.isArray(existing.events) ? existing.events : [],
+-      };
+-    }
+-    const info = collectClientBannerInfo();
+-    const snapshot = { info, events: [] };
+-    updateState({ clientBanner: snapshot });
+-    return snapshot;
+-  }
+-
+-  function updateClientBannerState(info, events) {
+-    const state = {
+-      info,
+-      events,
+-    };
+-    updateState({ clientBanner: state });
+-    return state;
+-  }
+-
+-  function queueClientBannerPayload(payload) {
+-    if (!payload || typeof payload !== "object") {
+-      return;
+-    }
+-    clientBannerQueue = clientBannerQueue.concat([payload]);
+-    if (clientBannerQueue.length > CLIENT_BANNER_MAX_QUEUE) {
+-      clientBannerQueue = clientBannerQueue.slice(clientBannerQueue.length - CLIENT_BANNER_MAX_QUEUE);
+-    }
+-    flushClientBannerQueue();
+-  }
+-
+-  function flushClientBannerQueue() {
+-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+-      return;
+-    }
+-    while (clientBannerQueue.length) {
+-      const next = clientBannerQueue[0];
+-      try {
+-        sendJson(next);
+-        clientBannerQueue.shift();
+-      } catch (err) {
+-        console.warn("Failed to flush client banner", err);
+-        break;
+-      }
+-    }
+-  }
+-
+-  function recordClientBannerEvent(label, meta) {
+-    if (typeof label !== "string" || !label) {
+-      return;
+-    }
+-    const baseState = ensureClientBannerState();
+-    const info = collectClientBannerInfo();
+-    const events = Array.isArray(baseState.events) ? baseState.events.slice() : [];
+-    const entry = {
+-      label: truncateBannerString(label, CLIENT_BANNER_EVENT_LABEL_MAX),
+-      ts_ms: Date.now(),
+-    };
+-    const sanitizedMeta = sanitizeBannerValue(meta);
+-    if (sanitizedMeta && typeof sanitizedMeta === "object" && Object.keys(sanitizedMeta).length) {
+-      entry.meta = sanitizedMeta;
+-    }
+-    events.push(entry);
+-    if (events.length > CLIENT_BANNER_MAX_HISTORY) {
+-      events.splice(0, events.length - CLIENT_BANNER_MAX_HISTORY);
+-    }
+-    updateClientBannerState(info, events);
+-    queueClientBannerPayload({
+-      type: CLIENT_BANNER_TYPE,
+-      info,
+-      event: entry,
+-    });
+-  }
+-
+   function getErrorMessage(err) {
+     if (!err) {
+       return undefined;
+     }
+     if (typeof err === "string") {
+       return truncateBannerString(err);
+     }
+     if (err && typeof err.message === "string") {
+       return truncateBannerString(err.message);
+     }
+     try {
+       return truncateBannerString(String(err));
+     } catch (inner) {
+       return undefined;
+     }
+   }
+ 
+   // Build a full WS URL and PRESERVE the query string as-is.
+   function makeWsUrl(pathWithQuery) {
+     if (typeof pathWithQuery !== "string" || !pathWithQuery) {
+       return pathWithQuery;
+     }
+     const trimmed = pathWithQuery.trim();
+     if (/^wss?:/i.test(trimmed)) {
+       return trimmed;
+@@ -2730,93 +2773,50 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+     const token = typeof resume.token === "string" ? resume.token : null;
+     const ttlMs = Number.isFinite(resume.ttlMs) ? resume.ttlMs : null;
+     const expiresAt = Number.isFinite(resume.expiresAt) ? resume.expiresAt : null;
+     if (!token || !ttlMs || !expiresAt) return null;
+     return { token, ttlMs, expiresAt };
+   }
+ 
+   function assignResume(token, ttlMs) {
+     if (typeof AppState.setResume === "function") {
+       AppState.setResume(token, ttlMs);
+     }
+     autoResumeAttemptToken = null;
+   }
+ 
+   function clearResumeState() {
+     if (typeof AppState.clearResume === "function") {
+       AppState.clearResume();
+     }
+     autoResumeAttemptToken = null;
+   }
+ 
+   function updateState(patch) {
+     AppState.setState(patch);
+   }
+ 
+-  function ensureToastRoot() {
+-    toastRoot = toastRoot && toastRoot.isConnected ? toastRoot : document.getElementById("toast-root");
+-    if (!toastRoot) {
+-      toastRoot = document.createElement("div");
+-      toastRoot.id = "toast-root";
+-      toastRoot.className = "toast-container";
+-      document.body.appendChild(toastRoot);
+-    }
+-    if (
+-      !document.getElementById("inline-toast-styles") &&
+-      !document.getElementById("ws-error-styles") &&
+-      !document.getElementById(TOAST_STYLE_ID)
+-    ) {
+-      const styleTag = document.createElement("style");
+-      styleTag.id = TOAST_STYLE_ID;
+-      styleTag.textContent = TOAST_STYLE_TEXT;
+-      document.head.appendChild(styleTag);
+-    }
+-    return toastRoot;
+-  }
+-
+-  function showConnectionToast(message) {
+-    if (!message) return;
+-    const host = ensureToastRoot();
+-    if (!host) return;
+-    const toast = document.createElement("div");
+-    toast.className = "toast";
+-    toast.setAttribute("role", "alert");
+-    const body = document.createElement("div");
+-    body.className = "toast-body";
+-    body.textContent = message;
+-    toast.appendChild(body);
+-    host.appendChild(toast);
+-    setTimeout(() => {
+-      toast.classList.add("toast-exit");
+-      setTimeout(() => {
+-        if (toast.parentNode) {
+-          toast.parentNode.removeChild(toast);
+-        }
+-      }, 220);
+-    }, 3600);
+-  }
+-
+   function trackTokenFromUrl(url) {
+     if (typeof url !== "string" || !url) {
+       return { token: null, mintedAt: null };
+     }
+     let token = null;
+     try {
+       const parsed = new URL(url, window.location.origin);
+       token = parsed.searchParams.get("access_token");
+     } catch (err) {
+       return { token: null, mintedAt: null };
+     }
+     if (typeof token === "string" && token) {
+       if (token !== lastTokenValue) {
+         lastTokenValue = token;
+         lastTokenMintedAt = Date.now();
+       }
+       return { token: lastTokenValue, mintedAt: lastTokenMintedAt };
+     }
+     return { token: null, mintedAt: null };
+   }
+ 
+   function maybeShowHandshakeToast(ws, closeCode) {
+     if (!ws || ws.__intentionalClose === true || ws.__handshakeToastShown) {
+       return;
+     }
