@@ -1472,16 +1472,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       setListeningState(true);
       // allow the *first* PCM to pass even if VAD pauses immediately
       __armingGraceUntil = Date.now() + 1200; // ~1.2s
-      if ((AppState?.policy?.audio?.header_on_first_chunk) === true && !__audioHeaderSent && AppState?.asrReady) {
-        try {
-          const maybe = sendAudioHeader(AppState?.policy || {});
-          if (maybe && typeof maybe.then === "function") {
-            await maybe;
-          }
-        } catch (err) {
-          console.warn("Audio header send failed", err);
-        }
-      }
+      // audio.header is sent from the ASR-ready handler; do not send another copy here.
       try {
         hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
       } catch {}
