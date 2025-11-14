@@ -39,6 +39,11 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
 
   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
+  const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+  const PCM_TARGET_SAMPLE_RATE = 16000;
+  const DEFAULT_ASR_VENDOR = 'gcp';
+  const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
+  let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
 
   function detectControlFramesCodec() {
     const normalize = (value) => {
@@ -79,11 +84,13 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     ERROR_STATE_GUARD: 'error_state_guard',
     ERROR_UNKNOWN: 'error_unknown',
   };
-  const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-  const PCM_TARGET_SAMPLE_RATE = 16000;
-  const DEFAULT_ASR_VENDOR = 'gcp';
-  const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
-  let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
+  let __micAttempts = 0;
+  let __micChunks = 0;
+  let __micBytes = 0;
+  let __micPermissionGranted = false;
+  let __micRecordingStartAt = null;
+  let __micFirstChunkBreadcrumbSent = false;
+  let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
 
   function getGateSnapshot() {
     let snapshot = null;
@@ -228,6 +235,33 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   let clientBannerQueue = [];
   let toastRoot = null;
 
+  function recordClientBannerEvent(label, meta) {
+    if (typeof label !== "string" || !label) {
+      return;
+    }
+    const baseState = ensureClientBannerState();
+    const info = collectClientBannerInfo();
+    const events = Array.isArray(baseState.events) ? baseState.events.slice() : [];
+    const entry = {
+      label: truncateBannerString(label, CLIENT_BANNER_EVENT_LABEL_MAX),
+      ts_ms: Date.now(),
+    };
+    const sanitizedMeta = sanitizeBannerValue(meta);
+    if (sanitizedMeta && typeof sanitizedMeta === "object" && Object.keys(sanitizedMeta).length) {
+      entry.meta = sanitizedMeta;
+    }
+    events.push(entry);
+    if (events.length > CLIENT_BANNER_MAX_HISTORY) {
+      events.splice(0, events.length - CLIENT_BANNER_MAX_HISTORY);
+    }
+    updateClientBannerState(info, events);
+    queueClientBannerPayload({
+      type: CLIENT_BANNER_TYPE,
+      info,
+      event: entry,
+    });
+  }
+
   function ensureClientBannerState() {
     const state = AppState.getState();
     const existing = state && state.clientBanner && typeof state.clientBanner === "object" ? state.clientBanner : null;
@@ -277,33 +311,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
         break;
       }
     }
-  }
-
-  function recordClientBannerEvent(label, meta) {
-    if (typeof label !== "string" || !label) {
-      return;
-    }
-    const baseState = ensureClientBannerState();
-    const info = collectClientBannerInfo();
-    const events = Array.isArray(baseState.events) ? baseState.events.slice() : [];
-    const entry = {
-      label: truncateBannerString(label, CLIENT_BANNER_EVENT_LABEL_MAX),
-      ts_ms: Date.now(),
-    };
-    const sanitizedMeta = sanitizeBannerValue(meta);
-    if (sanitizedMeta && typeof sanitizedMeta === "object" && Object.keys(sanitizedMeta).length) {
-      entry.meta = sanitizedMeta;
-    }
-    events.push(entry);
-    if (events.length > CLIENT_BANNER_MAX_HISTORY) {
-      events.splice(0, events.length - CLIENT_BANNER_MAX_HISTORY);
-    }
-    updateClientBannerState(info, events);
-    queueClientBannerPayload({
-      type: CLIENT_BANNER_TYPE,
-      info,
-      event: entry,
-    });
   }
 
   function ensureToastRoot() {
@@ -358,16 +365,9 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     }
   }
 
-  let __micAttempts = 0;
-  let __micChunks = 0;
-  let __micBytes = 0;
   let __micArmedAt = 0;     // ms since epoch
-  let __micPermissionGranted = false;
-  let __micRecordingStartAt = null;
-  let __micFirstChunkBreadcrumbSent = false;
   let __firstChunkSeen = false;
   let __armingGraceUntil = 0; // ms epoch; brief window after capture start
-  let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
   let __pauseSendUntil = 0;
   let __throttleTimer = null;
 
