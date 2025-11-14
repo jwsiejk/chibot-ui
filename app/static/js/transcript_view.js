@@ -414,7 +414,11 @@
     view.showSystemFromChip = showSystemFromChip;
   }
 
-  window.TranscriptView = view;
+  if (typeof window.attachTranscriptView === "function") {
+    window.attachTranscriptView(view);
+  } else {
+    window.TranscriptView = view;
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
