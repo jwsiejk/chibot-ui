@@ -1586,15 +1586,16 @@
       });
     });
 
-    endBtn.addEventListener('click', () => {
-      WSClient.close('user_requested');
-      if (typeof AppState.clearResume === 'function') {
-        AppState.clearResume();
+    endBtn.addEventListener('click', async () => {
+      try {
+        if (typeof WSClient?.requestAsrClose === 'function') {
+          await WSClient.requestAsrClose('end_button');
+        }
+      } catch (err) {
+        console.warn('requestAsrClose failed', err);
       }
       if (audioRecorder && typeof audioRecorder.stop === 'function') {
-        try {
-          audioRecorder.stop();
-        } catch (err) {
+        try { audioRecorder.stop(); } catch (err) {
           console.warn('Failed to stop audio recorder', err);
         }
       }

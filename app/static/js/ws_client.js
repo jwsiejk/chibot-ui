@@ -75,6 +75,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   let __throttleTimer = null;
 
   let _audioStreaming = false;
+  let awaitingAsrClosedAck = false;
+  let pendingAsrClosedSeq = null;
+  let awaitingTurnEndForRearm = false;
+  let pendingRearmReason = null;
 
   if (typeof window !== "undefined") {
     try {
@@ -332,11 +336,63 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
     window.ws = null;
   }
+  const wsEventEmitter = WSClient.__events = WSClient.__events || createEventEmitter();
+  WSClient.on = function on(event, handler) {
+    return wsEventEmitter.on(event, handler);
+  };
+  WSClient.off = function off(event, handler) {
+    return wsEventEmitter.off(event, handler);
+  };
+  WSClient.emit = function emit(event, detail) {
+    return wsEventEmitter.emit(event, detail);
+  };
   WSClient._ws = WSClient._ws || null;
   WSClient._connected = !!(WSClient._ws && WSClient._ws.readyState === WebSocket.OPEN);
   WSClient._queue = Array.isArray(WSClient._queue) ? WSClient._queue : [];
   WSClient.__firstChunkSeen = () => __firstChunkSeen === true;
   const getAudioPlayer = () => window.AudioPlayer;
+
+  WSClient.waitForOnce = function waitForOnce(type, predicate, timeoutMs = 2000) {
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) {
+          return;
+        }
+        finalize(reject, new Error(`waitForOnce timeout: ${type}`));
+      }, timeoutMs);
+
+      function finalize(callback, value) {
+        if (done) {
+          return;
+        }
+        done = true;
+        clearTimeout(timer);
+        try {
+          WSClient.off('frame', onFrame);
+        } catch {}
+        callback(value);
+      }
+
+      function onFrame(frame) {
+        if (done) {
+          return;
+        }
+        if (!frame || frame.type !== type) {
+          return;
+        }
+        try {
+          if (!predicate || predicate(frame)) {
+            finalize(resolve, frame);
+          }
+        } catch (err) {
+          finalize(reject, err);
+        }
+      }
+
+      WSClient.on('frame', onFrame);
+    });
+  };
 
   // ---- Type guards / helpers ----
   function isTypedArray(value) {
@@ -1399,6 +1455,25 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     return SERVER_ERROR_REASON_PATTERNS.some((pattern) => pattern.test(key));
   }
 
+  function shouldAutoRearmAfterClosed(reason) {
+    if (AppState?.policy?.auto_record_after_greet === false) {
+      return false;
+    }
+    const key = typeof reason === "string" && reason ? reason.trim().toLowerCase() : "";
+    if (!key) {
+      return true;
+    }
+    if (key === "end_button") {
+      return false;
+    }
+    return !reasonLooksUserInitiated(key);
+  }
+
+  function clearPendingRearm() {
+    awaitingTurnEndForRearm = false;
+    pendingRearmReason = null;
+  }
+
   function evaluateStopRecorderReason(reason, fallbackReason) {
     const label = toReasonLabel(reason);
     const key = label.trim().toLowerCase();
@@ -1505,15 +1580,41 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   async function requestAsrClose(reason = "client_stop") {
     const label = normalizeReason(reason);
     setAsrArmInFlight(false);
+    const seq = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const sid = typeof AppState?.asrSid === "string" && AppState.asrSid ? AppState.asrSid : null;
+    const payload = { type: "asr.close", seq, reason: label };
+    if (sid) {
+      payload.sid = sid;
+    }
+    let ack = null;
     try {
-      WSClient.sendJSON({ type: "asr.close", reason: label });
-      setWsPhase("closing");
+      WSClient.sendJSON(payload);
+      pendingAsrClosedSeq = seq;
+      awaitingAsrClosedAck = true;
       logStage("client.asr_close_request", { reason: label });
     } catch (err) {
+      pendingAsrClosedSeq = null;
+      awaitingAsrClosedAck = false;
       console.warn("Failed to send asr.close", err);
-      setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
+    }
+    if (awaitingAsrClosedAck) {
+      try {
+        ack = await WSClient.waitForOnce(
+          "asr.closed",
+          (frame) => frame?.seq === seq || (!!sid && frame?.sid === sid),
+          2000,
+        );
+      } catch (err) {
+        console.warn("asr.closed ack timeout; proceeding cautiously", err);
+      } finally {
+        awaitingAsrClosedAck = false;
+        pendingAsrClosedSeq = null;
+      }
     }
     await stopRecorder(label);
+    return ack;
   }
 
   const CLIENT_BANNER_TYPE = "client.banner";
@@ -1533,41 +1634,61 @@ import { initPcmSender } from "./audio/pcm_sender.js";
 
   function createEventEmitter() {
     const registry = new Map();
-    return {
-      on(event, handler) {
-        if (typeof event !== "string" || !event || typeof handler !== "function") {
-          return () => {};
-        }
-        let listeners = registry.get(event);
-        if (!listeners) {
-          listeners = new Set();
-          registry.set(event, listeners);
-        }
-        listeners.add(handler);
-        return () => {
-          listeners.delete(handler);
-        };
-      },
-      emit(event, detail) {
-        if (typeof event !== "string" || !event) {
-          return;
-        }
-        const listeners = registry.get(event);
-        if (!listeners || !listeners.size) {
-          return;
-        }
-        listeners.forEach((listener) => {
-          if (typeof listener !== "function") {
-            return;
-          }
-          try {
-            listener(detail);
-          } catch (err) {
-            console.warn("AppState listener error", err);
-          }
-        });
+
+    function off(event, handler) {
+      if (typeof event !== "string" || !event) {
+        return;
       }
-    };
+      const listeners = registry.get(event);
+      if (!listeners || !listeners.size) {
+        return;
+      }
+      if (typeof handler === "function") {
+        listeners.delete(handler);
+      } else if (handler == null) {
+        listeners.clear();
+      }
+      if (!listeners.size) {
+        registry.delete(event);
+      }
+    }
+
+    function on(event, handler) {
+      if (typeof event !== "string" || !event || typeof handler !== "function") {
+        return () => {};
+      }
+      let listeners = registry.get(event);
+      if (!listeners) {
+        listeners = new Set();
+        registry.set(event, listeners);
+      }
+      listeners.add(handler);
+      return () => {
+        off(event, handler);
+      };
+    }
+
+    function emit(event, detail) {
+      if (typeof event !== "string" || !event) {
+        return;
+      }
+      const listeners = registry.get(event);
+      if (!listeners || !listeners.size) {
+        return;
+      }
+      listeners.forEach((listener) => {
+        if (typeof listener !== "function") {
+          return;
+        }
+        try {
+          listener(detail);
+        } catch (err) {
+          console.warn("AppState listener error", err);
+        }
+      });
+    }
+
+    return { on, off, emit };
   }
 
   function ensureInitialAutostartState() {
@@ -2558,6 +2679,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       return safe;
     }
 
+    if (typeof frame.sid === "string" && frame.sid) {
+      safe.sid = frame.sid;
+    }
+
     if (typeof frame.vendor === "string" && frame.vendor) {
       const normalized = frame.vendor.trim().toLowerCase();
       if (normalized === DEFAULT_ASR_VENDOR) {
@@ -2651,6 +2776,11 @@ import { initPcmSender } from "./audio/pcm_sender.js";
 
   function handleAsrReadyFrame(frame) {
     const sanitized = sanitizeAsrReadyFrame(frame);
+    if (typeof sanitized.sid === "string" && sanitized.sid) {
+      AppState.asrSid = sanitized.sid;
+    } else if (frame && typeof frame.sid === "string" && frame.sid) {
+      AppState.asrSid = frame.sid;
+    }
     AppState.asrReady = true;
     try {
       window.dispatchEvent(new CustomEvent("asr.ready"));
@@ -3126,6 +3256,14 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       return;
     }
 
+    if (typeof WSClient?.emit === "function") {
+      try {
+        WSClient.emit("frame", frame);
+      } catch (err) {
+        console.warn("WSClient frame emit failed", err);
+      }
+    }
+
     if (frame.type === "turn.begin") {
       if (AppState?.setState) {
         try {
@@ -3149,6 +3287,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       try {
         window.dispatchEvent(new CustomEvent("turn.end", { detail: frame }));
       } catch {}
+      if (awaitingTurnEndForRearm) {
+        const reason = pendingRearmReason || "turn_end_rearm";
+        clearPendingRearm();
+        if (shouldAutoRearmAfterClosed(reason)) {
+          requestAsrArm(reason);
+        }
+      }
       return;
     }
 
@@ -3351,6 +3496,23 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
       __resetAudioHeaderSent();
       if (frame.type === "asr.closed") {
+        AppState.asrSid = null;
+        awaitingAsrClosedAck = false;
+        pendingAsrClosedSeq = null;
+        clearPendingRearm();
+        const status = typeof frame?.status === "string" && frame.status ? frame.status : "closed";
+        const reasonRaw = typeof frame?.reason === "string" && frame.reason ? frame.reason : "";
+        const normalizedReason = normalizeReason(reasonRaw || "asr_closed");
+        const shouldRearm = shouldAutoRearmAfterClosed(normalizedReason);
+        if (status !== "already_closed" && shouldRearm) {
+          const allowCaptureDuringTts = AppState?.policy?.audio?.allow_capture_during_tts;
+          if (allowCaptureDuringTts === false) {
+            awaitingTurnEndForRearm = true;
+            pendingRearmReason = normalizedReason || "asr_closed";
+          } else {
+            requestAsrArm(normalizedReason || "asr_closed");
+          }
+        }
         _audioStreaming = false;
         setListeningState(false);
         resetTurnIntent(frame?.type || "asr.closed");
@@ -3380,6 +3542,9 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       setListeningState(false);
       resetTurnIntent(reason);
     } else if (frame.type === "asr.ready") {
+      if (typeof frame.sid === "string" && frame.sid) {
+        AppState.asrSid = frame.sid;
+      }
       frame = handleAsrReadyFrame(frame) || frame;
       // HARD SYNC: Set final state flags
       AppState.asrReady = true;
@@ -3424,6 +3589,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     } else if (frame.type === "asr.partial") {
       transcriptFrameAllowed(frame);
     } else if (frame.type === "asr.final") {
+      if (typeof frame.sid === "string" && frame.sid) {
+        if (AppState.asrSid && AppState.asrSid !== frame.sid) {
+          console.warn("asr.final sid mismatch", { expected: AppState.asrSid, sid: frame.sid });
+        } else {
+          AppState.asrSid = frame.sid;
+        }
+      }
       transcriptFrameAllowed(frame);
     } else if (frame.type === "asr.unavailable") {
       const reason = frame && typeof frame.reason === "string" ? frame.reason : "";

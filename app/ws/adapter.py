@@ -14,6 +14,7 @@ import inspect
 import platform
 import socket
 import sys
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import (
@@ -473,6 +474,8 @@ class AdapterContext:
     asr_bytes_sent: int = 0
     asr_opened_ms: Optional[int] = None
     asr_close_reason: Optional[str] = None
+    asr_final_emitted: bool = False
+    asr_closed_ack_sent: bool = False
     tts_end_ts: Optional[float] = None
     diag_audio_seen: bool = False
     diag_timer: asyncio.TimerHandle | None = None
@@ -2283,20 +2286,67 @@ class ChatV2Adapter:
                     return self._HandleResult(True)
 
         if frame_type == "asr.close":
-            if ctx.session.asr_state in {"opening", "open"}:
+            raw_seq = frame.get("seq")
+            seq = raw_seq if isinstance(raw_seq, str) and raw_seq else uuid.uuid4().hex
+            client_sid = frame.get("sid")
+            if not isinstance(client_sid, str) or not client_sid:
+                client_sid = None
+            reason = frame.get("reason")
+            if not isinstance(reason, str) or not reason:
+                reason = "client_stop"
+
+            server_sid = self._current_asr_sid(ctx)
+            ctx.asr_close_reason = reason
+            if client_sid and client_sid != server_sid:
+                _log.warning(
+                    "evt=asr_close_sid_mismatch sid=%s client_sid=%s server_sid=%s",
+                    ctx.sid,
+                    client_sid,
+                    server_sid,
+                )
+
+            ack_status = "closed"
+
+            if ctx.session.asr_state in {"opening", "open"} and ctx.session.asr_engine is not None:
                 await self._publish(
                     EVT_ASR_CLOSE,
                     ctx.sid,
                     {"state": ctx.session.asr_state},
                 )
-                await self._close_asr(ctx, reason="client_request")
+                try:
+                    await self._close_asr(ctx, reason=reason)
+                except Exception:
+                    ack_status = "error"
+                    _log.exception("evt=asr_close_teardown_failed sid=%s", ctx.sid)
+                ctx.asr_closed_ack_sent = True
             else:
+                ack_status = "already_closed"
                 await self._publish(
                     ASR_CLOSE_DEDUP,
                     ctx.sid,
                     {"state": ctx.session.asr_state},
                 )
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                ctx.asr_closed_ack_sent = True
+
+            ack_frame = self._build_asr_closed_ack(
+                ctx,
+                seq=seq,
+                sid=server_sid,
+                reason=reason,
+                status=ack_status,
+            )
+            try:
+                await self._send_json(send, ctx.sid, ack_frame)
+            finally:
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            _log.info(
+                "evt=asr_close_ack sid=%s seq=%s status=%s final_emitted=%s bytes=%d",
+                ctx.sid,
+                seq,
+                ack_status,
+                ctx.asr_final_emitted,
+                ctx.asr_bytes_sent,
+            )
             return self._HandleResult(True)
 
         if frame_type == "audio.header":
@@ -3731,8 +3781,29 @@ class ChatV2Adapter:
                 turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
                 if turn_end_payload is not None:
                     _enqueue(turn_end_payload)
-                frame = {"type": "asr.closed"}
-                _enqueue(frame)
+                if ctx.asr_closed_ack_sent:
+                    return
+                ack_seq = uuid.uuid4().hex
+                reason = ctx.asr_close_reason or "server_closed"
+                # Maintain ordering: final transcripts (if any) precede the closed ACK,
+                # which in turn precedes downstream turn / chat / TTS events.
+                ack_frame = self._build_asr_closed_ack(
+                    ctx,
+                    seq=ack_seq,
+                    sid=self._current_asr_sid(ctx),
+                    reason=reason,
+                    status="server_closed",
+                )
+                _enqueue(ack_frame)
+                ctx.asr_closed_ack_sent = True
+                _log.info(
+                    "evt=asr_close_ack sid=%s seq=%s status=%s final_emitted=%s bytes=%d",
+                    ctx.sid,
+                    ack_seq,
+                    "server_closed",
+                    ctx.asr_final_emitted,
+                    ctx.asr_bytes_sent,
+                )
 
             try:
                 loop.call_soon_threadsafe(_on_loop)
@@ -3830,6 +3901,7 @@ class ChatV2Adapter:
                 "type": "asr.ready",
                 "input": dict(descriptor),
             }
+            ready_frame["sid"] = ctx.sid
             if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
                 ready_frame["vendor"] = ctx.asr_vendor
             capture = dict(descriptor)
@@ -4186,6 +4258,7 @@ class ChatV2Adapter:
             return None
 
         frame: Dict[str, Any] = {"type": frame_type, "text": text}
+        frame["sid"] = ctx.sid
 
         req_id = event.get("req_id")
         if not isinstance(req_id, str) or not req_id.strip():
@@ -4225,6 +4298,71 @@ class ChatV2Adapter:
                 frame["partial_seq"] = partial_seq
 
         return frame
+
+    def _current_asr_sid(self, ctx: AdapterContext) -> str:
+        engine = ctx.session.asr_engine
+        if engine is not None:
+            sid = getattr(engine, "sid", None) or getattr(engine, "_sid", None)
+            if isinstance(sid, str) and sid:
+                return sid
+        return ctx.sid
+
+    def _estimate_ms_ingested(self, ctx: AdapterContext, byte_count: int) -> int:
+        if byte_count <= 0:
+            return 0
+        profile: Optional[Mapping[str, Any]] = None
+        session_profile = getattr(ctx.session, "audio_profile", None)
+        if isinstance(session_profile, Mapping):
+            profile = session_profile
+        elif isinstance(ctx.audio_profile, Mapping):
+            profile = ctx.audio_profile
+
+        sample_rate = _DEFAULT_GCP_SAMPLE_RATE_HZ
+        channels = 1
+        if profile is not None:
+            raw_rate = profile.get("sample_rate") or profile.get("rate_hz")
+            try:
+                parsed_rate = int(raw_rate)
+            except (TypeError, ValueError):
+                parsed_rate = sample_rate
+            if parsed_rate > 0:
+                sample_rate = parsed_rate
+            raw_channels = profile.get("channels")
+            try:
+                parsed_channels = int(raw_channels)
+            except (TypeError, ValueError):
+                parsed_channels = channels
+            if parsed_channels > 0:
+                channels = parsed_channels
+
+        bytes_per_sample = max(1, channels) * 2
+        if sample_rate <= 0 or bytes_per_sample <= 0:
+            return 0
+        samples = byte_count / bytes_per_sample
+        ms = (samples / sample_rate) * 1000.0
+        return int(round(ms))
+
+    def _build_asr_closed_ack(
+        self,
+        ctx: AdapterContext,
+        *,
+        seq: str,
+        sid: str,
+        reason: str,
+        status: str,
+    ) -> Dict[str, Any]:
+        bytes_ingested = max(0, ctx.asr_bytes_sent)
+        ms_ingested = self._estimate_ms_ingested(ctx, bytes_ingested)
+        return {
+            "type": "asr.closed",
+            "seq": seq,
+            "sid": sid,
+            "reason": reason,
+            "status": status,
+            "final_emitted": bool(ctx.asr_final_emitted),
+            "bytes_ingested": bytes_ingested,
+            "ms_ingested": ms_ingested,
+        }
 
     def _start_asr_ready_tracker(
         self, ctx: AdapterContext, telemetry_bus: Optional[Any] = None
@@ -4288,7 +4426,7 @@ class ChatV2Adapter:
                 self._publish_server_vad_event(ctx, "server.vad.state", state_meta)
             self._ensure_vad_fusion_task(ctx)
 
-            frame: Dict[str, Any] = {"type": "asr.ready"}
+            frame: Dict[str, Any] = {"type": "asr.ready", "sid": ctx.sid}
             vendor = event.get("vendor")
             if isinstance(vendor, str) and vendor:
                 frame["vendor"] = vendor
@@ -5928,6 +6066,7 @@ class ChatV2Adapter:
                 "vendor": vendor,
                 "meta": dict(meta),
             }
+            ctx.asr_final_emitted = True
 
         bus.publish(event_payload)
 
@@ -5955,6 +6094,8 @@ class ChatV2Adapter:
         ctx.asr_bytes_sent = 0
         ctx.asr_opened_ms = None
         ctx.asr_close_reason = None
+        ctx.asr_final_emitted = False
+        ctx.asr_closed_ack_sent = False
         ctx.session.first_chunk_sent = False
         ctx.session.queued_arm = False
         ctx.session.closed_at_ms = None
@@ -6199,6 +6340,7 @@ class ChatV2Adapter:
             "vendor": vendor,
             "input": input_payload,
         }
+        asr_ready_frame["sid"] = ctx.sid
         if session_policy:
             asr_ready_frame["policy"] = session_policy
 
