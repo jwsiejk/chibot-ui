@@ -3489,6 +3489,776 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     }
   }
 
+
+  function deliverAsr(frame) {
+    if (!frame || typeof frame !== "object") {
+      return;
+    }
+    if (frame.type === "asr.final" && typeof frame.sid === "string" && frame.sid) {
+      if (AppState.asrSid && AppState.asrSid !== frame.sid) {
+        console.warn("asr.final sid mismatch", { expected: AppState.asrSid, sid: frame.sid });
+      } else {
+        AppState.asrSid = frame.sid;
+      }
+    }
+    const view = window.TranscriptView;
+    const now = Date.now();
+    if (frame.type === "asr.final" && typeof frame.text === "string" && frame.text) {
+      const sid = (typeof frame.sid === "string" && frame.sid) || generateProvisionalSid();
+      lastUserBySid.set(sid, { text: frame.text, ts: now });
+      pruneStaleUserSids(now);
+      if (view && typeof view.upsertUser === "function") {
+        try {
+          view.upsertUser({ key: sid, text: frame.text, provisional: true });
+        } catch (err) {
+          console.warn("TranscriptView upsertUser error", err);
+        }
+      }
+    } else {
+      pruneStaleUserSids(now);
+    }
+    if (!view) {
+      return;
+    }
+    try {
+      if (frame.type === "asr.partial" && typeof view.handlePartial === "function") {
+        view.handlePartial(frame);
+      } else if (frame.type === "asr.final" && typeof view.handleFinal === "function") {
+        view.handleFinal(frame);
+      }
+    } catch (err) {
+      console.warn("TranscriptView ASR handler error", err);
+    }
+  }
+
+  function deliverChat(frame) {
+    if (!frame || typeof frame !== "object") {
+      console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "invalid_frame" });
+      return;
+    }
+    const view = window.TranscriptView;
+    pruneStaleUserSids();
+    if (!view || typeof view.handleChatMessage !== "function") {
+      queueForTranscript(frame);
+      return;
+    }
+
+    const turnId = typeof frame.turn_id === "string" ? frame.turn_id : null;
+    if (
+      turnId &&
+      frame.role === "assistant" &&
+      assistantStreamingTurns.has(turnId) &&
+      typeof view.commitAssistantStreaming === "function"
+    ) {
+      const record = assistantStreamingTurns.get(turnId) || {};
+      const finalText = typeof frame.text === "string" ? frame.text : record.text || "";
+      try {
+        view.commitAssistantStreaming(turnId, {
+          text: finalText,
+          messageId: typeof frame.id === "string" ? frame.id : null,
+          reqId: typeof frame.req_id === "string" ? frame.req_id : record.reqId || null,
+          final: true,
+        });
+      } catch (err) {
+        console.warn("TranscriptView final commit error", err);
+      }
+      assistantStreamingTurns.delete(turnId);
+      return;
+    }
+
+    const isUserChat =
+      frame.type === "chat.message" &&
+      frame.role === "user" &&
+      typeof frame.text === "string" &&
+      frame.text;
+
+    if (isUserChat) {
+      const sid =
+        (typeof frame.sid === "string" && frame.sid) ||
+        findNearestSid(frame.text);
+      if (sid && lastUserBySid.has(sid) && typeof view.upsertUser === "function") {
+        try {
+          view.upsertUser({ key: sid, text: frame.text, provisional: false });
+          lastUserBySid.delete(sid);
+          return;
+        } catch (err) {
+          console.warn("TranscriptView upsertUser error", err);
+        }
+      }
+    }
+
+    try {
+      view.handleChatMessage(frame);
+    } catch (err) {
+      console.warn("TranscriptView chat handler error", err);
+    }
+  }
+
+  function findNearestSid(text) {
+    if (typeof text !== "string" || !text) {
+      return null;
+    }
+    const now = Date.now();
+    for (const [sid, record] of lastUserBySid.entries()) {
+      if (record && record.text === text && (now - record.ts) < ASR_MATCH_WINDOW_MS) {
+        return sid;
+      }
+    }
+    return null;
+  }
+
+  window.attachTranscriptView = function attachTranscriptView(view) {
+    window.TranscriptView = view;
+    if (!view || typeof view.handleChatMessage !== "function") {
+      if (pendingTranscriptFrames.length) {
+        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "invalid_transcript_view" });
+      }
+      return;
+    }
+    while (pendingTranscriptFrames.length) {
+      const frame = pendingTranscriptFrames.shift();
+      try {
+        deliverChat(frame);
+      } catch (err) {
+        console.warn("flush chat error", err);
+        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "transcript_flush_error" });
+      }
+    }
+  };
+
+  function handleChatHistoryFrame(frame) {
+    const messages = Array.isArray(frame.messages) ? frame.messages : [];
+    if (!messages.length) {
+      return;
+    }
+    for (const message of messages) {
+      deliverChat(message);
+    }
+  }
+
+  async function handleMessageFrame(frame) {
+    if (!frame || typeof frame.type !== "string") {
+      console.warn("Ignoring WS frame without type", frame);
+      return;
+    }
+    if (frame.type === "keepalive") {
+      return;
+    }
+
+    if (frame.type === "server.ping") {
+      const response = { type: "client.pong", ts: Date.now() };
+      if (typeof frame.ts === "number") {
+        response.echo = frame.ts;
+      }
+      sendJson(response);
+      return;
+    }
+
+    if (frame.type === "ping") {
+      sendJson({ type: "pong", t: Date.now() });
+      return;
+    }
+
+    if (typeof WSClient?.emit === "function") {
+      try {
+        WSClient.emit("frame", frame);
+      } catch (err) {
+        console.warn("WSClient frame emit failed", err);
+      }
+    }
+
+    let handledByTranscriptDispatch = false;
+    switch (frame.type) {
+      case "chat.begin":
+        handleAssistantStreamingBegin(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "chat.delta":
+        handleAssistantStreamingDelta(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "chat.commit":
+        handleAssistantStreamingCommit(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "chat.end":
+        handleAssistantStreamingEnd(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "chat.message":
+      case "message":
+        deliverChat(frame);
+        dispatchFrame(frame);
+        return;
+
+      case "asr.partial":
+        schedulePartialWatchdog("asr.partial");
+        if (transcriptFrameAllowed(frame)) {
+          deliverAsr(frame);
+        } else {
+          logStage("ui_transcript_filter", { allow: false, type: frame.type });
+        }
+        handledByTranscriptDispatch = true;
+        break;
+
+      case "asr.final":
+        clearPartialWatchdog();
+        if (transcriptFrameAllowed(frame)) {
+          deliverAsr(frame);
+        } else {
+          logStage("ui_transcript_filter", { allow: false, type: frame.type });
+        }
+        handledByTranscriptDispatch = true;
+        break;
+
+      default:
+        break;
+    }
+
+    if (handledByTranscriptDispatch) {
+      dispatchFrame(frame);
+      return;
+    }
+
+    if (frame.type === "turn.begin") {
+      if (AppState?.setState) {
+        try {
+          AppState.setState({ turnActive: true });
+        } catch {}
+      }
+      updatePcmSenderState();
+      try {
+        window.dispatchEvent(new CustomEvent("turn.begin", { detail: frame }));
+      } catch {}
+      return;
+    }
+
+    if (frame.type === "turn.end") {
+      if (AppState?.setState) {
+        try {
+          AppState.setState({ turnActive: false });
+        } catch {}
+      }
+      updatePcmSenderState();
+      try {
+        window.dispatchEvent(new CustomEvent("turn.end", { detail: frame }));
+      } catch {}
+      if (awaitingTurnEndForRearm) {
+        const reason = pendingRearmReason || "turn_end_rearm";
+        clearPendingRearm();
+        if (shouldAutoRearmAfterClosed(reason)) {
+          requestAsrArm(reason);
+        }
+      }
+      return;
+    }
+
+    if (frame.type === "asr.timeout") {
+      dispatchFrame(frame);
+      void recoverFromAsrFault("timeout");
+      return;
+    }
+
+    if (frame.type === "audio.throttle") {
+      const rawMs = Number(frame?.ms);
+      const ms = Number.isFinite(rawMs) ? Math.max(0, rawMs) : 0;
+      const now = Date.now();
+      const until = ms > 0 ? now + ms : now;
+      __pauseSendUntil = ms > 0 ? Math.max(__pauseSendUntil, until) : now;
+      if (AppState && typeof AppState === "object") {
+        AppState._throttleUntil = __pauseSendUntil;
+      }
+      try {
+        hubLog("client.audio.throttle", { ms, until: __pauseSendUntil });
+      } catch {}
+      if (__throttleTimer) {
+        clearTimeout(__throttleTimer);
+        __throttleTimer = null;
+      }
+      if (ms > 0) {
+        const delay = Math.max(0, __pauseSendUntil - Date.now());
+        __throttleTimer = setTimeout(() => {
+          __throttleTimer = null;
+          if (AppState && typeof AppState === "object") {
+            AppState._throttleUntil = 0;
+          }
+          try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
+        }, delay);
+      } else {
+        try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
+        if (AppState && typeof AppState === "object") {
+          AppState._throttleUntil = 0;
+        }
+      }
+      return;
+    }
+
+    if (frame.type === "config.updated" || frame.type === "config_updated") {
+      const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
+      const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
+      const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
+      if (incomingType !== 'config.updated') {
+        dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
+      }
+      return;
+    }
+
+    if (frame.type === "policy.interaction") {
+      const sanitized = sanitizePolicyFrame(frame);
+      const appliedPolicy = applyPolicySnapshotFromSource(
+        sanitized && sanitized.policy ? sanitized.policy : null,
+        'policy.interaction'
+      );
+      sanitized.policy = appliedPolicy;
+      if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
+        markUserGestureSatisfied('policy_update');
+      }
+      attachUserGestureListeners();
+      dispatchFrame(sanitized);
+      return;
+    }
+
+    if (frame.type === "server.banner") {
+      handleServerBannerFrame(frame);
+      return;
+    }
+
+    if (expectInfoFrame) {
+      if (frame.type === "chat.history") {
+        handleChatHistoryFrame(frame);
+      } else if (frame.type === "error") {
+        await handleErrorFrame(frame);
+        return;
+      } else if (frame.type !== "info") {
+        console.error("Expected info frame first, received", frame.type);
+        await close("bad_info_sequence");
+        return;
+      }
+      if (frame.type === "info") {
+        await handleInfoFrame(frame);
+      }
+    } else if (frame.type === "info") {
+      await handleInfoFrame(frame);
+    } else if (frame.type === "server.pong") {
+      handlePongFrame(frame);
+    } else if (frame.type === "pong") {
+      handlePongFrame(frame);
+    } else if (frame.type === "error") {
+      await handleErrorFrame(frame);
+    } else if (frame.type === "tts.start") {
+      try {
+        AppState?.hub?.stopListening?.("tts");
+      } catch {}
+      await stopRecorder("tts_start");
+      setAppStateValue("ttsActive", true);
+      AppState.tts = true;
+      window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+      if (typeof AppState.emit === "function") {
+        AppState.emit("ttsActive", { active: true });
+      }
+      const audioPlayer = getAudioPlayer();
+      if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
+        audioPlayer.handleTtsStart(frame);
+      }
+      const uttIdStart = frame?.utt_id || 'utt-00001';
+      logStage('client.tts_start', { utt_id: uttIdStart });
+      logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
+      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
+    } else if (frame.type === "tts.end") {
+      setAppStateValue("ttsActive", false);
+      try {
+        window.dispatchEvent(new CustomEvent("tts.end", { detail: frame }));
+      } catch {}
+      AppState.tts = false;
+      beginWarmup(getWarmupMs());
+      window.requestAnimationFrame(() => window.AppUI?.refresh?.());
+      if (typeof AppState.emit === "function") {
+        AppState.emit("ttsActive", { active: false });
+      }
+      const audioPlayer = getAudioPlayer();
+      if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
+        audioPlayer.handleTtsEnd(frame);
+      }
+      const uttIdEnd = frame?.utt_id || 'utt-00001';
+      logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+      logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+
+      // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
+      // We rely on the server to send asr.ready back when it processes this.
+      if (AppState?.policy?.auto_record_after_greet !== false) {
+        requestAsrArm('tts_end');
+      }
+      // *** END NEW LOGIC ***
+    } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
+      const uttId = frame?.utt_id || 'utt-00001';
+      const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
+      setAppStateValue("ttsActive", false);
+      logStage('client.tts', {
+        outcome: 'ended',
+        utt_id: uttId,
+        dur_ms: frame?.dur_ms,
+        reason,
+      });
+      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
+    } else if (frame.type === "start_listening") {
+      const policy = frame?.policy || {};
+      if (!AppState?.asrReady) {
+        console.warn("Received start_listening before ASR ready; ignoring until asr.ready arrives.", frame);
+        return;
+      }
+      console.info("start_listening received after ASR ready; relying on automatic mic start.", {
+        vendor: policy?.asr?.vendor?.primary ?? null,
+      });
+      return;
+    } else if (frame.type === "stop_listening") {
+      const rawStopReason = typeof frame?.reason === "string" && frame.reason
+        ? frame.reason
+        : frame?.type || "stop_listening";
+      if (_audioStreaming) {
+        hubLog("client.stream.off", { reason: rawStopReason });
+      }
+      _audioStreaming = false;
+      await stopRecorder({ reason: rawStopReason }, { fallbackReason: "server_requested", source: "server.stop_listening" });
+      setAsrArmInFlight(false);
+      try {
+        const hub = AppState?.hub;
+        if (hub && typeof hub.stopListening === "function") {
+          hub.stopListening("server_requested");
+        } else {
+          stopInputCapture({ reason: "server_requested" });
+        }
+        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
+      } catch (err) {
+        console.warn("Hub stop_listening handler error", err);
+        logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
+      }
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        try {
+          const reason =
+            (typeof frame?.reason === "string" && frame.reason) ||
+            "server_requested";
+          window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
+        } catch (err) {
+          console.warn("stop_listening event dispatch failed", err);
+        }
+      }
+    } else if (frame.type === "input.start") {
+      _audioStreaming = true;
+      setListeningState(true);
+      emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
+      const reason = typeof frame?.reason === "string" && frame.reason
+        ? frame.reason
+        : frame?.type || "input.start";
+      __turnOpen = true;
+      __turnOpenAt = Date.now();
+      hubLog("client.stream.on", { reason });
+      // NEW: Rely on input.start to open turn, but mic start is tied to ASR readiness
+      await openTurnOnce(reason); 
+      await handleInputStartFrame(frame);
+    } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
+      clearPartialWatchdog();
+      __resetAudioHeaderSent();
+      if (frame.type === "asr.closed") {
+        AppState.asrSid = null;
+        awaitingAsrClosedAck = false;
+        pendingAsrClosedSeq = null;
+        clearPendingRearm();
+        const status = typeof frame?.status === "string" && frame.status ? frame.status : "closed";
+        const reasonRaw = typeof frame?.reason === "string" && frame.reason ? frame.reason : "";
+        const normalizedReason = normalizeReason(reasonRaw || "asr_closed");
+        const shouldRearm = shouldAutoRearmAfterClosed(normalizedReason);
+        if (status !== "already_closed" && shouldRearm) {
+          const allowCaptureDuringTts = AppState?.policy?.audio?.allow_capture_during_tts;
+          if (allowCaptureDuringTts === false) {
+            awaitingTurnEndForRearm = true;
+            pendingRearmReason = normalizedReason || "asr_closed";
+          } else {
+            requestAsrArm(normalizedReason || "asr_closed");
+          }
+        }
+        _audioStreaming = false;
+        setListeningState(false);
+        resetTurnIntent(frame?.type || "asr.closed");
+        emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
+      }
+    } else if (frame.type === "input.stop") {
+      const reason = typeof frame?.reason === "string" && frame.reason
+        ? frame.reason
+        : frame?.type || "input.stop";
+      if (_audioStreaming) {
+        hubLog("client.stream.off", { reason });
+      }
+      _audioStreaming = false;
+      setListeningState(false);
+      resetTurnIntent(reason);
+      emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
+      stopInputCapture({ reason: "input.stop" });
+      __resetAudioHeaderSent();
+    } else if (frame.type === "assistant.await_user") {
+      const reason = typeof frame?.reason === "string" && frame.reason
+        ? frame.reason
+        : frame?.type || "assistant.await_user";
+      if (_audioStreaming) {
+        hubLog("client.stream.off", { reason });
+      }
+      _audioStreaming = false;
+      setListeningState(false);
+      resetTurnIntent(reason);
+    } else if (frame.type === "asr.ready") {
+      if (typeof frame.sid === "string" && frame.sid) {
+        AppState.asrSid = frame.sid;
+      }
+      frame = handleAsrReadyFrame(frame) || frame;
+      // HARD SYNC: Set final state flags
+      AppState.asrReady = true;
+      setAsrArmInFlight(false);
+      setWsConnected(true);
+      setWsPhase("ready");
+      emitConsoleBusEvent("client.asr.ready", { asrReady: true });
+
+      // *** NEW STABLE LOGIC: Immediately transition to streaming based on server readiness ***
+      const startReason = "asr_ready_forced_start";
+      hubLog("client.ws_ready_check", {
+        socketOpen: !!(WSClient?._ws) && WSClient._ws.readyState === WebSocket.OPEN,
+        phase: (AppState?.wsPhase || AppState?.connectionState || null),
+      });
+      // 1. Open Turn (Idempotent)
+      const turned = await openTurnOnce(startReason);
+      void turned;
+      try {
+        // 2. Start Mic Streaming (Triggers mic hardware and sets AppState.listening=true)
+        await startRecorderStreaming(frame?.policy || {}, startReason);
+        _audioStreaming = true;
+      } catch (e) {
+        console.warn("auto-arm on asr.ready failed", e);
+      }
+      // -----------------------------------------------------------------------------------
+
+      try {
+        const capturePolicy = AppState?.policy?.capture || {};
+        const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
+          ? capturePolicy.mode
+          : "webrtc_aec";
+        const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
+          ? window.__audioCtx.sampleRate
+          : 48000;
+        emitConsoleBusEvent("client.capture.mode", { mode, ctxSampleRate: ctxRate });
+      } catch {}
+      logStage("diag", { label: "asr.ready" });
+      logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
+      // Send the header once. If startRecorderStreaming() already sent it
+      // (policy: audio.header_on_first_chunk), this call will no-op.
+      sendAudioHeader(frame);
+      if (AppState._recoverPrimePending) {
+        const sid = frame?.sid || AppState?.asrSid || `${Date.now()}`;
+        primeAsrStreamFromRing(sid);
+        AppState._recoverPrimePending = false;
+      }
+    } else if (frame.type === "asr.unavailable") {
+      const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
+      const details = frame && typeof frame.details === "string"
+        ? frame.details
+        : (frame && typeof frame.detail === "string" ? frame.detail : "");
+      console.warn("asr.unavailable", reason, details);
+      AppState.asrReady = false;
+      AppState.asrVendor = null;
+      updateState({ asrReady: false, asrVendor: null });
+      updatePcmSenderState();
+      await stopRecorder("asr_unavailable");
+      __resetAudioHeaderSent();
+      resetTurnIntent(frame?.type || "asr.unavailable");
+      setAsrArmInFlight(false);
+      if (typeof AppState.emit === "function") {
+        AppState.emit("asrReady", { ready: false, reason, vendor: null });
+      }
+      try {
+        const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
+        hud?.setState?.("Chat");
+      } catch (err) {
+        console.warn("Failed to update HUD state after asr.unavailable", err);
+      }
+      try {
+        const view = window.TranscriptView;
+        view?.showSystemFromChip?.(
+          "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
+        );
+      } catch (err) {
+        console.warn("Failed to render Chip system message after asr.unavailable", err);
+      }
+      try {
+        window?.Banner?.show?.(
+          "Voice temporarily unavailable. You can continue via chat.",
+          { level: "warning", ttlMs: 10000 }
+        );
+      } catch (err) {
+        console.warn("Failed to show voice unavailable banner", err);
+      }
+    } else if (frame.type === "asr.turn") {
+      const begin = frame.state === "begin";
+      if (dbg("audio_safe_mode") && begin && !AppState?.listening) {
+        try {
+          const turned = await openTurnOnce("safe_turn_begin");
+          if (!turned) {
+            console.warn("safe_mode turn autostart skipped: turn not open");
+          } else {
+            const started = await startRecorderStreaming(AppState?.policy || {}, "safe_turn_begin");
+            if (!started) {
+              console.warn("safe_mode turn autostart recorder returned false");
+            }
+          }
+        } catch (e) {
+          console.warn("safe_mode turn autostart failed", e);
+        }
+      }
+      try {
+        window.UIState = window.UIState || {};
+        window.UIState.asrTurnActive = begin;
+        if (window.StatusBar && typeof window.StatusBar.render === "function") {
+          window.StatusBar.render({
+            ...window.UIState,
+            policy: (window.AppState?.policy || {}),
+          });
+        }
+      } catch (err) {
+        console.warn("asr.turn handling error", err);
+      }
+      // publish turn state for StatusBar
+      try {
+        // REMOVED: Nested state update
+        if (typeof AppState.setState === "function") AppState.setState({ asrTurnActive: begin });
+      } catch {}
+      if (!begin) {
+        resetTurnIntent(frame?.state || "turn.end");
+      }
+    } else if (frame.type === "chat.history") {
+      handleChatHistoryFrame(frame);
+    }
+    dispatchFrame(frame);
+  }
+
+  function normalizeIncomingFrame(frame) {
+    if (!frame || typeof frame !== "object") {
+      return null;
+    }
+    if (typeof frame.type === "string" && frame.type) {
+      return frame;
+    }
+    let inferredType = null;
+    if (typeof frame.kind === "string" && frame.kind) {
+      inferredType = frame.kind;
+    } else if (typeof frame.event === "string" && frame.event) {
+      inferredType = frame.event;
+    } else if (
+      typeof frame.code === "string" ||
+      typeof frame.detail === "string" ||
+      typeof frame.message === "string"
+    ) {
+      inferredType = "error";
+    }
+    if (!inferredType) {
+      return null;
+    }
+    return { ...frame, type: inferredType };
+  }
+
+  async function processControlFrameObject(frame) {
+    if (frame && typeof frame.message === "string") {
+      const normalizedType =
+        (typeof frame.type === "string" && frame.type) ||
+        (typeof frame.kind === "string" && frame.kind) ||
+        (typeof frame.event === "string" && frame.event) ||
+        null;
+      if (normalizedType !== "chat.message") {
+        if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+          return;
+        }
+      } else if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
+      }
+    }
+    const normalizedFrame = normalizeIncomingFrame(frame);
+    if (!normalizedFrame) {
+      console.warn("Dropping WS frame without recognizable type", frame);
+      await handleErrorFrame({
+        type: "error",
+        code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
+        detail:
+          typeof frame?.detail === "string"
+            ? frame.detail
+            : "Frame missing type field",
+      });
+      return;
+    }
+    if (normalizedFrame.type === "server.ping") {
+      send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+      return;
+    }
+    await handleMessageFrame(normalizedFrame);
+  }
+
+  async function parseFrame(event) {
+    try {
+      const { data } = event;
+      if (typeof data === "string") {
+        try {
+          const frame = JSON.parse(data);
+          await processControlFrameObject(frame);
+        } catch (err) {
+          console.error("Failed to parse WS frame", err, data);
+        }
+        return;
+      }
+      if (data instanceof Blob) {
+        if (getNegotiatedControlCodec() === "msgpack") {
+          try {
+            const buffer = await data.arrayBuffer();
+            const frame = tryDecodeMsgpackFrame(buffer);
+            if (frame) {
+              await processControlFrameObject(frame);
+              return;
+            }
+          } catch (err) {
+            console.warn("Failed to decode msgpack blob", err);
+          }
+        }
+        const audioPlayer = getAudioPlayer();
+        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+          audioPlayer.enqueueChunk(data);
+        }
+        window.dispatchEvent(new CustomEvent("binary", { detail: data }));
+        return;
+      }
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+        const chunk = data instanceof ArrayBuffer
+          ? data
+          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        if (getNegotiatedControlCodec() === "msgpack") {
+          const frame = tryDecodeMsgpackFrame(chunk);
+          if (frame) {
+            await processControlFrameObject(frame);
+            return;
+          }
+        }
+        const audioPlayer = getAudioPlayer();
+        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+          audioPlayer.enqueueChunk(chunk);
+        }
+        window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
+        return;
+      }
+      console.warn("Unknown WS frame type", data);
+    } catch (outerErr) {
+      console.error("Uncaught exception in parseFrame", outerErr);
+      hubLog("client.ws.parse_crash", { error: outerErr?.message, frame_data: event?.data });
+    }
+  }
+
+
+
   function startInputCapture(frame) {
     const policy = frame?.policy || {};
     const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
@@ -4162,109 +4932,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     return allow;
   }
 
-  function deliverAsr(frame) {
-    if (!frame || typeof frame !== "object") {
-      return;
-    }
-    if (frame.type === "asr.final" && typeof frame.sid === "string" && frame.sid) {
-      if (AppState.asrSid && AppState.asrSid !== frame.sid) {
-        console.warn("asr.final sid mismatch", { expected: AppState.asrSid, sid: frame.sid });
-      } else {
-        AppState.asrSid = frame.sid;
-      }
-    }
-    const view = window.TranscriptView;
-    const now = Date.now();
-    if (frame.type === "asr.final" && typeof frame.text === "string" && frame.text) {
-      const sid = (typeof frame.sid === "string" && frame.sid) || generateProvisionalSid();
-      lastUserBySid.set(sid, { text: frame.text, ts: now });
-      pruneStaleUserSids(now);
-      if (view && typeof view.upsertUser === "function") {
-        try {
-          view.upsertUser({ key: sid, text: frame.text, provisional: true });
-        } catch (err) {
-          console.warn("TranscriptView upsertUser error", err);
-        }
-      }
-    } else {
-      pruneStaleUserSids(now);
-    }
-    if (!view) {
-      return;
-    }
-    try {
-      if (frame.type === "asr.partial" && typeof view.handlePartial === "function") {
-        view.handlePartial(frame);
-      } else if (frame.type === "asr.final" && typeof view.handleFinal === "function") {
-        view.handleFinal(frame);
-      }
-    } catch (err) {
-      console.warn("TranscriptView ASR handler error", err);
-    }
-  }
-
-  function deliverChat(frame) {
-    if (!frame || typeof frame !== "object") {
-      console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "invalid_frame" });
-      return;
-    }
-    const view = window.TranscriptView;
-    pruneStaleUserSids();
-    if (!view || typeof view.handleChatMessage !== "function") {
-      queueForTranscript(frame);
-      return;
-    }
-
-    const turnId = typeof frame.turn_id === "string" ? frame.turn_id : null;
-    if (
-      turnId &&
-      frame.role === "assistant" &&
-      assistantStreamingTurns.has(turnId) &&
-      typeof view.commitAssistantStreaming === "function"
-    ) {
-      const record = assistantStreamingTurns.get(turnId) || {};
-      const finalText = typeof frame.text === "string" ? frame.text : record.text || "";
-      try {
-        view.commitAssistantStreaming(turnId, {
-          text: finalText,
-          messageId: typeof frame.id === "string" ? frame.id : null,
-          reqId: typeof frame.req_id === "string" ? frame.req_id : record.reqId || null,
-          final: true,
-        });
-      } catch (err) {
-        console.warn("TranscriptView final commit error", err);
-      }
-      assistantStreamingTurns.delete(turnId);
-      return;
-    }
-
-    const isUserChat =
-      frame.type === "chat.message" &&
-      frame.role === "user" &&
-      typeof frame.text === "string" &&
-      frame.text;
-
-    if (isUserChat) {
-      const sid =
-        (typeof frame.sid === "string" && frame.sid) ||
-        findNearestSid(frame.text);
-      if (sid && lastUserBySid.has(sid) && typeof view.upsertUser === "function") {
-        try {
-          view.upsertUser({ key: sid, text: frame.text, provisional: false });
-          lastUserBySid.delete(sid);
-          return;
-        } catch (err) {
-          console.warn("TranscriptView upsertUser error", err);
-        }
-      }
-    }
-
-    try {
-      view.handleChatMessage(frame);
-    } catch (err) {
-      console.warn("TranscriptView chat handler error", err);
-    }
-  }
 
   function findNearestSid(text) {
     if (typeof text !== "string" || !text) {
@@ -4298,15 +4965,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     }
   };
 
-  function handleChatHistoryFrame(frame) {
-    const messages = Array.isArray(frame.messages) ? frame.messages : [];
-    if (!messages.length) {
-      return;
-    }
-    for (const message of messages) {
-      deliverChat(message);
-    }
-  }
 
   async function handleErrorFrame(frame) {
     const code = typeof frame?.code === "string" ? frame.code : "unknown";
@@ -4368,626 +5026,13 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     }
   }
 
-  async function handleMessageFrame(frame) {
-    if (!frame || typeof frame.type !== "string") {
-      console.warn("Ignoring WS frame without type", frame);
-      return;
-    }
-    if (frame.type === "keepalive") {
-      return;
-    }
 
-    if (frame.type === "server.ping") {
-      const response = { type: "client.pong", ts: Date.now() };
-      if (typeof frame.ts === "number") {
-        response.echo = frame.ts;
-      }
-      sendJson(response);
-      return;
-    }
 
-    if (frame.type === "ping") {
-      sendJson({ type: "pong", t: Date.now() });
-      return;
-    }
 
-    if (typeof WSClient?.emit === "function") {
-      try {
-        WSClient.emit("frame", frame);
-      } catch (err) {
-        console.warn("WSClient frame emit failed", err);
-      }
-    }
 
-    let handledByTranscriptDispatch = false;
-    switch (frame.type) {
-      case "chat.begin":
-        handleAssistantStreamingBegin(frame);
-        dispatchFrame(frame);
-        return;
 
-      case "chat.delta":
-        handleAssistantStreamingDelta(frame);
-        dispatchFrame(frame);
-        return;
 
-      case "chat.commit":
-        handleAssistantStreamingCommit(frame);
-        dispatchFrame(frame);
-        return;
 
-      case "chat.end":
-        handleAssistantStreamingEnd(frame);
-        dispatchFrame(frame);
-        return;
-
-      case "chat.message":
-      case "message":
-        deliverChat(frame);
-        dispatchFrame(frame);
-        return;
-
-      case "asr.partial":
-        schedulePartialWatchdog("asr.partial");
-        if (transcriptFrameAllowed(frame)) {
-          deliverAsr(frame);
-        } else {
-          logStage("ui_transcript_filter", { allow: false, type: frame.type });
-        }
-        handledByTranscriptDispatch = true;
-        break;
-
-      case "asr.final":
-        clearPartialWatchdog();
-        if (transcriptFrameAllowed(frame)) {
-          deliverAsr(frame);
-        } else {
-          logStage("ui_transcript_filter", { allow: false, type: frame.type });
-        }
-        handledByTranscriptDispatch = true;
-        break;
-
-      default:
-        break;
-    }
-
-    if (handledByTranscriptDispatch) {
-      dispatchFrame(frame);
-      return;
-    }
-
-    if (frame.type === "turn.begin") {
-      if (AppState?.setState) {
-        try {
-          AppState.setState({ turnActive: true });
-        } catch {}
-      }
-      updatePcmSenderState();
-      try {
-        window.dispatchEvent(new CustomEvent("turn.begin", { detail: frame }));
-      } catch {}
-      return;
-    }
-
-    if (frame.type === "turn.end") {
-      if (AppState?.setState) {
-        try {
-          AppState.setState({ turnActive: false });
-        } catch {}
-      }
-      updatePcmSenderState();
-      try {
-        window.dispatchEvent(new CustomEvent("turn.end", { detail: frame }));
-      } catch {}
-      if (awaitingTurnEndForRearm) {
-        const reason = pendingRearmReason || "turn_end_rearm";
-        clearPendingRearm();
-        if (shouldAutoRearmAfterClosed(reason)) {
-          requestAsrArm(reason);
-        }
-      }
-      return;
-    }
-
-    if (frame.type === "asr.timeout") {
-      dispatchFrame(frame);
-      void recoverFromAsrFault("timeout");
-      return;
-    }
-
-    if (frame.type === "audio.throttle") {
-      const rawMs = Number(frame?.ms);
-      const ms = Number.isFinite(rawMs) ? Math.max(0, rawMs) : 0;
-      const now = Date.now();
-      const until = ms > 0 ? now + ms : now;
-      __pauseSendUntil = ms > 0 ? Math.max(__pauseSendUntil, until) : now;
-      if (AppState && typeof AppState === "object") {
-        AppState._throttleUntil = __pauseSendUntil;
-      }
-      try {
-        hubLog("client.audio.throttle", { ms, until: __pauseSendUntil });
-      } catch {}
-      if (__throttleTimer) {
-        clearTimeout(__throttleTimer);
-        __throttleTimer = null;
-      }
-      if (ms > 0) {
-        const delay = Math.max(0, __pauseSendUntil - Date.now());
-        __throttleTimer = setTimeout(() => {
-          __throttleTimer = null;
-          if (AppState && typeof AppState === "object") {
-            AppState._throttleUntil = 0;
-          }
-          try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
-        }, delay);
-      } else {
-        try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
-        if (AppState && typeof AppState === "object") {
-          AppState._throttleUntil = 0;
-        }
-      }
-      return;
-    }
-
-    if (frame.type === "config.updated" || frame.type === "config_updated") {
-      const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
-      const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
-      const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
-      if (incomingType !== 'config.updated') {
-        dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
-      }
-      return;
-    }
-
-    if (frame.type === "policy.interaction") {
-      const sanitized = sanitizePolicyFrame(frame);
-      const appliedPolicy = applyPolicySnapshotFromSource(
-        sanitized && sanitized.policy ? sanitized.policy : null,
-        'policy.interaction'
-      );
-      sanitized.policy = appliedPolicy;
-      if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
-        markUserGestureSatisfied('policy_update');
-      }
-      attachUserGestureListeners();
-      dispatchFrame(sanitized);
-      return;
-    }
-
-    if (frame.type === "server.banner") {
-      handleServerBannerFrame(frame);
-      return;
-    }
-
-    if (expectInfoFrame) {
-      if (frame.type === "chat.history") {
-        handleChatHistoryFrame(frame);
-      } else if (frame.type === "error") {
-        await handleErrorFrame(frame);
-        return;
-      } else if (frame.type !== "info") {
-        console.error("Expected info frame first, received", frame.type);
-        await close("bad_info_sequence");
-        return;
-      }
-      if (frame.type === "info") {
-        await handleInfoFrame(frame);
-      }
-    } else if (frame.type === "info") {
-      await handleInfoFrame(frame);
-    } else if (frame.type === "server.pong") {
-      handlePongFrame(frame);
-    } else if (frame.type === "pong") {
-      handlePongFrame(frame);
-    } else if (frame.type === "error") {
-      await handleErrorFrame(frame);
-    } else if (frame.type === "tts.start") {
-      try {
-        AppState?.hub?.stopListening?.("tts");
-      } catch {}
-      await stopRecorder("tts_start");
-      setAppStateValue("ttsActive", true);
-      AppState.tts = true;
-      window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-      if (typeof AppState.emit === "function") {
-        AppState.emit("ttsActive", { active: true });
-      }
-      const audioPlayer = getAudioPlayer();
-      if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
-        audioPlayer.handleTtsStart(frame);
-      }
-      const uttIdStart = frame?.utt_id || 'utt-00001';
-      logStage('client.tts_start', { utt_id: uttIdStart });
-      logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
-      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
-    } else if (frame.type === "tts.end") {
-      setAppStateValue("ttsActive", false);
-      try {
-        window.dispatchEvent(new CustomEvent("tts.end", { detail: frame }));
-      } catch {}
-      AppState.tts = false;
-      beginWarmup(getWarmupMs());
-      window.requestAnimationFrame(() => window.AppUI?.refresh?.());
-      if (typeof AppState.emit === "function") {
-        AppState.emit("ttsActive", { active: false });
-      }
-      const audioPlayer = getAudioPlayer();
-      if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
-        audioPlayer.handleTtsEnd(frame);
-      }
-      const uttIdEnd = frame?.utt_id || 'utt-00001';
-      logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-      logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
-
-      // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
-      // We rely on the server to send asr.ready back when it processes this.
-      if (AppState?.policy?.auto_record_after_greet !== false) {
-        requestAsrArm('tts_end');
-      }
-      // *** END NEW LOGIC ***
-    } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
-      const uttId = frame?.utt_id || 'utt-00001';
-      const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
-      setAppStateValue("ttsActive", false);
-      logStage('client.tts', {
-        outcome: 'ended',
-        utt_id: uttId,
-        dur_ms: frame?.dur_ms,
-        reason,
-      });
-      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
-    } else if (frame.type === "start_listening") {
-      const policy = frame?.policy || {};
-      if (!AppState?.asrReady) {
-        console.warn("Received start_listening before ASR ready; ignoring until asr.ready arrives.", frame);
-        return;
-      }
-      console.info("start_listening received after ASR ready; relying on automatic mic start.", {
-        vendor: policy?.asr?.vendor?.primary ?? null,
-      });
-      return;
-    } else if (frame.type === "stop_listening") {
-      const rawStopReason = typeof frame?.reason === "string" && frame.reason
-        ? frame.reason
-        : frame?.type || "stop_listening";
-      if (_audioStreaming) {
-        hubLog("client.stream.off", { reason: rawStopReason });
-      }
-      _audioStreaming = false;
-      await stopRecorder({ reason: rawStopReason }, { fallbackReason: "server_requested", source: "server.stop_listening" });
-      setAsrArmInFlight(false);
-      try {
-        const hub = AppState?.hub;
-        if (hub && typeof hub.stopListening === "function") {
-          hub.stopListening("server_requested");
-        } else {
-          stopInputCapture({ reason: "server_requested" });
-        }
-        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-      } catch (err) {
-        console.warn("Hub stop_listening handler error", err);
-        logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-      }
-      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-        try {
-          const reason =
-            (typeof frame?.reason === "string" && frame.reason) ||
-            "server_requested";
-          window.dispatchEvent(new CustomEvent("stop_listening", { detail: { reason } }));
-        } catch (err) {
-          console.warn("stop_listening event dispatch failed", err);
-        }
-      }
-    } else if (frame.type === "input.start") {
-      _audioStreaming = true;
-      setListeningState(true);
-      emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
-      const reason = typeof frame?.reason === "string" && frame.reason
-        ? frame.reason
-        : frame?.type || "input.start";
-      __turnOpen = true;
-      __turnOpenAt = Date.now();
-      hubLog("client.stream.on", { reason });
-      // NEW: Rely on input.start to open turn, but mic start is tied to ASR readiness
-      await openTurnOnce(reason); 
-      await handleInputStartFrame(frame);
-    } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
-      clearPartialWatchdog();
-      __resetAudioHeaderSent();
-      if (frame.type === "asr.closed") {
-        AppState.asrSid = null;
-        awaitingAsrClosedAck = false;
-        pendingAsrClosedSeq = null;
-        clearPendingRearm();
-        const status = typeof frame?.status === "string" && frame.status ? frame.status : "closed";
-        const reasonRaw = typeof frame?.reason === "string" && frame.reason ? frame.reason : "";
-        const normalizedReason = normalizeReason(reasonRaw || "asr_closed");
-        const shouldRearm = shouldAutoRearmAfterClosed(normalizedReason);
-        if (status !== "already_closed" && shouldRearm) {
-          const allowCaptureDuringTts = AppState?.policy?.audio?.allow_capture_during_tts;
-          if (allowCaptureDuringTts === false) {
-            awaitingTurnEndForRearm = true;
-            pendingRearmReason = normalizedReason || "asr_closed";
-          } else {
-            requestAsrArm(normalizedReason || "asr_closed");
-          }
-        }
-        _audioStreaming = false;
-        setListeningState(false);
-        resetTurnIntent(frame?.type || "asr.closed");
-        emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
-      }
-    } else if (frame.type === "input.stop") {
-      const reason = typeof frame?.reason === "string" && frame.reason
-        ? frame.reason
-        : frame?.type || "input.stop";
-      if (_audioStreaming) {
-        hubLog("client.stream.off", { reason });
-      }
-      _audioStreaming = false;
-      setListeningState(false);
-      resetTurnIntent(reason);
-      emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
-      stopInputCapture({ reason: "input.stop" });
-      __resetAudioHeaderSent();
-    } else if (frame.type === "assistant.await_user") {
-      const reason = typeof frame?.reason === "string" && frame.reason
-        ? frame.reason
-        : frame?.type || "assistant.await_user";
-      if (_audioStreaming) {
-        hubLog("client.stream.off", { reason });
-      }
-      _audioStreaming = false;
-      setListeningState(false);
-      resetTurnIntent(reason);
-    } else if (frame.type === "asr.ready") {
-      if (typeof frame.sid === "string" && frame.sid) {
-        AppState.asrSid = frame.sid;
-      }
-      frame = handleAsrReadyFrame(frame) || frame;
-      // HARD SYNC: Set final state flags
-      AppState.asrReady = true;
-      setAsrArmInFlight(false);
-      setWsConnected(true);
-      setWsPhase("ready");
-      emitConsoleBusEvent("client.asr.ready", { asrReady: true });
-
-      // *** NEW STABLE LOGIC: Immediately transition to streaming based on server readiness ***
-      const startReason = "asr_ready_forced_start";
-      hubLog("client.ws_ready_check", {
-        socketOpen: !!(WSClient?._ws) && WSClient._ws.readyState === WebSocket.OPEN,
-        phase: (AppState?.wsPhase || AppState?.connectionState || null),
-      });
-      // 1. Open Turn (Idempotent)
-      const turned = await openTurnOnce(startReason);
-      void turned;
-      try {
-        // 2. Start Mic Streaming (Triggers mic hardware and sets AppState.listening=true)
-        await startRecorderStreaming(frame?.policy || {}, startReason);
-        _audioStreaming = true;
-      } catch (e) {
-        console.warn("auto-arm on asr.ready failed", e);
-      }
-      // -----------------------------------------------------------------------------------
-
-      try {
-        const capturePolicy = AppState?.policy?.capture || {};
-        const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
-          ? capturePolicy.mode
-          : "webrtc_aec";
-        const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
-          ? window.__audioCtx.sampleRate
-          : 48000;
-        emitConsoleBusEvent("client.capture.mode", { mode, ctxSampleRate: ctxRate });
-      } catch {}
-      logStage("diag", { label: "asr.ready" });
-      logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-      // Send the header once. If startRecorderStreaming() already sent it
-      // (policy: audio.header_on_first_chunk), this call will no-op.
-      sendAudioHeader(frame);
-      if (AppState._recoverPrimePending) {
-        const sid = frame?.sid || AppState?.asrSid || `${Date.now()}`;
-        primeAsrStreamFromRing(sid);
-        AppState._recoverPrimePending = false;
-      }
-    } else if (frame.type === "asr.unavailable") {
-      const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-      const details = frame && typeof frame.details === "string"
-        ? frame.details
-        : (frame && typeof frame.detail === "string" ? frame.detail : "");
-      console.warn("asr.unavailable", reason, details);
-      AppState.asrReady = false;
-      AppState.asrVendor = null;
-      updateState({ asrReady: false, asrVendor: null });
-      updatePcmSenderState();
-      await stopRecorder("asr_unavailable");
-      __resetAudioHeaderSent();
-      resetTurnIntent(frame?.type || "asr.unavailable");
-      setAsrArmInFlight(false);
-      if (typeof AppState.emit === "function") {
-        AppState.emit("asrReady", { ready: false, reason, vendor: null });
-      }
-      try {
-        const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
-        hud?.setState?.("Chat");
-      } catch (err) {
-        console.warn("Failed to update HUD state after asr.unavailable", err);
-      }
-      try {
-        const view = window.TranscriptView;
-        view?.showSystemFromChip?.(
-          "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
-        );
-      } catch (err) {
-        console.warn("Failed to render Chip system message after asr.unavailable", err);
-      }
-      try {
-        window?.Banner?.show?.(
-          "Voice temporarily unavailable. You can continue via chat.",
-          { level: "warning", ttlMs: 10000 }
-        );
-      } catch (err) {
-        console.warn("Failed to show voice unavailable banner", err);
-      }
-    } else if (frame.type === "asr.turn") {
-      const begin = frame.state === "begin";
-      if (dbg("audio_safe_mode") && begin && !AppState?.listening) {
-        try {
-          const turned = await openTurnOnce("safe_turn_begin");
-          if (!turned) {
-            console.warn("safe_mode turn autostart skipped: turn not open");
-          } else {
-            const started = await startRecorderStreaming(AppState?.policy || {}, "safe_turn_begin");
-            if (!started) {
-              console.warn("safe_mode turn autostart recorder returned false");
-            }
-          }
-        } catch (e) {
-          console.warn("safe_mode turn autostart failed", e);
-        }
-      }
-      try {
-        window.UIState = window.UIState || {};
-        window.UIState.asrTurnActive = begin;
-        if (window.StatusBar && typeof window.StatusBar.render === "function") {
-          window.StatusBar.render({
-            ...window.UIState,
-            policy: (window.AppState?.policy || {}),
-          });
-        }
-      } catch (err) {
-        console.warn("asr.turn handling error", err);
-      }
-      // publish turn state for StatusBar
-      try {
-        // REMOVED: Nested state update
-        if (typeof AppState.setState === "function") AppState.setState({ asrTurnActive: begin });
-      } catch {}
-      if (!begin) {
-        resetTurnIntent(frame?.state || "turn.end");
-      }
-    } else if (frame.type === "chat.history") {
-      handleChatHistoryFrame(frame);
-    }
-    dispatchFrame(frame);
-  }
-
-  function normalizeIncomingFrame(frame) {
-    if (!frame || typeof frame !== "object") {
-      return null;
-    }
-    if (typeof frame.type === "string" && frame.type) {
-      return frame;
-    }
-    let inferredType = null;
-    if (typeof frame.kind === "string" && frame.kind) {
-      inferredType = frame.kind;
-    } else if (typeof frame.event === "string" && frame.event) {
-      inferredType = frame.event;
-    } else if (
-      typeof frame.code === "string" ||
-      typeof frame.detail === "string" ||
-      typeof frame.message === "string"
-    ) {
-      inferredType = "error";
-    }
-    if (!inferredType) {
-      return null;
-    }
-    return { ...frame, type: inferredType };
-  }
-
-  async function processControlFrameObject(frame) {
-    if (frame && typeof frame.message === "string") {
-      const normalizedType =
-        (typeof frame.type === "string" && frame.type) ||
-        (typeof frame.kind === "string" && frame.kind) ||
-        (typeof frame.event === "string" && frame.event) ||
-        null;
-      if (normalizedType !== "chat.message") {
-        if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-          return;
-        }
-      } else if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
-      }
-    }
-    const normalizedFrame = normalizeIncomingFrame(frame);
-    if (!normalizedFrame) {
-      console.warn("Dropping WS frame without recognizable type", frame);
-      await handleErrorFrame({
-        type: "error",
-        code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
-        detail:
-          typeof frame?.detail === "string"
-            ? frame.detail
-            : "Frame missing type field",
-      });
-      return;
-    }
-    if (normalizedFrame.type === "server.ping") {
-      send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
-      return;
-    }
-    await handleMessageFrame(normalizedFrame);
-  }
-
-  async function parseFrame(event) {
-    try {
-      const { data } = event;
-      if (typeof data === "string") {
-        try {
-          const frame = JSON.parse(data);
-          await processControlFrameObject(frame);
-        } catch (err) {
-          console.error("Failed to parse WS frame", err, data);
-        }
-        return;
-      }
-      if (data instanceof Blob) {
-        if (getNegotiatedControlCodec() === "msgpack") {
-          try {
-            const buffer = await data.arrayBuffer();
-            const frame = tryDecodeMsgpackFrame(buffer);
-            if (frame) {
-              await processControlFrameObject(frame);
-              return;
-            }
-          } catch (err) {
-            console.warn("Failed to decode msgpack blob", err);
-          }
-        }
-        const audioPlayer = getAudioPlayer();
-        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-          audioPlayer.enqueueChunk(data);
-        }
-        window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-        return;
-      }
-      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-        const chunk = data instanceof ArrayBuffer
-          ? data
-          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-        if (getNegotiatedControlCodec() === "msgpack") {
-          const frame = tryDecodeMsgpackFrame(chunk);
-          if (frame) {
-            await processControlFrameObject(frame);
-            return;
-          }
-        }
-        const audioPlayer = getAudioPlayer();
-        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-          audioPlayer.enqueueChunk(chunk);
-        }
-        window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-        return;
-      }
-      console.warn("Unknown WS frame type", data);
-    } catch (outerErr) {
-      console.error("Uncaught exception in parseFrame", outerErr);
-      hubLog("client.ws.parse_crash", { error: outerErr?.message, frame_data: event?.data });
-    }
-  }
 
   // OPEN: Use the EXACT URL provided (must include ?access_token=... unless resuming)
   function open(options = {}, protocolsOverride) {
