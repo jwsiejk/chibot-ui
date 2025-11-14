@@ -4,6 +4,7 @@ import { initVAD } from "./audio/vad_client.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 (() => {
+  // ===== Shared constants, policy defaults, tiny helpers =====
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
   const JSON_SUBPROTOCOL = "chat.v2";
@@ -61,6 +62,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     return "json";
   }
 
+  // ===== Mic + VAD state, breadcrumbs, and telemetry wiring =====
   // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
   const MIC_OUTCOME = {
@@ -83,6 +85,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
   let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
 
+  // ===== PCM sender + ring buffer + ASR priming =====
   class PcmRingBuffer {
     constructor({ millis, sampleRate, channels = 1 }) {
       this.sampleRate = sampleRate;
@@ -228,6 +231,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     } catch {}
   }
 
+  // ===== Client policy runtime (applyPolicySnapshotFromSource, etc.) =====
   const AppState = window.AppState;
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
@@ -425,6 +429,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 
   let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
 
+  // ===== WebSocket connection + queue + outbound send helpers =====
   const WSClient = window.WSClient = window.WSClient || {};
   if (typeof window !== "undefined" && typeof window.ws === "undefined") {
     window.ws = null;
@@ -3099,6 +3104,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     }
   }
 
+  // ===== Frame dispatchers (ASR, chat, policy, config, etc.) =====
   function dispatchFrame(frame) {
     if (!frame || typeof frame.type !== "string") return;
     const type = frame.type;
@@ -5402,6 +5408,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     }
   };
 
+  // ===== Public WSClient API wiring (window.WSClient = …) =====
   WSClient.sendJSON = function sendJSONPayload(obj) {
     if (obj instanceof ArrayBuffer || ArrayBuffer.isView(obj)) {
       logTransportMisuse("binary_sent_to_sendJSON");
