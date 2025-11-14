@@ -6,6 +6,7 @@ import logging
 from array import array
 from typing import Awaitable, Callable, Optional
 
+from google.api_core.exceptions import OutOfRange
 from google.cloud import speech
 
 from app import config
@@ -78,6 +79,8 @@ class GCPStreamingASREngine(ASREngine):
         self._sample_rate: Optional[int] = None
         self._language: Optional[str] = None
         self._input_gain = config.GCP_STT_INPUT_GAIN
+        self._last_transcript: Optional[str] = None
+        self._last_is_final: bool = False
 
     async def open(
         self,
@@ -95,6 +98,8 @@ class GCPStreamingASREngine(ASREngine):
         self._on_result = on_result
         self._sid = sid
         self._closed = False
+        self._last_transcript = None
+        self._last_is_final = False
 
         resolved_sample_rate = (
             sample_rate if sample_rate and sample_rate > 0 else config.GCP_STT_DEFAULT_SAMPLE_RATE
@@ -161,6 +166,8 @@ class GCPStreamingASREngine(ASREngine):
         self._sample_rate = None
         self._language = None
         self._streaming_config = None
+        self._last_transcript = None
+        self._last_is_final = False
 
     # Internal helpers -------------------------------------------------
 
@@ -196,8 +203,20 @@ class GCPStreamingASREngine(ASREngine):
                         transcript,
                         is_final,
                     )
-        except Exception:
-            logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
+        except Exception as exc:
+            # Treat GCP "Audio Timeout Error" as a soft end-of-turn.
+            if isinstance(exc, OutOfRange) and "Audio Timeout Error" in str(exc):
+                logger.warning(
+                    "evt=asr_timeout vendor=gcp sid=%s", self._sid, exc_info=True
+                )
+                if self._last_transcript is not None and not self._last_is_final:
+                    self._loop.call_soon_threadsafe(
+                        self._handle_result,
+                        self._last_transcript,
+                        True,
+                    )
+            else:
+                logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
         finally:
             # Ensure request generator exits.
             asyncio.run_coroutine_threadsafe(self._queue.put(None), self._loop)
@@ -205,6 +224,9 @@ class GCPStreamingASREngine(ASREngine):
     def _handle_result(self, transcript: str, is_final: bool) -> None:
         if self._on_result is None:
             return
+
+        self._last_transcript = transcript
+        self._last_is_final = is_final
 
         if is_final:
             logger.info("evt=asr_final vendor=gcp sid=%s", self._sid)
