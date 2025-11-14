@@ -1,16 +1,173 @@
 diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
-index 0000000..0000000 100644
+index cf6326a1bc6c7faff2b623f0965ed1826ba7edbe..f7598b9cbcd5c44e308b0a922c6be8d2348961f5 100644
 --- a/app/static/js/ws_client.js
 +++ b/app/static/js/ws_client.js
-@@ -3425,8 +3425,9 @@
-       } catch {}
-       logStage("diag", { label: "asr.ready" });
-       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
--      __resetAudioHeaderSent();
--      sendAudioHeader(frame);
-+      // Send the header once. If startRecorderStreaming() already sent it
-+      // (policy: audio.header_on_first_chunk), this call will no-op.
-+      sendAudioHeader(frame);
-     } else if (frame.type === "asr.partial") {
-       transcriptFrameAllowed(frame);
-     } else if (frame.type === "asr.final") {
+@@ -1775,50 +1775,51 @@ import { initPcmSender } from "./audio/pcm_sender.js";
+       payload.metadata = { ...options.metadata };
+     }
+     if (typeof options.recover === "boolean") {
+       payload.recover = options.recover;
+     }
+     return WSClient.sendJSON(payload);
+   }
+ 
+   function requestAsrArm(reason) {
+     const label = normalizeReason(reason);
+     try {
+       setAsrArmInFlight(true);
+       logStage("client.asr_rearm_request", { reason: label });
+       openAsr({ reason: label }); // send first so it's not phase-blocked
+       setWsPhase("arming");
+     } catch (err) {
+       setAsrArmInFlight(false);
+       setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
+       console.error("Failed to send asr.open", err);
+       logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_WS_SEND, message: err?.message });
+     }
+   }
+ 
+   async function requestAsrClose(reason = "client_stop") {
+     const label = normalizeReason(reason);
++    // ASR close is not a transport close; do not touch wsPhase here.
+     setAsrArmInFlight(false);
+     const seq = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+       ? crypto.randomUUID()
+       : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+     const sid = typeof AppState?.asrSid === "string" && AppState.asrSid ? AppState.asrSid : null;
+     const payload = { type: "asr.close", seq, reason: label };
+     if (sid) {
+       payload.sid = sid;
+     }
+     let ack = null;
+     try {
+       WSClient.sendJSON(payload);
+       pendingAsrClosedSeq = seq;
+       awaitingAsrClosedAck = true;
+       logStage("client.asr_close_request", { reason: label });
+     } catch (err) {
+       pendingAsrClosedSeq = null;
+       awaitingAsrClosedAck = false;
+       console.warn("Failed to send asr.close", err);
+     }
+     if (awaitingAsrClosedAck) {
+       try {
+         ack = await WSClient.waitForOnce(
+           "asr.closed",
+           (frame) => frame?.seq === seq || (!!sid && frame?.sid === sid),
+@@ -4043,50 +4044,58 @@ import { initPcmSender } from "./audio/pcm_sender.js";
+     if (typeof frame.kind === "string" && frame.kind) {
+       inferredType = frame.kind;
+     } else if (typeof frame.event === "string" && frame.event) {
+       inferredType = frame.event;
+     } else if (
+       typeof frame.code === "string" ||
+       typeof frame.detail === "string" ||
+       typeof frame.message === "string"
+     ) {
+       inferredType = "error";
+     }
+     if (!inferredType) {
+       return null;
+     }
+     return { ...frame, type: inferredType };
+   }
+ 
+   async function parseFrame(event) {
+     try {
+       const { data } = event;
+       if (typeof data === "string") {
+         try {
+           const frame = JSON.parse(data);
+           if (frame && typeof frame.message === "string") {
+             if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
++              const normalizedType =
++                (typeof frame.type === "string" && frame.type) ||
++                (typeof frame.kind === "string" && frame.kind) ||
++                (typeof frame.event === "string" && frame.event) ||
++                null;
++              if (normalizedType === "chat.message") {
++                console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
++              }
+               return;
+             }
+           }
+           const normalizedFrame = normalizeIncomingFrame(frame);
+           if (!normalizedFrame) {
+             console.warn("Dropping WS frame without recognizable type", frame);
+             await handleErrorFrame({
+               type: "error",
+               code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
+               detail:
+                 typeof frame?.detail === "string"
+                   ? frame.detail
+                   : "Frame missing type field",
+             });
+             return;
+           }
+           if (normalizedFrame.type === "server.ping") {
+             send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+             return;
+           }
+           await handleMessageFrame(normalizedFrame);
+         } catch (err) {
+           console.error("Failed to parse WS frame", err, data);
+         }
+         return;
+@@ -4469,50 +4478,57 @@ import { initPcmSender } from "./audio/pcm_sender.js";
+             return _send(data);
+           };
+         }
+       } catch (_) {}
+     };
+ 
+     ws.onerror = (e) => {
+       console.error("WebSocket error", e, { readyState: ws.readyState });
+       const message = e && typeof e?.message === "string" && e.message
+         ? e.message
+         : "socket_error";
+       recordLastError(null, message);
+       maybeShowHandshakeToast(ws, null);
+       recordClientBannerEvent("ws.socket.error", {
+         ready_state: ws.readyState,
+       });
+     };
+ 
+     ws.onclose = (e) => {
+       console.error("WebSocket closed", {
+         code: e.code,
+         reason: e.reason,
+         wasClean: e.wasClean,
+         readyState: ws.readyState,
+       });
++      const currentTurnState =
++        typeof TurnState !== "undefined"
++          ? TurnState
++          : (typeof window !== "undefined" && window.TurnState) || null;
++      if (currentTurnState?.awaitingAssistant) {
++        console.warn("WS closed mid-turn", { awaiting: currentTurnState });
++      }
+       const detailReason = typeof e.reason === "string" && e.reason ? e.reason : "handshake_close";
+       recordLastError(typeof e.code === "number" ? e.code : null, detailReason);
+       setWsConnected(false);
+       setWsPhase("disconnected");
+       logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
+       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: e?.reason || (expected ? 'intentional_close' : 'ws_close') });
+       maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
+       recordClientBannerEvent("ws.socket.close", {
+         code: typeof e.code === "number" ? e.code : undefined,
+         reason: truncateBannerString(e.reason || "", 160),
+         was_clean: Boolean(e.wasClean),
+         ready_state: ws.readyState,
+       });
+       // Logic moved to detach/cleanupSocket, kept here for legacy logging/telemetry
+     };
+ 
+     socket = ws;
+     if (pcmSender && typeof pcmSender.setWebSocket === "function") {
+       try {
+         pcmSender.setWebSocket(ws);
+       } catch (err) {
+         if (typeof console !== "undefined" && typeof console.warn === "function") {
+           console.warn("pcm.sender.attach_failed", err);
+         }
+       }

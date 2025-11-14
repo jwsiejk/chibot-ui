@@ -1797,6 +1797,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
 
   async function requestAsrClose(reason = "client_stop") {
     const label = normalizeReason(reason);
+    // ASR close is not a transport close; do not touch wsPhase here.
     setAsrArmInFlight(false);
     const seq = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
       ? crypto.randomUUID()
@@ -4065,6 +4066,14 @@ import { initPcmSender } from "./audio/pcm_sender.js";
           const frame = JSON.parse(data);
           if (frame && typeof frame.message === "string") {
             if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+              const normalizedType =
+                (typeof frame.type === "string" && frame.type) ||
+                (typeof frame.kind === "string" && frame.kind) ||
+                (typeof frame.event === "string" && frame.event) ||
+                null;
+              if (normalizedType === "chat.message") {
+                console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
+              }
               return;
             }
           }
@@ -4491,6 +4500,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
         wasClean: e.wasClean,
         readyState: ws.readyState,
       });
+      const currentTurnState =
+        typeof TurnState !== "undefined"
+          ? TurnState
+          : (typeof window !== "undefined" && window.TurnState) || null;
+      if (currentTurnState?.awaitingAssistant) {
+        console.warn("WS closed mid-turn", { awaiting: currentTurnState });
+      }
       const detailReason = typeof e.reason === "string" && e.reason ? e.reason : "handshake_close";
       recordLastError(typeof e.code === "number" ? e.code : null, detailReason);
       setWsConnected(false);
