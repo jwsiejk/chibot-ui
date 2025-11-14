@@ -2,6 +2,7 @@
 /* __BUILD_MARKER__: FULL_DUPLEX_01 */
 import { initVAD } from "./audio/vad_client.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
+import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import {
   MIC_OUTCOME,
@@ -396,6 +397,7 @@ import {
   }
   const ASR_RATE = (AppState?.targetSampleRate || 16000);
   // ===== PCM sender + ring buffer + ASR priming =====
+  /*
   class PcmRingBuffer {
     constructor({ millis, sampleRate, channels = 1 }) {
       this.sampleRate = sampleRate;
@@ -910,6 +912,35 @@ import {
       throw err;
     });
     return pcmSenderInitPromise;
+  }
+  */
+
+  function clearAudioKeepaliveTimer() {
+    if (micKeepaliveTimerId) {
+      clearTimeout(micKeepaliveTimerId);
+      micKeepaliveTimerId = null;
+    }
+  }
+
+  function scheduleAudioKeepalive() {
+    clearAudioKeepaliveTimer();
+    micKeepaliveTimerId = setTimeout(() => {
+      micKeepaliveTimerId = null;
+      const listening = Boolean(AppState.listening);
+      const now = Date.now();
+      if (!listening) {
+        return;
+      }
+      if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
+        try {
+          WSClient.sendJSON({ type: "client.ping" });
+          logStage("client.ping", { lane: "mic" });
+        } catch (err) {
+          console.warn("client.ping send failed", err);
+        }
+      }
+      scheduleAudioKeepalive();
+    }, AUDIO_KEEPALIVE_MS);
   }
 
   if (typeof AppState._recoverPrimePending === "undefined") {
@@ -1655,23 +1686,32 @@ import {
       console.warn("WSClient cleanup close error", err);
     }
     if (socket === ws) {
+      const shouldDetachSender = _audioStreaming;
+      if (shouldDetachSender) {
+        ensurePcmSender().then((sender) => {
+          if (sender && typeof sender.setWebSocket === "function") {
+            try {
+              sender.setWebSocket(null);
+            } catch (err) {
+              if (typeof console !== "undefined" && typeof console.warn === "function") {
+                console.warn("pcm.sender.detach_failed", err);
+              }
+            }
+          }
+        }).catch((err) => {
+          if (typeof console !== "undefined" && typeof console.warn === "function") {
+            console.warn("pcm.sender.detach_failed", err);
+          }
+        });
+      }
       socket = null;
       expectInfoFrame = true;
       clearInfoWatchdog();
-      if (_audioStreaming) {
+      if (shouldDetachSender) {
         const offReason = typeof reason === "string" && reason ? reason : "ws.cleanup";
         hubLog("client.stream.off", { reason: offReason });
       }
       _audioStreaming = false;
-      if (pcmSender && typeof pcmSender.setWebSocket === "function") {
-        try {
-          pcmSender.setWebSocket(null);
-        } catch (err) {
-          if (typeof console !== "undefined" && typeof console.warn === "function") {
-            console.warn("pcm.sender.detach_failed", err);
-          }
-        }
-      }
       stopInputCapture();
       try {
         if (window.ws === ws) {
@@ -1970,6 +2010,56 @@ import {
     return false;
   }
 
+  const audioRuntime = createWsAudioRuntime({
+    AppState,
+    initPcmSender,
+    hubLog,
+    updateState,
+    logStage,
+    getSocket: () => socket,
+    WSClient,
+    getWsClient: () => WSClient,
+    sendAudioChunk: (payload, meta) => {
+      if (WSClient && typeof WSClient.sendAudioChunk === "function") {
+        return WSClient.sendAudioChunk(payload, meta);
+      }
+      return false;
+    },
+    sendJSON: (payload) => {
+      if (WSClient && typeof WSClient.sendJSON === "function") {
+        WSClient.sendJSON(payload);
+        return true;
+      }
+      return false;
+    },
+    isAudioStreaming: () => _audioStreaming,
+    canCaptureNow: () => _canCaptureNow(),
+    isSenderPaused: () => senderPaused,
+    setSenderPauseReason,
+    getVadController: () => vadController,
+    getFirstChunkSeen: () => __firstChunkSeen,
+    setFirstChunkSeen: (value) => { __firstChunkSeen = Boolean(value); },
+    getMicRecordingStartAt: () => __micRecordingStartAt,
+    setMicRecordingStartAt: (value) => { __micRecordingStartAt = Number.isFinite(value) ? Number(value) : null; },
+    getMicChunks: () => __micChunks,
+    setMicChunks: (value) => { __micChunks = Number.isFinite(value) ? Number(value) : 0; },
+    getMicBytes: () => __micBytes,
+    setMicBytes: (value) => { __micBytes = Number.isFinite(value) ? Number(value) : 0; },
+    audioKeepaliveMs: 20000,
+  });
+
+  const {
+    ensurePcmSender,
+    handlePcmFrame,
+    handlePcmSend,
+    handleSampleRate,
+    primeAsrStreamFromRing,
+    recordRecorderChunk,
+    getPcmRing,
+    resetSilenceSuppression,
+    updatePcmSenderState,
+  } = audioRuntime;
+
   function getVadPolicySnapshot() {
     try {
       const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
@@ -2125,9 +2215,10 @@ import {
     if (event === "client.vad.speech_start") {
       clearVadSilenceTimer();
       emitConsoleBusEvent("client.vad.start_speech");
-      if (typeof pcmRing?.clear === 'function') {
+      const ring = getPcmRing();
+      if (typeof ring?.clear === 'function') {
         try {
-          pcmRing.clear();
+          ring.clear();
         } catch (err) {
           try { console.warn("pcmRing.clear failed", err); } catch (_) {}
         }
@@ -2396,12 +2487,17 @@ import {
     clearPartialWatchdog();
     resetSilenceSuppression();
     syncSenderPaused(false);
-    if (pcmSender && typeof pcmSender.setEnabled === "function") {
-      try {
-        pcmSender.setEnabled(false);
-      } catch (err) {
-        console.warn("pcm.sender.disable_failed", err);
+    try {
+      const sender = await ensurePcmSender();
+      if (sender && typeof sender.setEnabled === "function") {
+        try {
+          sender.setEnabled(false);
+        } catch (err) {
+          console.warn("pcm.sender.disable_failed", err);
+        }
       }
+    } catch (err) {
+      console.warn("pcm.sender.disable_failed", err);
     }
     __micRecordingStartAt = null;
     if (vadController && typeof vadController.reset === "function") {
@@ -2584,8 +2680,11 @@ import {
 
   function openAsr(opts = {}) {
     const options = opts && typeof opts === "object" ? { ...opts } : {};
-    if (!options.recover && typeof pcmRing?.clear === 'function') {
-      try { pcmRing.clear(); } catch (err) { try { console.warn("pcmRing.clear failed", err); } catch (_) {} }
+    if (!options.recover) {
+      const ring = getPcmRing();
+      if (typeof ring?.clear === 'function') {
+        try { ring.clear(); } catch (err) { try { console.warn("pcmRing.clear failed", err); } catch (_) {} }
+      }
     }
     if (!options.recover && primedSessionIds.size) {
       primedSessionIds.clear();
@@ -5106,14 +5205,22 @@ import {
     };
 
     socket = ws;
-    if (pcmSender && typeof pcmSender.setWebSocket === "function") {
-      try {
-        pcmSender.setWebSocket(ws);
-      } catch (err) {
+    if (_audioStreaming) {
+      ensurePcmSender().then((sender) => {
+        if (sender && typeof sender.setWebSocket === "function") {
+          try {
+            sender.setWebSocket(ws);
+          } catch (err) {
+            if (typeof console !== "undefined" && typeof console.warn === "function") {
+              console.warn("pcm.sender.attach_failed", err);
+            }
+          }
+        }
+      }).catch((err) => {
         if (typeof console !== "undefined" && typeof console.warn === "function") {
           console.warn("pcm.sender.attach_failed", err);
         }
-      }
+      });
     }
     updateState({
       connectionState: resumeTokenValue ? "resuming" : "connecting",
