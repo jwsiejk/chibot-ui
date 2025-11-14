@@ -2,10 +2,16 @@
 /* __BUILD_MARKER__: FULL_DUPLEX_01 */
 import { initVAD } from "./audio/vad_client.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
+import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 (() => {
   const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
-  const SUBPROTOCOL = "chat.v2";
+  const JSON_SUBPROTOCOL = "chat.v2";
+  const MSGPACK_SUBPROTOCOL = "chip-msgpack";
+  const REQUESTED_CONTROL_CODEC = detectControlFramesCodec();
+  const DEFAULT_SUBPROTOCOLS = REQUESTED_CONTROL_CODEC === "msgpack"
+    ? [MSGPACK_SUBPROTOCOL, JSON_SUBPROTOCOL]
+    : JSON_SUBPROTOCOL;
   const INFO_DEADLINE_MS = 20000;
   const TOKEN_EXPIRY_MS = 60 * 1000;
   const TOAST_STYLE_ID = "wsclient-toast-styles";
@@ -33,6 +39,28 @@ import { initPcmSender } from "./audio/pcm_sender.js";
 
   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
 
+  function detectControlFramesCodec() {
+    const normalize = (value) => {
+      if (typeof value !== "string") return null;
+      const lowered = value.trim().toLowerCase();
+      return lowered === "msgpack" ? "msgpack" : lowered === "json" ? "json" : null;
+    };
+    try {
+      const debugValue = normalize(window?.AppState?.debug?.controlFrames);
+      if (debugValue) return debugValue;
+    } catch {}
+    try {
+      const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search || "") : null;
+      const queryValue = params ? normalize(params.get("controlFrames")) : null;
+      if (queryValue) return queryValue;
+    } catch {}
+    try {
+      const stored = typeof window !== "undefined" && window.localStorage ? normalize(window.localStorage.getItem("controlFrames")) : null;
+      if (stored) return stored;
+    } catch {}
+    return "json";
+  }
+
   // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
   const MIC_OUTCOME = {
@@ -53,6 +81,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   const PCM_TARGET_SAMPLE_RATE = 16000;
   const DEFAULT_ASR_VENDOR = 'gcp';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
+  let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
 
   class PcmRingBuffer {
     constructor({ millis, sampleRate, channels = 1 }) {
@@ -401,6 +430,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     window.ws = null;
   }
   const wsEventEmitter = WSClient.__events = WSClient.__events || createEventEmitter();
+  setNegotiatedControlCodec(REQUESTED_CONTROL_CODEC);
   WSClient.on = function on(event, handler) {
     return wsEventEmitter.on(event, handler);
   };
@@ -489,6 +519,53 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     if (!frame || typeof frame !== "object") return false;
     const t = typeof frame.type === "string" ? frame.type : "";
     return t === "input.start" || t === "input.stop" || t === "audio.header" || t === "ping" || t === "pong";
+  }
+
+  function getNegotiatedControlCodec() {
+    return negotiatedControlCodec === "msgpack" ? "msgpack" : "json";
+  }
+
+  function setNegotiatedControlCodec(codec) {
+    negotiatedControlCodec = codec === "msgpack" ? "msgpack" : "json";
+    try {
+      WSClient._negotiatedCodec = negotiatedControlCodec;
+    } catch {}
+  }
+
+  function encodeControlFramePayload(frame, codec) {
+    if (codec === "msgpack") {
+      try {
+        const encoded = encodeMessagePack(frame);
+        return { binary: true, payload: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength) };
+      } catch (err) {
+        console.warn("WSClient encode msgpack failed", err);
+        return null;
+      }
+    }
+    if (typeof frame === "string") {
+      return { binary: false, payload: frame };
+    }
+    try {
+      return { binary: false, payload: JSON.stringify(frame) };
+    } catch (err) {
+      console.warn("WSClient stringify control frame failed", err);
+      return null;
+    }
+  }
+
+  function tryDecodeMsgpackFrame(buffer) {
+    try {
+      const view = buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer)
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      const decoded = decodeMessagePack(view);
+      if (decoded && typeof decoded === "object" && typeof decoded.type === "string") {
+        return decoded;
+      }
+    } catch (err) {
+      // Silently ignore decode errors; likely audio data.
+    }
+    return null;
   }
 
   // ---- Turn opener (idempotent + retry) ----
@@ -1108,7 +1185,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
   let expectInfoFrame = true;
   let infoWatchdogTimerId = null;
   let lastPingAt = null;
-  let transportFactory = (url, protocols = SUBPROTOCOL) => new WebSocket(url, protocols);
+  let transportFactory = (url, protocols = DEFAULT_SUBPROTOCOLS) => new WebSocket(url, protocols);
   let rateLimitRetryTimerId = null;
   let rateLimitRetryCount = 0;
   let autoResumeAttemptToken = null;
@@ -4472,50 +4549,66 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     return { ...frame, type: inferredType };
   }
 
+  async function processControlFrameObject(frame) {
+    if (frame && typeof frame.message === "string") {
+      const normalizedType =
+        (typeof frame.type === "string" && frame.type) ||
+        (typeof frame.kind === "string" && frame.kind) ||
+        (typeof frame.event === "string" && frame.event) ||
+        null;
+      if (normalizedType !== "chat.message") {
+        if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+          return;
+        }
+      } else if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
+        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
+      }
+    }
+    const normalizedFrame = normalizeIncomingFrame(frame);
+    if (!normalizedFrame) {
+      console.warn("Dropping WS frame without recognizable type", frame);
+      await handleErrorFrame({
+        type: "error",
+        code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
+        detail:
+          typeof frame?.detail === "string"
+            ? frame.detail
+            : "Frame missing type field",
+      });
+      return;
+    }
+    if (normalizedFrame.type === "server.ping") {
+      send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+      return;
+    }
+    await handleMessageFrame(normalizedFrame);
+  }
+
   async function parseFrame(event) {
     try {
       const { data } = event;
       if (typeof data === "string") {
         try {
           const frame = JSON.parse(data);
-          if (frame && typeof frame.message === "string") {
-            const normalizedType =
-              (typeof frame.type === "string" && frame.type) ||
-              (typeof frame.kind === "string" && frame.kind) ||
-              (typeof frame.event === "string" && frame.event) ||
-              null;
-            if (normalizedType !== "chat.message") {
-              if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-                return;
-              }
-            } else if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-              console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
-            }
-          }
-          const normalizedFrame = normalizeIncomingFrame(frame);
-          if (!normalizedFrame) {
-            console.warn("Dropping WS frame without recognizable type", frame);
-            await handleErrorFrame({
-              type: "error",
-              code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
-              detail:
-                typeof frame?.detail === "string"
-                  ? frame.detail
-                  : "Frame missing type field",
-            });
-            return;
-          }
-          if (normalizedFrame.type === "server.ping") {
-            send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
-            return;
-          }
-          await handleMessageFrame(normalizedFrame);
+          await processControlFrameObject(frame);
         } catch (err) {
           console.error("Failed to parse WS frame", err, data);
         }
         return;
       }
       if (data instanceof Blob) {
+        if (getNegotiatedControlCodec() === "msgpack") {
+          try {
+            const buffer = await data.arrayBuffer();
+            const frame = tryDecodeMsgpackFrame(buffer);
+            if (frame) {
+              await processControlFrameObject(frame);
+              return;
+            }
+          } catch (err) {
+            console.warn("Failed to decode msgpack blob", err);
+          }
+        }
         const audioPlayer = getAudioPlayer();
         if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
           audioPlayer.enqueueChunk(data);
@@ -4527,6 +4620,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
         const chunk = data instanceof ArrayBuffer
           ? data
           : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        if (getNegotiatedControlCodec() === "msgpack") {
+          const frame = tryDecodeMsgpackFrame(chunk);
+          if (frame) {
+            await processControlFrameObject(frame);
+            return;
+          }
+        }
         const audioPlayer = getAudioPlayer();
         if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
           audioPlayer.enqueueChunk(chunk);
@@ -4545,6 +4645,10 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     ws.__intentionalClose = false;
     const handlers = {
       open: () => {
+        const negotiated = typeof ws?.protocol === "string" && ws.protocol === MSGPACK_SUBPROTOCOL
+          ? "msgpack"
+          : "json";
+        setNegotiatedControlCodec(negotiated);
         // Write live socket and mark connected so UI gates on ws.open can run
         setWsConnected(true);
         setWsPhase("connected");
@@ -4658,6 +4762,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
         if (!resumed) {
           updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
         }
+        setNegotiatedControlCodec(REQUESTED_CONTROL_CODEC);
         window.dispatchEvent(new CustomEvent("ws.close", { detail: event }));
       }
     };
@@ -4783,7 +4888,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       return;
     }
 
-    const wsProtocols = protocols !== undefined ? protocols : SUBPROTOCOL;
+    const wsProtocols = protocols !== undefined ? protocols : DEFAULT_SUBPROTOCOLS;
     const bannerProtocols = Array.isArray(wsProtocols)
       ? wsProtocols
         .filter((proto) => typeof proto === "string" && proto)
@@ -5228,8 +5333,17 @@ import { initPcmSender } from "./audio/pcm_sender.js";
     try { live.binaryType = "arraybuffer"; } catch {}
 
     if (!binary && isControl) {
+      const codec = getNegotiatedControlCodec();
+      const encoded = encodeControlFramePayload(data, codec);
+      if (!encoded) {
+        return false;
+      }
       try {
-        live.send(typeof data === "string" ? data : JSON.stringify(data));
+        if (encoded.binary) {
+          live.send(encoded.payload);
+        } else {
+          live.send(encoded.payload);
+        }
         return true;
       } catch (err) {
         console.error("WSClient send error", err);
@@ -5352,8 +5466,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       const ws = WSClient?._ws || window.ws;
       const open = ws && ws.readyState === WebSocket.OPEN;
       if (open && isControlFrame(payload)) {
+        const codec = getNegotiatedControlCodec();
+        const encoded = encodeControlFramePayload(payload, codec);
+        if (!encoded) {
+          return false;
+        }
         try {
-          ws.send(JSON.stringify(payload));
+          ws.send(encoded.payload);
           return true;
         } catch (e) {
           console.warn("ws.json send failed", e);
@@ -5373,8 +5492,13 @@ import { initPcmSender } from "./audio/pcm_sender.js";
         const open = ws && ws.readyState === WebSocket.OPEN;
         const isControl = isControlFrame(frame);
         if (open && isControl) {
+          const codec = getNegotiatedControlCodec();
+          const encoded = encodeControlFramePayload(frame, codec);
+          if (!encoded) {
+            return false;
+          }
           try {
-            ws.send(JSON.stringify(frame));
+            ws.send(encoded.payload);
             return true;
           } catch (e) {
             console.warn("ws.json send failed", e);
@@ -5409,6 +5533,9 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       console.warn("[selfTestAudio] FAIL:", e?.message || e);
     }
   };
+
+  debug.encodeMessagePack = (value) => encodeMessagePack(value);
+  debug.decodeMessagePack = (buffer) => decodeMessagePack(buffer);
   Object.defineProperty(WSClient, "socket", {
     configurable: true,
     enumerable: true,

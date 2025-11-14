@@ -51,3 +51,4 @@ SQLAlchemy>=2.0.29
 beautifulsoup4
 
 
+msgpack==1.0.7

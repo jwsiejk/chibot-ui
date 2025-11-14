@@ -35,6 +35,11 @@ from typing import (
 import json
 from urllib.parse import parse_qs
 
+try:
+    import msgpack  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover - optional dependency fallback
+    msgpack = None  # type: ignore[assignment]
+
 from app import config
 from app.config_build import current_build_id
 from app.logging_setup import current_sid
@@ -90,6 +95,7 @@ except Exception:  # pragma: no cover - fallback when uvicorn missing
 
 
 CHAT_V2_SUBPROTOCOL = "chat.v2"
+CHAT_MSGPACK_SUBPROTOCOL = "chip-msgpack"
 TEXT_FRAME_LIMIT_BYTES = 64 * 1024
 BINARY_FRAME_LIMIT_BYTES = 2 * 1024 * 1024
 FEATURE_LEGACY_POLICY = os.getenv("FEATURE_LEGACY_POLICY", "false").lower() == "true"
@@ -114,6 +120,10 @@ _DEFAULT_GCP_SAMPLE_RATE_HZ = 16000
 
 _DEFAULT_WS_PING_INTERVAL_MS = 20_000
 _HEARTBEAT_TIMEOUT_MS = 30_000
+
+_PERMESSAGE_DEFLATE_HEADER = (
+    b"permessage-deflate; client_no_context_takeover; server_no_context_takeover"
+)
 
 EVT_BACKPRESSURE_ON = "EVT_BACKPRESSURE_ON"
 EVT_BACKPRESSURE_OFF = "EVT_BACKPRESSURE_OFF"
@@ -406,6 +416,7 @@ class AdapterContext:
     user_id: Optional[str] = None
     is_admin: bool = False
     principal: Dict[str, Any] = field(default_factory=dict)
+    control_codec: Literal["json", "msgpack"] = "json"
     audio_seq: int = 0
     audio_expected_seq: int = 0
     audio_highest_seq: int = -1
@@ -1638,14 +1649,48 @@ class ChatV2Adapter:
         if query_string:
             path_qs = f"{path}?{query_string}"
 
-        subprotocols = scope.get("subprotocols") or []
-        _log.info("evt=ws_subs subprotocols=%r need='chat.v2'", subprotocols)
-        if CHAT_V2_SUBPROTOCOL not in subprotocols:
+        offered_subprotocols = [
+            proto for proto in scope.get("subprotocols") or [] if isinstance(proto, str)
+        ]
+        needed = {CHAT_V2_SUBPROTOCOL, CHAT_MSGPACK_SUBPROTOCOL}
+        _log.info(
+            "evt=ws_subs subprotocols=%r need_any=%r",
+            offered_subprotocols,
+            needed,
+        )
+        msgpack_supported = msgpack is not None
+        selected_subprotocol: Optional[str] = None
+        fallback_reason: Optional[str] = None
+        if msgpack_supported and CHAT_MSGPACK_SUBPROTOCOL in offered_subprotocols:
+            selected_subprotocol = CHAT_MSGPACK_SUBPROTOCOL
+        elif CHAT_MSGPACK_SUBPROTOCOL in offered_subprotocols and CHAT_V2_SUBPROTOCOL not in offered_subprotocols:
+            _log.warning(
+                "evt=ws_accept_reject code=4401 reason=msgpack_unavailable path=%s",
+                path_qs,
+            )
+            await self._reject_subprotocol(send)
+            return
+        elif CHAT_V2_SUBPROTOCOL in offered_subprotocols:
+            selected_subprotocol = CHAT_V2_SUBPROTOCOL
+            if not msgpack_supported and CHAT_MSGPACK_SUBPROTOCOL in offered_subprotocols:
+                fallback_reason = "msgpack_unavailable"
+        else:
             _log.warning(
                 "evt=ws_accept_reject code=4401 reason=bad_subprotocol path=%s", path_qs
             )
             await self._reject_subprotocol(send)
             return
+
+        if fallback_reason:
+            _log.info(
+                "evt=ws_subprotocol_fallback reason=%s offered=%r", fallback_reason, offered_subprotocols
+            )
+
+        selected_codec: Literal["json", "msgpack"]
+        if selected_subprotocol == CHAT_MSGPACK_SUBPROTOCOL:
+            selected_codec = "msgpack"
+        else:
+            selected_codec = "json"
 
         headers = self._decode_headers(scope.get("headers", ()))
 
@@ -1710,14 +1755,25 @@ class ChatV2Adapter:
 
         _log.info("evt=ws_accept_token_ok sid=%s", sid)
 
-        _log.info("evt=ws_accept subprotocol='%s'", CHAT_V2_SUBPROTOCOL)
-        await send({"type": "websocket.accept", "subprotocol": CHAT_V2_SUBPROTOCOL})
+        accept_headers: list[tuple[bytes, bytes]] = []
+        if selected_codec == "json" and self._client_offers_permessage_deflate(headers):
+            accept_headers.append((b"sec-websocket-extensions", _PERMESSAGE_DEFLATE_HEADER))
+
+        accept_message: dict[str, Any] = {
+            "type": "websocket.accept",
+            "subprotocol": selected_subprotocol,
+        }
+        if accept_headers:
+            accept_message["headers"] = accept_headers
+
+        _log.info("evt=ws_accept subprotocol='%s' codec=%s", selected_subprotocol, selected_codec)
+        await send(accept_message)
 
         self._emit_session_step(
             sid,
             "ws.accepted",
             summary="Accepted WebSocket upgrade",
-            meta={"subprotocol": CHAT_V2_SUBPROTOCOL},
+            meta={"subprotocol": selected_subprotocol, "codec": selected_codec},
             source="ws.accept",
         )
 
@@ -1734,8 +1790,8 @@ class ChatV2Adapter:
             pid = os.getpid()
             cwd = os.getcwd()
 
-            offered = scope.get("subprotocols", [])
-            selected = "chat.v2"
+            offered = list(offered_subprotocols)
+            selected = selected_subprotocol
 
             banner = {
                 "type": "server.banner",
@@ -1748,11 +1804,21 @@ class ChatV2Adapter:
                 "ws_path": scope.get("path"),
                 "subprotocols_offered": offered,
                 "subprotocol_selected": selected,
+                "control_codec": selected_codec,
+                "permessage_deflate": bool(accept_headers),
                 "adapter_file": adapter_file,
                 "engine_file": engine_file,
             }
 
-            await self._send_json(send, sid, banner)
+            banner_ctx = AdapterContext(
+                sid=sid,
+                headers=dict(headers),
+                principal=principal,
+                user_id=sub,
+                is_admin=is_admin,
+            )
+            banner_ctx.control_codec = selected_codec
+            await self._send_json(send, sid, banner, ctx=banner_ctx)
             _log.info(
                 "evt=server_banner build_id=%s host=%s pid=%d path=%s subproto=%s adapter=%s engine=%s",
                 build_id,
@@ -1772,6 +1838,7 @@ class ChatV2Adapter:
                     "host": host,
                     "pid": pid,
                     "subprotocol": selected,
+                    "codec": selected_codec,
                 },
             )
         except Exception:
@@ -1781,7 +1848,8 @@ class ChatV2Adapter:
         now_ms = int(time.time() * 1000)
         info_frame: Dict[str, Any] = {
             "type": "info",
-            "protocol": CHAT_V2_SUBPROTOCOL,
+            "protocol": selected_subprotocol,
+            "control_codec": selected_codec,
             "sid": sid,
             "ts_ms": now_ms,
             "build_id": current_build_id(),
@@ -1804,6 +1872,7 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
+        provisional_ctx.control_codec = selected_codec
         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, dict):
             provisional_ctx.policy_snapshot = dict(policy_snapshot)
         elif FEATURE_LEGACY_POLICY:
@@ -1818,7 +1887,7 @@ class ChatV2Adapter:
         if FEATURE_LEGACY_POLICY and policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
         info_frame["policy"] = self._policy_for_client(session_policy_v2)
-        await self._send_json(send, sid, info_frame)
+        await self._send_json(send, sid, info_frame, ctx=provisional_ctx)
         _log.info("evt=ws_info_sent sid=%s", sid)
         self._emit_session_step(
             sid,
@@ -1834,6 +1903,7 @@ class ChatV2Adapter:
             user_id=sub,
             is_admin=is_admin,
         )
+        ctx.control_codec = selected_codec
         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, dict):
             ctx.policy_snapshot = dict(policy_snapshot)
         elif FEATURE_LEGACY_POLICY:
@@ -2017,7 +2087,7 @@ class ChatV2Adapter:
         return self._contexts.get(sid)
 
     async def _reject_subprotocol(self, send: Callable[[dict], Awaitable[None]]) -> None:
-        detail = "use chat.v2"
+        detail = "use chat.v2 or chip-msgpack"
         body = json.dumps(
             {
                 "type": "error",
@@ -2039,10 +2109,20 @@ class ChatV2Adapter:
         close_reason: Optional[str] = None
 
     async def _handle_text(
-        self, data: str, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
+        self,
+        data: str,
+        ctx: AdapterContext,
+        send: Callable[[dict], Awaitable[None]],
+        *,
+        codec: Literal["json", "msgpack"] = "json",
+        raw_bytes: bytes | None = None,
+        predecoded: Mapping[str, Any] | None = None,
     ) -> _HandleResult:
         try:
-            payload_bytes = data.encode("utf-8")
+            if codec == "msgpack" and raw_bytes is not None:
+                payload_bytes = raw_bytes
+            else:
+                payload_bytes = data.encode("utf-8")
             byte_count = len(payload_bytes)
         except UnicodeEncodeError:
             sanitized = data.encode("utf-8", "replace")
@@ -2053,6 +2133,7 @@ class ChatV2Adapter:
                 "ws": {
                     "dir": "in",
                     "size": len(sanitized),
+                    "codec": codec,
                     "preview": self._make_preview_from_bytes(sanitized),
                 },
             }
@@ -2066,10 +2147,22 @@ class ChatV2Adapter:
             "ws": {
                 "dir": "in",
                 "size": byte_count,
+                "codec": codec,
             },
         }
 
-        preview = self._make_preview_from_bytes(payload_bytes)
+        if codec == "msgpack":
+            try:
+                preview_bytes = data.encode("utf-8", "replace")
+            except Exception:
+                preview_bytes = None
+            preview = (
+                self._make_preview_from_bytes(preview_bytes)
+                if preview_bytes is not None
+                else None
+            )
+        else:
+            preview = self._make_preview_from_bytes(payload_bytes)
         if preview is not None:
             meta["ws"]["preview"] = preview
 
@@ -2081,13 +2174,16 @@ class ChatV2Adapter:
             await self._send_error(send, ctx.sid, "frame_too_large", "Text frame exceeds limit")
             return self._HandleResult(False, 1009, "frame_too_large")
 
-        try:
-            frame = json.loads(payload_bytes.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            meta["error"] = "bad_json"
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
-            await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
-            return self._HandleResult(True)
+        if predecoded is not None and isinstance(predecoded, Mapping):
+            frame = dict(predecoded)
+        else:
+            try:
+                frame = json.loads(data if codec == "msgpack" else payload_bytes.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                meta["error"] = "bad_json"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta)
+                await self._send_error(send, ctx.sid, "bad_json", f"Invalid JSON payload: {exc.msg}")
+                return self._HandleResult(True)
 
         if not isinstance(frame, dict):
             meta["error"] = "schema_invalid"
@@ -2110,7 +2206,6 @@ class ChatV2Adapter:
         ctx.last_client_activity_ms = now_ms
 
         if frame_type in (
-            "client.banner",
             "client.metrics",
             "client.log",
             "client.pong",
@@ -2118,7 +2213,7 @@ class ChatV2Adapter:
             await self._publish(
                 EVT_WS_JSON_RECV,
                 ctx.sid,
-                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+                {"type": frame_type, "ok": True, "ws": {"dir": "in", "codec": codec}},
             )
             if frame_type == "client.pong":
                 ctx.last_client_pong_ms = now_ms
@@ -2128,12 +2223,11 @@ class ChatV2Adapter:
             "client.ready",
             "client.telemetry",
             "client.diag",
-            "client.autostart",
         ):
             await self._publish(
                 EVT_WS_JSON_RECV,
                 ctx.sid,
-                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+                {"type": frame_type, "ok": True, "ws": {"dir": "in", "codec": codec}},
             )
             return self._HandleResult(True)
 
@@ -2175,7 +2269,7 @@ class ChatV2Adapter:
             await self._publish(
                 EVT_WS_JSON_RECV,
                 ctx.sid,
-                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+                {"type": frame_type, "ok": True, "ws": {"dir": "in", "codec": codec}},
             )
             return self._HandleResult(True)
 
@@ -2357,7 +2451,7 @@ class ChatV2Adapter:
             await self._publish(
                 EVT_WS_JSON_RECV,
                 ctx.sid,
-                {"type": frame_type, "ok": True, "ws": {"dir": "in"}},
+                {"type": frame_type, "ok": True, "ws": {"dir": "in", "codec": codec}},
             )
             ctx.client_mic_open = True
             self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
@@ -2812,6 +2906,26 @@ class ChatV2Adapter:
             )
             await self._send_error(send, ctx.sid, "frame_too_large", "Binary frame exceeds limit")
             return self._HandleResult(False, 1009, "frame_too_large")
+
+        if (
+            getattr(ctx, "control_codec", "json") == "msgpack"
+            and msgpack is not None
+            and byte_count <= self.text_limit_bytes
+        ):
+            try:
+                frame_obj = msgpack.unpackb(data, raw=False)
+            except Exception:
+                frame_obj = None
+            if isinstance(frame_obj, Mapping) and isinstance(frame_obj.get("type"), str):
+                json_payload = json.dumps(frame_obj, separators=(",", ":"))
+                return await self._handle_text(
+                    json_payload,
+                    ctx,
+                    send,
+                    codec="msgpack",
+                    raw_bytes=data,
+                    predecoded=frame_obj,
+                )
 
         if not ctx.client_capture_armed:
             if ALLOW_AUDIO_WITHOUT_ASR:
@@ -3431,34 +3545,79 @@ class ChatV2Adapter:
         send: Callable[[dict], Awaitable[None]],
         sid: str,
         payload: Dict[str, Any],
+        *,
+        ctx: AdapterContext | None = None,
     ) -> None:
-        text = json.dumps(payload, separators=(",", ":"))
-        payload_bytes = text.encode("utf-8")
+        context = ctx or self._contexts.get(sid)
+        codec = "json"
+        if context is not None:
+            codec = getattr(context, "control_codec", "json")
+        if codec == "msgpack" and msgpack is None:
+            _log.warning("evt=ws_send_codec_fallback sid=%s reason=msgpack_unavailable", sid)
+            codec = "json"
+
+        frame_payload: Dict[str, Any] = dict(payload)
+
+        if codec == "msgpack" and msgpack is not None:
+            payload_bytes = msgpack.packb(payload, use_bin_type=True)
+            byte_count = len(payload_bytes)
+            ws_meta: Dict[str, Any] = {"dir": "out", "size": byte_count, "codec": "msgpack"}
+            meta: Dict[str, Any] = {
+                "byte_count": byte_count,
+                "frame_type": payload.get("type"),
+                "ws": ws_meta,
+            }
+            ws_meta["from_adapter"] = True
+            preview = None
+            try:
+                preview_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            except Exception:
+                preview_bytes = None
+            else:
+                preview = self._make_preview_from_bytes(preview_bytes)
+            if preview is not None:
+                ws_meta["preview"] = preview
+            try:
+                await send({"type": "websocket.send", "bytes": payload_bytes})
+            except RuntimeError as e:
+                if "websocket.close" in str(e) or "response already completed" in str(e):
+                    _log.warning(
+                        "evt=ws_send_skipped sid=%s reason=asgi_closed type=%s",
+                        sid,
+                        payload.get("type"),
+                    )
+                    ws_meta["send_skipped"] = True
+                    ws_meta["skipped_reason"] = "asgi_closed"
+                    self._log_asr_control_summary(sid, payload)
+                    await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
+                    return
+                raise
+
+            self._log_asr_control_summary(sid, payload)
+            await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
+            return
+
+        text_payload = json.dumps(payload, separators=(",", ":"))
+        payload_bytes = text_payload.encode("utf-8")
         byte_count = len(payload_bytes)
-        meta: Dict[str, Any] = {
+        ws_meta = {"dir": "out", "size": byte_count, "codec": "json"}
+        meta = {
             "byte_count": byte_count,
             "frame_type": payload.get("type"),
-            "ws": {
-                "dir": "out",
-                "size": byte_count,
-            },
+            "ws": ws_meta,
         }
-        meta["ws"]["from_adapter"] = True
+        ws_meta["from_adapter"] = True
         preview = self._make_preview_from_bytes(payload_bytes)
         if preview is not None:
-            meta["ws"]["preview"] = preview
+            ws_meta["preview"] = preview
         try:
-            parsed_frame = json.loads(text)
+            parsed_frame = json.loads(text_payload)
         except json.JSONDecodeError:
             parsed_frame = None
-        frame_payload: Dict[str, Any]
         if isinstance(parsed_frame, Mapping):
             frame_payload = dict(parsed_frame)
-        else:
-            frame_payload = dict(payload)
-
         try:
-            await send({"type": "websocket.send", "text": text})
+            await send({"type": "websocket.send", "text": text_payload})
         except RuntimeError as e:
             if "websocket.close" in str(e) or "response already completed" in str(e):
                 _log.warning(
@@ -3466,9 +3625,8 @@ class ChatV2Adapter:
                     sid,
                     payload.get("type"),
                 )
-                meta_ws = meta.setdefault("ws", {})
-                meta_ws["send_skipped"] = True
-                meta_ws["skipped_reason"] = "asgi_closed"
+                ws_meta["send_skipped"] = True
+                ws_meta["skipped_reason"] = "asgi_closed"
                 self._log_asr_control_summary(sid, payload)
                 await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
                 return
@@ -3476,6 +3634,7 @@ class ChatV2Adapter:
 
         self._log_asr_control_summary(sid, payload)
         await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
+
 
     async def _send_error(
         self,
@@ -6423,6 +6582,13 @@ class ChatV2Adapter:
         for key, value in headers:
             decoded[key.decode("latin1").lower()] = value.decode("latin1")
         return decoded
+
+    @staticmethod
+    def _client_offers_permessage_deflate(headers: Mapping[str, str]) -> bool:
+        value = headers.get("sec-websocket-extensions")
+        if not isinstance(value, str):
+            return False
+        return "permessage-deflate" in value.lower()
 
     @staticmethod
     def _now_ms() -> int:
