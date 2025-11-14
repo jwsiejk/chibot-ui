@@ -62,22 +62,6 @@ import {
   // ===== Mic + VAD state, breadcrumbs, and telemetry wiring =====
   // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
-  /*
-  const MIC_OUTCOME = {
-    PERM_GRANTED: 'perm_granted',
-    ARMED: 'armed',
-    STREAMING: 'streaming',
-    STREAMING_HEARTBEAT: 'streaming_heartbeat',
-    STOPPED: 'stopped',
-    ERROR_DENIED: 'error_denied',
-    ERROR_NO_DEVICE: 'error_no_device',
-    ERROR_GUM: 'error_getuser_media',
-    ERROR_SILENT: 'error_silent_stream',
-    ERROR_WS_SEND: 'error_ws_send',
-    ERROR_STATE_GUARD: 'error_state_guard',
-    ERROR_UNKNOWN: 'error_unknown',
-  };
-  */
   let __micAttempts = 0;
   let __micChunks = 0;
   let __micBytes = 0;
@@ -110,118 +94,6 @@ import {
     };
   }
 
-  /*
-  function emitMicBreadcrumb(detail = {}) {
-    try {
-      const payload = { ...detail };
-      payload.gates = getGateSnapshot();
-      hubLog('client.mic', payload);
-    } catch (err) {
-      try {
-        console.warn("Mic breadcrumb log failed", err);
-      } catch {}
-    }
-  }
-
-  function logMic(detail = {}) {
-    try {
-      const holdFlags = {
-        ttsActive: !!AppState?.ttsActive,
-        systemHold: !!AppState?.systemHold,
-        userMuted: !!AppState?.userMuted,
-      };
-      const base = {
-        trace_id: __turnTraceId || null,
-        attempts: __micAttempts,
-        chunks: __micChunks,
-        bytes: __micBytes,
-        phase: AppState?.ttsActive ? 'tts_active' : 'post_tts',
-        hold_flags: holdFlags,
-      };
-      const outcome = typeof detail?.outcome === "string" ? detail.outcome : null;
-      const permLabel = typeof detail?.perm === "string" ? detail.perm : null;
-      if (permLabel !== null) {
-        const granted = permLabel === "granted";
-        __micPermissionGranted = granted;
-        try { AppState.micPermissionGranted = granted; } catch {}
-      } else if (outcome === MIC_OUTCOME.ERROR_DENIED) {
-        __micPermissionGranted = false;
-        try { AppState.micPermissionGranted = false; } catch {}
-      }
-      if (outcome === MIC_OUTCOME.PERM_GRANTED || permLabel === "granted") {
-        emitMicBreadcrumb({ event: "armed" });
-      }
-      if (outcome === MIC_OUTCOME.STREAMING && !__micFirstChunkBreadcrumbSent) {
-        __micFirstChunkBreadcrumbSent = true;
-        let msSinceStart = 0;
-        if (typeof __micRecordingStartAt === "number") {
-          msSinceStart = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
-        } else if (Number.isFinite(Number(detail?.first_chunk_ms))) {
-          const fallback = Number(detail.first_chunk_ms);
-          msSinceStart = Math.max(0, Math.round(fallback));
-        }
-        const bytesRaw = Number.isFinite(__micBytes) ? __micBytes : 0;
-        const bytesSent = bytesRaw >= 0 ? bytesRaw : 0;
-        emitMicBreadcrumb({
-          event: "first_chunk_sent",
-          bytes: bytesSent,
-          ms_since_recording_start: msSinceStart,
-        });
-      }
-      if (outcome === MIC_OUTCOME.STOPPED) {
-        let totalMs = 0;
-        if (typeof __micRecordingStartAt === "number") {
-          totalMs = Math.max(0, Math.round(Date.now() - __micRecordingStartAt));
-        }
-        const reason = typeof detail?.reason === "string" && detail.reason ? detail.reason : null;
-        emitMicBreadcrumb({
-          event: "stopped",
-          reason,
-          ms_total_recording: totalMs,
-        });
-        __micRecordingStartAt = null;
-        __micFirstChunkBreadcrumbSent = false;
-      }
-      hubLog('client.mic', { ...base, ...detail });
-    } catch {}
-  }
-
-  function logStage(label, detail = {}) {
-    try {
-      hubLog(label, { trace_id: __turnTraceId || null, ...detail });
-    } catch {}
-  }
-
-  function normalizeErrorDetail(detail) {
-    if (detail === null || detail === undefined) {
-      return null;
-    }
-    if (typeof detail === "string") {
-      return truncateBannerString(detail, 240);
-    }
-    if (typeof detail === "number" || typeof detail === "boolean") {
-      return truncateBannerString(String(detail), 240);
-    }
-    try {
-      const serialized = JSON.stringify(detail);
-      return truncateBannerString(serialized, 240);
-    } catch (err) {
-      try {
-        return truncateBannerString(String(detail), 240);
-      } catch {
-        return null;
-      }
-    }
-  }
-
-  function recordLastError(code, detail) {
-    const normalizedCode = Number.isFinite(code) ? code : null;
-    const normalizedDetail = normalizeErrorDetail(detail);
-    setAppStateValue("lastErrorCode", normalizedCode);
-    setAppStateValue("lastErrorDetail", normalizedDetail);
-  }
-  */
-
   const CLIENT_BANNER_TYPE = "client.banner";
   const CLIENT_BANNER_MAX_HISTORY = 24;
   const CLIENT_BANNER_MAX_QUEUE = 24;
@@ -230,35 +102,6 @@ import {
 
   let clientBannerQueue = [];
   let toastRoot = null;
-
-  /*
-  function recordClientBannerEvent(label, meta) {
-    if (typeof label !== "string" || !label) {
-      return;
-    }
-    const baseState = ensureClientBannerState();
-    const info = collectClientBannerInfo();
-    const events = Array.isArray(baseState.events) ? baseState.events.slice() : [];
-    const entry = {
-      label: truncateBannerString(label, CLIENT_BANNER_EVENT_LABEL_MAX),
-      ts_ms: Date.now(),
-    };
-    const sanitizedMeta = sanitizeBannerValue(meta);
-    if (sanitizedMeta && typeof sanitizedMeta === "object" && Object.keys(sanitizedMeta).length) {
-      entry.meta = sanitizedMeta;
-    }
-    events.push(entry);
-    if (events.length > CLIENT_BANNER_MAX_HISTORY) {
-      events.splice(0, events.length - CLIENT_BANNER_MAX_HISTORY);
-    }
-    updateClientBannerState(info, events);
-    queueClientBannerPayload({
-      type: CLIENT_BANNER_TYPE,
-      info,
-      event: entry,
-    });
-  }
-  */
 
   function ensureClientBannerState() {
     const state = AppState.getState();
