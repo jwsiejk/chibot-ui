@@ -19,23 +19,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
   const MAX_GATE_SILENCE_MS = 3000;
   // server_no_speech_timeout_ms should be ≥ 2 × MAX_GATE_SILENCE_MS to let the client close the turn cleanly.
-  const CLIENT_VAD_POLICY = Object.freeze({
-    enable: true,
-    sensitivity: 0.60,
-    min_speech_ms: 160,
-    min_silence_ms: 500,
-    hold_ms: 250,
-    echo_suppression_db: 10,
-    tts_threshold_boost_db: 12,
-    debounce_ms: 40,
-    // Enable true gating; preroll remains handled internally by the VAD.
-    stream_gate: "gate",          // keep gating if you want to save bandwidth
-    max_gate_silence_ms: MAX_GATE_SILENCE_MS,
-    // Optional: per-deployment configurable warmup in ms
-    warmup_ms: 1200,
-    // If your input is very quiet, allow threshold override via policy
-  });
-  const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
 
   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
@@ -449,6 +432,106 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   }
 
   // ===== Client policy runtime (applyPolicySnapshotFromSource, etc.) =====
+  const CLIENT_VAD_POLICY = Object.freeze({
+    enable: true,
+    sensitivity: 0.60,
+    min_speech_ms: 160,
+    min_silence_ms: 500,
+    hold_ms: 250,
+    echo_suppression_db: 10,
+    tts_threshold_boost_db: 12,
+    debounce_ms: 40,
+    // Enable true gating; preroll remains handled internally by the VAD.
+    stream_gate: "gate",          // keep gating if you want to save bandwidth
+    max_gate_silence_ms: MAX_GATE_SILENCE_MS,
+    // Optional: per-deployment configurable warmup in ms
+    warmup_ms: 1200,
+    // If your input is very quiet, allow threshold override via policy
+  });
+  const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
+  const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
+  const DEFAULT_POLICY_WATCHDOG = {
+    partial_wait_ms_first_turn: 3500,
+    partial_wait_ms: 2500,
+  };
+  const DEFAULT_POLICY_STATUS = { require_active_turn: true };
+  const DEFAULT_POLICY_FLAGS = {
+    recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
+    input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
+    asr: {
+      prearm_on_tts_end: false,
+      keep_stream_warm_ms: 30000,
+      commit_on_vad_silence: true,
+      commit_silence_ms: 900,
+      max_utterance_ms: 8000,
+      vendor: { primary: 'gcp', secondary: null },
+    },
+    routing: { ws_version: 'v2' },
+    audio: { pipeline: { mode: 'pcm16' } },
+  };
+  const ASR_VENDOR_OPTIONS = ['gcp'];
+  const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
+
+  function installClientVadPolicySnapshot() {
+    const policyRoot = AppState.policy && typeof AppState.policy === "object"
+      ? AppState.policy
+      : (AppState.policy = {});
+    const ensureVadBlock = (target) => {
+      if (!target || typeof target !== "object") {
+        return;
+      }
+      const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
+      const existingClient = existingVad.client && typeof existingVad.client === "object"
+        ? existingVad.client
+        : {};
+      // Merge: runtime/client overrides survive; our defaults fill gaps.
+      target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
+    };
+    ensureVadBlock(policyRoot);
+    if (FEATURE_LEGACY_POLICY) {
+      if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
+        policyRoot.policy = {};
+      }
+      ensureVadBlock(policyRoot.policy);
+    }
+    // Hard-disable any legacy hotword gate, regardless of incoming policy.
+    const ensureInput = (root) => {
+      if (!root || typeof root !== "object") {
+        return;
+      }
+      const existingInput = root.input && typeof root.input === "object" ? root.input : {};
+      root.input = { ...existingInput, require_hotword_to_start: false };
+    };
+    ensureInput(policyRoot);
+    if (FEATURE_LEGACY_POLICY) {
+      ensureInput(policyRoot.policy);
+    }
+  }
+
+  function applyPolicySnapshotFromSource(source, origin) {
+    const sanitizedPolicy = sanitizePolicySnapshot(source);
+    AppState.policy = sanitizedPolicy;
+    updateState({ policy: sanitizedPolicy });
+    const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
+    dispatchFrame(snapshotFrame);
+    dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
+    return sanitizedPolicy;
+  }
+
+  function shouldAutoRearmAfterClosed(reason) {
+    if (AppState?.policy?.auto_record_after_greet === false) {
+      return false;
+    }
+    const key = typeof reason === "string" && reason ? reason.trim().toLowerCase() : "";
+    if (!key) {
+      return true;
+    }
+    if (key === "end_button") {
+      return false;
+    }
+    return !reasonLooksUserInitiated(key);
+  }
+
   const AppState = window.AppState;
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
@@ -976,12 +1059,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   }
   const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
   const P0 = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
-  const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
-  const DEFAULT_POLICY_WATCHDOG = {
-    partial_wait_ms_first_turn: 3500,
-    partial_wait_ms: 2500,
-  };
-  const DEFAULT_POLICY_STATUS = { require_active_turn: true };
 
   const cloneValue = (value) => {
     if (Array.isArray(value)) {
@@ -1085,42 +1162,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     });
 
     AppState.policy = normalizedPolicy;
-  }
-
-  function installClientVadPolicySnapshot() {
-    const policyRoot = AppState.policy && typeof AppState.policy === "object"
-      ? AppState.policy
-      : (AppState.policy = {});
-    const ensureVadBlock = (target) => {
-      if (!target || typeof target !== "object") {
-        return;
-      }
-      const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
-      const existingClient = existingVad.client && typeof existingVad.client === "object"
-        ? existingVad.client
-        : {};
-      // Merge: runtime/client overrides survive; our defaults fill gaps.
-      target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
-    };
-    ensureVadBlock(policyRoot);
-    if (FEATURE_LEGACY_POLICY) {
-      if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
-        policyRoot.policy = {};
-      }
-      ensureVadBlock(policyRoot.policy);
-    }
-    // Hard-disable any legacy hotword gate, regardless of incoming policy.
-    const ensureInput = (root) => {
-      if (!root || typeof root !== "object") {
-        return;
-      }
-      const existingInput = root.input && typeof root.input === "object" ? root.input : {};
-      root.input = { ...existingInput, require_hotword_to_start: false };
-    };
-    ensureInput(policyRoot);
-    if (FEATURE_LEGACY_POLICY) {
-      ensureInput(policyRoot.policy);
-    }
   }
 
   installClientVadPolicySnapshot();
@@ -2006,20 +2047,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
       return true;
     }
     return SERVER_ERROR_REASON_PATTERNS.some((pattern) => pattern.test(key));
-  }
-
-  function shouldAutoRearmAfterClosed(reason) {
-    if (AppState?.policy?.auto_record_after_greet === false) {
-      return false;
-    }
-    const key = typeof reason === "string" && reason ? reason.trim().toLowerCase() : "";
-    if (!key) {
-      return true;
-    }
-    if (key === "end_button") {
-      return false;
-    }
-    return !reasonLooksUserInitiated(key);
   }
 
   function clearPendingRearm() {
@@ -3306,24 +3333,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     return sanitized;
   }
 
-  const ASR_VENDOR_OPTIONS = ['gcp'];
-  const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
-
-  const DEFAULT_POLICY_FLAGS = {
-    recorder: { stop_on_tts_start: false, mute_send_during_tts: true },
-    input: { require_hotword_to_start: false, require_user_gesture_first_visit: false },
-    asr: {
-      prearm_on_tts_end: false,
-      keep_stream_warm_ms: 30000,
-      commit_on_vad_silence: true,
-      commit_silence_ms: 900,
-      max_utterance_ms: 8000,
-      vendor: { primary: 'gcp', secondary: null },
-    },
-    routing: { ws_version: 'v2' },
-    audio: { pipeline: { mode: 'pcm16' } },
-  };
-
   function sanitizePolicySnapshot(source) {
     if (!FEATURE_LEGACY_POLICY) {
       const base = (AppState && typeof AppState.policy === 'object') ? AppState.policy : {};
@@ -3563,16 +3572,6 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     policy.input = nested && typeof nested.input === 'object' ? { ...nested.input } : {};
     policy.audio = { pipeline: audioPipeline };
     return policy;
-  }
-
-  function applyPolicySnapshotFromSource(source, origin) {
-    const sanitizedPolicy = sanitizePolicySnapshot(source);
-    AppState.policy = sanitizedPolicy;
-    updateState({ policy: sanitizedPolicy });
-    const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
-    dispatchFrame(snapshotFrame);
-    dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
-    return sanitizedPolicy;
   }
 
   function sanitizePolicyFrame(frame) {
