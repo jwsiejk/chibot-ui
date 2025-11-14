@@ -1374,6 +1374,8 @@ class ChatV2Adapter:
                 ctx.client_vad_noise_db = noise
         elif event_name in {"client.vad.gate", "client.vad.gate_heartbeat"}:
             ctx.client_vad_last_event_ms = now_ms
+            if event_name == "client.vad.gate":
+                self._maybe_trigger_vad_eot_from_client_gate(ctx, meta, now_ms)
         elif event_name in {"client.appstate.delta", "client.appstate.heartbeat"}:
             speech_value = meta.get("vadSpeech")
             if isinstance(speech_value, bool):
@@ -1390,6 +1392,89 @@ class ChatV2Adapter:
                 ctx.client_vad_noise_db = noise
         else:
             ctx.client_vad_last_event_ms = now_ms
+
+    def _maybe_trigger_vad_eot_from_client_gate(
+        self,
+        ctx: AdapterContext,
+        meta: Mapping[str, Any],
+        now_ms: int,
+    ) -> None:
+        """Use client VAD gate 'pause/silence' as an end-of-turn trigger."""
+
+        # Only act if ASR is actually open and EOT is armed
+        if ctx.ws_send is None:
+            return
+        if not ctx.session.eot_armed or ctx.session.asr_state != "open":
+            return
+
+        action = meta.get("action")
+        reason = meta.get("reason") or ""
+        if action != "pause":
+            return
+        # Only treat silence-based pauses as EOT; ignore policy resets etc.
+        if "silence" not in str(reason).lower():
+            return
+
+        # Reuse the same policy + timing math as the server VAD fusion
+        policy = self._resolve_server_vad_policy(ctx)
+        client_silence_ms = self._compute_client_silence_ms(ctx, now_ms)
+        server_silence_ms = self._compute_server_silence_ms(
+            ctx,
+            now_ms,
+            policy,
+            client_silence_ms,
+        )
+        vendor_idle_ms = self._compute_vendor_idle_ms(ctx, now_ms)
+
+        fuse_mode = str(policy.get("fuse_mode", "and")).strip().lower()
+        if fuse_mode not in {"and", "or", "weighted"}:
+            fuse_mode = "and"
+
+        # Decide if we *should* close; mirror _run_vad_fusion’s rules, but run once
+        min_silence_ms = max(0, int(policy.get("min_silence_ms", 0)))
+        eot_silence_ms = max(0, int(policy.get("eot_silence_ms", 0)))
+        client_ok = client_silence_ms >= min_silence_ms
+        server_ok = (not policy.get("enable", True)) or server_silence_ms >= min_silence_ms
+        silence_ok = client_ok and server_ok
+        vendor_ok = vendor_idle_ms >= eot_silence_ms
+
+        should_close = False
+        if fuse_mode == "and":
+            should_close = silence_ok and vendor_ok
+        elif fuse_mode == "or":
+            should_close = silence_ok or vendor_ok
+        else:  # weighted
+            denom_client = max(1, min_silence_ms)
+            denom_vendor = max(1, eot_silence_ms)
+            client_norm = min(1.0, client_silence_ms / denom_client)
+            vendor_norm = min(1.0, vendor_idle_ms / denom_vendor)
+            weight_client = float(policy.get("weight_client", 0.5) or 0.0)
+            weight_vendor = float(policy.get("weight_vendor", 0.5) or 0.0)
+            score = (weight_client * client_norm) + (weight_vendor * vendor_norm)
+            should_close = score >= 1.0 and (client_norm > 0.0 or vendor_norm > 0.0)
+
+        if not should_close:
+            return
+
+        async def _run_vad_eot() -> None:
+            await self._handle_vad_eot(
+                ctx,
+                "client_gate_silence",
+                fuse_mode,
+                client_silence_ms,
+                vendor_idle_ms,
+                server_silence_ms,
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            loop.create_task(_run_vad_eot())
+        else:
+            asyncio.create_task(_run_vad_eot())
 
     def _emit_server_vendor_activity(
         self, ctx: AdapterContext, event_type: str, event: Mapping[str, Any], now_ms: int
