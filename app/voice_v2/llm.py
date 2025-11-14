@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Sequence
 
 from app.services.llm.provider import create_from_env
 from app.telemetry import bus
@@ -57,6 +57,8 @@ class LLMAdapter:
         self._provider = provider or create_from_env(telemetry_bus=telemetry_bus)
         self._turn_lookup: dict[str, tuple[str, str]] = {}
         self._turn_counter_by_sid: Dict[str, int] = {}
+        self._history_cache: Dict[str, list[Dict[str, str]]] = {}
+        self._cached_system_preamble: str | None = None
         subscribe = getattr(self._bus, "subscribe", None)
         if callable(subscribe):
             self._subscriptions = [
@@ -108,7 +110,7 @@ class LLMAdapter:
 
         persona = load_persona()
         rule_based_messages = generator.build_messages(persona, plan, user_text)
-        system_preamble = build_system_preamble(persona)
+        system_preamble = self._ensure_system_preamble(persona)
 
         # Prepend the explicit persona preamble for LLM providers while keeping the
         # remainder of the deterministic stack intact for fallback use.
@@ -357,6 +359,7 @@ class LLMAdapter:
         """Manually mirror the assistant message into the chat stream."""
 
         self._publish_chat_message(req_id, text)
+        self._history_cache.pop(req_id, None)
 
     def _publish_nlg(
         self,
@@ -406,6 +409,7 @@ class LLMAdapter:
 
         event = {"type": EVT_WS_JSON_SEND, "sid": sid, "payload": payload}
         self._bus.publish(event)
+        self._history_cache.pop(req_id, None)
 
     def _handle_turn_event(self, event: Mapping[str, Any]) -> None:
         event_type = event.get("type")
@@ -426,6 +430,37 @@ class LLMAdapter:
             req_id = event.get("req_id")
             if isinstance(req_id, str) and req_id:
                 self._turn_lookup.pop(req_id, None)
+                self._history_cache.pop(req_id, None)
+
+    def cache_history(
+        self, req_id: str, history: Sequence[Mapping[str, Any]] | None
+    ) -> None:
+        if not isinstance(req_id, str) or not req_id:
+            return
+
+        prepared: list[Dict[str, str]] = []
+        if history:
+            for entry in list(history)[-6:]:
+                if not isinstance(entry, Mapping):
+                    continue
+                role = entry.get("role")
+                text = entry.get("text")
+                if not isinstance(role, str) or not isinstance(text, str):
+                    continue
+                normalized = text.strip()
+                if not normalized:
+                    continue
+                prepared.append({"role": role, "content": normalized[:512]})
+
+        self._history_cache[req_id] = prepared
+
+    def _ensure_system_preamble(self, persona: Mapping[str, Any] | object) -> str:
+        if isinstance(self._cached_system_preamble, str) and self._cached_system_preamble:
+            return self._cached_system_preamble
+
+        preamble = build_system_preamble(persona)
+        self._cached_system_preamble = preamble
+        return preamble
 
 
 __all__ = ["LLMAdapter"]

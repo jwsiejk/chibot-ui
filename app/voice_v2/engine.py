@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import inspect
 import json
 import logging
@@ -101,6 +101,8 @@ _PCM_DESCRIPTOR = {
     "channels": _PCM_CHANNELS,
 }
 
+_CONCISE_MAX_TOKENS = 320
+
 _DEFAULT_VOICE_ID = "alloy-en-US-001"
 _DEFAULT_LOCALE = "en-US"
 
@@ -165,6 +167,15 @@ class _TurnSession:
     adaptive_utterance_end_ms: Optional[int] = None
     adaptive_commit_silence_ms: Optional[int] = None
     adaptive_extended_once: bool = False
+    assistant_turn_open: bool = False
+    history_message_count: int = 0
+    metrics_asr_final_ms: Optional[int] = None
+    metrics_llm_start_ms: Optional[int] = None
+    metrics_llm_end_ms: Optional[int] = None
+    metrics_tts_start_ms: Optional[int] = None
+    metrics_tts_first_chunk_ms: Optional[int] = None
+    metrics_tts_end_ms: Optional[int] = None
+    metrics_logged_stages: set[str] = field(default_factory=set)
 
 
 class _NullExporter:
@@ -393,6 +404,8 @@ class EngineV2:
         session.turn_id = turn_id
         session.req_id = req_id
 
+        self._record_turn_timing(sid, session, "asr_final")
+
         self._emit_user_chat_message(sid, text, turn_id, req_id, client_msg_id)
 
         # --- OMNI-CHANNEL FIX START: Trigger NLU/LLM pipeline for text input ---
@@ -515,6 +528,7 @@ class EngineV2:
             payload["req_id"] = req_id
         event = self._envelope(sid, EVT_TTS_START, payload)
         self._publish(event)
+        self._record_turn_timing(sid, session, "tts_start")
         self._set_state(sid, RESPONDING, reason="tts_start")
 
         aggregator = self._aggregators.get(sid)
@@ -539,7 +553,7 @@ class EngineV2:
         if not isinstance(sid, str) or not sid:
             raise ValueError("sid must be a non-empty string")
 
-        self._ensure_session(sid)
+        session = self._ensure_session(sid)
 
         if isinstance(chunk, (bytes, bytearray, memoryview)):
             pcm_chunk = bytes(chunk)
@@ -548,6 +562,8 @@ class EngineV2:
 
         if not pcm_chunk:
             return
+
+        self._record_turn_timing(sid, session, "tts_first_chunk")
 
         byte_count = len(pcm_chunk)
         if byte_count % _PCM_SAMPLE_BYTES != 0:
@@ -604,6 +620,8 @@ class EngineV2:
         session.turn_id = turn_id
 
         req_id = active_req_id
+
+        self._record_turn_timing(sid, session, "asr_final")
 
         if session.nlu_req_id == req_id and session.nlu_emitted:
             _log.warning(
@@ -1349,6 +1367,15 @@ class EngineV2:
             session.tts_mask_phase = "off"
             session.turn_committed = False
             session._vad_energy_logged = False
+            session.assistant_turn_open = False
+            session.history_message_count = 0
+            session.metrics_asr_final_ms = None
+            session.metrics_llm_start_ms = None
+            session.metrics_llm_end_ms = None
+            session.metrics_tts_start_ms = None
+            session.metrics_tts_first_chunk_ms = None
+            session.metrics_tts_end_ms = None
+            session.metrics_logged_stages.clear()
 
         if (
             new_state == READY
@@ -1398,6 +1425,15 @@ class EngineV2:
             session.plan = None
             session.turn_committed = False
             session._vad_energy_logged = False
+            session.assistant_turn_open = False
+            session.history_message_count = 0
+            session.metrics_asr_final_ms = None
+            session.metrics_llm_start_ms = None
+            session.metrics_llm_end_ms = None
+            session.metrics_tts_start_ms = None
+            session.metrics_tts_first_chunk_ms = None
+            session.metrics_tts_end_ms = None
+            session.metrics_logged_stages.clear()
 
         session.state = new_state
 
@@ -1530,9 +1566,11 @@ class EngineV2:
     ) -> None:
         self._streaming.set_output_finalizer(sid, None)
         session = self._ensure_session(sid)
+        self._record_turn_timing(sid, session, "tts_end")
         was_active = session.tts_utt_id == utt_id
         if was_active:
             session.tts_utt_id = None
+        session.assistant_turn_open = False
 
         aggregator = self._aggregators.get(sid)
         if aggregator is not None:
@@ -1795,6 +1833,8 @@ class EngineV2:
                 if isinstance(candidate_mode, str) and candidate_mode:
                     plan_mode = candidate_mode
 
+        self._prepare_llm_history(sid, session, req_id)
+
         provider = getattr(self._llm, "_provider", None)
         model_name = getattr(provider, "default_model", None)
         request_payload: Dict[str, Any] = {"req_id": req_id, "purpose": "answer"}
@@ -1804,6 +1844,13 @@ class EngineV2:
             request_payload["mode"] = plan_mode
         if entity_payload:
             request_payload["entity_count"] = len(entity_payload)
+        request_payload["style"] = "concise"
+        request_payload["max_tokens"] = _CONCISE_MAX_TOKENS
+        if session.history_message_count:
+            request_payload["history_messages"] = session.history_message_count
+
+        self._record_turn_timing(sid, session, "llm_start")
+        self._emit_assistant_turn_begin(sid, session)
 
         request_event = self._envelope(
             sid, EVT_LLM_RESPONSE_START, request_payload
@@ -1834,11 +1881,18 @@ class EngineV2:
                 plan_payload,
             )
         else:
-            llm_result = self._llm.generate(req_id, intent=intent, entities=entity_payload)
+            llm_result = self._llm.generate(
+                req_id,
+                intent=intent,
+                entities=entity_payload,
+                max_tokens=_CONCISE_MAX_TOKENS,
+            )
             if isinstance(llm_result, Mapping):
                 response_text = llm_result.get("text")
             else:
                 response_text = llm_result
+
+        self._record_turn_timing(sid, session, "llm_end")
 
         latency_ms = max(int((time.perf_counter() - llm_start) * 1000), 0)
         complete_payload: Dict[str, Any] = {
@@ -1897,6 +1951,153 @@ class EngineV2:
         payload = {"meta": meta, "frame": frame}
         event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
         self._publish(event)
+
+    def _prepare_llm_history(
+        self, sid: str, session: _TurnSession, req_id: str
+    ) -> None:
+        history: list[Mapping[str, Any]] = []
+        try:
+            history = self._conversation_buffer.messages(sid)
+        except Exception:
+            history = []
+
+        trimmed: list[Mapping[str, Any]] = []
+        if history:
+            trimmed = [item for item in history[-6:] if isinstance(item, Mapping)]
+
+        sanitized: list[Dict[str, str]] = []
+        for entry in trimmed:
+            role = entry.get("role")
+            text = entry.get("text")
+            if not isinstance(role, str) or not isinstance(text, str):
+                continue
+            cleaned = text.strip()
+            if not cleaned:
+                continue
+            sanitized.append({"role": role, "text": cleaned[:512]})
+
+        session.history_message_count = len(sanitized)
+
+        cache_history = getattr(self._llm, "cache_history", None)
+        if callable(cache_history):
+            try:
+                cache_history(req_id, sanitized)
+            except Exception:
+                _log.debug(
+                    "evt=llm_history_cache_failed sid=%s req_id=%s",
+                    sid,
+                    req_id,
+                    exc_info=True,
+                )
+
+    def _emit_assistant_turn_begin(self, sid: str, session: _TurnSession) -> None:
+        if session.assistant_turn_open:
+            return
+
+        turn_id = session.turn_id
+        req_id = session.req_id
+        if not isinstance(turn_id, str) or not turn_id:
+            return
+        if not isinstance(req_id, str) or not req_id:
+            return
+
+        frame = {
+            "type": "turn.begin",
+            "turn_id": turn_id,
+            "req_id": req_id,
+            "ts_ms": _now_ms(),
+            "origin": "assistant",
+            "reason": "assistant_llm_start",
+        }
+        serialized = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
+        payload = {
+            "meta": {
+                "ws": {
+                    "dir": "out",
+                    "size": len(serialized.encode("utf-8")),
+                    "preview": serialized,
+                }
+            },
+            "frame": frame,
+        }
+        event = self._envelope(sid, EVT_WS_JSON_SEND, payload)
+        self._publish(event)
+        session.assistant_turn_open = True
+
+    def _record_turn_timing(
+        self, sid: str, session: _TurnSession, stage: str
+    ) -> None:
+        field_name: Optional[str]
+        if stage == "asr_final":
+            field_name = "metrics_asr_final_ms"
+        elif stage == "llm_start":
+            field_name = "metrics_llm_start_ms"
+        elif stage == "llm_end":
+            field_name = "metrics_llm_end_ms"
+        elif stage == "tts_start":
+            field_name = "metrics_tts_start_ms"
+        elif stage == "tts_first_chunk":
+            field_name = "metrics_tts_first_chunk_ms"
+        elif stage == "tts_end":
+            field_name = "metrics_tts_end_ms"
+        else:
+            return
+
+        existing = getattr(session, field_name, None)
+        if existing is not None:
+            return
+
+        timestamp = _now_ms()
+        setattr(session, field_name, timestamp)
+        self._log_turn_metrics(sid, session, stage)
+
+    def _log_turn_metrics(self, sid: str, session: _TurnSession, stage: str) -> None:
+        stages_logged = session.metrics_logged_stages
+        if stage in stages_logged:
+            return
+        stages_logged.add(stage)
+
+        parts = ["TURN_METRICS", f"stage={stage}", f"sid={sid}"]
+        if isinstance(session.turn_id, str) and session.turn_id:
+            parts.append(f"turn_id={session.turn_id}")
+        if isinstance(session.req_id, str) and session.req_id:
+            parts.append(f"req_id={session.req_id}")
+        if session.history_message_count:
+            parts.append(f"history_messages={session.history_message_count}")
+
+        durations = (
+            ("asr_to_llm_ms", self._safe_duration(session.metrics_asr_final_ms, session.metrics_llm_start_ms)),
+            ("llm_ms", self._safe_duration(session.metrics_llm_start_ms, session.metrics_llm_end_ms)),
+            (
+                "llm_to_tts_ms",
+                self._safe_duration(session.metrics_llm_end_ms, session.metrics_tts_start_ms),
+            ),
+            (
+                "tts_first_chunk_ms",
+                self._safe_duration(
+                    session.metrics_tts_start_ms, session.metrics_tts_first_chunk_ms
+                ),
+            ),
+            (
+                "tts_total_ms",
+                self._safe_duration(session.metrics_tts_start_ms, session.metrics_tts_end_ms),
+            ),
+        )
+
+        for label, value in durations:
+            if value is not None:
+                parts.append(f"{label}={value}")
+
+        _log.info(" ".join(parts))
+
+    @staticmethod
+    def _safe_duration(
+        start_ms: Optional[int], end_ms: Optional[int]
+    ) -> Optional[int]:
+        if start_ms is None or end_ms is None:
+            return None
+        duration = end_ms - start_ms
+        return duration if duration >= 0 else 0
 
     def _emit_policy_applied(
         self,
