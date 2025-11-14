@@ -102,7 +102,11 @@ class TestWebSocketJsonContract(unittest.TestCase):
         payload = json.loads(body["body"].decode("utf-8"))
         self.assertEqual(
             payload,
-            {"type": "error", "code": "bad_subprotocol", "detail": "use chat.v2"},
+            {
+                "type": "error",
+                "code": "bad_subprotocol",
+                "detail": "use chat.v2 or chip-msgpack",
+            },
         )
 
     def test_unknown_type_error_uses_standard_shape(self) -> None:
