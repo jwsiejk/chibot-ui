@@ -3418,7 +3418,8 @@ import { initPcmSender } from "./audio/pcm_sender.js";
       } catch {}
       logStage("diag", { label: "asr.ready" });
       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-      __resetAudioHeaderSent();
+      // Send the header once. If startRecorderStreaming() already sent it
+      // (policy: audio.header_on_first_chunk), this call will no-op.
       sendAudioHeader(frame);
     } else if (frame.type === "asr.partial") {
       transcriptFrameAllowed(frame);
