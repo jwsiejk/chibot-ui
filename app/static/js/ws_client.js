@@ -3,6 +3,15 @@
 import { initVAD } from "./audio/vad_client.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+import {
+  MIC_OUTCOME,
+  logMic,
+  emitMicBreadcrumb,
+  normalizeErrorDetail,
+  recordLastError,
+  recordClientBannerEvent,
+  logStage,
+} from "./ws/telemetry.js";
 (() => {
   // ===== Shared constants, policy defaults, tiny helpers =====
   const HEARTBEAT_INTERVAL_MS = 20000;
@@ -53,6 +62,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   // ===== Mic + VAD state, breadcrumbs, and telemetry wiring =====
   // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
+  /*
   const MIC_OUTCOME = {
     PERM_GRANTED: 'perm_granted',
     ARMED: 'armed',
@@ -67,6 +77,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     ERROR_STATE_GUARD: 'error_state_guard',
     ERROR_UNKNOWN: 'error_unknown',
   };
+  */
   let __micAttempts = 0;
   let __micChunks = 0;
   let __micBytes = 0;
@@ -99,6 +110,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     };
   }
 
+  /*
   function emitMicBreadcrumb(detail = {}) {
     try {
       const payload = { ...detail };
@@ -208,6 +220,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
     setAppStateValue("lastErrorCode", normalizedCode);
     setAppStateValue("lastErrorDetail", normalizedDetail);
   }
+  */
 
   const CLIENT_BANNER_TYPE = "client.banner";
   const CLIENT_BANNER_MAX_HISTORY = 24;
@@ -218,6 +231,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
   let clientBannerQueue = [];
   let toastRoot = null;
 
+  /*
   function recordClientBannerEvent(label, meta) {
     if (typeof label !== "string" || !label) {
       return;
@@ -244,6 +258,7 @@ import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
       event: entry,
     });
   }
+  */
 
   function ensureClientBannerState() {
     const state = AppState.getState();
