@@ -51,4 +51,7 @@ SQLAlchemy>=2.0.29
 beautifulsoup4
 
 
-msgpack==1.0.7
+# msgpack 1.0.7 fails to build against Python 3.13 due to changes in
+# _PyLong_AsByteArray signature. Bump to a version with official 3.13
+# support so environments can install prebuilt wheels.
+msgpack>=1.0.8,<2
