@@ -54,6 +54,7 @@ from app.telemetry.events import (
     ASR_SINGLE_STREAM_INVARIANT,
     ASR_VENDOR_BYTES_TOTAL,
     ASR_ROLLUP,
+    CLIENT_IDLE_TICK,
     EVT_ASR_CLOSE,
     EVT_ASR_OPEN,
     EVT_SESSION_TRANSPORT_CLOSED,
@@ -169,6 +170,7 @@ _RATE_LIMIT_EXEMPT_TYPES = {
     "client.autostart",
     "client.banner",
     "client.diag",
+    "client.idle",
     "client.log",
     "client.ping",
     "client.telemetry",
@@ -200,6 +202,7 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "admin.toggle",
     "chat.user",
     "client.diag",
+    "client.idle",
     "client.log",
     "client.autostart",
     "client.telemetry",
@@ -2238,6 +2241,52 @@ class ChatV2Adapter:
             limited = await self._check_rate_limit(ctx, send)
             if limited is not None:
                 return limited
+
+        if frame_type == "client.idle":
+            lane = frame.get("lane")
+            if lane is not None and not isinstance(lane, str):
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.idle lane must be a string if provided",
+                )
+                return self._HandleResult(True)
+
+            ts_value = frame.get("ts")
+            if ts_value is not None and (
+                not isinstance(ts_value, int) or isinstance(ts_value, bool)
+            ):
+                meta["error"] = "schema_invalid"
+                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.idle ts must be an integer if provided",
+                )
+                return self._HandleResult(True)
+
+            idle_meta: Dict[str, Any] = {}
+            if isinstance(lane, str) and lane:
+                idle_meta["lane"] = lane
+            if isinstance(ts_value, int) and not isinstance(ts_value, bool):
+                idle_meta["ts"] = ts_value
+
+            bus.publish(
+                {
+                    "schema_version": "1",
+                    "type": CLIENT_IDLE_TICK,
+                    "sid": ctx.sid,
+                    "who": "client",
+                    "source": "browser",
+                    "meta": idle_meta,
+                }
+            )
+            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            return self._HandleResult(True)
 
         if frame_type == "client.ping":
             await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
