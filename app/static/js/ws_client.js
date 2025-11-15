@@ -308,7 +308,7 @@ import {
     warmup_ms: 1200,
     // If your input is very quiet, allow threshold override via policy
   });
-  const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
+  // const CLIENT_VAD_POLICY_ROOT = Object.freeze({ vad: Object.freeze({ client: CLIENT_VAD_POLICY }) });
   const DEFAULT_POLICY_VAD = { warmup_ms: 1200, sender_gate_on_tts: true };
   const DEFAULT_POLICY_WATCHDOG = {
     partial_wait_ms_first_turn: 3500,
@@ -332,65 +332,65 @@ import {
   const ASR_VENDOR_OPTIONS = ['gcp'];
   const AUDIO_PIPELINE_OPTIONS = ['pcm16'];
 
-  function installClientVadPolicySnapshot() {
-    const policyRoot = AppState.policy && typeof AppState.policy === "object"
-      ? AppState.policy
-      : (AppState.policy = {});
-    const ensureVadBlock = (target) => {
-      if (!target || typeof target !== "object") {
-        return;
-      }
-      const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
-      const existingClient = existingVad.client && typeof existingVad.client === "object"
-        ? existingVad.client
-        : {};
-      // Merge: runtime/client overrides survive; our defaults fill gaps.
-      target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
-    };
-    ensureVadBlock(policyRoot);
-    if (FEATURE_LEGACY_POLICY) {
-      if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
-        policyRoot.policy = {};
-      }
-      ensureVadBlock(policyRoot.policy);
-    }
-    // Hard-disable any legacy hotword gate, regardless of incoming policy.
-    const ensureInput = (root) => {
-      if (!root || typeof root !== "object") {
-        return;
-      }
-      const existingInput = root.input && typeof root.input === "object" ? root.input : {};
-      root.input = { ...existingInput, require_hotword_to_start: false };
-    };
-    ensureInput(policyRoot);
-    if (FEATURE_LEGACY_POLICY) {
-      ensureInput(policyRoot.policy);
-    }
-  }
+  // function installClientVadPolicySnapshot() {
+  //   const policyRoot = AppState.policy && typeof AppState.policy === "object"
+  //     ? AppState.policy
+  //     : (AppState.policy = {});
+  //   const ensureVadBlock = (target) => {
+  //     if (!target || typeof target !== "object") {
+  //       return;
+  //     }
+  //     const existingVad = target.vad && typeof target.vad === "object" ? target.vad : {};
+  //     const existingClient = existingVad.client && typeof existingVad.client === "object"
+  //       ? existingVad.client
+  //       : {};
+  //     // Merge: runtime/client overrides survive; our defaults fill gaps.
+  //     target.vad = { ...existingVad, client: { ...CLIENT_VAD_POLICY, ...existingClient } };
+  //   };
+  //   ensureVadBlock(policyRoot);
+  //   if (FEATURE_LEGACY_POLICY) {
+  //     if (!policyRoot.policy || typeof policyRoot.policy !== "object") {
+  //       policyRoot.policy = {};
+  //     }
+  //     ensureVadBlock(policyRoot.policy);
+  //   }
+  //   // Hard-disable any legacy hotword gate, regardless of incoming policy.
+  //   const ensureInput = (root) => {
+  //     if (!root || typeof root !== "object") {
+  //       return;
+  //     }
+  //     const existingInput = root.input && typeof root.input === "object" ? root.input : {};
+  //     root.input = { ...existingInput, require_hotword_to_start: false };
+  //   };
+  //   ensureInput(policyRoot);
+  //   if (FEATURE_LEGACY_POLICY) {
+  //     ensureInput(policyRoot.policy);
+  //   }
+  // }
 
-  function applyPolicySnapshotFromSource(source, origin) {
-    const sanitizedPolicy = sanitizePolicySnapshot(source);
-    AppState.policy = sanitizedPolicy;
-    updateState({ policy: sanitizedPolicy });
-    const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
-    dispatchFrame(snapshotFrame);
-    dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
-    return sanitizedPolicy;
-  }
+  // function applyPolicySnapshotFromSource(source, origin) {
+  //   const sanitizedPolicy = sanitizePolicySnapshot(source);
+  //   AppState.policy = sanitizedPolicy;
+  //   updateState({ policy: sanitizedPolicy });
+  //   const snapshotFrame = { type: 'policy.snapshot', policy: sanitizedPolicy, origin: origin || null };
+  //   dispatchFrame(snapshotFrame);
+  //   dispatchFrame({ type: 'config.updated', policy: sanitizedPolicy, origin: origin || null });
+  //   return sanitizedPolicy;
+  // }
 
-  function shouldAutoRearmAfterClosed(reason) {
-    if (AppState?.policy?.auto_record_after_greet === false) {
-      return false;
-    }
-    const key = typeof reason === "string" && reason ? reason.trim().toLowerCase() : "";
-    if (!key) {
-      return true;
-    }
-    if (key === "end_button") {
-      return false;
-    }
-    return !reasonLooksUserInitiated(key);
-  }
+  // function shouldAutoRearmAfterClosed(reason) {
+  //   if (AppState?.policy?.auto_record_after_greet === false) {
+  //     return false;
+  //   }
+  //   const key = typeof reason === "string" && reason ? reason.trim().toLowerCase() : "";
+  //   if (!key) {
+  //     return true;
+  //   }
+  //   if (key === "end_button") {
+  //     return false;
+  //   }
+  //   return !reasonLooksUserInitiated(key);
+  // }
 
   const AppState = window.AppState;
   if (!AppState) {
@@ -538,17 +538,21 @@ import {
     AppState.policy = normalizedPolicy;
   }
 
-  installClientVadPolicySnapshot();
-
-  const policyRuntime = createPolicyRuntime(AppState);
+  const policyRuntime = createPolicyRuntime(AppState, {
+    updateState,
+    dispatchFrame,
+    reasonLooksUserInitiated,
+  });
 
   const {
     getCurrentPolicy,
-    applyPolicySnapshotFromSource: runtimeApplyPolicySnapshotFromSource,
-    installClientVadPolicySnapshot: runtimeInstallClientVadPolicySnapshot,
-    shouldAutoRearmAfterClosed: runtimeShouldAutoRearmAfterClosed,
+    applyPolicySnapshotFromSource,
+    installClientVadPolicySnapshot,
+    shouldAutoRearmAfterClosed,
     getClientVadPolicyRoot,
   } = policyRuntime;
+
+  installClientVadPolicySnapshot();
 
   // Derive POLICY *after* defaults are merged in
   const POLICY = AppState && typeof AppState.policy === "object" ? AppState.policy : {};
@@ -1557,16 +1561,14 @@ import {
 
   function getVadPolicySnapshot() {
     try {
-      const root = (typeof AppState === "object" && AppState && typeof AppState.policy === "object")
-        ? AppState.policy
-        : null;
+      const root = getClientVadPolicyRoot();
       const client = root?.vad?.client;
       if (client && typeof client === "object") {
         // Shallow merge: runtime overrides hard-coded safe defaults
         return { vad: { client: { ...CLIENT_VAD_POLICY, ...client } } };
       }
     } catch {}
-    return CLIENT_VAD_POLICY_ROOT;
+    return { vad: { client: { ...CLIENT_VAD_POLICY } } };
   }
 
   // Resolve warmup once per session start (policy or default)
