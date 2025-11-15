@@ -274,6 +274,11 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
       }
       return;
     }
+    try {
+      window.TranscriptView = view;
+    } catch (err) {
+      console.warn("Failed to bind TranscriptView on window", err);
+    }
     while (pendingTranscriptFrames.length) {
       const frame = pendingTranscriptFrames.shift();
       try {
