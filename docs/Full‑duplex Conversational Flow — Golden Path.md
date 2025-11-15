@@ -67,7 +67,7 @@
 
 ## 6) VAD / Audio Capture Settings
 
-* **WebRTC constraints:** `echoCancellation:true`, `noiseSuppression:true`, `autoGainControl:false` *(default)*, `channelCount:1`, `sampleRate:48000`, `sampleSize:16`.
+* **WebRTC constraints:** `echoCancellation:true`, `noiseSuppression:true`, `autoGainControl:false` *(default)*, `channelCount:1`, `sampleRate:16000`, `sampleSize:16`.
 * **AGC policy toggle:** Allow runtime enable via `AppState.policy.media.agc=true` if RMS remains too low.
 * **VAD defaults (client):** `stream_gate:"gate"` *(or "none" if bandwidth isn’t a concern)*, `sensitivity≈0.60`, `min_speech_ms≈160`, `min_silence_ms≈300`.
 * **First‑frame grace:** Do not let VAD prevent the very first PCM.

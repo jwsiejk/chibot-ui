@@ -397,7 +397,7 @@
 
         const sampleRateSource = audioConstraints.sampleRate;
         if (typeof sampleRateSource === 'undefined') {
-          audioConstraints.sampleRate = { ideal: 48000 };
+          audioConstraints.sampleRate = { ideal: 16000 };
         } else if (Number.isFinite(sampleRateSource)) {
           audioConstraints.sampleRate = { ideal: Number(sampleRateSource) };
         } else if (sampleRateSource && typeof sampleRateSource === 'object') {
