@@ -1,416 +1,50 @@
- BUILD_ID 2d375e3
-app.js?v=2d375e3:25 AskChip build: 2d375e3
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:1567 evt=ws_open_attempt Object
-ws_client.js?v=2d375e3:3864 evt=ws_client_open_params Object
-ws_client.js?v=2d375e3:3868 WS opening Object
-ws_client.js?v=2d375e3:3939 WebSocket open Object
-app.js?v=2d375e3:754 client.ws
-ws_client.js?v=2d375e3:4270 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=2d375e3:4270Understand this warning
-ws_client.js?v=2d375e3:4270 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=2d375e3:4270Understand this warning
-app.js?v=2d375e3:754 client.ws
-ws_client.js?v=2d375e3:3655 evt=ws_linked AppState true WSClient true
-app.js?v=2d375e3:754 client.ws
-app.js?v=2d375e3:754 client.appstate.heartbeat
-ws_client.js?v=2d375e3:2648 WS server banner Object
-app.js?v=2d375e3:754 client.ws
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.ws
-app.js?v=2d375e3:754 client.audio.worklet_load_ok
-2app.js?v=2d375e3:754 client.mic
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=chat.message role=assistant
-app.js?v=2d375e3:754 client.ws
-app.js?v=2d375e3:870 evt=mic_start timeslice_ms=unknown
-app.js?v=2d375e3:754 client.mic
-app.js?v=2d375e3:2256 diag=asr_ready
-app.js?v=2d375e3:754 client.asr
-app.js?v=2d375e3:754 client.ws_ready_check
-app.js?v=2d375e3:754 client.turn.intent
-app.js?v=2d375e3:754 client.stream.on
-ws_client.js?v=2d375e3:3302 start_listening received after ASR ready; relying on automatic mic start. Object
-app.js?v=2d375e3:2256 diag=asr_ready
-app.js?v=2d375e3:754 client.asr
-app.js?v=2d375e3:754 client.ws_ready_check
-app.js?v=2d375e3:754 diag
-app.js?v=2d375e3:754 client.asr_arm_clear
-app.js?v=2d375e3:754 client.audio_header_send
-app.js?v=2d375e3:2256 diag=asr_ready
-app.js?v=2d375e3:754 client.appstate.delta
-pcm_sender.js:175 [pcm_sender] audioCtx.sampleRate 44100
-ws_client.js?v=2d375e3:1143 client.pcm.hardware_sample_rate 44100
-ws_client.js?v=2d375e3:1151 client.pcm.target_sample_rate 16000
-ws_client.js?v=2d375e3:1152 client.pcm.sample_rate 16000
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.pcm.capture_start
-app.js?v=2d375e3:754 diag
-app.js?v=2d375e3:754 client.asr_arm_clear
-ws_client.js?v=2d375e3:892 audio.header already sent; skipping
-__sendAudioHeaderOnce @ ws_client.js?v=2d375e3:892Understand this warning
-app.js?v=2d375e3:2256 diag=asr_ready
-app.js?v=2d375e3:754 client.pcm.first_frame
-app.js?v=2d375e3:754 client.audio_first_chunk
-2app.js?v=2d375e3:754 client.vad.gate
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.speech_start
-app.js?v=2d375e3:754 client.vad.state
-2app.js?v=2d375e3:754 client.vad.gate
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.pcm.flush
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.speech_end
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-2app.js?v=2d375e3:754 client.vad.gate
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.speech_start
-app.js?v=2d375e3:754 client.vad.state
-2app.js?v=2d375e3:754 client.vad.gate
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-2ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-2ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-2ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-2ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.audio_chunk_send
-2app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-2ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.speech_end
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-2ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.partial role=
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio_chunk_send
-app.js?v=2d375e3:754 client.appstate.delta
-2app.js?v=2d375e3:754 client.vad.gate
-6app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.ws
-6app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-8app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-7app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-6app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-5app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-6app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.appstate.heartbeat
-3app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-5app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-5app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-5app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-5app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-6app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-4app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-6app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.gate_heartbeat
-5app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.vad.state
-5app.js?v=2d375e3:754 client.appstate.delta
-2ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=asr.final role=
-ws_client.js?v=2d375e3:3023 evt=ui_transcript_filter allow=true type=chat.message role=user
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.turn.intent
-app.js?v=2d375e3:754 client.appstate.delta
-app.js?v=2d375e3:754 client.audio.throttle
-app.js?v=2d375e3:754 client.audio.resume_after_throttle
-app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.audio.throttle
-app.js?v=2d375e3:754 client.audio.resume_after_throttle
-2app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.ws
-4app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.ws
-4app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.ws
-4app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.ws
-4app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.ws
-4app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.ws
-4app.js?v=2d375e3:754 client.appstate.heartbeat
-app.js?v=2d375e3:754 client.ws
-2app.js?v=2d375e3:754 client.appstate.heartbeat
-2app.js?v=2d375e3:754 client.vad.gate
-app.js?v=2d375e3:754 client.vad.state
-app.js?v=2d375e3:754 client.pcm.capture_stop
-ws_client.js?v=2d375e3:4270 WSClient.send queued (phase not ready) Object
-send @ ws_client.js?v=2d375e3:4270Understand this warning
-app.js?v=2d375e3:754 client.ws
-app.js?v=2d375e3:754 client.appstate.delta
+BUILD_ID 0032a71.95106fc989072c0b
+app.js:50 AskChip build: (no v param on app.js)
+app.js:792 client.vad.state
+app.js:792 client.appstate.delta
+app.js:1605 evt=ws_open_attempt Object
+session_manager.js:377 evt=ws_client_open_params Object
+session_manager.js:381 WS opening Object
+connection.js:862 evt=ws_connection_open_params Object
+app.js:792 client.ws
+app.js:792 client.appstate.heartbeat
+app.js:792 client.ws
+ws_client.js?v=0032a71.95106fc989072c0b:1857 WS server banner Object
+app.js:792 client.ws
+app.js:792 client.appstate.delta
+app.js:792 client.ws
+app.js:792 client.audio.worklet_load_ok
+2app.js:792 client.mic
+app.js:792 client.ws
+app.js:908 evt=mic_start timeslice_ms=unknown
+app.js:792 client.mic
+app.js:2301 diag=asr_ready
+app.js:792 client.asr
+app.js:792 client.ws_ready_check
+app.js:792 diag
+app.js:792 client.asr_arm_clear
+app.js:2301 diag=asr_ready
+app.js:792 client.stream.on
+ws_client.js?v=0032a71.95106fc989072c0b:1453 start_listening received after ASR ready; relying on automatic mic start. Object
+app.js:792 client.appstate.delta
+app.js:2301 diag=asr_ready
+app.js:792 client.asr
+app.js:792 client.ws_ready_check
+app.js:792 diag
+app.js:792 client.asr_arm_clear
+app.js:2301 diag=asr_ready
+app.js:792 client.appstate.heartbeat
+app.js:792 client.stream.off
+app.js:792 client.turn.intent
+pcm_sender.js:175 [pcm_sender] audioCtx.sampleRate 48000
+ws_audio_runtime.js:632 client.pcm.hardware_sample_rate 48000
+ws_audio_runtime.js:640 client.pcm.target_sample_rate 16000
+ws_audio_runtime.js:641 client.pcm.sample_rate 16000
+app.js:792 client.vad.state
+app.js:792 client.pcm.capture_stop
+connection.js:515 ws.connection.send queued (phase not ready) Object
+send @ connection.js:515Understand this warning
+connection.js:515 ws.connection.send queued (phase not ready) Object
+send @ connection.js:515Understand this warning
+app.js:792 client.ws
+app.js:792 client.appstate.delta
