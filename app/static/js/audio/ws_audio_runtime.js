@@ -11,7 +11,8 @@ const SILENCE_REQUIRED_FRAMES = 5;
 const SILENCE_RMS_THRESHOLD = 0.012;
 const SILENCE_PREROLL_MS = 100;
 const SILENCE_IDLE_TICK_MS = 5000;
-const AUDIO_KEEPALIVE_MS = 20000;
+const AUDIO_KEEPALIVE_MS = 4000;
+const AUDIO_KEEPALIVE_CHUNK_MS = 20;
 
 const primedSessionIds = new Set();
 
@@ -370,6 +371,28 @@ export function createWsAudioRuntime(options = {}) {
     }
   }
 
+  function sendAudioKeepaliveChunk(now) {
+    const effectiveSampleRate = Number.isFinite(pcmSampleRate) && pcmSampleRate > 0
+      ? pcmSampleRate
+      : asrRate;
+    const samples = Math.max(
+      1,
+      Math.round((AUDIO_KEEPALIVE_CHUNK_MS / 1000) * effectiveSampleRate),
+    );
+    if (!samples) {
+      return false;
+    }
+    const silenceChunk = new Int16Array(samples);
+    const sent = safeSendAudioChunk(silenceChunk, { lane: "mic", keepalive: true });
+    if (sent) {
+      micLastChunkAt = now;
+      try {
+        logStage("client.audio_keepalive", { bytes: silenceChunk.byteLength });
+      } catch (_) {}
+    }
+    return sent;
+  }
+
   function scheduleAudioKeepalive() {
     clearAudioKeepaliveTimer();
     if (!Number.isFinite(audioKeepaliveMs) || audioKeepaliveMs <= 0) {
@@ -378,17 +401,20 @@ export function createWsAudioRuntime(options = {}) {
     micKeepaliveTimerId = setTimeout(() => {
       micKeepaliveTimerId = null;
       const listening = Boolean(AppState?.listening);
-      const now = Date.now();
-      if (!listening) {
+      const streaming = typeof isAudioStreaming === "function" ? isAudioStreaming() : true;
+      if (!listening || !streaming) {
         return;
       }
+      const now = Date.now();
       if (now - micLastChunkAt >= audioKeepaliveMs) {
-        try {
-          if (safeSendJSON({ type: "client.ping" })) {
-            logStage("client.ping", { lane: "mic" });
+        if (!sendAudioKeepaliveChunk(now)) {
+          try {
+            if (safeSendJSON({ type: "client.ping" })) {
+              logStage("client.ping", { lane: "mic", fallback: true });
+            }
+          } catch (err) {
+            console.warn("client.ping send failed", err);
           }
-        } catch (err) {
-          console.warn("client.ping send failed", err);
         }
       }
       scheduleAudioKeepalive();
@@ -857,5 +883,7 @@ export function createWsAudioRuntime(options = {}) {
     resetPcmStateForTesting,
     resetSilenceSuppression,
     updatePcmSenderState,
+    scheduleAudioKeepalive,
+    clearAudioKeepaliveTimer,
   };
 }
