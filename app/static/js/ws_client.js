@@ -25,6 +25,8 @@ import {
 const captureRuntimeExports = captureRuntimeModule ?? {};
 const { createCaptureRuntime } = captureRuntimeExports;
 
+const AUDIO_KEEPALIVE_MS = 4000;
+
 const USER_INITIATED_STOP_REASONS_FALLBACK = new Set([
   "user_requested",
   "user_restart",
@@ -902,8 +904,6 @@ if (typeof createCaptureRuntime !== "function") {
   }
   // --- End: header idempotency + strict schema ---
   let __lastErrorSig = null, __lastErrorAt = 0;
-  const AUDIO_KEEPALIVE_MS = 4000;
-
   function clearPendingRearm() {
     awaitingTurnEndForRearm = false;
     pendingRearmReason = null;
