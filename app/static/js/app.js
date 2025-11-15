@@ -1,4 +1,10 @@
-// app.js - FINAL, CORRECTED VERSION (with Recursive Call Guard)
+// AskChip frontend base module
+//
+// index.html includes only this script (app.js) alongside the standalone
+// auth/status bar entry points. Every other client module - including
+// state.js, audio_player.js, audio/pcm_recorder.js, audio/vad_client.js,
+// ws_client.js, transcript_view.js, and errors.js - is loaded dynamically via
+// loadScript() below so they share the same versioned ?v= query parameters.
 
 (() => {
   // Ensure single-store shape (idempotent)
