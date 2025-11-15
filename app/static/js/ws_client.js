@@ -74,6 +74,14 @@ import {
   let __micFirstChunkBreadcrumbSent = false;
   let __turnTraceId = null; // optional trace id per turn (sid + timestamp)
 
+  let runtimeResetTurnIntent = null;
+  let runtimeCanCaptureNow = null;
+  let runtimeOpenAsr = null;
+  let runtimeRequestAsrArm = null;
+  let runtimeRequestAsrClose = null;
+  let runtimeRecoverFromAsrFault = null;
+  let runtimeHandleAsrStateFrame = null;
+
   function getGateSnapshot() {
     let snapshot = null;
     try {
@@ -545,6 +553,7 @@ import {
     return true;
   }
 
+  /*
   function resetTurnIntent(reason) {
     if (!__turnOpen) return;
     __turnOpen = false;
@@ -552,6 +561,21 @@ import {
     try {
       hubLog("client.turn.intent", { action: "close", reason: reason || "reset" });
     } catch {}
+  }
+  */
+
+  function resetTurnIntent(reason) {
+    if (__turnOpen) {
+      __turnOpen = false;
+      __turnOpenAt = 0;
+      try {
+        hubLog("client.turn.intent", { action: "close", reason: reason || "reset" });
+      } catch {}
+    }
+    if (typeof runtimeResetTurnIntent === "function") {
+      return runtimeResetTurnIntent(reason);
+    }
+    return undefined;
   }
 
   function canSendInputControl() {
@@ -621,6 +645,7 @@ import {
   function _warming() {
     return Date.now() < warmupUntil;
   }
+  /*
   function _canCaptureNow() {
     if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
     // During arming (or until first chunk), don’t block the stream
@@ -634,7 +659,15 @@ import {
       return false;
     }
     // Simplified gate check: listening state must be true AND not paused
-    return _warming() || (s.listening && !senderPaused); 
+    return _warming() || (s.listening && !senderPaused);
+  }
+  */
+
+  function canCaptureNow() {
+    if (typeof runtimeCanCaptureNow === "function") {
+      return runtimeCanCaptureNow();
+    }
+    return false;
   }
   function applySenderPausedState() {
     const nextPaused = senderPauseReasons.size > 0;
@@ -717,7 +750,7 @@ import {
       return false;
     },
     isAudioStreaming: () => _audioStreaming,
-    canCaptureNow: () => _canCaptureNow(),
+    canCaptureNow: () => canCaptureNow(),
     isSenderPaused: () => senderPaused,
     setSenderPauseReason,
     getVadController: () => vadController,
@@ -1332,6 +1365,7 @@ import {
     }
   }
 
+  /*
   function openAsr(opts = {}) {
     const options = opts && typeof opts === "object" ? { ...opts } : {};
     if (!options.recover) {
@@ -1367,7 +1401,16 @@ import {
     }
     return WSClient.sendJSON(payload);
   }
+  */
 
+  function openAsr(opts = {}) {
+    if (typeof runtimeOpenAsr === "function") {
+      return runtimeOpenAsr(opts);
+    }
+    return undefined;
+  }
+
+  /*
   function requestAsrArm(reason) {
     const label = normalizeReason(reason);
     try {
@@ -1382,7 +1425,16 @@ import {
       logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_WS_SEND, message: err?.message });
     }
   }
+  */
 
+  function requestAsrArm(reason) {
+    if (typeof runtimeRequestAsrArm === "function") {
+      return runtimeRequestAsrArm(reason);
+    }
+    return undefined;
+  }
+
+  /*
   async function requestAsrClose(reason = "client_stop") {
     const label = normalizeReason(reason);
     // ASR close is not a transport close; do not touch wsPhase here.
@@ -1423,7 +1475,16 @@ import {
     await stopRecorder(label);
     return ack;
   }
+  */
 
+  async function requestAsrClose(reason = "client_stop") {
+    if (typeof runtimeRequestAsrClose === "function") {
+      return runtimeRequestAsrClose(reason);
+    }
+    return undefined;
+  }
+
+  /*
   async function recoverFromAsrFault(reason) {
     if (asrRecovering) {
       return;
@@ -1463,6 +1524,21 @@ import {
     } finally {
       asrRecovering = false;
     }
+  }
+  */
+
+  async function recoverFromAsrFault(reason) {
+    if (typeof runtimeRecoverFromAsrFault === "function") {
+      return runtimeRecoverFromAsrFault(reason);
+    }
+    return undefined;
+  }
+
+  async function handleAsrStateFrame(frame) {
+    if (typeof runtimeHandleAsrStateFrame === "function") {
+      return runtimeHandleAsrStateFrame(frame);
+    }
+    return undefined;
   }
 
   // Initialize the client banner state only after related constants are defined.
@@ -2339,42 +2415,19 @@ import {
       return;
     }
 
-    if (frame.type === "turn.begin") {
-      if (AppState?.setState) {
-        try {
-          AppState.setState({ turnActive: true });
-        } catch {}
-      }
-      updatePcmSenderState();
-      try {
-        window.dispatchEvent(new CustomEvent("turn.begin", { detail: frame }));
-      } catch {}
-      return;
-    }
+    const delegateToTurnRuntime = (
+      typeof frame.type === "string" &&
+      ((frame.type.startsWith("asr.") && frame.type !== "asr.partial" && frame.type !== "asr.final") ||
+        frame.type === "turn.begin" ||
+        frame.type === "turn.end")
+    );
 
-    if (frame.type === "turn.end") {
-      if (AppState?.setState) {
-        try {
-          AppState.setState({ turnActive: false });
-        } catch {}
-      }
-      updatePcmSenderState();
-      try {
-        window.dispatchEvent(new CustomEvent("turn.end", { detail: frame }));
-      } catch {}
-      if (awaitingTurnEndForRearm) {
-        const reason = pendingRearmReason || "turn_end_rearm";
-        clearPendingRearm();
-        if (shouldAutoRearmAfterClosed(reason)) {
-          requestAsrArm(reason);
-        }
-      }
-      return;
-    }
-
-    if (frame.type === "asr.timeout") {
-      dispatchFrame(frame);
-      void recoverFromAsrFault("timeout");
+    if (delegateToTurnRuntime) {
+      await handleAsrStateFrame(frame);
+      const dispatchable = frame.type === "asr.ready"
+        ? sanitizeAsrReadyFrame(frame)
+        : frame;
+      dispatchFrame(dispatchable);
       return;
     }
 
@@ -2574,32 +2627,6 @@ import {
       // NEW: Rely on input.start to open turn, but mic start is tied to ASR readiness
       await openTurnOnce(reason); 
       await handleInputStartFrame(frame);
-    } else if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
-      clearPartialWatchdog();
-      __resetAudioHeaderSent();
-      if (frame.type === "asr.closed") {
-        AppState.asrSid = null;
-        awaitingAsrClosedAck = false;
-        pendingAsrClosedSeq = null;
-        clearPendingRearm();
-        const status = typeof frame?.status === "string" && frame.status ? frame.status : "closed";
-        const reasonRaw = typeof frame?.reason === "string" && frame.reason ? frame.reason : "";
-        const normalizedReason = normalizeReason(reasonRaw || "asr_closed");
-        const shouldRearm = shouldAutoRearmAfterClosed(normalizedReason);
-        if (status !== "already_closed" && shouldRearm) {
-          const allowCaptureDuringTts = AppState?.policy?.audio?.allow_capture_during_tts;
-          if (allowCaptureDuringTts === false) {
-            awaitingTurnEndForRearm = true;
-            pendingRearmReason = normalizedReason || "asr_closed";
-          } else {
-            requestAsrArm(normalizedReason || "asr_closed");
-          }
-        }
-        _audioStreaming = false;
-        setListeningState(false);
-        resetTurnIntent(frame?.type || "asr.closed");
-        emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
-      }
     } else if (frame.type === "input.stop") {
       const reason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
@@ -2623,132 +2650,6 @@ import {
       _audioStreaming = false;
       setListeningState(false);
       resetTurnIntent(reason);
-    } else if (frame.type === "asr.ready") {
-      if (typeof frame.sid === "string" && frame.sid) {
-        AppState.asrSid = frame.sid;
-      }
-      frame = handleAsrReadyFrame(frame) || frame;
-      // HARD SYNC: Set final state flags
-      AppState.asrReady = true;
-      setAsrArmInFlight(false);
-      setWsConnected(true);
-      setWsPhase("ready");
-      emitConsoleBusEvent("client.asr.ready", { asrReady: true });
-
-      // *** NEW STABLE LOGIC: Immediately transition to streaming based on server readiness ***
-      const startReason = "asr_ready_forced_start";
-      hubLog("client.ws_ready_check", {
-        socketOpen: !!socket && socket.readyState === WebSocket.OPEN,
-        phase: (AppState?.wsPhase || AppState?.connectionState || null),
-      });
-      // 1. Open Turn (Idempotent)
-      const turned = await openTurnOnce(startReason);
-      void turned;
-      try {
-        // 2. Start Mic Streaming (Triggers mic hardware and sets AppState.listening=true)
-        await startRecorderStreaming(frame?.policy || {}, startReason);
-        _audioStreaming = true;
-      } catch (e) {
-        console.warn("auto-arm on asr.ready failed", e);
-      }
-      // -----------------------------------------------------------------------------------
-
-      try {
-        const capturePolicy = AppState?.policy?.capture || {};
-        const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
-          ? capturePolicy.mode
-          : "webrtc_aec";
-        const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
-          ? window.__audioCtx.sampleRate
-          : 48000;
-        emitConsoleBusEvent("client.capture.mode", { mode, ctxSampleRate: ctxRate });
-      } catch {}
-      logStage("diag", { label: "asr.ready" });
-      logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-      // Send the header once. If startRecorderStreaming() already sent it
-      // (policy: audio.header_on_first_chunk), this call will no-op.
-      sendAudioHeader(frame);
-      if (AppState._recoverPrimePending) {
-        const sid = frame?.sid || AppState?.asrSid || `${Date.now()}`;
-        primeAsrStreamFromRing(sid);
-        AppState._recoverPrimePending = false;
-      }
-    } else if (frame.type === "asr.unavailable") {
-      const reason = frame && typeof frame.reason === "string" ? frame.reason : "";
-      const details = frame && typeof frame.details === "string"
-        ? frame.details
-        : (frame && typeof frame.detail === "string" ? frame.detail : "");
-      console.warn("asr.unavailable", reason, details);
-      AppState.asrReady = false;
-      AppState.asrVendor = null;
-      updateState({ asrReady: false, asrVendor: null });
-      updatePcmSenderState();
-      await stopRecorder("asr_unavailable");
-      __resetAudioHeaderSent();
-      resetTurnIntent(frame?.type || "asr.unavailable");
-      setAsrArmInFlight(false);
-      if (typeof AppState.emit === "function") {
-        AppState.emit("asrReady", { ready: false, reason, vendor: null });
-      }
-      try {
-        const hud = window?.HUD || window?.DiagHUD || window?.DiagHud;
-        hud?.setState?.("Chat");
-      } catch (err) {
-        console.warn("Failed to update HUD state after asr.unavailable", err);
-      }
-      try {
-        const view = window.TranscriptView;
-        view?.showSystemFromChip?.(
-          "Sorry, having issues hearing you right now, but I can absolutely still assist via chat."
-        );
-      } catch (err) {
-        console.warn("Failed to render Chip system message after asr.unavailable", err);
-      }
-      try {
-        window?.Banner?.show?.(
-          "Voice temporarily unavailable. You can continue via chat.",
-          { level: "warning", ttlMs: 10000 }
-        );
-      } catch (err) {
-        console.warn("Failed to show voice unavailable banner", err);
-      }
-    } else if (frame.type === "asr.turn") {
-      const begin = frame.state === "begin";
-      if (dbg("audio_safe_mode") && begin && !AppState?.listening) {
-        try {
-          const turned = await openTurnOnce("safe_turn_begin");
-          if (!turned) {
-            console.warn("safe_mode turn autostart skipped: turn not open");
-          } else {
-            const started = await startRecorderStreaming(AppState?.policy || {}, "safe_turn_begin");
-            if (!started) {
-              console.warn("safe_mode turn autostart recorder returned false");
-            }
-          }
-        } catch (e) {
-          console.warn("safe_mode turn autostart failed", e);
-        }
-      }
-      try {
-        window.UIState = window.UIState || {};
-        window.UIState.asrTurnActive = begin;
-        if (window.StatusBar && typeof window.StatusBar.render === "function") {
-          window.StatusBar.render({
-            ...window.UIState,
-            policy: (window.AppState?.policy || {}),
-          });
-        }
-      } catch (err) {
-        console.warn("asr.turn handling error", err);
-      }
-      // publish turn state for StatusBar
-      try {
-        // REMOVED: Nested state update
-        if (typeof AppState.setState === "function") AppState.setState({ asrTurnActive: begin });
-      } catch {}
-      if (!begin) {
-        resetTurnIntent(frame?.state || "turn.end");
-      }
     } else if (frame.type === "chat.history") {
       handleChatHistoryFrame(frame);
     }
@@ -2781,15 +2682,15 @@ import {
     hubLog,
   });
 
-  const {
+  ({
     resetTurnIntent: runtimeResetTurnIntent,
-    canCaptureNow,
+    canCaptureNow: runtimeCanCaptureNow,
     openAsr: runtimeOpenAsr,
     requestAsrArm: runtimeRequestAsrArm,
     requestAsrClose: runtimeRequestAsrClose,
     recoverFromAsrFault: runtimeRecoverFromAsrFault,
-    handleAsrStateFrame,
-  } = turnRuntime;
+    handleAsrStateFrame: runtimeHandleAsrStateFrame,
+  } = turnRuntime);
 
   WSClient.on("open", (event) => {
     const ws = event && typeof event === "object" ? event.websocket || null : null;
@@ -3834,10 +3735,18 @@ import {
   })();
   WSClient.sendBinary = (payload, opts = {}) => connection.sendBinary(payload, opts);
   WSClient.getBufferedAmount = () => connection.getBufferedAmount();
-  WSClient.requestAsrArm = requestAsrArm;
-  WSClient.openAsr = openAsr;
-  WSClient.requestAsrClose = requestAsrClose;
-  WSClient.recoverFromAsrFault = recoverFromAsrFault;
+  WSClient.requestAsrArm = function wsClientRequestAsrArm(reason) {
+    return requestAsrArm(reason);
+  };
+  WSClient.openAsr = function wsClientOpenAsr(opts = {}) {
+    return openAsr(opts);
+  };
+  WSClient.requestAsrClose = function wsClientRequestAsrClose(reason = "client_stop") {
+    return requestAsrClose(reason);
+  };
+  WSClient.recoverFromAsrFault = function wsClientRecoverFromAsrFault(reason) {
+    return recoverFromAsrFault(reason);
+  };
   WSClient.selfTestAudio = async function selfTestAudio() {
     console.log("[selfTestAudio] starting");
     try {
