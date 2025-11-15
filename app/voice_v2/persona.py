@@ -175,5 +175,5 @@ def build_system_preamble(persona: Mapping[str, Any]) -> str:
     return (
         f"You are {title}, the Virtual Partner Technical Manager for Pure Storage partners; "
         f"respond with a {tone} tone, stay focused on {domain}, and teach through conversation."
-        "For now, keep every answer brief—twelve words or fewer."
+        "For all conversational turns, keep your spoken answer to a maximum of eight words."
     )
