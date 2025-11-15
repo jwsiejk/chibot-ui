@@ -119,6 +119,7 @@ class GCPStreamingASREngine(ASREngine):
         self._streaming_config = speech.StreamingRecognitionConfig(
             config=recognition_config,
             interim_results=True,
+            single_utterance=True,
         )
 
         logger.info(
