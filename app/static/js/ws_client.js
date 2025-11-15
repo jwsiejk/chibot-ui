@@ -1,7 +1,7 @@
 // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
 /* __BUILD_MARKER__: FULL_DUPLEX_01 */
 import { initVAD } from "./audio/vad_client.js";
-import { createCaptureRuntime, reasonLooksUserInitiated } from "./audio/capture_runtime.js";
+import * as captureRuntimeModule from "./audio/capture_runtime.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
@@ -21,6 +21,52 @@ import {
   recordClientBannerEvent,
   logStage,
 } from "./ws/telemetry.js";
+
+const captureRuntimeExports = captureRuntimeModule ?? {};
+const { createCaptureRuntime } = captureRuntimeExports;
+
+const USER_INITIATED_STOP_REASONS_FALLBACK = new Set([
+  "user_requested",
+  "user_restart",
+  "user_end",
+  "client_stop",
+  "client_shutdown",
+  "resume_invalid",
+]);
+
+const fallbackToReasonKey = (value) => {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "object") {
+    if (typeof value.reason === "string" && value.reason) {
+      return value.reason.trim().toLowerCase();
+    }
+    if (typeof value.label === "string" && value.label) {
+      return value.label.trim().toLowerCase();
+    }
+  }
+  return String(value).trim().toLowerCase();
+};
+
+const fallbackReasonLooksUserInitiated = (value) => {
+  const key = fallbackToReasonKey(value);
+  if (!key) {
+    return false;
+  }
+  return USER_INITIATED_STOP_REASONS_FALLBACK.has(key);
+};
+
+const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserInitiated === "function"
+  ? captureRuntimeExports.reasonLooksUserInitiated
+  : fallbackReasonLooksUserInitiated;
+
+if (typeof createCaptureRuntime !== "function") {
+  throw new Error("capture_runtime exports missing createCaptureRuntime()");
+}
 (() => {
   // ===== Shared constants, policy defaults, tiny helpers =====
   const DEFAULT_CLOSE_REASON = "client_shutdown";
