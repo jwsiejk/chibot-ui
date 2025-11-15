@@ -6,6 +6,7 @@ import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
 import { createWsConnection } from "./ws/connection.js";
 import { createTurnRuntime } from "./ws/turns.js";
+import { createBannerClient } from "./ws/banner_client.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import {
   MIC_OUTCOME,
@@ -28,8 +29,6 @@ import {
     : JSON_SUBPROTOCOL;
   const INFO_DEADLINE_MS = 20000;
   const TOKEN_EXPIRY_MS = 60 * 1000;
-  const TOAST_STYLE_ID = "wsclient-toast-styles";
-  const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
   const MAX_GATE_SILENCE_MS = 3000;
   // server_no_speech_timeout_ms should be ≥ 2 × MAX_GATE_SILENCE_MS to let the client close the turn cleanly.
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
@@ -105,110 +104,6 @@ import {
       ttsActive: Boolean(ttsValue),
     };
   }
-
-  const CLIENT_BANNER_TYPE = "client.banner";
-  const CLIENT_BANNER_MAX_HISTORY = 24;
-  const CLIENT_BANNER_MAX_QUEUE = 24;
-  const CLIENT_BANNER_EVENT_LABEL_MAX = 64;
-  const CLIENT_BANNER_STRING_MAX = 240;
-
-  let clientBannerQueue = [];
-  let toastRoot = null;
-
-  function ensureClientBannerState() {
-    const state = AppState.getState();
-    const existing = state && state.clientBanner && typeof state.clientBanner === "object" ? state.clientBanner : null;
-    if (existing && existing.info) {
-      return {
-        info: existing.info,
-        events: Array.isArray(existing.events) ? existing.events : [],
-      };
-    }
-    const info = collectClientBannerInfo();
-    const snapshot = { info, events: [] };
-    updateState({ clientBanner: snapshot });
-    return snapshot;
-  }
-
-  function updateClientBannerState(info, events) {
-    const state = {
-      info,
-      events,
-    };
-    updateState({ clientBanner: state });
-    return state;
-  }
-
-  function queueClientBannerPayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      return;
-    }
-    clientBannerQueue = clientBannerQueue.concat([payload]);
-    if (clientBannerQueue.length > CLIENT_BANNER_MAX_QUEUE) {
-      clientBannerQueue = clientBannerQueue.slice(clientBannerQueue.length - CLIENT_BANNER_MAX_QUEUE);
-    }
-    flushClientBannerQueue();
-  }
-
-  function flushClientBannerQueue() {
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    while (clientBannerQueue.length) {
-      const next = clientBannerQueue[0];
-      try {
-        sendJson(next);
-        clientBannerQueue.shift();
-      } catch (err) {
-        console.warn("Failed to flush client banner", err);
-        break;
-      }
-    }
-  }
-
-  function ensureToastRoot() {
-    toastRoot = toastRoot && toastRoot.isConnected ? toastRoot : document.getElementById("toast-root");
-    if (!toastRoot) {
-      toastRoot = document.createElement("div");
-      toastRoot.id = "toast-root";
-      toastRoot.className = "toast-container";
-      document.body.appendChild(toastRoot);
-    }
-    if (
-      !document.getElementById("inline-toast-styles") &&
-      !document.getElementById("ws-error-styles") &&
-      !document.getElementById(TOAST_STYLE_ID)
-    ) {
-      const styleTag = document.createElement("style");
-      styleTag.id = TOAST_STYLE_ID;
-      styleTag.textContent = TOAST_STYLE_TEXT;
-      document.head.appendChild(styleTag);
-    }
-    return toastRoot;
-  }
-
-  function showConnectionToast(message) {
-    if (!message) return;
-    const host = ensureToastRoot();
-    if (!host) return;
-    const toast = document.createElement("div");
-    toast.className = "toast";
-    toast.setAttribute("role", "alert");
-    const body = document.createElement("div");
-    body.className = "toast-body";
-    body.textContent = message;
-    toast.appendChild(body);
-    host.appendChild(toast);
-    setTimeout(() => {
-      toast.classList.add("toast-exit");
-      setTimeout(() => {
-        if (toast.parentNode) {
-          toast.parentNode.removeChild(toast);
-        }
-      }, 220);
-    }, 3600);
-  }
-
   // ---- Debug toggles (runtime-settable) ----
   function dbg(key, fallback = false) {
     try {
@@ -363,6 +258,41 @@ import {
   if (!AppState) {
     throw new Error("AppState store is required before loading WSClient");
   }
+  function updateState(patch) {
+    AppState.setState(patch);
+  }
+
+  let socket = null;
+
+  function getSocket() {
+    return socket;
+  }
+
+  const bannerClient = createBannerClient({
+    AppState,
+    updateState,
+    getSocket,
+    sendJson,
+  });
+
+  const {
+    CLIENT_BANNER_TYPE,
+    CLIENT_BANNER_MAX_HISTORY,
+    CLIENT_BANNER_MAX_QUEUE,
+    CLIENT_BANNER_EVENT_LABEL_MAX,
+    CLIENT_BANNER_STRING_MAX,
+    ensureClientBannerState,
+    updateClientBannerState,
+    queueClientBannerPayload,
+    flushClientBannerQueue,
+    ensureToastRoot,
+    showConnectionToast,
+    truncateBannerString,
+    sanitizeBannerValue,
+    sanitizeUrlForBanner,
+    collectClientBannerInfo,
+  } = bannerClient;
+
   const ASR_RATE = (AppState?.targetSampleRate || 16000);
   // ===== PCM sender + ring buffer + ASR priming =====
   
@@ -464,7 +394,6 @@ import {
   WSClient.__firstChunkSeen = () => __firstChunkSeen === true;
   const getAudioPlayer = () => window.AudioPlayer;
 
-  let socket = null;
   let expectInfoFrame = true;
   let infoWatchdogTimerId = null;
   let rateLimitRetryTimerId = null;
@@ -1559,253 +1488,6 @@ import {
   ensureInitialAutostartState();
   attachUserGestureListeners();
 
-  function truncateBannerString(value, max) {
-    const limit = typeof max === "number" ? max : CLIENT_BANNER_STRING_MAX;
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    if (!limit || limit <= 0) {
-      return "";
-    }
-    if (value.length <= limit) {
-      return value;
-    }
-    return `${value.slice(0, limit - 1)}…`;
-  }
-
-  function sanitizeBannerNumber(value) {
-    if (typeof value !== "number") {
-      return undefined;
-    }
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return value;
-  }
-
-  function sanitizeBannerArray(array, depth) {
-    if (!Array.isArray(array)) {
-      return undefined;
-    }
-    const limit = 8;
-    const result = [];
-    for (let i = 0; i < array.length && result.length < limit; i += 1) {
-      const sanitized = sanitizeBannerValue(array[i], depth + 1);
-      if (sanitized !== undefined) {
-        result.push(sanitized);
-      }
-    }
-    return result;
-  }
-
-  function sanitizeBannerObject(obj, depth) {
-    if (!obj || typeof obj !== "object") {
-      return undefined;
-    }
-    const result = {};
-    const keys = Object.keys(obj);
-    const limit = 16;
-    for (let i = 0; i < keys.length && Object.keys(result).length < limit; i += 1) {
-      const rawKey = keys[i];
-      if (typeof rawKey !== "string" || !rawKey) {
-        continue;
-      }
-      const key = truncateBannerString(rawKey, 48);
-      const sanitized = sanitizeBannerValue(obj[rawKey], depth + 1);
-      if (sanitized !== undefined) {
-        result[key] = sanitized;
-      }
-    }
-    return result;
-  }
-
-  function sanitizeBannerValue(value, depth = 0) {
-    if (value === null) {
-      return null;
-    }
-    if (typeof value === "string") {
-      return truncateBannerString(value);
-    }
-    if (typeof value === "number") {
-      return sanitizeBannerNumber(value);
-    }
-    if (typeof value === "boolean") {
-      return value;
-    }
-    if (depth >= 2) {
-      return undefined;
-    }
-    if (Array.isArray(value)) {
-      return sanitizeBannerArray(value, depth);
-    }
-    if (typeof value === "object") {
-      return sanitizeBannerObject(value, depth);
-    }
-    return undefined;
-  }
-
-  function sanitizeUrlForBanner(url) {
-    if (typeof url !== "string" || !url) {
-      return undefined;
-    }
-    try {
-      const parsed = new URL(url, window.location && window.location.origin ? window.location.origin : undefined);
-      const info = {
-        origin: truncateBannerString(parsed.origin, 120),
-        pathname: truncateBannerString(parsed.pathname, 160),
-      };
-      if (parsed.hash) {
-        info.hash = truncateBannerString(parsed.hash, 80);
-      }
-      if (parsed.search) {
-        const params = new URLSearchParams(parsed.search);
-        const keys = [];
-        const iterator = params.keys();
-        for (let i = 0; i < 12; i += 1) {
-          const { value, done } = iterator.next();
-          if (done) {
-            break;
-          }
-          if (typeof value === "string" && value) {
-            keys.push(truncateBannerString(value, 64));
-          }
-        }
-        if (keys.length) {
-          info.query_keys = keys;
-        }
-      }
-      return info;
-    } catch (err) {
-      return { raw: truncateBannerString(url) };
-    }
-  }
-
-  function collectClientBannerInfo() {
-    if (typeof window === "undefined") {
-      return {};
-    }
-    const info = {};
-    const nav = typeof navigator !== "undefined" ? navigator : null;
-    if (nav) {
-      if (typeof nav.userAgent === "string" && nav.userAgent) {
-        info.user_agent = truncateBannerString(nav.userAgent);
-      }
-      if (typeof nav.platform === "string" && nav.platform) {
-        info.platform = truncateBannerString(nav.platform, 120);
-      }
-      if (typeof nav.vendor === "string" && nav.vendor) {
-        info.vendor = truncateBannerString(nav.vendor, 120);
-      }
-      if (typeof nav.product === "string" && nav.product) {
-        info.product = truncateBannerString(nav.product, 120);
-      }
-      if (typeof nav.language === "string" && nav.language) {
-        info.language = truncateBannerString(nav.language, 32);
-      }
-      if (Array.isArray(nav.languages) && nav.languages.length) {
-        info.languages = nav.languages
-          .filter((lang) => typeof lang === "string" && lang)
-          .slice(0, 8)
-          .map((lang) => truncateBannerString(lang, 32));
-      }
-      if (typeof nav.hardwareConcurrency === "number" && Number.isFinite(nav.hardwareConcurrency)) {
-        info.hardware_concurrency = Math.max(0, Math.floor(nav.hardwareConcurrency));
-      }
-      if (typeof nav.deviceMemory === "number" && Number.isFinite(nav.deviceMemory)) {
-        info.device_memory = Math.max(0, nav.deviceMemory);
-      }
-      if (typeof nav.maxTouchPoints === "number" && Number.isFinite(nav.maxTouchPoints)) {
-        info.max_touch_points = Math.max(0, nav.maxTouchPoints);
-      }
-      if (typeof nav.cookieEnabled === "boolean") {
-        info.cookies_enabled = nav.cookieEnabled;
-      }
-      if (typeof nav.onLine === "boolean") {
-        info.online = nav.onLine;
-      }
-      const connection = nav.connection || nav.mozConnection || nav.webkitConnection;
-      if (connection && typeof connection === "object") {
-        const conn = {};
-        if (typeof connection.effectiveType === "string" && connection.effectiveType) {
-          conn.effective_type = truncateBannerString(connection.effectiveType, 32);
-        }
-        if (typeof connection.type === "string" && connection.type) {
-          conn.type = truncateBannerString(connection.type, 32);
-        }
-        if (typeof connection.downlink === "number" && Number.isFinite(connection.downlink)) {
-          conn.downlink = connection.downlink;
-        }
-        if (typeof connection.rtt === "number" && Number.isFinite(connection.rtt)) {
-          conn.rtt = connection.rtt;
-        }
-        if (Object.keys(conn).length) {
-          info.connection = conn;
-        }
-      }
-    }
-    const screenInfo = typeof window.screen !== "undefined" ? window.screen : null;
-    if (screenInfo) {
-      const screenPayload = {};
-      if (Number.isFinite(screenInfo.width) && Number.isFinite(screenInfo.height)) {
-        screenPayload.width = screenInfo.width;
-        screenPayload.height = screenInfo.height;
-      }
-      if (Number.isFinite(screenInfo.availWidth) && Number.isFinite(screenInfo.availHeight)) {
-        screenPayload.avail_width = screenInfo.availWidth;
-        screenPayload.avail_height = screenInfo.availHeight;
-      }
-      if (Object.keys(screenPayload).length) {
-        info.screen = screenPayload;
-      }
-    }
-    if (Number.isFinite(window.innerWidth) && Number.isFinite(window.innerHeight)) {
-      info.viewport = {
-        width: window.innerWidth,
-        height: window.innerHeight,
-      };
-    }
-    if (typeof window.devicePixelRatio === "number" && Number.isFinite(window.devicePixelRatio)) {
-      info.device_pixel_ratio = window.devicePixelRatio;
-    }
-    try {
-      const tz = Intl.DateTimeFormat().resolvedOptions();
-      if (tz && typeof tz.timeZone === "string" && tz.timeZone) {
-        info.timezone = truncateBannerString(tz.timeZone, 96);
-      }
-    } catch (err) {
-      // ignore timezone errors
-    }
-    const offset = new Date().getTimezoneOffset();
-    if (Number.isFinite(offset)) {
-      info.tz_offset_minutes = offset;
-    }
-    if (typeof document !== "undefined") {
-      if (typeof document.referrer === "string" && document.referrer) {
-        info.referrer = truncateBannerString(document.referrer);
-      }
-      if (typeof document.visibilityState === "string" && document.visibilityState) {
-        info.visibility_state = truncateBannerString(document.visibilityState, 32);
-      }
-    }
-    if (typeof window.matchMedia === "function") {
-      try {
-        const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
-        if (prefersDark && typeof prefersDark.matches === "boolean") {
-          info.prefers_dark = prefersDark.matches;
-        }
-      } catch (err) {
-        // ignore matchMedia errors
-      }
-    }
-    if (typeof window.location !== "undefined") {
-      const locationInfo = sanitizeUrlForBanner(window.location.href);
-      if (locationInfo) {
-        info.location = locationInfo;
-      }
-    }
-    return info;
-  }
-
   function getErrorMessage(err) {
     if (!err) {
       return undefined;
@@ -1870,11 +1552,6 @@ import {
     }
     autoResumeAttemptToken = null;
   }
-
-  function updateState(patch) {
-    AppState.setState(patch);
-  }
-
   function trackTokenFromUrl(url) {
     if (typeof url !== "string" || !url) {
       return { token: null, mintedAt: null };
