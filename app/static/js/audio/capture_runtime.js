@@ -2,6 +2,106 @@
 // Encapsulates VAD+AppState bridge, consoleBus publishing, silence timers,
 // and recorder start/stop lifecycle for AskChip.
 
+const USER_INITIATED_STOP_REASONS = new Set([
+  "user_requested",
+  "user_restart",
+  "user_end",
+  "client_stop",
+  "client_shutdown",
+  "resume_invalid",
+]);
+
+const SERVER_ERROR_STOP_REASONS = new Set([
+  "server_requested",
+  "server_error",
+  "server_restart",
+  "bad_info_frame",
+  "bad_info_sequence",
+  "resume_invalid",
+  "asr_unavailable",
+  "tts_start",
+  "handshake_close",
+  "schema_invalid",
+  "bad_utf8",
+  "ws_close",
+  "client_shutdown",
+  "rate_limited",
+]);
+
+const SERVER_ERROR_REASON_PATTERNS = [
+  /error/,
+  /fail/,
+  /denied/,
+  /timeout/,
+  /invalid/,
+  /unavailable/,
+  /disconnect/,
+  /refus/,
+  /forbidden/,
+  /shutdown/,
+];
+
+const VAD_OR_MIC_REASON_PATTERNS = [
+  /\bvad(?:[_-]|$)/,
+  /\bvoice_activity\b/,
+  /\bmic(?:_|-|\s)(?:state|status|pause|paused|mute|muted|off|inactive)/,
+];
+
+const normalizeReason = (reason) => {
+  if (typeof reason === "string" && reason) {
+    return reason;
+  }
+  if (reason && typeof reason === "object" && typeof reason.reason === "string" && reason.reason) {
+    return reason.reason;
+  }
+  return "unspecified";
+};
+
+const toReasonKey = (value) => {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "object" && typeof value.reason === "string" && value.reason) {
+    return value.reason.trim().toLowerCase();
+  }
+  return String(value).trim().toLowerCase();
+};
+
+const reasonLooksLikeVadOrMic = (value) => {
+  const key = toReasonKey(value);
+  if (!key) {
+    return false;
+  }
+  return VAD_OR_MIC_REASON_PATTERNS.some((pattern) => pattern.test(key));
+};
+
+export const reasonLooksUserInitiated = (value) => {
+  const key = toReasonKey(value);
+  if (!key) {
+    return false;
+  }
+  return USER_INITIATED_STOP_REASONS.has(key);
+};
+
+export const reasonLooksServerError = (value) => {
+  const key = toReasonKey(value);
+  if (!key) {
+    return false;
+  }
+  if (SERVER_ERROR_STOP_REASONS.has(key)) {
+    return true;
+  }
+  return SERVER_ERROR_REASON_PATTERNS.some((pattern) => pattern.test(key));
+};
+
+const toReasonLabel = (value) => {
+  const label = normalizeReason(value);
+  return typeof label === "string" ? label : "unspecified";
+};
+
 export function createCaptureRuntime({
   AppState,
   policyRuntime,          // createPolicyRuntime(AppState)
@@ -284,84 +384,6 @@ export function createCaptureRuntime({
   }
 
   // ===== Recorder lifecycle =====
-
-  const USER_INITIATED_STOP_REASONS = new Set([
-    "user_requested",
-    "user_restart",
-    "user_end",
-    "client_stop",
-    "client_shutdown",
-    "resume_invalid",
-  ]);
-
-  const SERVER_ERROR_STOP_REASONS = new Set([
-    "server_requested",
-    "server_error",
-    "server_restart",
-    "bad_info_frame",
-    "bad_info_sequence",
-    "resume_invalid",
-    "asr_unavailable",
-    "tts_start",
-    "handshake_close",
-    "schema_invalid",
-    "bad_utf8",
-    "ws_close",
-    "client_shutdown",
-    "rate_limited",
-  ]);
-
-  const SERVER_ERROR_REASON_PATTERNS = [
-    /error/,
-    /fail/,
-    /denied/,
-    /timeout/,
-    /invalid/,
-    /unavailable/,
-    /disconnect/,
-    /refus/,
-    /forbidden/,
-    /shutdown/,
-  ];
-
-  const VAD_OR_MIC_REASON_PATTERNS = [
-    /\bvad(?:[_-]|$)/,
-    /\bvoice_activity\b/,
-    /\bmic(?:_|-|\s)(?:state|status|pause|paused|mute|muted|off|inactive)/,
-  ];
-
-  function normalizeReason(reason) {
-    if (typeof reason === "string" && reason) {
-      return reason;
-    }
-    if (reason && typeof reason === "object" && typeof reason.reason === "string" && reason.reason) {
-      return reason.reason;
-    }
-    return "unspecified";
-  }
-
-  function toReasonLabel(value) {
-    const label = normalizeReason(value);
-    return typeof label === "string" ? label : "unspecified";
-  }
-
-  function reasonLooksLikeVadOrMic(key) {
-    if (!key) {
-      return false;
-    }
-    return VAD_OR_MIC_REASON_PATTERNS.some((pattern) => pattern.test(key));
-  }
-
-  function reasonLooksUserInitiated(key) {
-    return USER_INITIATED_STOP_REASONS.has(key);
-  }
-
-  function reasonLooksServerError(key) {
-    if (SERVER_ERROR_STOP_REASONS.has(key)) {
-      return true;
-    }
-    return SERVER_ERROR_REASON_PATTERNS.some((pattern) => pattern.test(key));
-  }
 
   function setAppStateValue(key, value) {
     if (typeof key !== "string" || !key) {
