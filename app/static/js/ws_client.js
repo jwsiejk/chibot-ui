@@ -5,7 +5,7 @@ import * as captureRuntimeModule from "./audio/capture_runtime.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
-import { createWsConnection, validateOutboundPayload } from "./ws/connection.js";
+import { createWsConnection } from "./ws/connection.js";
 import { createTurnRuntime } from "./ws/turns.js";
 import { createBannerClient } from "./ws/banner_client.js";
 import { createTranscriptBridge } from "./ws/transcript_bridge.js";
@@ -2014,6 +2014,73 @@ if (typeof createCaptureRuntime !== "function") {
       return false;
     }
     return true;
+  }
+
+  function validateOutboundPayload(payload, { rawPayload = payload, source = "wsclient" } = {}) {
+    if (!isTypedObjectPayload(payload)) {
+      return true;
+    }
+
+    const structureTag = Object.prototype.toString.call(payload);
+    const isPlainJsonObject = structureTag === "[object Object]";
+    if (!isPlainJsonObject) {
+      const structure = Array.isArray(payload)
+        ? "Array"
+        : structureTag.slice(8, -1) || "Unknown";
+      const keys = Object.keys(payload || {});
+
+      try {
+        console.warn("WSClient send skipped payload with non type-preserving structure", {
+          structure,
+          keys,
+          source,
+        });
+      } catch {}
+
+      try {
+        recordClientBannerEvent("ws.send.invalid_payload", {
+          reason: "non_type_preserving_structure",
+          structure,
+          source,
+        });
+      } catch {}
+
+      try {
+        logStage("client.ws", {
+          outcome: "send_skipped_non_type_preserving_structure",
+          structure,
+          source,
+        });
+      } catch {}
+
+      return false;
+    }
+
+    const type =
+      payload && typeof payload.type === "string"
+        ? payload.type.trim()
+        : "";
+
+    if (type.length > 0) {
+      return true;
+    }
+
+    // Missing `type` field – treat as invalid and log
+    try {
+      recordClientBannerEvent("ws.send.invalid_payload", {
+        reason: "missing_type_field",
+        source,
+      });
+    } catch {}
+
+    try {
+      logStage("client.ws", {
+        outcome: "send_skipped_missing_type_field",
+        source,
+      });
+    } catch {}
+
+    return false;
   }
 
   const BINARY_JSON_GUARD_MAX_BYTES = 512;
