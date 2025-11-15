@@ -659,7 +659,7 @@ export function createTurnRuntime(config = {}) {
           : "webrtc_aec";
         const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
           ? window.__audioCtx.sampleRate
-          : 48000;
+          : 16000;
         emitConsoleBusEvent("client.capture.mode", { mode, ctxSampleRate: ctxRate });
       } catch {}
       logStage("diag", { label: "asr.ready" });
