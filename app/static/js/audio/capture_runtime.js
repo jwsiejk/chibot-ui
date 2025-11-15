@@ -10,7 +10,11 @@ export function createCaptureRuntime({
   consoleBus,             // existing console event bus
   hubLog,                 // logging helper
   logStage,               // telemetry logStage from ws/telemetry.js
-  recordClientBannerEvent // telemetry banner from ws/telemetry.js
+  recordClientBannerEvent, // telemetry banner from ws/telemetry.js
+  schedulePartialWatchdog = null,
+  clearPartialWatchdog = null,
+  resetTurnIntent = null,
+  MIC_OUTCOME = {},
 }) {
   const MAX_GATE_SILENCE_MS = 3000;
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
@@ -29,10 +33,18 @@ export function createCaptureRuntime({
   const {
     getPcmRing = () => null,
     updatePcmSenderState = () => {},
+    ensurePcmSender = async () => null,
+    resetSilenceSuppression = () => {},
+    scheduleAudioKeepalive = () => {},
+    clearAudioKeepaliveTimer = () => {},
   } = audioRuntime || {};
 
   const senderPauseReasons = new Set();
   let senderPaused = false;
+  let audioStreaming = false;
+  let firstChunkSeen = false;
+  let armingGraceUntil = 0;
+  let micRecordingStartAt = null;
   // ===== Internal VAD state =====
   let vadController = null;
   let vadSilenceTimerId = null;
@@ -273,45 +285,275 @@ export function createCaptureRuntime({
 
   // ===== Recorder lifecycle =====
 
-  function evaluateStopRecorderReason(reason) {
-    // real implementation will be moved from ws_client.js
-    return "unknown";
+  const USER_INITIATED_STOP_REASONS = new Set([
+    "user_requested",
+    "user_restart",
+    "user_end",
+    "client_stop",
+    "client_shutdown",
+    "resume_invalid",
+  ]);
+
+  const SERVER_ERROR_STOP_REASONS = new Set([
+    "server_requested",
+    "server_error",
+    "server_restart",
+    "bad_info_frame",
+    "bad_info_sequence",
+    "resume_invalid",
+    "asr_unavailable",
+    "tts_start",
+    "handshake_close",
+    "schema_invalid",
+    "bad_utf8",
+    "ws_close",
+    "client_shutdown",
+    "rate_limited",
+  ]);
+
+  const SERVER_ERROR_REASON_PATTERNS = [
+    /error/,
+    /fail/,
+    /denied/,
+    /timeout/,
+    /invalid/,
+    /unavailable/,
+    /disconnect/,
+    /refus/,
+    /forbidden/,
+    /shutdown/,
+  ];
+
+  const VAD_OR_MIC_REASON_PATTERNS = [
+    /\bvad(?:[_-]|$)/,
+    /\bvoice_activity\b/,
+    /\bmic(?:_|-|\s)(?:state|status|pause|paused|mute|muted|off|inactive)/,
+  ];
+
+  function normalizeReason(reason) {
+    if (typeof reason === "string" && reason) {
+      return reason;
+    }
+    if (reason && typeof reason === "object" && typeof reason.reason === "string" && reason.reason) {
+      return reason.reason;
+    }
+    return "unspecified";
+  }
+
+  function toReasonLabel(value) {
+    const label = normalizeReason(value);
+    return typeof label === "string" ? label : "unspecified";
+  }
+
+  function reasonLooksLikeVadOrMic(key) {
+    if (!key) {
+      return false;
+    }
+    return VAD_OR_MIC_REASON_PATTERNS.some((pattern) => pattern.test(key));
+  }
+
+  function reasonLooksUserInitiated(key) {
+    return USER_INITIATED_STOP_REASONS.has(key);
+  }
+
+  function reasonLooksServerError(key) {
+    if (SERVER_ERROR_STOP_REASONS.has(key)) {
+      return true;
+    }
+    return SERVER_ERROR_REASON_PATTERNS.some((pattern) => pattern.test(key));
   }
 
   function setAppStateValue(key, value) {
-    // real implementation will be moved from ws_client.js
+    if (typeof key !== "string" || !key) {
+      return;
+    }
+    const state = typeof AppState?.getState === "function" ? AppState.getState() : null;
+    const hasKey = state && Object.prototype.hasOwnProperty.call(state, key);
+    const current = hasKey ? state[key] : AppState?.[key];
+    if (Object.is(current, value)) {
+      if (AppState && typeof AppState === "object") {
+        AppState[key] = value;
+      }
+      return;
+    }
+    if (AppState && typeof AppState === "object") {
+      AppState[key] = value;
+    }
+    updateState({ [key]: value });
   }
 
-  function setListeningState(listening) {
-    // real implementation will be moved from ws_client.js
+  function setListeningState(active) {
+    const listening = Boolean(active);
+    updateState({ listening });
+    if (!listening && AppState?.wsConnected) {
+      setWsPhase("connected");
+    }
+    updatePcmSenderState();
   }
 
   function setAsrArmInFlight(inFlight) {
-    // real implementation will be moved from ws_client.js
+    setAppStateValue("asrArmInFlight", Boolean(inFlight));
   }
 
   function setWsConnected(connected) {
-    // real implementation will be moved from ws_client.js
+    setAppStateValue("wsConnected", Boolean(connected));
   }
 
   function setWsPhase(phase) {
-    // real implementation will be moved from ws_client.js
+    if (typeof phase !== "string" || !phase) {
+      return;
+    }
+    setAppStateValue("wsPhase", phase);
   }
 
   function resetRecorderTelemetry() {
-    // real implementation will be moved from ws_client.js
+    setAppStateValue("chunkCount", 0);
+    setAppStateValue("lastChunkTs", null);
+    firstChunkSeen = false;
+    armingGraceUntil = 0;
   }
 
   async function performStopRecorder(reason) {
-    // real implementation will be moved from ws_client.js
+    audioStreaming = false;
+    firstChunkSeen = false;
+    armingGraceUntil = 0;
+    const stopReason = normalizeReason(reason);
+    if (typeof resetTurnIntent === "function") {
+      try { resetTurnIntent(stopReason); } catch {}
+    }
+    clearAudioKeepaliveTimer();
+    clearVadSilenceTimer();
+    if (typeof clearPartialWatchdog === "function") {
+      try { clearPartialWatchdog(); } catch {}
+    }
+    resetSilenceSuppression();
+    syncSenderPaused(false);
+    try {
+      const sender = await ensurePcmSender();
+      if (sender && typeof sender.setEnabled === "function") {
+        try {
+          sender.setEnabled(false);
+        } catch (err) {
+          try { console.warn("pcm.sender.disable_failed", err); } catch {}
+        }
+      }
+    } catch (err) {
+      try { console.warn("pcm.sender.disable_failed", err); } catch {}
+    }
+    micRecordingStartAt = null;
+    if (vadController && typeof vadController.reset === "function") {
+      try {
+        vadController.reset();
+      } catch (err) {
+        try { console.warn("VAD reset failed", err); } catch {}
+      }
+    }
+    setListeningState(false);
+    updatePcmSenderState();
+    try {
+      hubLog("client.pcm.capture_stop", { reason: stopReason });
+    } catch {}
   }
 
-  async function stopRecorder(reason) {
-    // real implementation will be moved from ws_client.js
+  function evaluateStopRecorderReason(reason, fallbackReason) {
+    const label = toReasonLabel(reason);
+    const key = label.trim().toLowerCase();
+    if (reasonLooksLikeVadOrMic(key)) {
+      return { allowed: false, blocked: true, label };
+    }
+    if (reasonLooksUserInitiated(key) || reasonLooksServerError(key)) {
+      return { allowed: true, blocked: false, label };
+    }
+    if (fallbackReason) {
+      const fallbackLabel = toReasonLabel(fallbackReason);
+      const fallbackKey = fallbackLabel.trim().toLowerCase();
+      if (!reasonLooksLikeVadOrMic(fallbackKey) && (reasonLooksUserInitiated(fallbackKey) || reasonLooksServerError(fallbackKey))) {
+        return { allowed: true, blocked: false, label: fallbackLabel };
+      }
+    }
+    return { allowed: false, blocked: false, label };
+  }
+
+  async function stopRecorder(reason, options = {}) {
+    const legacyFallback = arguments.length > 1 && typeof options !== "object"
+      ? options
+      : undefined;
+    const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
+    const fallbackReason = Object.prototype.hasOwnProperty.call(opts, "fallbackReason") ? opts.fallbackReason : legacyFallback;
+    const source = Object.prototype.hasOwnProperty.call(opts, "source") ? opts.source : null;
+    const { allowed, blocked, label } = evaluateStopRecorderReason(reason, fallbackReason);
+    if (!allowed) {
+      try {
+        const meta = { reason: label, source };
+        if (blocked) {
+          console.info("stopRecorder skipped for VAD/mic trigger", meta);
+        } else {
+          console.info("stopRecorder skipped for non user/server trigger", meta);
+        }
+      } catch {}
+      return false;
+    }
+    return performStopRecorder(label);
   }
 
   async function startRecorderStreaming(opts = {}) {
-    // real implementation will be moved from ws_client.js
+    let policy = null;
+    let reason = null;
+    if (arguments.length >= 2 && (typeof arguments[0] !== "object" || Array.isArray(arguments[0]))) {
+      policy = arguments[0];
+      reason = arguments[1];
+    } else if (opts && typeof opts === "object" && !Array.isArray(opts)) {
+      ({ policy = null, reason = null } = opts);
+    } else {
+      policy = opts;
+      reason = null;
+    }
+
+    if (AppState?.listening) {
+      return true;
+    }
+    firstChunkSeen = false;
+    clearVadSilenceTimer();
+    const captureReason = typeof reason === "string" && reason ? reason : "auto";
+    try {
+      const sender = await ensurePcmSender();
+      if (!sender) {
+        console.warn("PCM sender unavailable; cannot start streaming");
+        return false;
+      }
+      resetRecorderTelemetry();
+      resetSilenceSuppression();
+      syncSenderPaused(false);
+      if (vadController && typeof vadController.reset === "function") {
+        try {
+          vadController.reset();
+        } catch (err) {
+          try { console.warn("VAD reset failed", err); } catch {}
+        }
+      }
+      if (typeof sender.resume === "function") {
+        await sender.resume();
+      }
+      micRecordingStartAt = Date.now();
+      audioStreaming = true;
+      updatePcmSenderState();
+      scheduleAudioKeepalive();
+      setListeningState(true);
+      armingGraceUntil = Date.now() + 1200;
+      try {
+        hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
+      } catch {}
+      return true;
+    } catch (err) {
+      if (err?.name === "NotAllowedError") {
+        try {
+          logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
+        } catch {}
+      }
+      setListeningState(false);
+      audioStreaming = false;
+      throw err;
+    }
   }
 
   return {
