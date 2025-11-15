@@ -119,7 +119,7 @@ _AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD = 4
 
 _DEFAULT_GCP_SAMPLE_RATE_HZ = 16000
 
-_DEFAULT_WS_PING_INTERVAL_MS = 20_000
+_DEFAULT_WS_PING_INTERVAL_MS = 10_000
 _HEARTBEAT_TIMEOUT_MS = 30_000
 
 _PERMESSAGE_DEFLATE_HEADER = (
@@ -3718,6 +3718,9 @@ class ChatV2Adapter:
             if interval <= 0:
                 return
             try:
+                now_ms = int(time.time() * 1000)
+                ctx.last_server_ping_ms = now_ms
+                await self._send_json(send, ctx.sid, {"type": "server.ping", "ts": now_ms})
                 while True:
                     await asyncio.sleep(interval)
                     now_ms = int(time.time() * 1000)
