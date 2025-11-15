@@ -1916,7 +1916,7 @@
         if (raf) return;
         try{
           const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 48000});
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
           analyser = audioCtx.createAnalyser();
           analyser.fftSize = 2048;
           dataArray = new Uint8Array(analyser.frequencyBinCount);
