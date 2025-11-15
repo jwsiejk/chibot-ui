@@ -5,6 +5,7 @@ import { initPcmSender } from "./audio/pcm_sender.js";
 import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
 import { createWsConnection } from "./ws/connection.js";
+import { createTurnRuntime } from "./ws/turns.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import {
   MIC_OUTCOME,
@@ -2767,6 +2768,28 @@ import {
     hubLog,
     handleIncomingFrame,
   });
+
+  const turnRuntime = createTurnRuntime({
+    AppState,
+    policyRuntime,
+    audioRuntime,
+    connection,
+    telemetry: {
+      logStage,
+      recordClientBannerEvent,
+    },
+    hubLog,
+  });
+
+  const {
+    resetTurnIntent: runtimeResetTurnIntent,
+    canCaptureNow,
+    openAsr: runtimeOpenAsr,
+    requestAsrArm: runtimeRequestAsrArm,
+    requestAsrClose: runtimeRequestAsrClose,
+    recoverFromAsrFault: runtimeRecoverFromAsrFault,
+    handleAsrStateFrame,
+  } = turnRuntime;
 
   WSClient.on("open", (event) => {
     const ws = event && typeof event === "object" ? event.websocket || null : null;
