@@ -1593,11 +1593,13 @@
 
     endBtn.addEventListener('click', async () => {
       try {
-        if (typeof WSClient?.requestAsrClose === 'function') {
+        if (typeof WSClient?.close === 'function') {
+          await WSClient.close('end_button');
+        } else if (typeof WSClient?.requestAsrClose === 'function') {
           await WSClient.requestAsrClose('end_button');
         }
       } catch (err) {
-        console.warn('requestAsrClose failed', err);
+        console.warn('WSClient.close/requestAsrClose failed', err);
       }
       if (audioRecorder && typeof audioRecorder.stop === 'function') {
         try { audioRecorder.stop(); } catch (err) {
@@ -1606,7 +1608,11 @@
       }
       updateRecordingState(false, 'end_button');
       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
-        window.AudioPlayer.interrupt();
+        try {
+          window.AudioPlayer.interrupt();
+        } catch (err) {
+          console.warn('AudioPlayer.interrupt failed', err);
+        }
       }
     });
 

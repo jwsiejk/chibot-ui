@@ -787,6 +787,18 @@ if (typeof createCaptureRuntime !== "function") {
     startRecorderStreaming,
   } = captureRuntime;
 
+  WSClient.startRecorderStreaming = function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
+    if (!captureRuntime || typeof startRecorderStreaming !== "function") {
+      console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
+      return;
+    }
+    try {
+      return startRecorderStreaming(policy, source);
+    } catch (err) {
+      console.warn("WSClient.startRecorderStreaming failed", err);
+    }
+  };
+
   initClientVad();
 
   try {
