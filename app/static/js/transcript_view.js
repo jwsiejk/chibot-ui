@@ -509,10 +509,13 @@
     view.showSystemFromChip = showSystemFromChip;
   }
 
+  try { window.TranscriptView = view; } catch {}
   if (typeof window.attachTranscriptView === "function") {
-    window.attachTranscriptView(view);
-  } else {
-    window.TranscriptView = view;
+    try {
+      window.attachTranscriptView(view);
+    } catch (err) {
+      console.warn("attachTranscriptView failed", err);
+    }
   }
 
   if (document.readyState === "loading") {

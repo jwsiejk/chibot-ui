@@ -67,6 +67,18 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
       console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "invalid_frame" });
       return;
     }
+
+    // Normalize and patch up the frame so downstream consumers can rely on text/type.
+    try {
+      frame.type = normalizeChatType(frame.type);
+    } catch {}
+    try {
+      const text = extractTextFromChatFrame(frame);
+      if (text && typeof frame.text !== "string") {
+        frame.text = text;
+      }
+    } catch {}
+
     const view = window.TranscriptView;
     pruneStaleUserSids();
     if (!view || typeof view.handleChatMessage !== "function") {
@@ -139,19 +151,55 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
     pendingTranscriptFrames.push(frame);
   }
 
+  // Always allow transcriptable frames; filtering here caused drops during refactor.
   function transcriptFrameAllowed(frame) {
     const type = typeof frame?.type === "string" ? frame.type : "";
     const role = typeof frame?.role === "string" ? frame.role : "";
-
-    // For now, do NOT filter anything at the transcript layer.
-    // We want all ASR + chat frames to be eligible for display.
     const allow = true;
-
     try {
       console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
     } catch {}
-
     return allow;
+  }
+
+  // Extract visible text from various frame shapes (message, streaming, or content arrays).
+  function extractTextFromChatFrame(frame) {
+    if (!frame || typeof frame !== "object") return "";
+    if (typeof frame.text === "string") return frame.text;
+    if (typeof frame.delta === "string") return frame.delta;
+    const c = frame.content;
+    if (Array.isArray(c)) {
+      const parts = [];
+      for (const seg of c) {
+        if (!seg) continue;
+        if (typeof seg === "string") {
+          parts.push(seg);
+          continue;
+        }
+        if (typeof seg.text === "string") {
+          parts.push(seg.text);
+          continue;
+        }
+        if (typeof seg.delta === "string") {
+          parts.push(seg.delta);
+          continue;
+        }
+      }
+      return parts.join("");
+    }
+    return "";
+  }
+
+  // Normalize type aliases so routing is stable.
+  function normalizeChatType(t) {
+    if (!t) return "";
+    if (t === "message") return "chat.message";
+    if (t === "history") return "chat.history";
+    if (t === "begin") return "chat.begin";
+    if (t === "delta") return "chat.delta";
+    if (t === "commit") return "chat.commit";
+    if (t === "end") return "chat.end";
+    return t;
   }
 
   function handleAssistantStreamingBegin(frame) {
