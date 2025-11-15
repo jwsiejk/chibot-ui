@@ -598,8 +598,13 @@
       await loadScript("audio/pcm_recorder.js");
     }
     await loadScript("audio/vad_client.js");
-    if (!window.WSClient) {
+    const needsWsClient = !window.WSClient
+      || typeof window.WSClient.open !== "function";
+    if (needsWsClient) {
       await loadScript("ws_client.js");
+    }
+    if (!window.WSClient || typeof window.WSClient.open !== "function") {
+      console.error("WSClient runtime missing open() API", window.WSClient);
     }
     if (!window.TranscriptView) {
       await loadScript("transcript_view.js");
