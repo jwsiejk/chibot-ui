@@ -21,7 +21,6 @@ import {
 } from "./ws/telemetry.js";
 (() => {
   // ===== Shared constants, policy defaults, tiny helpers =====
-  const HEARTBEAT_INTERVAL_MS = 20000;
   const DEFAULT_CLOSE_REASON = "client_shutdown";
   const JSON_SUBPROTOCOL = "chat.v2";
   const MSGPACK_SUBPROTOCOL = "chip-msgpack";
@@ -29,15 +28,10 @@ import {
   const DEFAULT_SUBPROTOCOLS = REQUESTED_CONTROL_CODEC === "msgpack"
     ? [MSGPACK_SUBPROTOCOL, JSON_SUBPROTOCOL]
     : JSON_SUBPROTOCOL;
-  const INFO_DEADLINE_MS = 20000;
   const TOKEN_EXPIRY_MS = 60 * 1000;
-  const MAX_GATE_SILENCE_MS = 3000;
-  // server_no_speech_timeout_ms should be ≥ 2 × MAX_GATE_SILENCE_MS to let the client close the turn cleanly.
-  const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
 
   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-  const PCM_TARGET_SAMPLE_RATE = 16000;
   const DEFAULT_ASR_VENDOR = 'gcp';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
   let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
