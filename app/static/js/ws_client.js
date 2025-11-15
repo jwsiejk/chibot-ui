@@ -4,6 +4,7 @@ import { initVAD } from "./audio/vad_client.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
+import { createWsConnection } from "./ws/connection.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import {
   MIC_OUTCOME,
@@ -2797,6 +2798,10 @@ import {
     }
   }
 
+  function handleIncomingFrame(frame) {
+    return handleMessageFrame(frame);
+  }
+
 
   function deliverAsr(frame) {
     if (!frame || typeof frame !== "object") {
@@ -3447,6 +3452,20 @@ import {
     }
     dispatchFrame(frame);
   }
+
+  const connection = createWsConnection({
+    AppState,
+    eventEmitter: WSClient.__events || null,
+    telemetry: {
+      logStage,
+      recordClientBannerEvent,
+      recordLastError,
+    },
+    policyRuntime,
+    audioRuntime,
+    hubLog,
+    handleIncomingFrame,
+  });
 
   function normalizeIncomingFrame(frame) {
     if (!frame || typeof frame !== "object") {
