@@ -12,6 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("SECRET_KEY", "test-secret")
 
 from app.telemetry import bus
+from app.telemetry.events import CLIENT_IDLE_TICK
 from app.voice_v2 import EVT_CLIENT_AUTOSTART, EVT_CLIENT_BANNER, EVT_WS_JSON_RECV, EVT_WS_JSON_SEND
 from app.security.jwt_utils import mint_ws_token
 import app.ws.adapter as adapter_module
@@ -166,6 +167,46 @@ class TestWebSocketJsonContract(unittest.TestCase):
             any(event.get("meta", {}).get("frame_type") == "asr.rearm.request" for event in received),
             "Expected EVT_WS_JSON_RECV event for asr.rearm.request frame",
         )
+
+    def test_client_idle_frame_is_allowed(self) -> None:
+        adapter = ChatV2Adapter()
+        frame = {"type": "client.idle", "lane": "mic", "ts": 123456}
+        events = [
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "text": json.dumps(frame)},
+            {"type": "websocket.disconnect", "code": 1000},
+        ]
+
+        received: list[dict] = []
+        idle_events: list[dict] = []
+        recv_token = bus.subscribe(EVT_WS_JSON_RECV, received.append)
+        idle_token = bus.subscribe(CLIENT_IDLE_TICK, idle_events.append)
+        try:
+            sent = self._drive(adapter, events)
+        finally:
+            bus.unsubscribe(recv_token)
+            bus.unsubscribe(idle_token)
+
+        accepts = [msg for msg in sent if msg.get("type") == "websocket.accept"]
+        self.assertEqual(len(accepts), 1)
+
+        send_payloads = [
+            json.loads(msg["text"])
+            for msg in sent
+            if msg.get("type") == "websocket.send" and msg.get("text") is not None
+        ]
+        error_payloads = [payload for payload in send_payloads if payload.get("type") == "error"]
+        self.assertEqual(error_payloads, [])
+
+        self.assertTrue(
+            any(event.get("meta", {}).get("frame_type") == "client.idle" for event in received),
+            "Expected EVT_WS_JSON_RECV event for client.idle frame",
+        )
+
+        self.assertTrue(idle_events, "Expected CLIENT_IDLE_TICK telemetry event")
+        event_meta = idle_events[0].get("meta", {})
+        self.assertEqual(event_meta.get("lane"), "mic")
+        self.assertEqual(event_meta.get("ts"), 123456)
 
     def test_banner_and_info_frame_include_current_build_id(self) -> None:
         adapter = ChatV2Adapter()
