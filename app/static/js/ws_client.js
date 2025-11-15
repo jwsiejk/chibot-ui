@@ -430,7 +430,7 @@ if (typeof createCaptureRuntime !== "function") {
     });
   }
 
-  let userGestureSatisfied = !AppState.policy.require_user_gesture_first_visit;
+  let userGestureSatisfied = !AppState?.policy?.require_user_gesture_first_visit;
 
   // ===== WebSocket connection + queue + outbound send helpers =====
   const WSClient = window.WSClient = window.WSClient || {};
