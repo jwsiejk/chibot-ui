@@ -1,7 +1,7 @@
 // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
 /* __BUILD_MARKER__: FULL_DUPLEX_01 */
 import { initVAD } from "./audio/vad_client.js";
-import { createCaptureRuntime } from "./audio/capture_runtime.js";
+import { createCaptureRuntime, reasonLooksUserInitiated } from "./audio/capture_runtime.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
