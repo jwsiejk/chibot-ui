@@ -270,22 +270,32 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
   function attachTranscriptView(view) {
     if (!view || typeof view.handleChatMessage !== "function") {
       if (pendingTranscriptFrames.length) {
-        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "invalid_transcript_view" });
+        console.warn("chat.message dropped", {
+          phase: AppState?.wsPhase,
+          reason: "invalid_transcript_view",
+        });
       }
       return;
     }
+
+    // ✅ Bind the view globally so deliverChat/deliverAsr can see it
     try {
       window.TranscriptView = view;
     } catch (err) {
       console.warn("Failed to bind TranscriptView on window", err);
     }
+
+    // Flush any frames that arrived before the view was attached
     while (pendingTranscriptFrames.length) {
       const frame = pendingTranscriptFrames.shift();
       try {
         deliverChat(frame);
       } catch (err) {
         console.warn("flush chat error", err);
-        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "transcript_flush_error" });
+        console.warn("chat.message dropped", {
+          phase: AppState?.wsPhase,
+          reason: "transcript_flush_error",
+        });
       }
     }
   }
