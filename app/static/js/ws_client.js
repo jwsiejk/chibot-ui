@@ -469,6 +469,7 @@ import {
   let lastTokenValue = null;
   let lastTokenMintedAt = null;
 
+  /* Legacy WebSocket helpers retained for reference
   function wsOpen() {
     const ws = WSClient._ws || window.ws;
     return ws && ws.readyState === WebSocket.OPEN ? ws : null;
@@ -579,7 +580,7 @@ import {
     if (!canSendHeartbeat()) return;
     lastPingAt = Date.now();
     updateState({ lastPingAt });
-    send({ type: "client.ping", ts: lastPingAt });
+    connection.send({ type: "client.ping", ts: lastPingAt });
   }
 
   function startHeartbeat() {
@@ -870,7 +871,9 @@ import {
     if (!socket) return 0;
     return socket.bufferedAmount || 0;
   }
+  */
 
+  /* Legacy socket wiring retained for reference
   function attachSocket(ws) {
     ws.__intentionalClose = false;
     const handlers = {
@@ -1068,6 +1071,7 @@ import {
       client._connected = false;
     }
   }
+  */
 
 
   WSClient.waitForOnce = function waitForOnce(type, predicate, timeoutMs = 2000) {
@@ -1185,7 +1189,7 @@ import {
   let __turnOpen = false, __turnOpenAt = 0;
   async function openTurnOnce(reason) {
     if (__turnOpen) return true;
-    const ws = () => (WSClient?._ws || window.ws);
+    const ws = () => (WSClient?.socket || window.ws);
     const deadline = Date.now() + 1200;
     while ((!ws() || ws().readyState !== WebSocket.OPEN) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
@@ -1223,8 +1227,8 @@ import {
       if (typeof WSClient?.isConnected === "function") {
         connected = WSClient.isConnected();
       } else {
-        const live = wsOpen();
-        connected = !!live;
+        const live = ws();
+        connected = !!live && live.readyState === WebSocket.OPEN;
       }
     } catch {}
     if (!connected && typeof WSClient?._connected === "boolean") connected = WSClient._connected;
@@ -1807,7 +1811,7 @@ import {
       const { data, isBinary, options } = entry;
       try {
         if (isBinary) {
-          const result = sendBinary(data, options || {});
+          const result = connection.sendBinary(data, options || {});
           if (result && typeof result.then === "function") {
             result.catch((err) => {
               console.warn("WSClient queued binary send failed", err);
@@ -1815,7 +1819,7 @@ import {
           }
           continue;
         }
-        send.call(target, data, { binary: isBinary, skipPhaseCheck: true });
+        connection.send(data, { binary: isBinary, skipPhaseCheck: true });
       } catch (err) {
         console.warn("WSClient queue flush send failed", err);
       }
@@ -2746,7 +2750,7 @@ import {
       if (WSClient && typeof WSClient.sendJSON === "function") {
         return WSClient.sendJSON(frame);
       }
-      return send(frame, { binary: false });
+      return connection.send(frame, { binary: false });
     } catch (err) {
       console.error("WSClient sendJson error", err);
       return false;
@@ -3467,6 +3471,37 @@ import {
     handleIncomingFrame,
   });
 
+  WSClient.on("open", (event) => {
+    const ws = event && typeof event === "object" ? event.websocket || null : null;
+    socket = ws || null;
+    try { WSClient._ws = ws || null; } catch {}
+    WSClient._connected = Boolean(ws);
+    if (ws) {
+      const protocol = typeof ws.protocol === "string" && ws.protocol ? truncateBannerString(ws.protocol, 48) : null;
+      recordClientBannerEvent("ws.socket.open", protocol ? { protocol } : null);
+    }
+    flushClientBannerQueue();
+  });
+
+  WSClient.on("close", (event) => {
+    socket = null;
+    try { WSClient._ws = null; } catch {}
+    WSClient._connected = false;
+    const detailReason = event && typeof event === "object" && typeof event.reason === "string" && event.reason
+      ? event.reason
+      : null;
+    const closeCode = event && typeof event.code === "number" ? event.code : undefined;
+    recordClientBannerEvent("ws.socket.close", {
+      code: closeCode,
+      reason: truncateBannerString(detailReason || "", 160),
+      was_clean: Boolean(event?.wasClean),
+      ready_state: typeof event?.target?.readyState === "number" ? event.target.readyState : undefined,
+    });
+    if (detailReason) {
+      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: detailReason });
+    }
+  });
+
   function normalizeIncomingFrame(frame) {
     if (!frame || typeof frame !== "object") {
       return null;
@@ -3521,7 +3556,7 @@ import {
       return;
     }
     if (normalizedFrame.type === "server.ping") {
-      send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
+      connection.send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
       return;
     }
     await handleMessageFrame(normalizedFrame);
@@ -4132,10 +4167,8 @@ import {
     }
 
     if (socket) {
-      cleanupSocket(socket, "superseded");
+      connection.close("superseded");
     }
-    expectInfoFrame = true;
-    startInfoWatchdog();
     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
       try {
         window.WSErrorUI.cancelRateLimitCountdown("manual");
@@ -4189,48 +4222,34 @@ import {
     setWsPhase(resumeTokenValue ? "resuming" : "connecting");
     recordLastError(null, null);
 
-    const tokenInfo = trackTokenFromUrl(wsUrl);
-    const ws = transportFactory(wsUrl, wsProtocols);
+    const ws = connection.open(wsUrl, null, {
+      protocols: wsProtocols,
+      resumeToken: resumeTokenValue,
+      skipRateLimitCancel,
+    });
+    if (!ws) {
+      return null;
+    }
+    socket = ws;
+    try { WSClient._ws = ws; } catch {}
+
     const originalSend = typeof ws.send === "function" ? ws.send : null;
     if (originalSend) {
       const boundOriginalSend = originalSend.bind(ws);
-
-      const patchedSend = function patchedSend(data, ...rest) {
+      ws.send = function patchedSend(data, ...rest) {
         const target = (this && typeof this === "object") ? this : ws;
         const isBinaryPayload = data instanceof Blob || data instanceof ArrayBuffer || ArrayBuffer.isView(data);
-
-        if (!isBinaryPayload) {
-          let typedPayload = null;
-
-          if (typeof data === "string") {
-            try {
-              const parsed = JSON.parse(data);
-              if (isTypedObjectPayload(parsed)) {
-                typedPayload = parsed;
-              }
-            } catch (err) {
-              console.warn("WSClient send wrapper: failed to parse string payload", err);
-            }
-          } else if (isTypedObjectPayload(data)) {
-            typedPayload = data;
-          }
-
-          if (typedPayload) {
-            if (!validateOutboundPayload(typedPayload, { rawPayload: data, source: "ws_instance" })) {
+        if (!isBinaryPayload && isTypedObjectPayload(data)) {
+          try {
+            if (!validateOutboundPayload(data, { rawPayload: data, source: "ws_instance" })) {
               return undefined;
             }
-          }
-
-          if (isTypedObjectPayload(data)) {
-            try {
-              data = JSON.stringify(data);
-            } catch (err) {
-              console.warn("WSClient send wrapper: failed to serialize payload", err);
-              return undefined;
-            }
+            data = JSON.stringify(data);
+          } catch (err) {
+            console.warn("WSClient send wrapper: serialization failed", err);
+            return undefined;
           }
         }
-
         try {
           target.__wsClientGuarding = true;
           return boundOriginalSend(data, ...rest);
@@ -4238,106 +4257,21 @@ import {
           try { delete target.__wsClientGuarding; } catch { target.__wsClientGuarding = undefined; }
         }
       };
-
-      ws.send = patchedSend;
       ws.__originalSend = function delegatingOriginalSend(data, ...rest) {
-        return patchedSend.call(ws, data, ...rest);
+        return ws.send.call(ws, data, ...rest);
       };
     }
-    ws.__accessTokenInfo = tokenInfo;
-    ws.__handshakeToastShown = false;
-    try {
-      ws.binaryType = "arraybuffer";
-    } catch (err) {
-      console.warn("Failed to set WebSocket binaryType", err);
-    }
 
-    ws.onopen = () => {
-      // Lightweight breadcrumb; keep as console.log
-      console.log("WebSocket open", { url: wsUrl, protocol: ws.protocol || wsProtocols });
-      logStage('client.ws', { outcome: 'connected', subprotocol: ws?.protocol || (typeof wsProtocols === "string" ? wsProtocols : null) });
-      recordClientBannerEvent("ws.socket.open", {
-        protocol: truncateBannerString(ws.protocol || (typeof wsProtocols === "string" ? wsProtocols : ""), 48),
-      });
-      flushClientBannerQueue();
+    try { ws.binaryType = "arraybuffer"; } catch (err) { console.warn("Failed to set WebSocket binaryType", err); }
 
-      // after ws opens
-      try {
-        const ws = WSClient._ws || window.ws;
-        if (ws && typeof ws.send === 'function') {
-          const _send = ws.send.bind(ws);
-          ws.send = (data) => {
-            try {
-              const kind = (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) ? 'binary' : typeof data;
-              const size = (data && data.byteLength) || (data && data.size) || null;
-              console.log('WS SEND', kind, size);
-            } catch (_) {}
-            return _send(data);
-          };
-        }
-      } catch (_) {}
-    };
-
-    ws.onerror = (e) => {
-      console.error("WebSocket error", e, { readyState: ws.readyState });
-      const message = e && typeof e?.message === "string" && e.message
-        ? e.message
-        : "socket_error";
-      recordLastError(null, message);
-      maybeShowHandshakeToast(ws, null);
-      recordClientBannerEvent("ws.socket.error", {
-        ready_state: ws.readyState,
-      });
-    };
-
-    ws.onclose = (e) => {
-      console.error("WebSocket closed", {
-        code: e.code,
-        reason: e.reason,
-        wasClean: e.wasClean,
-        readyState: ws.readyState,
-      });
-      const currentTurnState =
-        typeof TurnState !== "undefined"
-          ? TurnState
-          : (typeof window !== "undefined" && window.TurnState) || null;
-      if (currentTurnState?.awaitingAssistant) {
-        console.warn("WS closed mid-turn", { awaiting: currentTurnState });
-      }
-      const detailReason = typeof e.reason === "string" && e.reason ? e.reason : "handshake_close";
-      recordLastError(typeof e.code === "number" ? e.code : null, detailReason);
-      setWsConnected(false);
-      setWsPhase("disconnected");
-      logStage('client.ws', { outcome: 'close', code: e?.code, reason: e?.reason });
-      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: e?.reason || (expected ? 'intentional_close' : 'ws_close') });
-      maybeShowHandshakeToast(ws, e && typeof e.code === "number" ? e.code : null);
-      recordClientBannerEvent("ws.socket.close", {
-        code: typeof e.code === "number" ? e.code : undefined,
-        reason: truncateBannerString(e.reason || "", 160),
-        was_clean: Boolean(e.wasClean),
-        ready_state: ws.readyState,
-      });
-      // Logic moved to detach/cleanupSocket, kept here for legacy logging/telemetry
-    };
-
-    socket = ws;
     if (_audioStreaming) {
       ensurePcmSender().then((sender) => {
         if (sender && typeof sender.setWebSocket === "function") {
-          try {
-            sender.setWebSocket(ws);
-          } catch (err) {
-            if (typeof console !== "undefined" && typeof console.warn === "function") {
-              console.warn("pcm.sender.attach_failed", err);
-            }
-          }
+          try { sender.setWebSocket(ws); } catch (err) { console.warn("pcm.sender.attach_failed", err); }
         }
-      }).catch((err) => {
-        if (typeof console !== "undefined" && typeof console.warn === "function") {
-          console.warn("pcm.sender.attach_failed", err);
-        }
-      });
+      }).catch((err) => { console.warn("pcm.sender.attach_failed", err); });
     }
+
     updateState({
       connectionState: resumeTokenValue ? "resuming" : "connecting",
       websocket: ws,
@@ -4345,9 +4279,8 @@ import {
       lastPingAt: null,
       resumeError: null,
       infoFrame: null,
-      serverBanner: null
+      serverBanner: null,
     });
-    attachSocket(ws);
     return ws;
   }
 
@@ -4381,17 +4314,7 @@ import {
         } catch {}
       }
     };
-    if (!socket) {
-      setWsPhase("disconnected");
-      updateState({ connectionState: "disconnected", infoFrame: null, serverBanner: null });
-      emitResumeInvalid();
-      return;
-    }
-    const ws = socket;
-    cleanupSocket(ws, closeReason);
-    clearHeartbeat();
-    clearRateLimitRetryTimer();
-    rateLimitRetryCount = 0;
+    connection.close(closeReason);
     if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
       try {
         window.WSErrorUI.cancelRateLimitCountdown(closeReason);
@@ -4399,6 +4322,10 @@ import {
         console.warn("Failed to cancel countdown on close", err);
       }
     }
+    socket = null;
+    try { WSClient._ws = null; } catch {}
+    clearRateLimitRetryTimer();
+    rateLimitRetryCount = 0;
     autoResumeAttemptToken = null;
     emitResumeInvalid();
     updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
@@ -4499,7 +4426,7 @@ import {
     if (!obj || typeof obj !== "object") {
       return false;
     }
-    const result = send.call(WSClient, obj, { binary: false });
+    const result = connection.send(obj, { binary: false });
     if (result && typeof result.then === "function") {
       return result.then(() => true).catch((err) => {
         console.warn("sendJSON failed", err);
@@ -4511,7 +4438,7 @@ import {
 
   WSClient.sendAudioChunk = function sendAudioChunk(buf, opts = {}) {
     if (buf instanceof Blob) {
-      const blobResult = sendBinary(buf, { ...opts, lane: opts && typeof opts === "object" && typeof opts.lane !== "undefined" ? opts.lane : "mic" });
+      const blobResult = connection.sendBinary(buf, { ...opts, lane: opts && typeof opts === "object" && typeof opts.lane !== "undefined" ? opts.lane : "mic" });
       if (blobResult && typeof blobResult.then === "function") {
         return blobResult;
       }
@@ -4540,35 +4467,22 @@ import {
         return true;
       }
     }
-    const result = sendBinary(buf, options);
+    const result = connection.sendBinary(buf, options);
     if (result && typeof result.then === "function") {
       return result;
     }
     return result !== false;
   };
 
-  WSClient.open = open;
-  WSClient.close = close;
-  WSClient.send = function sendJSON(payload) {
-    try {
-      const ws = WSClient?._ws || window.ws;
-      const open = ws && ws.readyState === WebSocket.OPEN;
-      if (open && isControlFrame(payload)) {
-        const codec = getNegotiatedControlCodec();
-        const encoded = encodeControlFramePayload(payload, codec);
-        if (!encoded) {
-          return false;
-        }
-        try {
-          ws.send(encoded.payload);
-          return true;
-        } catch (e) {
-          console.warn("ws.json send failed", e);
-          return false;
-        }
-      }
-    } catch {}
-    return WSClient.sendJSON(payload);
+  WSClient.open = function openWs(options = {}, protocolsOverride) {
+    return open(options, protocolsOverride);
+  };
+  WSClient.close = function closeWs(reason) {
+    return close(reason);
+  };
+  WSClient.send = function sendWs(payload, opts = {}) {
+    const options = opts && typeof opts === "object" ? { ...opts, binary: false } : { binary: false };
+    return connection.send(payload, options);
   };
 
   // Fast-path for callers that use sendJSON() directly (audio.header, pings, etc.).
@@ -4597,8 +4511,8 @@ import {
       return __origSendJSON.call(WSClient, frame);
     };
   })();
-  WSClient.sendBinary = (payload, opts = {}) => sendBinary(payload, opts);
-  WSClient.getBufferedAmount = getBufferedAmount;
+  WSClient.sendBinary = (payload, opts = {}) => connection.sendBinary(payload, opts);
+  WSClient.getBufferedAmount = () => connection.getBufferedAmount();
   WSClient.requestAsrArm = requestAsrArm;
   WSClient.openAsr = openAsr;
   WSClient.requestAsrClose = requestAsrClose;
