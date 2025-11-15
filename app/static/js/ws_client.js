@@ -1885,7 +1885,7 @@ if (typeof createCaptureRuntime !== "function") {
       return;
     }
     expectInfoFrame = false;
-    clearInfoWatchdog();
+    // clearInfoWatchdog(); // ❌ removed – connection.js already does this
     resetRateLimitRecovery();
     const resumeToken = typeof meta.resume_token === "string" ? meta.resume_token : null;
     const resumeTtlMs = Number.isFinite(meta.resume_ttl_ms) ? meta.resume_ttl_ms : null;
