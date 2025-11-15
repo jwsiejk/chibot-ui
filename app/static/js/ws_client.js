@@ -1233,28 +1233,38 @@ if (typeof createCaptureRuntime !== "function") {
     let handledByTranscriptDispatch = false;
     switch (frame.type) {
       case "chat.begin":
-        handleAssistantStreamingBegin(frame);
+      case "begin":
+        try { handleAssistantStreamingBegin(frame); } catch (e) { console.warn("begin err", e); }
         dispatchFrame(frame);
         return;
 
       case "chat.delta":
-        handleAssistantStreamingDelta(frame);
+      case "delta":
+        try { handleAssistantStreamingDelta(frame); } catch (e) { console.warn("delta err", e); }
         dispatchFrame(frame);
         return;
 
       case "chat.commit":
-        handleAssistantStreamingCommit(frame);
+      case "commit":
+        try { handleAssistantStreamingCommit(frame); } catch (e) { console.warn("commit err", e); }
         dispatchFrame(frame);
         return;
 
       case "chat.end":
-        handleAssistantStreamingEnd(frame);
+      case "end":
+        try { handleAssistantStreamingEnd(frame); } catch (e) { console.warn("end err", e); }
         dispatchFrame(frame);
         return;
 
       case "chat.message":
       case "message":
-        deliverChat(frame);
+        try { deliverChat(frame); } catch (e) { console.warn("deliverChat error", e); }
+        dispatchFrame(frame);
+        return;
+
+      case "chat.history":
+      case "history":
+        try { handleChatHistoryFrame(frame); } catch (e) { console.warn("history error", e); }
         dispatchFrame(frame);
         return;
 
