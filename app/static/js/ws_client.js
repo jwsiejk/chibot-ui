@@ -10,6 +10,7 @@ import { createTurnRuntime } from "./ws/turns.js";
 import { createBannerClient } from "./ws/banner_client.js";
 import { createTranscriptBridge } from "./ws/transcript_bridge.js";
 import { createSessionManager } from "./ws/session_manager.js";
+import { createFrameParser } from "./ws/frame_parser.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import {
   MIC_OUTCOME,
@@ -36,6 +37,14 @@ import {
   const DEFAULT_ASR_VENDOR = 'gcp';
   const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
   let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
+
+  function getNegotiatedControlCodec() {
+    return negotiatedControlCodec === "msgpack" ? "msgpack" : "json";
+  }
+
+  function setNegotiatedControlCodec(codec) {
+    negotiatedControlCodec = codec === "msgpack" ? "msgpack" : "json";
+  }
 
   function detectControlFramesCodec() {
     const normalize = (value) => {
@@ -1476,6 +1485,33 @@ import {
     handleIncomingFrame,
   });
 
+  const frameParser = createFrameParser({
+    hubLog,
+    logStage,
+    connection,
+    handleMessageFrame: (frame) => {
+      if (connection && typeof connection.handleParsedFrame === "function") {
+        return connection.handleParsedFrame(frame);
+      }
+      return handleMessageFrame(frame);
+    },
+    handleErrorFrame,
+    getNegotiatedControlCodec,
+    getAudioPlayer,
+    ignoredVendorMessages: IGNORED_VENDOR_MESSAGES,
+  });
+
+  const {
+    normalizeIncomingFrame,
+    processControlFrameObject,
+    parseMessageData,
+    handleRawMessageData,
+  } = frameParser;
+
+  if (connection && typeof connection.setRawMessageHandler === "function") {
+    connection.setRawMessageHandler(handleRawMessageData);
+  }
+
   const sessionManager = createSessionManager({
     AppState,
     connection,
@@ -1562,125 +1598,6 @@ import {
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: detailReason });
     }
   });
-
-  function normalizeIncomingFrame(frame) {
-    if (!frame || typeof frame !== "object") {
-      return null;
-    }
-    if (typeof frame.type === "string" && frame.type) {
-      return frame;
-    }
-    let inferredType = null;
-    if (typeof frame.kind === "string" && frame.kind) {
-      inferredType = frame.kind;
-    } else if (typeof frame.event === "string" && frame.event) {
-      inferredType = frame.event;
-    } else if (
-      typeof frame.code === "string" ||
-      typeof frame.detail === "string" ||
-      typeof frame.message === "string"
-    ) {
-      inferredType = "error";
-    }
-    if (!inferredType) {
-      return null;
-    }
-    return { ...frame, type: inferredType };
-  }
-
-  async function processControlFrameObject(frame) {
-    if (frame && typeof frame.message === "string") {
-      const normalizedType =
-        (typeof frame.type === "string" && frame.type) ||
-        (typeof frame.kind === "string" && frame.kind) ||
-        (typeof frame.event === "string" && frame.event) ||
-        null;
-      if (normalizedType !== "chat.message") {
-        if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-          return;
-        }
-      } else if (IGNORED_VENDOR_MESSAGES.has(frame.message)) {
-        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
-      }
-    }
-    const normalizedFrame = normalizeIncomingFrame(frame);
-    if (!normalizedFrame) {
-      console.warn("Dropping WS frame without recognizable type", frame);
-      await handleErrorFrame({
-        type: "error",
-        code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
-        detail:
-          typeof frame?.detail === "string"
-            ? frame.detail
-            : "Frame missing type field",
-      });
-      return;
-    }
-    if (normalizedFrame.type === "server.ping") {
-      connection.send({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
-      return;
-    }
-    await handleMessageFrame(normalizedFrame);
-  }
-
-  async function parseFrame(event) {
-    try {
-      const { data } = event;
-      if (typeof data === "string") {
-        try {
-          const frame = JSON.parse(data);
-          await processControlFrameObject(frame);
-        } catch (err) {
-          console.error("Failed to parse WS frame", err, data);
-        }
-        return;
-      }
-      if (data instanceof Blob) {
-        if (getNegotiatedControlCodec() === "msgpack") {
-          try {
-            const buffer = await data.arrayBuffer();
-            const frame = tryDecodeMsgpackFrame(buffer);
-            if (frame) {
-              await processControlFrameObject(frame);
-              return;
-            }
-          } catch (err) {
-            console.warn("Failed to decode msgpack blob", err);
-          }
-        }
-        const audioPlayer = getAudioPlayer();
-        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-          audioPlayer.enqueueChunk(data);
-        }
-        window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-        return;
-      }
-      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-        const chunk = data instanceof ArrayBuffer
-          ? data
-          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-        if (getNegotiatedControlCodec() === "msgpack") {
-          const frame = tryDecodeMsgpackFrame(chunk);
-          if (frame) {
-            await processControlFrameObject(frame);
-            return;
-          }
-        }
-        const audioPlayer = getAudioPlayer();
-        if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-          audioPlayer.enqueueChunk(chunk);
-        }
-        window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-        return;
-      }
-      console.warn("Unknown WS frame type", data);
-    } catch (outerErr) {
-      console.error("Uncaught exception in parseFrame", outerErr);
-      hubLog("client.ws.parse_crash", { error: outerErr?.message, frame_data: event?.data });
-    }
-  }
-
-
 
   function startInputCapture(frame) {
     const policy = frame?.policy || {};
@@ -2122,7 +2039,11 @@ import {
   const debug = {
     simulateIncomingFrame(frame) {
       return handleMessageFrame(frame);
-    }
+    },
+    normalizeIncomingFrame,
+    processControlFrameObject,
+    parseMessageData,
+    handleRawMessageData,
   };
 
   // ===== Public WSClient API wiring (window.WSClient = …) =====
