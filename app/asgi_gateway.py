@@ -661,11 +661,21 @@ def _build_static_response(path: Path, *, if_none_match: Optional[str] = None) -
     digest = hashlib.sha256(data).hexdigest()
     etag = f'"{digest}"'
 
+    try:
+        relative_path = path.relative_to(STATIC_ROOT).as_posix()
+    except ValueError:
+        relative_path = ""
+
+    cache_control_value = b"public, max-age=31536000, immutable"
+    if relative_path.startswith("js/ws/") or relative_path.startswith("js/audio/"):
+        # ES module imports don't get ?v={{BUILD_ID}}, so we force fresh loads there.
+        cache_control_value = b"no-store"
+
     if if_none_match:
         candidates = {value.strip() for value in if_none_match.split(",") if value.strip()}
         if "*" in candidates or etag in candidates:
             headers = (
-                (b"cache-control", b"public, max-age=31536000, immutable"),
+                (b"cache-control", cache_control_value),
                 (b"etag", etag.encode("ascii")),
                 (b"content-length", b"0"),
             )
@@ -680,7 +690,7 @@ def _build_static_response(path: Path, *, if_none_match: Optional[str] = None) -
     headers: list[tuple[bytes, bytes]] = [
         (b"content-type", content_type.encode("latin1")),
         (b"content-length", str(len(data)).encode("ascii")),
-        (b"cache-control", b"public, max-age=31536000, immutable"),
+        (b"cache-control", cache_control_value),
         (b"etag", etag.encode("ascii")),
     ]
     if encoding:
