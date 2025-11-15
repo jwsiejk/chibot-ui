@@ -357,32 +357,23 @@ import {
   // ===== PCM sender + ring buffer + ASR priming =====
   
 
+  let scheduleAudioKeepaliveImpl = () => {};
+  let clearAudioKeepaliveTimerImpl = () => {};
+
   function clearAudioKeepaliveTimer() {
-    if (micKeepaliveTimerId) {
-      clearTimeout(micKeepaliveTimerId);
-      micKeepaliveTimerId = null;
+    try {
+      clearAudioKeepaliveTimerImpl();
+    } catch (err) {
+      console.warn("clearAudioKeepaliveTimer failed", err);
     }
   }
 
   function scheduleAudioKeepalive() {
-    clearAudioKeepaliveTimer();
-    micKeepaliveTimerId = setTimeout(() => {
-      micKeepaliveTimerId = null;
-      const listening = Boolean(AppState.listening);
-      const now = Date.now();
-      if (!listening) {
-        return;
-      }
-      if (now - micLastChunkAt >= AUDIO_KEEPALIVE_MS) {
-        try {
-          WSClient.sendJSON({ type: "client.ping" });
-          logStage("client.ping", { lane: "mic" });
-        } catch (err) {
-          console.warn("client.ping send failed", err);
-        }
-      }
-      scheduleAudioKeepalive();
-    }, AUDIO_KEEPALIVE_MS);
+    try {
+      scheduleAudioKeepaliveImpl();
+    } catch (err) {
+      console.warn("scheduleAudioKeepalive failed", err);
+    }
   }
 
   if (typeof AppState._recoverPrimePending === "undefined") {
@@ -476,9 +467,6 @@ import {
   let autoResumeAttemptToken = null;
   let lastTokenValue = null;
   let lastTokenMintedAt = null;
-
-  let micKeepaliveTimerId = null;
-  let micLastChunkAt = 0;
 
   function wsOpen() {
     const ws = WSClient._ws || window.ws;
@@ -1399,7 +1387,7 @@ import {
     setMicChunks: (value) => { __micChunks = Number.isFinite(value) ? Number(value) : 0; },
     getMicBytes: () => __micBytes,
     setMicBytes: (value) => { __micBytes = Number.isFinite(value) ? Number(value) : 0; },
-    audioKeepaliveMs: 20000,
+    audioKeepaliveMs: AUDIO_KEEPALIVE_MS,
   });
 
   const {
@@ -1412,7 +1400,16 @@ import {
     getPcmRing,
     resetSilenceSuppression,
     updatePcmSenderState,
+    scheduleAudioKeepalive: runtimeScheduleAudioKeepalive,
+    clearAudioKeepaliveTimer: runtimeClearAudioKeepalive,
   } = audioRuntime;
+
+  scheduleAudioKeepaliveImpl = typeof runtimeScheduleAudioKeepalive === "function"
+    ? runtimeScheduleAudioKeepalive
+    : () => {};
+  clearAudioKeepaliveTimerImpl = typeof runtimeClearAudioKeepalive === "function"
+    ? runtimeClearAudioKeepalive
+    : () => {};
 
   function cloneClientVadPolicyRoot(root) {
     const safeRoot = root && typeof root === "object" ? root : {};
@@ -1732,7 +1729,7 @@ import {
   }
   // --- End: header idempotency + strict schema ---
   let __lastErrorSig = null, __lastErrorAt = 0;
-  const AUDIO_KEEPALIVE_MS = 20000;
+  const AUDIO_KEEPALIVE_MS = 4000;
 
   function normalizeReason(reason) {
     if (typeof reason === "string" && reason) {
@@ -2012,7 +2009,6 @@ import {
       __micRecordingStartAt = Date.now();
       _audioStreaming = true;
       updatePcmSenderState();
-      micLastChunkAt = Date.now();
       scheduleAudioKeepalive();
       // Set the single authoritative state flag:
       setListeningState(true);
