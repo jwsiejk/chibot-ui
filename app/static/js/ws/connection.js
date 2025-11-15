@@ -1,7 +1,7 @@
 // app/static/js/ws/connection.js
 // Encapsulates low-level WebSocket connection, queueing, and heartbeat logic.
 
-import { encodeMessagePack, decodeMessagePack } from "../utils/msgpack.mjs";
+import { encodeMessagePack } from "../utils/msgpack.mjs";
 
 const HEARTBEAT_INTERVAL_MS = 20000;
 const DEFAULT_CLOSE_REASON = "client_shutdown";
@@ -45,7 +45,7 @@ export function createWsConnection({
   policyRuntime,
   audioRuntime,
   hubLog,
-  handleIncomingFrame,
+  handleIncomingFrame: clientHandleIncomingFrame,
 }) {
   void policyRuntime;
   const recordClientBannerEvent = telemetry?.recordClientBannerEvent || (() => {});
@@ -68,6 +68,8 @@ export function createWsConnection({
     ensurePcmSender = () => Promise.resolve(null),
     stopInputCapture = () => {},
   } = audioRuntime || {};
+
+  let rawMessageHandler = null;
 
   function emit(event, payload) {
     try {
@@ -388,19 +390,6 @@ export function createWsConnection({
     }
   }
 
-  function tryDecodeMsgpackFrame(buffer) {
-    try {
-      const view = buffer instanceof ArrayBuffer
-        ? new Uint8Array(buffer)
-        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-      const decoded = decodeMessagePack(view);
-      if (decoded && typeof decoded === "object" && typeof decoded.type === "string") {
-        return decoded;
-      }
-    } catch {}
-    return null;
-  }
-
   function extractArrayBuffer(payload) {
     if (payload instanceof ArrayBuffer) {
       return payload;
@@ -706,47 +695,6 @@ export function createWsConnection({
     } catch {}
   }
 
-  function decodeIncomingData(event) {
-    const { data } = event;
-    if (typeof data === "string") {
-      try {
-        return JSON.parse(data);
-      } catch (err) {
-        console.error("Failed to parse WS frame", err, data);
-        return null;
-      }
-    }
-    if (data instanceof Blob) {
-      if (getNegotiatedControlCodec() === "msgpack") {
-        return data.arrayBuffer().then((buffer) => {
-          const frame = tryDecodeMsgpackFrame(buffer);
-          if (frame) {
-            return frame;
-          }
-          emit("binary", buffer);
-          return null;
-        });
-      }
-      emit("binary", data);
-      return null;
-    }
-    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-      const chunk = data instanceof ArrayBuffer
-        ? data
-        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-      if (getNegotiatedControlCodec() === "msgpack") {
-        const frame = tryDecodeMsgpackFrame(chunk);
-        if (frame) {
-          return frame;
-        }
-      }
-      emit("binary", chunk);
-      return null;
-    }
-    console.warn("Unknown WS frame type", data);
-    return null;
-  }
-
   function processIncomingFrame(frame) {
     if (!frame || typeof frame !== "object") {
       return;
@@ -759,7 +707,11 @@ export function createWsConnection({
     if (frame.type === "server.banner") {
       handleServerBanner(frame);
     }
-    handleIncomingFrame?.(frame);
+    clientHandleIncomingFrame?.(frame);
+  }
+
+  function setRawMessageHandler(handler) {
+    rawMessageHandler = typeof handler === "function" ? handler : null;
   }
 
   function attachSocket(ws) {
@@ -782,19 +734,11 @@ export function createWsConnection({
       },
       message: (event) => {
         try {
-          const maybeFrame = decodeIncomingData(event);
-          if (!maybeFrame) {
+          if (rawMessageHandler) {
+            rawMessageHandler(event.data);
             return;
           }
-          if (maybeFrame && typeof maybeFrame.then === "function") {
-            maybeFrame.then((resolved) => {
-              if (resolved) {
-                processIncomingFrame(resolved);
-              }
-            }).catch((err) => console.warn("ws.connection async frame decode failed", err));
-            return;
-          }
-          processIncomingFrame(maybeFrame);
+          console.warn("ws.connection message handler missing parser; dropping frame");
         } catch (err) {
           console.error("WS message handler critical crash", err);
           hubLog?.("client.ws.crash", { error: err?.message, source: "onmessage" });
@@ -945,5 +889,8 @@ export function createWsConnection({
     send,
     sendBinary,
     getBufferedAmount,
+    handleParsedFrame: processIncomingFrame,
+    setRawMessageHandler,
+    getNegotiatedControlCodec,
   };
 }
