@@ -225,6 +225,63 @@ import {
   let partialWatchdogDeadline = 0;
   let partialWatchdogFirstTurn = true;
 
+  function clearPartialWatchdog() {
+    if (partialWatchdogTimer) {
+      try { clearTimeout(partialWatchdogTimer); } catch {}
+      partialWatchdogTimer = null;
+    }
+    partialWatchdogDeadline = 0;
+  }
+
+  function schedulePartialWatchdog(source) {
+    const firstTurn = partialWatchdogFirstTurn === true;
+    const rawDelay = firstTurn ? WATCHDOG_FIRST_MS : WATCHDOG_SUBSEQUENT_MS;
+    const delay = Number.isFinite(rawDelay) ? Math.max(0, rawDelay) : 0;
+    partialWatchdogFirstTurn = false;
+    if (delay <= 0) {
+      clearPartialWatchdog();
+      return;
+    }
+
+    clearPartialWatchdog();
+    const reason = typeof source === "string" && source ? source : "unknown";
+    partialWatchdogDeadline = Date.now() + delay;
+
+    partialWatchdogTimer = setTimeout(() => {
+      partialWatchdogTimer = null;
+      partialWatchdogDeadline = 0;
+      try {
+        logStage("client.watchdog.partial_timeout", {
+          source: reason,
+          first_turn: firstTurn,
+          wait_ms: delay,
+        });
+      } catch {}
+
+      try {
+        recordClientBannerEvent("watchdog.partial.timeout", {
+          source: reason,
+          first_turn: firstTurn,
+          wait_ms: delay,
+        });
+      } catch {}
+
+      try {
+        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+          window.dispatchEvent(new CustomEvent("client.watchdog.partial_timeout", {
+            detail: { source: reason, firstTurn, waitMs: delay },
+          }));
+        }
+      } catch {}
+
+      try {
+        void recoverFromAsrFault("partial_timeout");
+      } catch (err) {
+        try { console.warn("Partial watchdog recovery failed", err); } catch (_) {}
+      }
+    }, delay);
+  }
+
   if (typeof window !== "undefined") {
     try {
       Object.defineProperty(window, "__micAttempts", {
@@ -357,6 +414,9 @@ import {
     || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
   const WATCHDOG_FIRST_MS = Number(
     POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? 3500,
+  );
+  const WATCHDOG_SUBSEQUENT_MS = Number(
+    POLICY_WATCHDOG?.partial_wait_ms ?? 2500,
   );
   const SENDER_GATE_ON_TTS = Boolean(
     POLICY_VAD?.sender_gate_on_tts ?? true,
