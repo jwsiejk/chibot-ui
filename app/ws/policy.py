@@ -69,7 +69,7 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
             "noiseSuppression": True,
             "autoGainControl": False,
             "channelCount": 1,
-            "sampleRate": 48000,
+            "sampleRate": 16000,
         }
     },
     "ui": {
