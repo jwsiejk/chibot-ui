@@ -142,10 +142,15 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
   function transcriptFrameAllowed(frame) {
     const type = typeof frame?.type === "string" ? frame.type : "";
     const role = typeof frame?.role === "string" ? frame.role : "";
-    const allow = type === "asr.partial" || type === "asr.final";
+
+    // For now, do NOT filter anything at the transcript layer.
+    // We want all ASR + chat frames to be eligible for display.
+    const allow = true;
+
     try {
       console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
     } catch {}
+
     return allow;
   }
 
