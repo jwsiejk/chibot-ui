@@ -264,6 +264,7 @@ import {
     return socket;
   }
 
+  // Tracks banner state, cleans environment info, and surfaces WS connection toasts.
   const bannerClient = createBannerClient({
     AppState,
     updateState,
@@ -319,6 +320,7 @@ import {
   }
   const FEATURE_LEGACY_POLICY = Boolean(window.FEATURE_LEGACY_POLICY ?? false);
 
+  // Handles client-side policy normalization and access helpers.
   const policyRuntime = createPolicyRuntime(AppState, {
     updateState,
     dispatchFrame,
@@ -616,6 +618,7 @@ import {
     return false;
   }
 
+  // Owns PCM ring buffer, PCM sender wiring, and ASR priming from recent audio.
   const audioRuntime = createWsAudioRuntime({
     AppState,
     initPcmSender,
@@ -751,6 +754,7 @@ import {
     }
   }
 
+  // Bridges VAD events into AppState and orchestrates mic lifecycle + silence timers.
   captureRuntime = createCaptureRuntime({
     AppState,
     policyRuntime,
@@ -1330,6 +1334,7 @@ import {
     }
   }
 
+  // Delivers ASR/chat frames into the transcript UI and tracks streaming state.
   const transcriptBridge = createTranscriptBridge({
     AppState,
     hubLog,
@@ -1686,6 +1691,7 @@ import {
     dispatchFrame(frame);
   }
 
+  // Wraps the WebSocket transport, queue, and heartbeat, forwarding frames downstream.
   const connection = createWsConnection({
     AppState,
     eventEmitter: WSClient.__events || null,
@@ -1700,6 +1706,7 @@ import {
     handleIncomingFrame,
   });
 
+  // Coordinates turn state and ASR lifecycle (open/arm/close/recover decisions).
   const turnRuntime = createTurnRuntime({
     AppState,
     policyRuntime,
