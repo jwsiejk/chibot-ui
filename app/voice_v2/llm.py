@@ -11,7 +11,7 @@ from typing import Any, Dict, Mapping, Sequence
 
 from app.services.llm.provider import create_from_env
 from app.telemetry import bus
-from app.voice_v2 import EVT_NLG, EVT_WS_JSON_SEND
+from app.voice_v2 import EVT_NLG, EVT_NLG_STREAM, EVT_WS_JSON_SEND
 from app.voice_v2 import generator
 from app.voice_v2.llm_base import (
     LLMProviderBase,
@@ -142,6 +142,8 @@ class LLMAdapter:
                     provider_messages,
                     model=model_name,
                     temperature=0.6,
+                    req_id=req_id,
+                    sid=sid,
                 )
             except ProviderCircuitOpenError:
                 fallback_reason = "breaker_open"
@@ -226,6 +228,8 @@ class LLMAdapter:
                     messages,
                     model=model_name,
                     temperature=0.4,
+                    req_id=req_id,
+                    sid=sid,
                     max_tokens=30,
                     purpose="greet",
                 )
@@ -266,6 +270,8 @@ class LLMAdapter:
         *,
         model: str,
         temperature: float,
+        req_id: str,
+        sid: str | None = None,
         **extra_kwargs: Any,
     ) -> str:
         async def _execute() -> Any:
@@ -285,7 +291,22 @@ class LLMAdapter:
                 future = executor.submit(asyncio.run, _execute())
                 result = future.result()
 
-        return result if isinstance(result, str) else str(result)
+        if isinstance(result, str):
+            return result
+
+        if hasattr(result, "final_text") and callable(getattr(result, "final_text")):
+            stream = result
+            if self._auto_publish:
+                self._publish_stream_event(req_id, stream, sid=sid)
+            try:
+                return stream.final_text()
+            except Exception:
+                _log.exception(
+                    "evt=llm_stream_finalization_failed req_id=%s", req_id
+                )
+                raise
+
+        return str(result)
 
     @staticmethod
     def _greet_instruction(persona: Mapping[str, Any] | object) -> str:
@@ -354,6 +375,23 @@ class LLMAdapter:
 
         self._publish_nlg(req_id, text, metadata=metadata)
         self._publish_chat_message(req_id, text)
+
+    def _publish_stream_event(
+        self,
+        req_id: str,
+        stream: Any,
+        *,
+        sid: str | None = None,
+    ) -> None:
+        event = {
+            "type": EVT_NLG_STREAM,
+            "req_id": req_id,
+            "source": "llm_adapter",
+            "stream": stream,
+        }
+        if isinstance(sid, str) and sid:
+            event["sid"] = sid
+        self._bus.publish(event)
 
     def publish_chat_message(self, req_id: str, text: str) -> None:
         """Manually mirror the assistant message into the chat stream."""
