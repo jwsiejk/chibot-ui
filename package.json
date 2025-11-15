@@ -1,0 +1,11 @@
+{
+  "name": "askchip-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:js": "node tools/build_js.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.2"
+  }
+}

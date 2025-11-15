@@ -7,6 +7,25 @@
 // loadScript() below so they share the same versioned ?v= query parameters.
 
 (() => {
+  function getMainScriptElement() {
+    if (typeof document === "undefined") {
+      return null;
+    }
+    const current = document.currentScript;
+    if (current && current.tagName) {
+      return current;
+    }
+    const byId = document.getElementById?.("askchip-main");
+    if (byId && byId.tagName && byId.tagName.toLowerCase() === "script") {
+      return byId;
+    }
+    const dataAttr = document.querySelector?.('script[data-askchip-main="true"]');
+    if (dataAttr) {
+      return dataAttr;
+    }
+    return document.querySelector?.('script[src*="/static/js/app.js"]') || null;
+  }
+
   // Ensure single-store shape (idempotent)
   try {
     window.AppState = window.AppState || {};
@@ -22,9 +41,7 @@
 
   // Build stamp (diagnostic only). Prints the ?v= build id if present on this script.
   try {
-    const el =
-      document.currentScript ||
-      document.querySelector('script[src*="/static/js/app.js"]');
+    const el = getMainScriptElement();
     const build = el ? new URL(el.src, location.href).searchParams.get('v') : null;
     if (build) {
       window.__BUILD_SHA__ = build;
@@ -90,7 +107,20 @@
       return "/static/js/";
     }
 
-    const script = document.currentScript || document.querySelector('script[src$="/static/js/app.js"]');
+    const script = getMainScriptElement();
+
+    if (typeof window !== "undefined" && window.__STATIC_JS_BASE__) {
+      const fromWindow = window.__STATIC_JS_BASE__;
+      if (typeof fromWindow === "string" && fromWindow.trim()) {
+        return fromWindow.trim().replace(/\/?$/, "/");
+      }
+    }
+
+    const datasetBase = script?.dataset?.staticBase;
+    if (datasetBase && typeof datasetBase === "string" && datasetBase.trim()) {
+      return datasetBase.trim().replace(/\/?$/, "/");
+    }
+
     if (script && script.src) {
       try {
         const url = new URL(script.src, window.location.href);
@@ -129,10 +159,7 @@
       return suffix;
     }
     try {
-      const current =
-        document.currentScript ||
-        document.querySelector('script[src*="/static/js/app.js"]') ||
-        null;
+      const current = getMainScriptElement();
       if (!current || !current.src) {
         return suffix;
       }

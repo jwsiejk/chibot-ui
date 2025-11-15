@@ -38,6 +38,8 @@ def inject_static_version(html: str) -> str:
 
     def _replace(match: re.Match[str]) -> str:
         url = match.group("url")
+        if url.startswith("/static/dist/"):
+            return match.group(0)
         if "?" in url:
             return match.group(0)
         attr = match.group("attr")

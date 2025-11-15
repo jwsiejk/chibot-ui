@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="/static/css/styles.css?v={{ BUILD_ID }}" />
     <script>
       window.BUILD_ID = "{{ BUILD_ID }}";
+      window.__STATIC_JS_BASE__ = "/static/js/";
       console.log("BUILD_ID", "{{ BUILD_ID }}");
     </script>
   </head>
@@ -182,7 +183,13 @@
       }());
     </script>
     <script src="/static/js/auth_ui.js?v={{ BUILD_ID }}" defer></script>
-    <script src="/static/js/app.js?v={{ BUILD_ID }}" defer></script>
+    <script
+      id="askchip-main"
+      data-askchip-main="true"
+      data-static-base="/static/js/"
+      type="module"
+      src="{{ MAIN_BUNDLE_SRC }}"
+    ></script>
     <script>
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker
