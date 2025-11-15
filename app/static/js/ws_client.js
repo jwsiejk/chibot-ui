@@ -553,17 +553,6 @@ import {
     return true;
   }
 
-  /*
-  function resetTurnIntent(reason) {
-    if (!__turnOpen) return;
-    __turnOpen = false;
-    __turnOpenAt = 0;
-    try {
-      hubLog("client.turn.intent", { action: "close", reason: reason || "reset" });
-    } catch {}
-  }
-  */
-
   function resetTurnIntent(reason) {
     if (__turnOpen) {
       __turnOpen = false;
@@ -645,24 +634,6 @@ import {
   function _warming() {
     return Date.now() < warmupUntil;
   }
-  /*
-  function _canCaptureNow() {
-    if (dbg("audio_safe_mode") || dbg("force_capture")) return true;
-    // During arming (or until first chunk), don’t block the stream
-    if (!__firstChunkSeen || Date.now() < __armingGraceUntil) return true;
-    const s = window.AppState || {};
-    const ws = socket || window.ws;
-    if (!(!!ws && ws.readyState === WebSocket.OPEN)) {
-      return false;
-    }
-    if (s.tts) {
-      return false;
-    }
-    // Simplified gate check: listening state must be true AND not paused
-    return _warming() || (s.listening && !senderPaused);
-  }
-  */
-
   function canCaptureNow() {
     if (typeof runtimeCanCaptureNow === "function") {
       return runtimeCanCaptureNow();
@@ -1365,67 +1336,12 @@ import {
     }
   }
 
-  /*
-  function openAsr(opts = {}) {
-    const options = opts && typeof opts === "object" ? { ...opts } : {};
-    if (!options.recover) {
-      const ring = getPcmRing();
-      if (typeof ring?.clear === 'function') {
-        try { ring.clear(); } catch (err) { try { console.warn("pcmRing.clear failed", err); } catch (_) {} }
-      }
-    }
-    if (!options.recover && primedSessionIds.size) {
-      primedSessionIds.clear();
-    }
-    if (!options.recover) {
-      AppState._recoverPrimePending = false;
-    }
-    const payload = { type: "asr.open" };
-    if (typeof options.vendor === "string" && options.vendor) {
-      payload.vendor = options.vendor;
-    }
-    if (Number.isFinite(options.sample_rate)) {
-      payload.sample_rate = Number(options.sample_rate);
-    }
-    if (typeof options.language === "string" && options.language) {
-      payload.language = options.language;
-    }
-    if (typeof options.reason === "string" && options.reason) {
-      payload.reason = options.reason;
-    }
-    if (options && typeof options.metadata === "object" && options.metadata) {
-      payload.metadata = { ...options.metadata };
-    }
-    if (typeof options.recover === "boolean") {
-      payload.recover = options.recover;
-    }
-    return WSClient.sendJSON(payload);
-  }
-  */
-
   function openAsr(opts = {}) {
     if (typeof runtimeOpenAsr === "function") {
       return runtimeOpenAsr(opts);
     }
     return undefined;
   }
-
-  /*
-  function requestAsrArm(reason) {
-    const label = normalizeReason(reason);
-    try {
-      setAsrArmInFlight(true);
-      logStage("client.asr_rearm_request", { reason: label });
-      openAsr({ reason: label }); // send first so it's not phase-blocked
-      setWsPhase("arming");
-    } catch (err) {
-      setAsrArmInFlight(false);
-      setWsPhase(AppState.wsConnected ? "connected" : "disconnected");
-      console.error("Failed to send asr.open", err);
-      logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_WS_SEND, message: err?.message });
-    }
-  }
-  */
 
   function requestAsrArm(reason) {
     if (typeof runtimeRequestAsrArm === "function") {
@@ -1434,98 +1350,12 @@ import {
     return undefined;
   }
 
-  /*
-  async function requestAsrClose(reason = "client_stop") {
-    const label = normalizeReason(reason);
-    // ASR close is not a transport close; do not touch wsPhase here.
-    setAsrArmInFlight(false);
-    const seq = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
-      ? crypto.randomUUID()
-      : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const sid = typeof AppState?.asrSid === "string" && AppState.asrSid ? AppState.asrSid : null;
-    const payload = { type: "asr.close", seq, reason: label };
-    if (sid) {
-      payload.sid = sid;
-    }
-    let ack = null;
-    try {
-      WSClient.sendJSON(payload);
-      pendingAsrClosedSeq = seq;
-      awaitingAsrClosedAck = true;
-      logStage("client.asr_close_request", { reason: label });
-    } catch (err) {
-      pendingAsrClosedSeq = null;
-      awaitingAsrClosedAck = false;
-      console.warn("Failed to send asr.close", err);
-    }
-    if (awaitingAsrClosedAck) {
-      try {
-        ack = await WSClient.waitForOnce(
-          "asr.closed",
-          (frame) => frame?.seq === seq || (!!sid && frame?.sid === sid),
-          2000,
-        );
-      } catch (err) {
-        console.warn("asr.closed ack timeout; proceeding cautiously", err);
-      } finally {
-        awaitingAsrClosedAck = false;
-        pendingAsrClosedSeq = null;
-      }
-    }
-    await stopRecorder(label);
-    return ack;
-  }
-  */
-
   async function requestAsrClose(reason = "client_stop") {
     if (typeof runtimeRequestAsrClose === "function") {
       return runtimeRequestAsrClose(reason);
     }
     return undefined;
   }
-
-  /*
-  async function recoverFromAsrFault(reason) {
-    if (asrRecovering) {
-      return;
-    }
-    asrRecovering = true;
-    const label = typeof reason === "string" && reason ? reason : "unknown";
-    clearPartialWatchdog();
-    try {
-      await WSClient.requestAsrClose(`recover:${label}`);
-    } catch (err) {
-      try { console.warn("ASR recovery close failed", err); } catch (_) {}
-    }
-
-    try {
-      await WSClient.openAsr({
-        vendor: AppState?.asrVendor || DEFAULT_ASR_VENDOR,
-        sample_rate: ASR_RATE,
-        language: AppState?.language || "en-US",
-        recover: true,
-      });
-    } catch (err) {
-      try { console.warn("ASR recovery open failed", err); } catch (_) {}
-    }
-
-    try {
-      if (typeof WSClient.waitForOnce === 'function') {
-        const readyFrame = await WSClient.waitForOnce('asr.ready', () => true, 2000);
-        const sid = readyFrame?.sid || AppState?.asrSid || `${Date.now()}`;
-        primeAsrStreamFromRing(sid);
-        AppState._recoverPrimePending = false;
-      } else {
-        AppState._recoverPrimePending = true;
-      }
-    } catch (err) {
-      AppState._recoverPrimePending = true;
-      try { console.warn("ASR recovery wait_for_ready failed", err); } catch (_) {}
-    } finally {
-      asrRecovering = false;
-    }
-  }
-  */
 
   async function recoverFromAsrFault(reason) {
     if (typeof runtimeRecoverFromAsrFault === "function") {
