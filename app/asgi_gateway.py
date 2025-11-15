@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 from urllib.parse import parse_qs
 
 from app import config
+from app import static_manifest
 from app.admin.api.settings import handle_admin_settings
 from app.admin.flow_api import handle_flow_sessions, handle_flow_trace, handle_flow_zip
 from app.auth.http_handlers import (
@@ -345,8 +346,10 @@ async def _handle_index(scope: dict, receive: Callable[[], Awaitable[dict]]) -> 
     rewritten = rewritten.replace("{{APP_CONTEXT}}", context_json)
     rewritten = rewritten.replace("{{CLIENT_CONFIG}}", client_config_json)
     build_id = get_build_id()
+    main_bundle_src = static_manifest.get_main_script_src(build_id)
     rewritten = rewritten.replace("{{BUILD_ID}}", build_id)
     rewritten = rewritten.replace("{{ BUILD_ID }}", build_id)
+    rewritten = rewritten.replace("{{ MAIN_BUNDLE_SRC }}", main_bundle_src)
     body = rewritten.encode("utf-8")
     return _html_response(body, build_id=build_id)
 
