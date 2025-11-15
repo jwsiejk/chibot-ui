@@ -5,7 +5,7 @@ import * as captureRuntimeModule from "./audio/capture_runtime.js";
 import { initPcmSender } from "./audio/pcm_sender.js";
 import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
-import { createWsConnection } from "./ws/connection.js";
+import { createWsConnection, validateOutboundPayload } from "./ws/connection.js";
 import { createTurnRuntime } from "./ws/turns.js";
 import { createBannerClient } from "./ws/banner_client.js";
 import { createTranscriptBridge } from "./ws/transcript_bridge.js";

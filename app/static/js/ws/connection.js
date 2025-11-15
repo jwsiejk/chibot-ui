@@ -38,6 +38,69 @@ const DEFAULT_SUBPROTOCOLS = REQUESTED_CONTROL_CODEC === "msgpack"
   ? [MSGPACK_SUBPROTOCOL, JSON_SUBPROTOCOL]
   : JSON_SUBPROTOCOL;
 
+let sharedRecordClientBannerEvent = () => {};
+let sharedLogStage = () => {};
+
+function isTypedObjectPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
+    return false;
+  }
+  return true;
+}
+
+export function validateOutboundPayload(payload, { rawPayload = payload, source = "ws.connection" } = {}) {
+  const recordClientBannerEvent = sharedRecordClientBannerEvent;
+  const logStage = sharedLogStage;
+  if (!isTypedObjectPayload(payload)) {
+    return true;
+  }
+  const structureTag = Object.prototype.toString.call(payload);
+  const isPlainJsonObject = structureTag === "[object Object]";
+  if (!isPlainJsonObject) {
+    const structure = Array.isArray(payload)
+      ? "Array"
+      : structureTag.slice(8, -1) || "Unknown";
+    const keys = Object.keys(payload || {});
+    console.warn("WS connection send skipped payload with non type-preserving structure", { structure, keys });
+    try {
+      recordClientBannerEvent("ws.send.invalid_payload", {
+        reason: "non_type_preserving_structure",
+        structure,
+        keys: keys.slice(0, 6),
+        source,
+      });
+    } catch {}
+    try {
+      logStage("client.ws", {
+        outcome: "send_skipped_non_type_preserving_structure",
+        structure,
+        source,
+      });
+    } catch {}
+    return false;
+  }
+  const type = payload && typeof payload.type === "string" ? payload.type.trim() : "";
+  if (type.length > 0) {
+    return true;
+  }
+  const keys = Object.keys(payload || {});
+  console.warn("WS connection send skipped object payload without type", { keys, source });
+  try {
+    recordClientBannerEvent("ws.send.invalid_payload", {
+      reason: "missing_type",
+      keys: keys.slice(0, 6),
+      source,
+    });
+  } catch {}
+  try {
+    logStage("client.ws", { outcome: "send_skipped_missing_type", keys: keys.slice(0, 6), source });
+  } catch {}
+  return false;
+}
+
 export function createWsConnection({
   AppState,
   eventEmitter,
@@ -50,6 +113,8 @@ export function createWsConnection({
   void policyRuntime;
   const recordClientBannerEvent = telemetry?.recordClientBannerEvent || (() => {});
   const logStage = telemetry?.logStage || (() => {});
+  sharedRecordClientBannerEvent = recordClientBannerEvent;
+  sharedLogStage = logStage;
   const recordLastError = telemetry?.recordLastError || (() => {});
 
   const connectionQueue = [];
@@ -303,64 +368,6 @@ export function createWsConnection({
       return value;
     }
     return `${value.slice(0, max - 3)}...`;
-  }
-
-  function isTypedObjectPayload(payload) {
-    if (!payload || typeof payload !== "object") {
-      return false;
-    }
-    if (payload instanceof Blob || payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) {
-      return false;
-    }
-    return true;
-  }
-
-  function validateOutboundPayload(payload, { rawPayload = payload, source = "ws.connection" } = {}) {
-    if (!isTypedObjectPayload(payload)) {
-      return true;
-    }
-    const structureTag = Object.prototype.toString.call(payload);
-    const isPlainJsonObject = structureTag === "[object Object]";
-    if (!isPlainJsonObject) {
-      const structure = Array.isArray(payload)
-        ? "Array"
-        : structureTag.slice(8, -1) || "Unknown";
-      const keys = Object.keys(payload || {});
-      console.warn("WS connection send skipped payload with non type-preserving structure", { structure, keys });
-      try {
-        recordClientBannerEvent("ws.send.invalid_payload", {
-          reason: "non_type_preserving_structure",
-          structure,
-          keys: keys.slice(0, 6),
-          source,
-        });
-      } catch {}
-      try {
-        logStage("client.ws", {
-          outcome: "send_skipped_non_type_preserving_structure",
-          structure,
-          source,
-        });
-      } catch {}
-      return false;
-    }
-    const type = payload && typeof payload.type === "string" ? payload.type.trim() : "";
-    if (type.length > 0) {
-      return true;
-    }
-    const keys = Object.keys(payload || {});
-    console.warn("WS connection send skipped object payload without type", { keys, source });
-    try {
-      recordClientBannerEvent("ws.send.invalid_payload", {
-        reason: "missing_type",
-        keys: keys.slice(0, 6),
-        source,
-      });
-    } catch {}
-    try {
-      logStage("client.ws", { outcome: "send_skipped_missing_type", keys: keys.slice(0, 6), source });
-    } catch {}
-    return false;
   }
 
   function isControlFrame(frame) {
