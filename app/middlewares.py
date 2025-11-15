@@ -30,6 +30,11 @@ def apply_cache_headers(headers: Iterable[_Header]) -> Tuple[_Header, ...]:
     elif any(token in ct_lower for token in ("javascript", "text/css", "font", "image")):
         cache_value = b"public, max-age=31536000, immutable"
 
+    if cache_index is not None:
+        existing = normalized[cache_index][1]
+        if b"no-store" in existing.lower():
+            return tuple(normalized)
+
     if cache_value is None:
         return tuple(normalized)
 
