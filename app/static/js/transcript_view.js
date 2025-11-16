@@ -422,6 +422,12 @@
       const clientMsgId = typeof frame.client_msg_id === "string" ? frame.client_msg_id : null;
       const reqId = typeof frame.req_id === "string" ? frame.req_id : null;
 
+      if (role === "assistant" && typeof view.hasCommittedAssistantForReqId === "function" && reqId) {
+        if (view.hasCommittedAssistantForReqId(reqId)) {
+          return;
+        }
+      }
+
       let node = null;
 
       if (messageId && messageNodesById.has(messageId)) {
