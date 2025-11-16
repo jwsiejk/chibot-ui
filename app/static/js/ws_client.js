@@ -205,6 +205,8 @@ if (typeof createCaptureRuntime !== "function") {
   let turnStopSent = false;
 
   function resetTurnStopFlag() {
+    // Start each user turn fresh: allow exactly one client-side input.stop
+    // signal per turn and never block audio based on this flag.
     turnStopSent = false;
   }
 
@@ -222,7 +224,8 @@ if (typeof createCaptureRuntime !== "function") {
     const normalized = fallbackToReasonKey(reason) || "vad_silence";
     maybeSendTurnStop(normalized);
     try {
-      await stopRecorder({ reason: normalized }, {
+      // IMPORTANT: stopRecorder expects a string reason, not an object.
+      await stopRecorder(normalized, {
         fallbackReason: "vad_silence",
         source: "client.vad_silence",
         allowVadStop: true,
@@ -852,6 +855,8 @@ if (typeof createCaptureRuntime !== "function") {
       return;
     }
     try {
+      // Ensure a fresh turn-stop guard when we locally begin a new capture/turn.
+      resetTurnStopFlag();
       return startRecorderStreaming(policy, source);
     } catch (err) {
       console.warn("WSClient.startRecorderStreaming failed", err);
@@ -2303,10 +2308,6 @@ if (typeof createCaptureRuntime !== "function") {
     const lane = typeof options.lane === "string" ? options.lane : "mic";
     if (lane === "mic") {
       const now = Date.now();
-      if (turnStopSent) {
-        try { AppState?.hub?.log?.('client.audio.chunk_dropped_turn_stop', { ts: now }); } catch {}
-        return true;
-      }
       if (now < __pauseSendUntil) {
         const pauseMs = __pauseSendUntil - now;
         const ts = Number.isFinite(options.ts) ? Number(options.ts) : now;
