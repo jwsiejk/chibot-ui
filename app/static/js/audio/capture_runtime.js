@@ -508,11 +508,23 @@ export function createCaptureRuntime({
     const legacyFallback = arguments.length > 1 && typeof options !== "object"
       ? options
       : undefined;
-    const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
-    const fallbackReason = Object.prototype.hasOwnProperty.call(opts, "fallbackReason") ? opts.fallbackReason : legacyFallback;
+
+    const opts =
+      options && typeof options === "object" && !Array.isArray(options)
+        ? options
+        : {};
+
+    const fallbackReason = Object.prototype.hasOwnProperty.call(opts, "fallbackReason")
+      ? opts.fallbackReason
+      : legacyFallback;
+
     const allowVadStop = opts.allowVadStop === true;
-    const source = Object.prototype.hasOwnProperty.call(opts, "source") ? opts.source : null;
+    const source = Object.prototype.hasOwnProperty.call(opts, "source")
+      ? opts.source
+      : null;
+
     const { allowed, blocked, label } = evaluateStopRecorderReason(reason, fallbackReason);
+
     if (!allowed && !allowVadStop) {
       try {
         const meta = { reason: label, source };
@@ -524,9 +536,12 @@ export function createCaptureRuntime({
       } catch {}
       return false;
     }
-    const normalizedLabel = typeof label === "string" && label
-      ? label
-      : normalizeReason(fallbackReason || reason);
+
+    const normalizedLabel =
+      typeof label === "string" && label
+        ? label
+        : normalizeReason(fallbackReason || reason);
+
     return performStopRecorder(normalizedLabel);
   }
 

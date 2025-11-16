@@ -841,12 +841,20 @@ if (typeof createCaptureRuntime !== "function") {
 
   async function stopRecorder(reason, options = {}) {
     const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
-    const normalized = fallbackToReasonKey(reason) || fallbackToReasonKey(opts.fallbackReason) || "unspecified";
-    const allowTurnStop = opts.allowVadStop === true || fallbackReasonLooksUserInitiated(normalized);
-    if (allowTurnStop) {
+    const normalized =
+      fallbackToReasonKey(reason) ||
+      fallbackToReasonKey(opts.fallbackReason) ||
+      "unspecified";
+
+    // Only send a client-side input.stop when explicitly allowed by caller
+    // (e.g., VAD silence, manual stop). Do NOT use this to decide whether to
+    // send audio; recorder lifecycle handles that.
+    if (opts.allowVadStop === true) {
       maybeSendTurnStop(normalized);
     }
-    return captureStopRecorder(reason, options);
+
+    // Always pass a normalized string reason into the capture runtime.
+    return captureStopRecorder(normalized, opts);
   }
 
   WSClient.startRecorderStreaming = function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
