@@ -12,6 +12,7 @@ import { createTranscriptBridge } from "./ws/transcript_bridge.js";
 import { createSessionManager } from "./ws/session_manager.js";
 import { createFrameParser } from "./ws/frame_parser.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+import { isTypedArray, toArrayBuffer } from "./utils/binary.js";
 import {
   MIC_OUTCOME,
   logMic,
