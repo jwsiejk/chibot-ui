@@ -395,7 +395,7 @@
       }
     }
 
-    function handleSubmit(event) {
+    async function handleSubmit(event) {
       event.preventDefault();
       if (!input) return;
       const raw = input.value || "";
