@@ -117,6 +117,24 @@ if (typeof createCaptureRuntime !== "function") {
     return "json";
   }
 
+  function sendTurnStop(reason = "vad_silence") {
+    const ws = WSClient?._ws || window.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const frame = {
+      type: "input.stop",
+      reason,
+      ts: Date.now(),
+    };
+
+    try {
+      ws.send(JSON.stringify(frame));
+      console.log("client.turn_stop", frame);
+    } catch (err) {
+      console.warn("client.turn_stop_failed", { err, frame });
+    }
+  }
+
   // ===== Mic + VAD state, breadcrumbs, and telemetry wiring =====
   // ---- Golden-path turn trace & mic outcomes (additive) ----
   // ---- Telemetry (additive) ----
@@ -184,6 +202,35 @@ if (typeof createCaptureRuntime !== "function") {
   let partialWatchdogTimer = null;
   let partialWatchdogDeadline = 0;
   let partialWatchdogFirstTurn = true;
+  let turnStopSent = false;
+
+  function resetTurnStopFlag() {
+    turnStopSent = false;
+  }
+
+  function maybeSendTurnStop(reason = "vad_silence") {
+    if (turnStopSent) {
+      return false;
+    }
+    const key = fallbackToReasonKey(reason) || "vad_silence";
+    sendTurnStop(key);
+    turnStopSent = true;
+    return true;
+  }
+
+  async function handleVadSilenceStop(reason = "vad_silence") {
+    const normalized = fallbackToReasonKey(reason) || "vad_silence";
+    maybeSendTurnStop(normalized);
+    try {
+      await stopRecorder({ reason: normalized }, {
+        fallbackReason: "vad_silence",
+        source: "client.vad_silence",
+        allowVadStop: true,
+      });
+    } catch (err) {
+      try { console.warn("vad_silence_stop_failed", err); } catch {}
+    }
+  }
 
   function clearPartialWatchdog() {
     if (partialWatchdogTimer) {
@@ -764,6 +811,7 @@ if (typeof createCaptureRuntime !== "function") {
     clearPartialWatchdog,
     resetTurnIntent,
     MIC_OUTCOME,
+    onVadSilenceStop: handleVadSilenceStop,
   });
 
   const {
@@ -784,9 +832,19 @@ if (typeof createCaptureRuntime !== "function") {
     setWsPhase,
     resetRecorderTelemetry,
     performStopRecorder,
-    stopRecorder,
+    stopRecorder: captureStopRecorder,
     startRecorderStreaming,
   } = captureRuntime;
+
+  async function stopRecorder(reason, options = {}) {
+    const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
+    const normalized = fallbackToReasonKey(reason) || fallbackToReasonKey(opts.fallbackReason) || "unspecified";
+    const allowTurnStop = opts.allowVadStop === true || fallbackReasonLooksUserInitiated(normalized);
+    if (allowTurnStop) {
+      maybeSendTurnStop(normalized);
+    }
+    return captureStopRecorder(reason, options);
+  }
 
   WSClient.startRecorderStreaming = function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
@@ -1504,11 +1562,12 @@ if (typeof createCaptureRuntime !== "function") {
       const reason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
         : frame?.type || "input.start";
+      resetTurnStopFlag();
       __turnOpen = true;
       __turnOpenAt = Date.now();
       hubLog("client.stream.on", { reason });
       // NEW: Rely on input.start to open turn, but mic start is tied to ASR readiness
-      await openTurnOnce(reason); 
+      await openTurnOnce(reason);
       await handleInputStartFrame(frame);
     } else if (frame.type === "input.stop") {
       const reason = typeof frame?.reason === "string" && frame.reason
@@ -2244,6 +2303,10 @@ if (typeof createCaptureRuntime !== "function") {
     const lane = typeof options.lane === "string" ? options.lane : "mic";
     if (lane === "mic") {
       const now = Date.now();
+      if (turnStopSent) {
+        try { AppState?.hub?.log?.('client.audio.chunk_dropped_turn_stop', { ts: now }); } catch {}
+        return true;
+      }
       if (now < __pauseSendUntil) {
         const pauseMs = __pauseSendUntil - now;
         const ts = Number.isFinite(options.ts) ? Number(options.ts) : now;
