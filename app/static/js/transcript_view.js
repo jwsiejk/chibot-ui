@@ -373,8 +373,8 @@
     }
 
     function sendChatPayload(text, clientMsgId) {
-      const payload = { type: "chat.user", text };
-      if (clientMsgId) {
+      const payload = { type: "chat.user", role: "user", text };
+      if (typeof clientMsgId === "string" && clientMsgId) {
         payload.client_msg_id = clientMsgId;
       }
       const WSClient = window.WSClient;
