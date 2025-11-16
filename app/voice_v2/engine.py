@@ -163,6 +163,7 @@ class _TurnSession:
     tts_utt_id: Optional[str] = None
     tts_mask_phase: str = "off"
     req_id: Optional[str] = None
+    last_client_msg_id: Optional[str] = None
     nlu_req_id: Optional[str] = None
     perf_first_partial_ms: Optional[int] = None
     perf_final_ms: Optional[int] = None
@@ -357,6 +358,11 @@ class EngineV2:
             client_msg_id = None
 
         session = self._ensure_session(sid)
+        # Drop duplicate chat.user events if the client re-submits the same client_msg_id
+        if isinstance(client_msg_id, str) and client_msg_id and session.last_client_msg_id == client_msg_id:
+            _log.info("evt=chat_user_dedup sid=%s client_msg_id=%s", sid, client_msg_id)
+            return
+        session.last_client_msg_id = client_msg_id if isinstance(client_msg_id, str) else None
         previous_state = session.state
         was_responding = previous_state == RESPONDING
         policy = self.policy_snapshot or {}

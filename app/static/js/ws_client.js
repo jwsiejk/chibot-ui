@@ -884,6 +884,24 @@ if (typeof createCaptureRuntime !== "function") {
   }
 
   WSClient.startRecorderStreaming = function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
+    // Expose stopRecorder and input.stop helpers publicly so UI can pause mic on text input
+    WSClient.stopRecorder = function wsClientStopRecorder(reason = "text_input", options = {}) {
+      try {
+        return captureStopRecorder(reason, options);
+      } catch (err) {
+        console.warn("WSClient.stopRecorder failed", err);
+      }
+    };
+    WSClient.inputStop = function wsClientInputStop(reason = "text_input") {
+      try {
+        WSClient.sendJSON({ type: "input.stop", reason });
+      } catch (err) {
+        console.warn("WSClient.inputStop failed", err);
+      }
+    };
+    WSClient.clearResume = function wsClientClearResume() {
+      try { clearResumeState(); } catch (err) { console.warn('WSClient.clearResume failed', err); }
+    };
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
       return;
