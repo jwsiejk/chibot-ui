@@ -451,6 +451,7 @@ class AdapterContext:
     audio_profile: Optional[Dict[str, Any]] = None
     accepting_audio: bool = True
     audio_violation_count: int = 0
+    client_turn_closed: bool = False
     awaiting_asr_ready: bool = False
     client_capture_armed: bool = False
     outbound_queue_depth: int = 0
@@ -486,6 +487,7 @@ class AdapterContext:
     asr_first_packet_monotonic: Optional[float] = None
     partial_seq: int = 0
     partial_coalescer: _PartialCoalescer = field(default_factory=_PartialCoalescer)
+    last_asr_partial: Optional[str] = None
     send_lock: asyncio.Lock | None = None
     ws_send: Callable[[dict], Awaitable[None]] | None = None
     asr_open_task: asyncio.Task[None] | None = None
@@ -2314,12 +2316,18 @@ class ChatV2Adapter:
                 await self._send_json(send, ctx.sid, {"type": "pong", "t": reply_ts})
             return self._HandleResult(True)
 
-        if frame_type in ("input.start", "input.stop", "start_listening", "stop_listening"):
+        if frame_type in ("input.start", "start_listening", "stop_listening"):
             await self._publish(
                 EVT_WS_JSON_RECV,
                 ctx.sid,
                 {"type": frame_type, "ok": True, "ws": {"dir": "in", "codec": codec}},
             )
+            return self._HandleResult(True)
+
+        if frame_type == "input.stop":
+            reason_value = frame.get("reason")
+            reason = reason_value if isinstance(reason_value, str) and reason_value else "client_turn_stop"
+            await self._handle_client_turn_stop(ctx, reason=reason, frame=frame, meta=meta, send=send)
             return self._HandleResult(True)
 
         if frame_type == "chat.user":
@@ -2936,6 +2944,55 @@ class ChatV2Adapter:
         await self._invoke_engine("on_json", ctx.sid, frame)
         return self._HandleResult(True)
 
+    async def _handle_client_turn_stop(
+        self,
+        ctx: AdapterContext,
+        *,
+        reason: str,
+        frame: Mapping[str, Any] | None = None,
+        meta: Mapping[str, Any] | None = None,
+    ) -> None:
+        reason_label = reason or "client_turn_stop"
+        ctx.client_turn_closed = True
+        ctx.accepting_audio = False
+        ctx.audio_violation_count = 0
+        ctx.partial_coalescer.cancel()
+
+        try:
+            await self._publish(
+                EVT_WS_JSON_RECV,
+                ctx.sid,
+                meta if isinstance(meta, Mapping) else {"type": "input.stop", "ok": True},
+                frame,
+            )
+        except Exception:
+            _log.exception("evt=client_turn_stop_publish_failed sid=%s", ctx.sid)
+
+        frame_ts = None
+        try:
+            frame_ts = frame.get("ts") if isinstance(frame, Mapping) else None
+        except Exception:
+            frame_ts = None
+
+        _log.info(
+            "evt=client_turn_stop sid=%s reason=%s frame_ts=%s", ctx.sid, reason_label, frame_ts
+        )
+
+        if not ctx.asr_open:
+            return
+
+        try:
+            if not ctx.asr_final_emitted and isinstance(ctx.last_asr_partial, str) and ctx.last_asr_partial.strip():
+                await self._handle_asr_result(ctx, ctx.last_asr_partial, True)
+                return
+        except Exception:
+            _log.exception("evt=client_turn_stop_force_final_failed sid=%s", ctx.sid)
+
+        try:
+            await self._close_asr(ctx, reason=reason_label)
+        except Exception:
+            _log.exception("evt=client_turn_stop_close_failed sid=%s", ctx.sid)
+
     async def _handle_binary(
         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
     ) -> _HandleResult:
@@ -2975,6 +3032,15 @@ class ChatV2Adapter:
                     raw_bytes=data,
                     predecoded=frame_obj,
                 )
+
+        if ctx.client_turn_closed:
+            await self._publish(
+                EVT_WS_AUDIO_RECV,
+                ctx.sid,
+                {"byte_count": byte_count, "error": "audio_after_turn_stop"},
+            )
+            _log.debug("evt=audio_after_turn_stop_ignored sid=%s", ctx.sid)
+            return self._HandleResult(True)
 
         if not ctx.client_capture_armed:
             if ALLOW_AUDIO_WITHOUT_ASR:
@@ -4511,6 +4577,11 @@ class ChatV2Adapter:
             partial_seq = meta.get("partial_seq")
             if isinstance(partial_seq, int):
                 frame["partial_seq"] = partial_seq
+
+        if frame_type == "asr.partial":
+            ctx.last_asr_partial = text
+        elif frame_type == "asr.final":
+            ctx.last_asr_partial = None
 
         return frame
 
@@ -6258,6 +6329,11 @@ class ChatV2Adapter:
         if not isinstance(text, str):
             text = str(text)
 
+        if not is_final:
+            ctx.last_asr_partial = text
+        else:
+            ctx.last_asr_partial = None
+
         meta: Dict[str, Any] = {"vendor": vendor}
         event_payload: Dict[str, Any]
 
@@ -6318,6 +6394,8 @@ class ChatV2Adapter:
         ctx.asr_silence_hold_logged = False
         ctx.asr_silence_eot_logged = False
         ctx.asr_vendor = "gcp"
+        ctx.client_turn_closed = False
+        ctx.last_asr_partial = None
 
         try:
             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
@@ -6463,6 +6541,7 @@ class ChatV2Adapter:
         ctx.session.eot_armed = False
         ctx.session.server_vad_speech = False
         ctx.session.server_vad_since_ms = None
+        ctx.last_asr_partial = None
 
         await self._publish(
             ASR_SINGLE_STREAM_INVARIANT,

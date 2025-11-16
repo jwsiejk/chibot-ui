@@ -115,6 +115,7 @@ export function createCaptureRuntime({
   clearPartialWatchdog = null,
   resetTurnIntent = null,
   MIC_OUTCOME = {},
+  onVadSilenceStop = null,
 }) {
   const MAX_GATE_SILENCE_MS = 3000;
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
@@ -356,6 +357,13 @@ export function createCaptureRuntime({
     vadSilenceTimerId = setTimeout(() => {
       vadSilenceTimerId = null;
       emitConsoleBusEvent("client.vad.silence_timeout", undefined, VAD_SILENCE_TIMEOUT_SAMPLE_RATE);
+      if (typeof onVadSilenceStop === "function") {
+        try {
+          onVadSilenceStop("vad_silence_timeout");
+        } catch (err) {
+          try { console.warn("onVadSilenceStop failed", err); } catch {}
+        }
+      }
     }, timeoutMs);
   }
 
@@ -502,9 +510,10 @@ export function createCaptureRuntime({
       : undefined;
     const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
     const fallbackReason = Object.prototype.hasOwnProperty.call(opts, "fallbackReason") ? opts.fallbackReason : legacyFallback;
+    const allowVadStop = opts.allowVadStop === true;
     const source = Object.prototype.hasOwnProperty.call(opts, "source") ? opts.source : null;
     const { allowed, blocked, label } = evaluateStopRecorderReason(reason, fallbackReason);
-    if (!allowed) {
+    if (!allowed && !allowVadStop) {
       try {
         const meta = { reason: label, source };
         if (blocked) {
@@ -515,7 +524,10 @@ export function createCaptureRuntime({
       } catch {}
       return false;
     }
-    return performStopRecorder(label);
+    const normalizedLabel = typeof label === "string" && label
+      ? label
+      : normalizeReason(fallbackReason || reason);
+    return performStopRecorder(normalizedLabel);
   }
 
   async function startRecorderStreaming(opts = {}) {
