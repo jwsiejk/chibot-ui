@@ -39,7 +39,7 @@ const DEFAULT_POLICY_FLAGS = {
     vendor: { primary: "gcp", secondary: null },
   },
   routing: { ws_version: "v2" },
-  audio: { pipeline: { mode: "pcm16" } },
+  audio: { pipeline: { mode: "pcm16" }, keepalive_ms: 2000 },
 };
 const ASR_VENDOR_OPTIONS = ["gcp"];
 const AUDIO_PIPELINE_OPTIONS = ["pcm16"];
@@ -363,6 +363,7 @@ export function createPolicyRuntime(AppState, options = {}) {
     const audioSource = source && typeof source === "object" ? source.audio : null;
     const audioDefaults = DEFAULT_POLICY_FLAGS.audio || { pipeline: { mode: "pcm16" } };
     const audioPipeline = audioDefaults.pipeline ? { ...audioDefaults.pipeline } : { mode: "pcm16" };
+    let keepaliveMs = audioDefaults.keepalive_ms;
     if (audioSource && typeof audioSource === "object") {
       const pipeline = audioSource.pipeline && typeof audioSource.pipeline === "object"
         ? audioSource.pipeline
@@ -373,11 +374,14 @@ export function createPolicyRuntime(AppState, options = {}) {
           audioPipeline.mode = mode;
         }
       }
+      if (typeof audioSource.keepalive_ms === "number" && audioSource.keepalive_ms > 0) {
+        keepaliveMs = audioSource.keepalive_ms;
+      }
     }
 
     policy.policy = nested;
     policy.input = nested && typeof nested.input === "object" ? { ...nested.input } : {};
-    policy.audio = { pipeline: audioPipeline };
+    policy.audio = { pipeline: audioPipeline, keepalive_ms: keepaliveMs };
     return policy;
   }
 
