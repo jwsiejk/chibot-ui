@@ -413,15 +413,13 @@ export function createWsAudioRuntime(options = {}) {
       micKeepaliveTimerId = null;
       const listening = Boolean(AppState?.listening);
       const streaming = typeof isAudioStreaming === "function" ? isAudioStreaming() : true;
-      if (!listening || !streaming) {
-        scheduleAudioKeepalive();
-        return;
-      }
       if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
         return;
       }
       const now = Date.now();
-      if (now - micLastChunkAt >= audioKeepaliveMs) {
+      const shouldSendKeepalive = (!listening || !streaming)
+        || (listening && streaming && (now - micLastChunkAt >= audioKeepaliveMs));
+      if (shouldSendKeepalive) {
         if (!sendAudioKeepaliveChunk(now)) {
           try {
             if (safeSendJSON({ type: "client.ping" })) {
