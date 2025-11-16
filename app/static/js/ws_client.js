@@ -1665,6 +1665,24 @@ if (typeof createCaptureRuntime !== "function") {
     if (detailReason) {
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: detailReason });
     }
+
+    const transient = !detailReason
+      || detailReason === "heartbeat_timeout"
+      || closeCode === 1001
+      || closeCode === 1006;
+
+    if (transient) {
+      setTimeout(() => {
+        try {
+          if (typeof attemptAutoResume === "function" && attemptAutoResume()) {
+            return;
+          }
+          if (WSClient && typeof WSClient.open === "function") {
+            WSClient.open();
+          }
+        } catch {}
+      }, 300);
+    }
   });
 
   function startInputCapture(frame) {
