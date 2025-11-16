@@ -4,6 +4,7 @@
 export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFrame }) {
   const pendingTranscriptFrames = [];
   const assistantStreamingTurns = new Map();
+  const committedAssistantByReqId = new Map();
   const ASR_MATCH_WINDOW_MS = 4000;
   const lastUserBySid = new Map();
   let provisionalSidCounter = 0;
@@ -279,6 +280,14 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
         console.warn("TranscriptView commitAssistantStreaming error", err);
       }
     }
+
+    const reqId = typeof frame?.req_id === "string" ? frame.req_id : record.reqId || null;
+    if (reqId) {
+      committedAssistantByReqId.set(reqId, {
+        turnId,
+        messageId: typeof frame?.id === "string" ? frame.id : null,
+      });
+    }
   }
 
   function handleAssistantStreamingEnd(frame) {
@@ -332,6 +341,8 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
     } catch (err) {
       console.warn("Failed to bind TranscriptView on window", err);
     }
+
+    view.hasCommittedAssistantForReqId = (reqId) => committedAssistantByReqId.has(reqId);
 
     // Flush any frames that arrived before the view was attached
     while (pendingTranscriptFrames.length) {
