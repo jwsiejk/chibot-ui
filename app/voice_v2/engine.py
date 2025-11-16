@@ -114,7 +114,7 @@ _PCM_DESCRIPTOR = {
     "channels": _PCM_CHANNELS,
 }
 
-_CONCISE_MAX_TOKENS = 320
+_CONCISE_MAX_TOKENS = 48
 
 _DEFAULT_VOICE_ID = "alloy-en-US-001"
 _DEFAULT_LOCALE = "en-US"
@@ -182,6 +182,7 @@ class _TurnSession:
     adaptive_extended_once: bool = False
     assistant_turn_open: bool = False
     history_message_count: int = 0
+    answer_chars: Optional[int] = None
     metrics_asr_final_ms: Optional[int] = None
     metrics_llm_start_ms: Optional[int] = None
     metrics_llm_end_ms: Optional[int] = None
@@ -1382,6 +1383,7 @@ class EngineV2:
             session._vad_energy_logged = False
             session.assistant_turn_open = False
             session.history_message_count = 0
+            session.answer_chars = None
             session.metrics_asr_final_ms = None
             session.metrics_llm_start_ms = None
             session.metrics_llm_end_ms = None
@@ -1440,6 +1442,7 @@ class EngineV2:
             session._vad_energy_logged = False
             session.assistant_turn_open = False
             session.history_message_count = 0
+            session.answer_chars = None
             session.metrics_asr_final_ms = None
             session.metrics_llm_start_ms = None
             session.metrics_llm_end_ms = None
@@ -1846,7 +1849,15 @@ class EngineV2:
                 if isinstance(candidate_mode, str) and candidate_mode:
                     plan_mode = candidate_mode
 
-        self._prepare_llm_history(sid, session, req_id)
+        extra_style_instruction = (
+            "Respond as if speaking aloud in a live call. "
+            "Use ONE short spoken sentence, no more than about 12 words, "
+            "unless the user explicitly asks for more detail."
+        )
+
+        self._prepare_llm_history(
+            sid, session, req_id, extra_system_instruction=extra_style_instruction
+        )
 
         provider = getattr(self._llm, "_provider", None)
         model_name = getattr(provider, "default_model", None)
@@ -1857,7 +1868,8 @@ class EngineV2:
             request_payload["mode"] = plan_mode
         if entity_payload:
             request_payload["entity_count"] = len(entity_payload)
-        request_payload["style"] = "concise"
+        request_payload["style"] = "one short spoken sentence, no more than 12 words"
+        request_payload["style_instruction"] = extra_style_instruction
         request_payload["max_tokens"] = _CONCISE_MAX_TOKENS
         if session.history_message_count:
             request_payload["history_messages"] = session.history_message_count
@@ -1892,18 +1904,23 @@ class EngineV2:
                 req_id,
                 user_text,
                 plan_payload,
+                max_tokens=_CONCISE_MAX_TOKENS,
             )
         else:
             llm_result = self._llm.generate(
                 req_id,
                 intent=intent,
                 entities=entity_payload,
+                extra_system_instructions=extra_style_instruction,
                 max_tokens=_CONCISE_MAX_TOKENS,
             )
             if isinstance(llm_result, Mapping):
                 response_text = llm_result.get("text")
             else:
                 response_text = llm_result
+
+        answer_len = len(response_text or "") if isinstance(response_text, str) else 0
+        session.answer_chars = answer_len
 
         self._record_turn_timing(sid, session, "llm_end")
 
@@ -1912,6 +1929,7 @@ class EngineV2:
             "req_id": req_id,
             "purpose": "answer",
             "latency_ms": latency_ms,
+            "answer_chars": answer_len,
         }
         if isinstance(model_name, str) and model_name:
             complete_payload["model"] = model_name
@@ -2036,7 +2054,12 @@ class EngineV2:
         self._publish_chat_frame(sid, end_frame)
 
     def _prepare_llm_history(
-        self, sid: str, session: _TurnSession, req_id: str
+        self,
+        sid: str,
+        session: _TurnSession,
+        req_id: str,
+        *,
+        extra_system_instruction: Optional[str] = None,
     ) -> None:
         history: list[Mapping[str, Any]] = []
         try:
@@ -2058,6 +2081,11 @@ class EngineV2:
             if not cleaned:
                 continue
             sanitized.append({"role": role, "text": cleaned[:512]})
+
+        if isinstance(extra_system_instruction, str):
+            instruction_text = extra_system_instruction.strip()
+            if instruction_text:
+                sanitized.insert(0, {"role": "system", "text": instruction_text[:512]})
 
         session.history_message_count = len(sanitized)
 
@@ -2147,6 +2175,8 @@ class EngineV2:
             parts.append(f"req_id={session.req_id}")
         if session.history_message_count:
             parts.append(f"history_messages={session.history_message_count}")
+        if isinstance(session.answer_chars, int):
+            parts.append(f"answer_chars={session.answer_chars}")
 
         durations = (
             ("asr_to_llm_ms", self._safe_duration(session.metrics_asr_final_ms, session.metrics_llm_start_ms)),
