@@ -15,7 +15,6 @@
       return;
     }
     const form = document.getElementById("textChatForm");
-    const input = document.getElementById("textChatInput");
 
     const PARTIAL_THROTTLE_MS = 50;
 
@@ -360,62 +359,38 @@
       return node;
     }
 
-    function generateClientMsgId() {
-      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        try {
-          return crypto.randomUUID();
-        } catch (err) {
-          console.warn("TranscriptView: crypto.randomUUID failed", err);
-        }
-      }
-      const random = Math.random().toString(36).slice(2, 10);
-      return `client-${Date.now().toString(36)}-${random}`;
-    }
+    async function handleSubmit(ev) {
+      ev.preventDefault();
 
-    function sendChatPayload(text, clientMsgId) {
-      const payload = { type: "chat.user", role: "user", text };
-      if (typeof clientMsgId === "string" && clientMsgId) {
-        payload.client_msg_id = clientMsgId;
+      const inputEl = document.getElementById("textInput") || ev.target.querySelector("input, textarea");
+      const text = (inputEl?.value || "").trim();
+      if (!text) return;
+
+      // Stop recorder and send input.stop (helper uses an immediate send path)
+      if (window.WSClient?.stopRecorder) {
+        try { await window.WSClient.stopRecorder("text_input"); } catch {}
       }
-      const WSClient = window.WSClient;
-      if (WSClient && typeof WSClient.sendJSON === "function") {
-        try {
-          WSClient.sendJSON(payload);
-        } catch (err) {
-          console.error("TranscriptView: failed to send chat.user", err);
-        }
-      } else if (WSClient && typeof WSClient.send === "function") {
-        try {
-          WSClient.send(payload);
-        } catch (err) {
-          console.error("TranscriptView: failed to send chat.user", err);
-        }
+      window.WSClient?.inputStop?.("text_input");
+
+      const clientMsgId =
+        (crypto.randomUUID?.() || ("mid_" + Date.now() + "_" + Math.random().toString(36).slice(2)));
+
+      // Render user bubble immediately (pending)
+      if (typeof renderUserBubble === "function") {
+        renderUserBubble(text, clientMsgId);
+      }
+
+      // Send user message
+      const frame = { type: "chat.user", text, client_msg_id: clientMsgId };
+      if (window.WSClient?.send) {
+        window.WSClient.send(frame);
+      } else if (window.WSClient?.sendFrame) {
+        window.WSClient.sendFrame(frame);
       } else {
-        console.warn("TranscriptView: WSClient unavailable for chat.user");
+        console.error("No WSClient.send / sendFrame found");
       }
-    }
 
-    async function handleSubmit(event) {
-      event.preventDefault();
-      if (!input) return;
-      const raw = input.value || "";
-      const trimmed = raw.trim();
-      if (!trimmed) return;
-      input.value = "";
-      try {
-        if (window.WSClient && typeof window.WSClient.stopRecorder === "function") {
-          await window.WSClient.stopRecorder("text_input", { allowVadStop: true, fallbackReason: "client_stop" });
-        }
-        if (window.WSClient && typeof window.WSClient.inputStop === "function") {
-          window.WSClient.inputStop("text_input");
-        }
-      } catch (err) {
-        console.warn("TranscriptView: stop mic before text submit failed", err);
-      }
-      const clientMsgId = generateClientMsgId();
-      addUserMessage(trimmed, { clientMsgId, pending: true });
-      sendChatPayload(trimmed, clientMsgId);
-      input.focus();
+      if (inputEl) inputEl.value = "";
     }
 
     function handleChatMessage(frame) {
@@ -505,9 +480,9 @@
       scrollToBottom();
     }
 
-    if (form && input) {
-      form.addEventListener("submit", handleSubmit);
-    }
+    form?.replaceWith(form.cloneNode(true)); // optional: clears any duplicate listeners
+    const freshForm = document.getElementById("textChatForm");
+    freshForm?.addEventListener("submit", handleSubmit);
 
     window.addEventListener("ws.close", () => {
       clearPartial({ removeNode: true });

@@ -84,7 +84,7 @@ if (typeof createCaptureRuntime !== "function") {
   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
   const DEFAULT_ASR_VENDOR = 'gcp';
-  const WS_READY_PHASES = new Set(['connected', 'ready', 'resuming']);
+  const WS_READY_PHASES = new Set(['connected', 'ready', 'arming', 'resuming']);
   let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
 
   function getNegotiatedControlCodec() {
@@ -1760,7 +1760,7 @@ if (typeof createCaptureRuntime !== "function") {
   WSClient.on("open", (event) => {
     const ws = event && typeof event === "object" ? event.websocket || null : null;
     socket = ws || null;
-    try { WSClient._ws = ws || null; } catch {}
+    try { WSClient._ws = ws || null; WSClient.ws = ws || null; } catch {}
     if (ws) {
       const protocol = typeof ws.protocol === "string" && ws.protocol ? truncateBannerString(ws.protocol, 48) : null;
       recordClientBannerEvent("ws.socket.open", protocol ? { protocol } : null);
@@ -1770,7 +1770,7 @@ if (typeof createCaptureRuntime !== "function") {
 
   WSClient.on("close", (event) => {
     socket = null;
-    try { WSClient._ws = null; } catch {}
+    try { WSClient._ws = null; WSClient.ws = null; } catch {}
     const detailReason = event && typeof event === "object" && typeof event.reason === "string" && event.reason
       ? event.reason
       : null;
@@ -2381,6 +2381,13 @@ if (typeof createCaptureRuntime !== "function") {
     socket = ws || null;
     if (!ws) {
       try { WSClient._ws = null; } catch {}
+    } else {
+      try { WSClient.ws = ws; } catch {}
+      try {
+        this.ws?.addEventListener?.("close", (ev) => {
+          console.warn("client.ws outcome: close", { code: ev.code, reason: ev.reason });
+        });
+      } catch {}
     }
     return ws;
   };
@@ -2402,6 +2409,26 @@ if (typeof createCaptureRuntime !== "function") {
   WSClient.send = function sendWs(payload, opts = {}) {
     const options = opts && typeof opts === "object" ? { ...opts, binary: false } : { binary: false };
     return connection.send(payload, options);
+  };
+
+  WSClient.inputStop = function inputStop(reason = "manual") {
+    const frame = { type: "input.stop", reason };
+    try {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify(frame)); // bypass phase gating for control frame
+        this.log?.info?.("client.ws", { evt: "send", type: "input.stop", bypass: true, reason });
+      } else {
+        this.queue = this.queue || [];
+        this.queue.push(frame);
+      }
+    } catch (e) {
+      console.warn("input.stop send failed", e);
+    }
+  };
+
+  WSClient.clearResume = function clearResume() {
+    WSClient.resumeToken = null;
+    try { sessionStorage?.removeItem?.("chibot.resumeToken"); } catch {}
   };
 
   // Fast-path for callers that use sendJSON() directly (audio.header, pings, etc.).
