@@ -656,6 +656,18 @@
     const WSClient = window.WSClient;
     const audioRecorder = window.AudioRecorder || null;
 
+    try {
+      if (typeof WSClient === "undefined" || typeof WSClient.sendAudioChunk !== "function") {
+        console.error(
+          "[AskChip] WSClient.sendAudioChunk is not defined. " +
+          "Audio will not reach the ASR backend. " +
+          "Check ws_client wiring and utils/binary.js imports."
+        );
+      }
+    } catch (e) {
+      console.error("[AskChip] Error checking WSClient.sendAudioChunk:", e);
+    }
+
     const deferredClientLogs = [];
     let deferredClientLogFlushTimer = null;
 
