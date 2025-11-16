@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from app.services.llm.provider import create_from_env
 from app.telemetry import bus
@@ -102,6 +102,8 @@ class LLMAdapter:
         req_id: str,
         user_text: str,
         plan: Mapping[str, Any] | object,
+        *,
+        max_tokens: Optional[int] = None,
     ) -> str:
         """Return a persona-aligned reply using either the provider or fallback."""
 
@@ -144,6 +146,7 @@ class LLMAdapter:
                     temperature=0.6,
                     req_id=req_id,
                     sid=sid,
+                    max_tokens=max_tokens,
                 )
             except ProviderCircuitOpenError:
                 fallback_reason = "breaker_open"
