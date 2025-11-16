@@ -26,7 +26,7 @@ import {
 const captureRuntimeExports = captureRuntimeModule ?? {};
 const { createCaptureRuntime } = captureRuntimeExports;
 
-const AUDIO_KEEPALIVE_MS = 4000;
+const AUDIO_KEEPALIVE_MS = 2000;
 
 const USER_INITIATED_STOP_REASONS_FALLBACK = new Set([
   "user_requested",
@@ -717,6 +717,20 @@ if (typeof createCaptureRuntime !== "function") {
     setMicBytes: (value) => { __micBytes = Number.isFinite(value) ? Number(value) : 0; },
     audioKeepaliveMs: AUDIO_KEEPALIVE_MS,
   });
+
+  function applyAudioPolicy(policy) {
+    const audio = policy && typeof policy === "object" && policy.audio && typeof policy.audio === "object"
+      ? policy.audio
+      : {};
+    const keepaliveMs = (typeof audio.keepalive_ms === "number" && audio.keepalive_ms > 0)
+      ? audio.keepalive_ms
+      : AUDIO_KEEPALIVE_MS;
+    try {
+      audioRuntime?.setAudioKeepaliveMs?.(keepaliveMs);
+    } catch (err) {
+      console.warn("applyAudioPolicy failed", err);
+    }
+  }
 
   const {
     ensurePcmSender,
@@ -1467,6 +1481,7 @@ if (typeof createCaptureRuntime !== "function") {
     if (frame.type === "config.updated" || frame.type === "config_updated") {
       const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
       const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
+      applyAudioPolicy(appliedPolicy);
       const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
       if (incomingType !== 'config.updated') {
         dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
@@ -1480,6 +1495,7 @@ if (typeof createCaptureRuntime !== "function") {
         sanitized && sanitized.policy ? sanitized.policy : null,
         'policy.interaction'
       );
+      applyAudioPolicy(appliedPolicy);
       sanitized.policy = appliedPolicy;
       if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
         markUserGestureSatisfied('policy_update');

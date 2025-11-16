@@ -13,8 +13,9 @@ const SILENCE_REQUIRED_FRAMES = 5;
 const SILENCE_RMS_THRESHOLD = 0.012;
 const SILENCE_PREROLL_MS = 100;
 const SILENCE_IDLE_TICK_MS = 5000;
-const AUDIO_KEEPALIVE_MS = 4000;
+const AUDIO_KEEPALIVE_MS = 2000;
 const AUDIO_KEEPALIVE_CHUNK_MS = 20;
+let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 
 const primedSessionIds = new Set();
 
@@ -110,7 +111,7 @@ export function createWsAudioRuntime(options = {}) {
     getMicBytes,
     setMicBytes,
     updateMicRms,
-    audioKeepaliveMs = AUDIO_KEEPALIVE_MS,
+    audioKeepaliveMs: initialAudioKeepaliveMs = AUDIO_KEEPALIVE_MS,
   } = options;
 
   let localMicChunks = 0;
@@ -365,6 +366,9 @@ export function createWsAudioRuntime(options = {}) {
   let micLastChunkAt = 0;
   localFirstChunkSeen = readFirstChunkSeen();
   localMicRecordingStartAt = readMicRecordingStartAt();
+  audioKeepaliveMs = Number.isFinite(initialAudioKeepaliveMs) && initialAudioKeepaliveMs > 0
+    ? initialAudioKeepaliveMs
+    : AUDIO_KEEPALIVE_MS;
 
   function clearAudioKeepaliveTimer() {
     if (micKeepaliveTimerId) {
@@ -374,12 +378,10 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function sendAudioKeepaliveChunk(now) {
-    const effectiveSampleRate = Number.isFinite(pcmSampleRate) && pcmSampleRate > 0
-      ? pcmSampleRate
-      : asrRate;
+    const sampleRate = 16000;
     const samples = Math.max(
       1,
-      Math.round((AUDIO_KEEPALIVE_CHUNK_MS / 1000) * effectiveSampleRate),
+      Math.round((sampleRate * AUDIO_KEEPALIVE_CHUNK_MS) / 1000),
     );
     if (!samples) {
       return false;
@@ -389,7 +391,7 @@ export function createWsAudioRuntime(options = {}) {
     if (sent) {
       micLastChunkAt = now;
       try {
-        logStage("client.audio_keepalive", { bytes: silenceChunk.byteLength });
+        logStage("client.audio_keepalive", { bytes: silenceChunk.byteLength, interval_ms: audioKeepaliveMs });
       } catch (_) {}
     }
     return sent;
@@ -400,11 +402,22 @@ export function createWsAudioRuntime(options = {}) {
     if (!Number.isFinite(audioKeepaliveMs) || audioKeepaliveMs <= 0) {
       return;
     }
+    const ws = resolveSocket();
+    if (!ws) {
+      return;
+    }
+    if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
     micKeepaliveTimerId = setTimeout(() => {
       micKeepaliveTimerId = null;
       const listening = Boolean(AppState?.listening);
       const streaming = typeof isAudioStreaming === "function" ? isAudioStreaming() : true;
       if (!listening || !streaming) {
+        scheduleAudioKeepalive();
+        return;
+      }
+      if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
         return;
       }
       const now = Date.now();
@@ -883,6 +896,12 @@ export function createWsAudioRuntime(options = {}) {
     micLastChunkAt = 0;
   }
 
+  function setAudioKeepaliveMs(value) {
+    const next = Number.isFinite(value) && value > 0 ? value : AUDIO_KEEPALIVE_MS;
+    audioKeepaliveMs = next;
+    scheduleAudioKeepalive();
+  }
+
   return {
     ensurePcmSender,
     handlePcmFrame,
@@ -896,5 +915,6 @@ export function createWsAudioRuntime(options = {}) {
     updatePcmSenderState,
     scheduleAudioKeepalive,
     clearAudioKeepaliveTimer,
+    setAudioKeepaliveMs,
   };
 }

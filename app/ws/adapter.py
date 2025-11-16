@@ -47,6 +47,7 @@ from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
 from app.telemetry.events import (
     AUDIO_WIRE_ROLLUP,
+    ASR_KEEPALIVE_PING,
     ASR_OPEN_AFTER_TTS,
     ASR_OPEN_DEDUP,
     ASR_OPEN_QUEUED,
@@ -106,6 +107,8 @@ RATE_LIMIT_CAPACITY = 25
 RATE_LIMIT_WINDOW_SECONDS = 2.0
 RATE_LIMIT_CLOSE_CODE = 1013
 _AUDIO_VIOLATION_LIMIT = 3
+PCM_BYTES_PER_SAMPLE = 2
+AUDIO_KEEPALIVE_CHUNK_MS = 20
 
 AUDIO_SEQ_WINDOW = 8
 
@@ -3488,7 +3491,41 @@ class ChatV2Adapter:
             )
             await self._forward_audio_chunk(ctx, queued, seq)
 
-    async def _forward_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
+    def _is_keepalive_chunk(self, chunk: bytes, profile: Optional[Mapping[str, Any]]) -> bool:
+        if not chunk:
+            return False
+        sample_rate = 16000
+        channels = 1
+        if isinstance(profile, Mapping):
+            try:
+                rate_value = int(profile.get("sample_rate")) if profile.get("sample_rate") is not None else None
+            except Exception:
+                rate_value = None
+            if isinstance(rate_value, int) and rate_value > 0:
+                sample_rate = rate_value
+            try:
+                channels_value = int(profile.get("channels")) if profile.get("channels") is not None else None
+            except Exception:
+                channels_value = None
+            if isinstance(channels_value, int) and channels_value > 0:
+                channels = channels_value
+        expected_samples = int(round(sample_rate * (AUDIO_KEEPALIVE_CHUNK_MS / 1000.0))) * channels
+        expected_bytes = expected_samples * PCM_BYTES_PER_SAMPLE
+        if expected_bytes <= 0 or len(chunk) != expected_bytes:
+            return False
+        if isinstance(chunk, memoryview):
+            chunk_view = chunk
+        else:
+            chunk_view = memoryview(chunk)
+        return not any(chunk_view)
+
+    async def _forward_audio_chunk(
+        self,
+        ctx: AdapterContext,
+        chunk: bytes,
+        seq: int,
+        frame_meta: Optional[Mapping[str, Any]] = None,
+    ) -> None:
         byte_count = len(chunk)
         bus.publish(
             {
@@ -3500,6 +3537,18 @@ class ChatV2Adapter:
                 "source": "ws_server",
             }
         )
+        keepalive = bool(frame_meta.get("keepalive")) if isinstance(frame_meta, Mapping) else False
+        if not keepalive:
+            keepalive = self._is_keepalive_chunk(chunk, ctx.audio_profile)
+        if keepalive and ctx.session.asr_state == "open":
+            try:
+                await self._publish(
+                    ASR_KEEPALIVE_PING,
+                    ctx.sid,
+                    {"bytes": byte_count, "engine": ctx.asr_vendor or "gcp"},
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                _log.exception("evt=asr_keepalive_telemetry_failed sid=%s", ctx.sid)
         engine = ctx.session.asr_engine
         if ctx.session.asr_state == "open" and engine is not None:
             try:
