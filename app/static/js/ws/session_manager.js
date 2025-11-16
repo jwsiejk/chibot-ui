@@ -329,7 +329,11 @@ export function createSessionManager({
       }
     }
 
-    if (getSocket()) {
+    const liveSocket = getSocket();
+    if (liveSocket && (liveSocket.readyState === WebSocket.OPEN || liveSocket.readyState === WebSocket.CONNECTING)) {
+      return liveSocket;
+    }
+    if (liveSocket) {
       connection.close("superseded");
     }
     if (!skipRateLimitCancel && window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
