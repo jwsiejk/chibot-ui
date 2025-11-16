@@ -855,14 +855,14 @@ if (typeof createCaptureRuntime !== "function") {
     startRecorderStreaming,
   } = captureRuntime;
 
-  const _origHandleVadGateChange = handleVadGateChange;
   function handleVadGateChangeWrapped(next) {
     try {
       if (next && (next.vadSpeech === true || next.speech === true)) {
         speechSeenThisTurn = true;
       }
     } catch {}
-    return _origHandleVadGateChange(next);
+    // The capture runtime will call handleVadGateChange after this override,
+    // so we avoid invoking it here to prevent double processing.
   }
 
   async function stopRecorder(reason, options = {}) {
