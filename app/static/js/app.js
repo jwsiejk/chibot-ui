@@ -1618,14 +1618,10 @@
       event.preventDefault();
       if (startBtn.disabled) return;
       startBtn.disabled = true;
+      try { window.WSClient?.clearResume?.(); } catch {}
       Promise.resolve(handleStartSessionClick()).finally(() => {
         startBtn.disabled = false;
       });
-    });
-
-    document.getElementById('startSessionBtn')?.addEventListener('click', async () => {
-      try { window.WSClient?.clearResume?.(); } catch {}
-      await handleStartSessionClick();
     });
 
     endBtn.addEventListener('click', async () => {
