@@ -3,7 +3,7 @@
 
 import { encodeMessagePack } from "../utils/msgpack.mjs";
 
-const HEARTBEAT_INTERVAL_MS = 20000;
+const HEARTBEAT_INTERVAL_MS = 10000;
 const DEFAULT_CLOSE_REASON = "client_shutdown";
 const JSON_SUBPROTOCOL = "chat.v2";
 const MSGPACK_SUBPROTOCOL = "chip-msgpack";
