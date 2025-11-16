@@ -203,11 +203,16 @@ if (typeof createCaptureRuntime !== "function") {
   let partialWatchdogDeadline = 0;
   let partialWatchdogFirstTurn = true;
   let turnStopSent = false;
+  let speechSeenThisTurn = false;
 
   function resetTurnStopFlag() {
     // Start each user turn fresh: allow exactly one client-side input.stop
     // signal per turn and never block audio based on this flag.
     turnStopSent = false;
+  }
+
+  function resetSpeechFlag() {
+    speechSeenThisTurn = false;
   }
 
   function maybeSendTurnStop(reason = "vad_silence") {
@@ -222,6 +227,16 @@ if (typeof createCaptureRuntime !== "function") {
 
   async function handleVadSilenceStop(reason = "vad_silence") {
     const normalized = fallbackToReasonKey(reason) || "vad_silence";
+
+    // Only end the turn if we’ve actually heard speech this turn.
+    if (!speechSeenThisTurn) {
+      // Pre-speech idle silence: do NOT stop the recorder or send input.stop.
+      // Optionally: log or nudge UI, but don’t close the turn.
+      try { AppState?.hub?.log?.('client.vad.idle_silence_ignored', { reason: normalized }); } catch {}
+      return;
+    }
+
+    // Post-speech EOT silence: now we can end the turn.
     maybeSendTurnStop(normalized);
     try {
       // IMPORTANT: stopRecorder expects a string reason, not an object.
@@ -815,6 +830,7 @@ if (typeof createCaptureRuntime !== "function") {
     resetTurnIntent,
     MIC_OUTCOME,
     onVadSilenceStop: handleVadSilenceStop,
+    canAutoStopFromVad: () => speechSeenThisTurn === true,
   });
 
   const {
@@ -838,6 +854,16 @@ if (typeof createCaptureRuntime !== "function") {
     stopRecorder: captureStopRecorder,
     startRecorderStreaming,
   } = captureRuntime;
+
+  const _origHandleVadGateChange = handleVadGateChange;
+  function handleVadGateChangeWrapped(next) {
+    try {
+      if (next && (next.vadSpeech === true || next.speech === true)) {
+        speechSeenThisTurn = true;
+      }
+    } catch {}
+    return _origHandleVadGateChange(next);
+  }
 
   async function stopRecorder(reason, options = {}) {
     const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
@@ -865,13 +891,14 @@ if (typeof createCaptureRuntime !== "function") {
     try {
       // Ensure a fresh turn-stop guard when we locally begin a new capture/turn.
       resetTurnStopFlag();
+      resetSpeechFlag();
       return startRecorderStreaming(policy, source);
     } catch (err) {
       console.warn("WSClient.startRecorderStreaming failed", err);
     }
   };
 
-  initClientVad();
+  initClientVad(handleVadGateChangeWrapped);
 
   try {
     if (typeof AppState.websocket === "undefined" && typeof AppState.getState === "function") {
@@ -1576,6 +1603,7 @@ if (typeof createCaptureRuntime !== "function") {
         ? frame.reason
         : frame?.type || "input.start";
       resetTurnStopFlag();
+      resetSpeechFlag();
       __turnOpen = true;
       __turnOpenAt = Date.now();
       hubLog("client.stream.on", { reason });

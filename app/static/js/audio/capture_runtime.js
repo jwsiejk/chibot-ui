@@ -116,6 +116,7 @@ export function createCaptureRuntime({
   resetTurnIntent = null,
   MIC_OUTCOME = {},
   onVadSilenceStop = null,
+  canAutoStopFromVad = null,
 }) {
   const MAX_GATE_SILENCE_MS = 3000;
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
@@ -357,6 +358,13 @@ export function createCaptureRuntime({
     vadSilenceTimerId = setTimeout(() => {
       vadSilenceTimerId = null;
       emitConsoleBusEvent("client.vad.silence_timeout", undefined, VAD_SILENCE_TIMEOUT_SAMPLE_RATE);
+      const okToAutoStop = typeof canAutoStopFromVad === "function" ? !!canAutoStopFromVad() : false;
+      if (!okToAutoStop) {
+        // Pre-speech silence; keep listening.
+        try { console.info("VAD silence timer fired pre-speech; not auto-stopping"); } catch {}
+        return;
+      }
+
       if (typeof onVadSilenceStop === "function") {
         try {
           onVadSilenceStop("vad_silence_timeout");
@@ -374,12 +382,17 @@ export function createCaptureRuntime({
     }
   }
 
-  function initClientVad() {
+  function initClientVad(onGateChangeOverride = null) {
     try {
       vadController = initVAD({
         getPolicy: () => getClientVadPolicyConfig(),
         getTtsActive: () => AppState?.ttsActive,
-        onGateChange: handleVadGateChange,
+        onGateChange: (state) => {
+          if (typeof onGateChangeOverride === "function") {
+            try { onGateChangeOverride(state); } catch {}
+          }
+          handleVadGateChange(state);
+        },
         setAppState: (patch) => setVadAppState(patch),
         publish: (event, payload) => publishVad(event, payload),
       });
