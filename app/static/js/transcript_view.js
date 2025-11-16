@@ -362,35 +362,63 @@
     async function handleSubmit(ev) {
       ev.preventDefault();
 
-      const inputEl = document.getElementById("textInput") || ev.target.querySelector("input, textarea");
+      const formEl = ev.target;
+      const inputEl =
+        document.getElementById("textChatInput") ||
+        formEl.querySelector("input, textarea");
+
       const text = (inputEl?.value || "").trim();
       if (!text) return;
 
-      // Stop recorder and send input.stop (helper uses an immediate send path)
-      if (window.WSClient?.stopRecorder) {
-        try { await window.WSClient.stopRecorder("text_input"); } catch {}
-      }
-      window.WSClient?.inputStop?.("text_input");
-
-      const clientMsgId =
-        (crypto.randomUUID?.() || ("mid_" + Date.now() + "_" + Math.random().toString(36).slice(2)));
-
-      // Render user bubble immediately (pending)
-      if (typeof renderUserBubble === "function") {
-        renderUserBubble(text, clientMsgId);
-      }
-
-      // Send user message
-      const frame = { type: "chat.user", text, client_msg_id: clientMsgId };
-      if (window.WSClient?.send) {
-        window.WSClient.send(frame);
-      } else if (window.WSClient?.sendFrame) {
-        window.WSClient.sendFrame(frame);
-      } else {
-        console.error("No WSClient.send / sendFrame found");
+      try {
+        if (window.WSClient?.stopRecorder) {
+          await window.WSClient.stopRecorder("text_input", {
+            allowVadStop: true,
+            fallbackReason: "client_stop",
+          });
+        }
+        if (window.WSClient?.inputStop) {
+          window.WSClient.inputStop("text_input");
+        }
+      } catch (err) {
+        console.warn("TranscriptView: stopRecorder/inputStop failed", err);
       }
 
-      if (inputEl) inputEl.value = "";
+      let clientMsgId;
+      try {
+        if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+          clientMsgId = crypto.randomUUID();
+        }
+      } catch (err) {
+        console.warn("TranscriptView: crypto.randomUUID failed", err);
+      }
+
+      if (!clientMsgId) {
+        const random = Math.random().toString(36).slice(2, 10);
+        clientMsgId = `client-${Date.now().toString(36)}-${random}`;
+      }
+
+      addUserMessage(text, { clientMsgId, pending: true });
+
+      const payload = { type: "chat.user", role: "user", text, client_msg_id: clientMsgId };
+      const WSClient = window.WSClient;
+
+      try {
+        if (WSClient?.sendJSON) {
+          WSClient.sendJSON(payload);
+        } else if (WSClient?.send) {
+          WSClient.send(payload);
+        } else {
+          console.warn("TranscriptView: WSClient unavailable for chat.user");
+        }
+      } catch (err) {
+        console.error("TranscriptView: failed to send chat.user", err);
+      }
+
+      if (inputEl) {
+        inputEl.value = "";
+        inputEl.focus();
+      }
     }
 
     function handleChatMessage(frame) {
@@ -480,9 +508,11 @@
       scrollToBottom();
     }
 
-    form?.replaceWith(form.cloneNode(true)); // optional: clears any duplicate listeners
-    const freshForm = document.getElementById("textChatForm");
-    freshForm?.addEventListener("submit", handleSubmit);
+    if (form) {
+      const clone = form.cloneNode(true); // clears old listeners
+      form.replaceWith(clone);
+      clone.addEventListener("submit", handleSubmit);
+    }
 
     window.addEventListener("ws.close", () => {
       clearPartial({ removeNode: true });
