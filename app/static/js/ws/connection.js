@@ -9,7 +9,7 @@ const JSON_SUBPROTOCOL = "chat.v2";
 const MSGPACK_SUBPROTOCOL = "chip-msgpack";
 const INFO_DEADLINE_MS = 20000;
 const TOKEN_EXPIRY_MS = 60 * 1000;
-const WS_READY_PHASES = new Set(["connected", "ready", "resuming"]);
+const WS_READY_PHASES = new Set(["connected", "ready", "arming", "resuming"]);
 
 function detectControlFramesCodec() {
   const normalize = (value) => {

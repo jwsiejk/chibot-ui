@@ -1623,6 +1623,11 @@
       });
     });
 
+    document.getElementById('startSessionBtn')?.addEventListener('click', async () => {
+      try { window.WSClient?.clearResume?.(); } catch {}
+      await handleStartSessionClick();
+    });
+
     endBtn.addEventListener('click', async () => {
       try {
         if (typeof WSClient?.close === 'function') {
