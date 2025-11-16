@@ -1534,9 +1534,12 @@ if (typeof createCaptureRuntime !== "function") {
       await handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
       try {
-        AppState?.hub?.stopListening?.("tts");
-      } catch {}
-      await stopRecorder("tts_start");
+        if (window?.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === "function") {
+          window.AudioRecorder.handleTtsStart(); // This handles the mute/keep-alive logic
+        }
+      } catch (err) {
+        console.warn("AudioRecorder handleTtsStart failed", err);
+      }
       setAppStateValue("ttsActive", true);
       AppState.tts = true;
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
