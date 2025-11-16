@@ -658,8 +658,15 @@
         this.stopListening({ reason: 'tts_start_policy' });
         return;
       }
-      if (this._shouldMuteOnTts) {
+
+      const policyAsr = this._policy?.policy?.asr;
+      const keepStreamWarmMs = policyAsr?.keep_stream_warm_ms;
+      const relyingOnKeepalive = keepStreamWarmMs > 0 || this._policy?.audio?.keepalive_ms > 0;
+
+      if (this._shouldMuteOnTts && !relyingOnKeepalive) {
         this._muted = true;
+      } else {
+        this._muted = false;
       }
     }
 
