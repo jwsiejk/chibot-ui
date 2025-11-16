@@ -1,6 +1,8 @@
 // app/static/js/audio/ws_audio_runtime.js
 // Encapsulates PCM ring buffer, PCM sender, and ASR priming helpers.
 
+import { isTypedArray, toArrayBuffer } from "../utils/binary.js";
+
 const PCM_TARGET_SAMPLE_RATE = 16000;
 const DEFAULT_RING_CAPACITY_MS = 1500;
 const DEFAULT_PCM_CHANNELS = 1;
@@ -682,21 +684,30 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function handlePcmFrame(frame, meta = {}) {
-    if (!frame || !frame.length) {
+    if (!frame) {
       return;
     }
-    let wire = frame;
-    if (wire instanceof ArrayBuffer) {
-      wire = new Int16Array(wire);
-    } else if (ArrayBuffer.isView(wire) && !(wire instanceof Int16Array)) {
-      const view = wire;
-      if (view.BYTES_PER_ELEMENT === 2) {
-        wire = new Int16Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
-      } else {
+
+    let wire = null;
+
+    if (frame instanceof Int16Array && frame.length) {
+      wire = frame;
+    } else {
+      if (isTypedArray(frame) && frame.BYTES_PER_ELEMENT && frame.BYTES_PER_ELEMENT !== 2) {
+        console.warn("ws_audio_runtime: invalid PCM chunk, expected ArrayBuffer or TypedArray");
         return;
       }
+
+      const buffer = toArrayBuffer(frame);
+      if (!buffer) {
+        console.warn("ws_audio_runtime: invalid PCM chunk, expected ArrayBuffer or TypedArray");
+        return;
+      }
+
+      wire = new Int16Array(buffer);
     }
-    if (!(wire instanceof Int16Array)) {
+
+    if (!(wire instanceof Int16Array) || !wire.length) {
       return;
     }
     const metaSampleRate = Number(meta.sampleRate);
