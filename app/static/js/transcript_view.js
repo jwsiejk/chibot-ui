@@ -402,6 +402,16 @@
       const trimmed = raw.trim();
       if (!trimmed) return;
       input.value = "";
+      try {
+        if (window.WSClient && typeof window.WSClient.stopRecorder === "function") {
+          await window.WSClient.stopRecorder("text_input", { allowVadStop: true, fallbackReason: "client_stop" });
+        }
+        if (window.WSClient && typeof window.WSClient.inputStop === "function") {
+          window.WSClient.inputStop("text_input");
+        }
+      } catch (err) {
+        console.warn("TranscriptView: stop mic before text submit failed", err);
+      }
       const clientMsgId = generateClientMsgId();
       addUserMessage(trimmed, { clientMsgId, pending: true });
       sendChatPayload(trimmed, clientMsgId);

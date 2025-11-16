@@ -1161,21 +1161,7 @@
     // Chat submit wiring
     // Send typed chat to the server using chat.user frames
     if (textChatForm) {
-      textChatForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const text = (textChatInput && textChatInput.value || '').trim();
-        if (!text) return;
-        try {
-          if (WSClient && typeof WSClient.sendJSON === 'function') {
-            WSClient.sendJSON({ type: 'chat.user', text });
-          } else if (WSClient && typeof WSClient.send === 'function') {
-            WSClient.send({ type: 'chat.user', text });
-          }
-          textChatInput.value = '';
-        } catch (err) {
-          console.error('chat.user send failed', err);
-        }
-      });
+      // Submit handler bound by TranscriptView; removed here to avoid duplicate chat.user sends.
     }
     
 
@@ -1538,6 +1524,7 @@
     }
 
     async function handleStartSessionClick() {
+      try { if (window.WSClient && typeof window.WSClient.clearResume === 'function') { window.WSClient.clearResume(); } } catch {}
       try {
         const me = await getMe();
         if (!me.authenticated) {
