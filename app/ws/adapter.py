@@ -947,6 +947,29 @@ class ChatV2Adapter:
             return dict(ctx.policy)
         return {}
 
+    def _allow_capture_during_tts(self, ctx: AdapterContext) -> bool:
+        policy = self._policy(ctx)
+        audio_block = policy.get("audio") if isinstance(policy, Mapping) else None
+        allow_capture = bool(
+            audio_block.get("allow_capture_during_tts") if isinstance(audio_block, Mapping) else False
+        )
+
+        recorder_block = None
+        policy_block = policy.get("policy") if isinstance(policy, Mapping) else None
+        if isinstance(policy_block, Mapping):
+            recorder_candidate = policy_block.get("recorder")
+            if isinstance(recorder_candidate, Mapping):
+                recorder_block = recorder_candidate
+        recorder_candidate = policy.get("recorder") if isinstance(policy, Mapping) else None
+        if recorder_block is None and isinstance(recorder_candidate, Mapping):
+            recorder_block = recorder_candidate
+
+        mute_during_tts = bool(
+            recorder_block.get("mute_send_during_tts") if isinstance(recorder_block, Mapping) else False
+        )
+
+        return allow_capture and not mute_during_tts
+
     def _replace_policy(self, ctx: AdapterContext, payload: Mapping[str, Any]) -> None:
         legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
         try:
@@ -6426,6 +6449,9 @@ class ChatV2Adapter:
         if ctx.ws_send is None:
             raise RuntimeError("websocket send unavailable for asr.open")
         if not can_open(ctx.session):
+            return
+        if ctx.session.tts_active and not self._allow_capture_during_tts(ctx):
+            ctx.session.queued_arm = True
             return
         if ctx.asr_open_task and not ctx.asr_open_task.done():
             return
