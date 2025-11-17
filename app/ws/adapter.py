@@ -667,8 +667,20 @@ class ChatV2Adapter:
             _log.info("evt=asr_ready_deferred sid=%s where=%s", ctx.sid, label)
             return
         try:
+            # Ensure an open task exists
             if ctx.asr_open_task is None or ctx.asr_open_task.done():
                 self._schedule_asr_open(ctx)
+
+            # Wait for the open task to complete before sending asr.ready
+            task = ctx.asr_open_task
+            if task is not None and not task.done():
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    # If it was cancelled (e.g., due to TTS), just bail; TTS gating will re-arm later.
+                    _log.info("evt=asr_open_task_cancelled_before_ready sid=%s where=%s", ctx.sid, label)
+                    return
+
             if not ctx.asr_ready_bundle_sent_ms:
                 await self._send_asr_ready_bundle(send, ctx)
                 _log.info("evt=asr_ready_emit sid=%s where=%s", ctx.sid, label)
