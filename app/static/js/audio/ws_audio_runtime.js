@@ -935,7 +935,7 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function setAudioKeepaliveIdleMs(value) {
-    const next = Number.isFinite(value) && value > 0 ? value : AUDIO_KEEPALIVE_IDLE_MS;
+    const next = Number.isFinite(value) && value >= 0 ? value : AUDIO_KEEPALIVE_IDLE_MS;
     audioKeepaliveIdleMs = next;
   }
 
