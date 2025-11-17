@@ -238,10 +238,14 @@ if (typeof createCaptureRuntime !== "function") {
 
     // Post-speech EOT silence: now we can end the turn.
     maybeSendTurnStop(normalized);
-    setSenderPauseReason("turn_completed", true);
-    applySenderPausedState();
-    updatePcmSenderState();
-    logStage("client.pcm.soft_pause", { reason: normalized });
+    try {
+      setSenderPauseReason("turn_completed", true);
+      applySenderPausedState();
+      updatePcmSenderState();
+      logStage("client.pcm.soft_pause", { reason: normalized });
+    } catch (err) {
+      try { console.warn("vad_silence_soft_pause_failed", err); } catch {}
+    }
   }
 
   function clearPartialWatchdog() {
@@ -1565,9 +1569,13 @@ if (typeof createCaptureRuntime !== "function") {
       }
       const shouldMuteDuringTts = Boolean(AppState?.policy?.recorder?.mute_send_during_tts);
       if (shouldMuteDuringTts) {
-        setSenderPauseReason("tts", true);
-        applySenderPausedState();
-        updatePcmSenderState();
+        try {
+          setSenderPauseReason("tts", true);
+          applySenderPausedState();
+          updatePcmSenderState();
+        } catch (err) {
+          try { console.warn("soft_pause_on_tts_start_failed", err); } catch {}
+        }
       }
       setAppStateValue("ttsActive", true);
       AppState.tts = true;
@@ -1596,9 +1604,13 @@ if (typeof createCaptureRuntime !== "function") {
         window.dispatchEvent(new CustomEvent("tts.end", { detail: frame }));
       } catch {}
       AppState.tts = false;
-      setSenderPauseReason("tts", false);
-      applySenderPausedState();
-      updatePcmSenderState();
+      try {
+        setSenderPauseReason("tts", false);
+        applySenderPausedState();
+        updatePcmSenderState();
+      } catch (err) {
+        try { console.warn("clear_soft_pause_on_tts_end_failed", err); } catch {}
+      }
 
       // Avoid hard-stopping the mic here so the ASR keep-alive stream remains intact.
       beginWarmup(getWarmupMs());
