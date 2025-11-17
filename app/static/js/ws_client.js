@@ -1560,13 +1560,6 @@ if (typeof createCaptureRuntime !== "function") {
     } else if (frame.type === "error") {
       await handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
-      try {
-        if (window?.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === "function") {
-          window.AudioRecorder.handleTtsStart(); // This handles the mute/keep-alive logic
-        }
-      } catch (err) {
-        console.warn("AudioRecorder handleTtsStart failed", err);
-      }
       const shouldMuteDuringTts = Boolean(AppState?.policy?.recorder?.mute_send_during_tts);
       if (shouldMuteDuringTts) {
         try {
@@ -1592,13 +1585,6 @@ if (typeof createCaptureRuntime !== "function") {
       logStage('client.tts', { outcome: 'playing', utt_id: uttIdStart });
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: 'tts' });
     } else if (frame.type === "tts.end") {
-      try {
-        if (window?.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === "function") {
-          window.AudioRecorder.handleTtsEnd(); // Clear mute without stopping the underlying stream
-        }
-      } catch (err) {
-        console.warn("AudioRecorder handleTtsEnd failed", err);
-      }
       setAppStateValue("ttsActive", false);
       try {
         window.dispatchEvent(new CustomEvent("tts.end", { detail: frame }));
