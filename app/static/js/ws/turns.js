@@ -49,6 +49,8 @@ export function createTurnRuntime(config = {}) {
     connection = {},
     telemetry = {},
     hubLog: providedHubLog = () => {},
+    setSenderPauseReason: providedSetSenderPauseReason,
+    applySenderPausedState: providedApplySenderPausedState,
   } = config;
 
   const helpers = config && typeof config === "object" && typeof config.helpers === "object"
@@ -214,30 +216,34 @@ export function createTurnRuntime(config = {}) {
     return now() < warmupUntil;
   }
 
-  function applySenderPausedState() {
-    const nextPaused = senderPauseReasons.size > 0;
-    if (senderPaused === nextPaused) {
-      return;
-    }
-    senderPaused = nextPaused;
-    setAppStateValue("senderPaused", senderPaused);
-    try {
-      updatePcmSenderState();
-    } catch {}
-  }
+  const applySenderPausedState = typeof providedApplySenderPausedState === "function"
+    ? providedApplySenderPausedState
+    : function applySenderPausedState() {
+      const nextPaused = senderPauseReasons.size > 0;
+      if (senderPaused === nextPaused) {
+        return;
+      }
+      senderPaused = nextPaused;
+      setAppStateValue("senderPaused", senderPaused);
+      try {
+        updatePcmSenderState();
+      } catch {}
+    };
 
-  function setSenderPauseReason(reason, value) {
-    const key = typeof reason === "string" && reason ? reason : "legacy";
-    const desired = Boolean(value);
-    if (desired) {
-      if (!senderPauseReasons.has(key)) {
-        senderPauseReasons.add(key);
+  const setSenderPauseReason = typeof providedSetSenderPauseReason === "function"
+    ? providedSetSenderPauseReason
+    : function setSenderPauseReason(reason, value) {
+      const key = typeof reason === "string" && reason ? reason : "legacy";
+      const desired = Boolean(value);
+      if (desired) {
+        if (!senderPauseReasons.has(key)) {
+          senderPauseReasons.add(key);
+          applySenderPausedState();
+        }
+      } else if (senderPauseReasons.delete(key)) {
         applySenderPausedState();
       }
-    } else if (senderPauseReasons.delete(key)) {
-      applySenderPausedState();
-    }
-  }
+    };
 
   function syncSenderPaused(value) {
     setSenderPauseReason("legacy", value);
