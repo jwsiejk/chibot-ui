@@ -1567,6 +1567,8 @@ if (typeof createCaptureRuntime !== "function") {
         window.dispatchEvent(new CustomEvent("tts.end", { detail: frame }));
       } catch {}
       AppState.tts = false;
+
+      // Avoid hard-stopping the mic here so the ASR keep-alive stream remains intact.
       beginWarmup(getWarmupMs());
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
       if (typeof AppState.emit === "function") {
