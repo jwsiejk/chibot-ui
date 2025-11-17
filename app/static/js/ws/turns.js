@@ -371,10 +371,22 @@ export function createTurnRuntime(config = {}) {
 
   function requestAsrArm(reason) {
     const label = normalizeReason(reason);
+    const snapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
+    const ttsActive = Boolean(snapshot?.tts || snapshot?.ttsActive);
+    if (ttsActive) {
+      awaitingTurnEndForRearm = true;
+      pendingRearmReason = label || "tts_active";
+      try {
+        logStage("client.asr_rearm_deferred", { reason: pendingRearmReason, ttsActive: true });
+      } catch {}
+      return;
+    }
+    const reasonLabel = pendingRearmReason || label;
+    clearPendingRearm();
     try {
       setAsrArmInFlight(true);
-      logStage("client.asr_rearm_request", { reason: label });
-      openAsr({ reason: label });
+      logStage("client.asr_rearm_request", { reason: reasonLabel });
+      openAsr({ reason: reasonLabel });
       setWsPhase("arming");
     } catch (err) {
       setAsrArmInFlight(false);
@@ -849,7 +861,11 @@ export function createTurnRuntime(config = {}) {
         hubLogger("client.stream.off", { reason: rawStopReason });
       }
       audioStreaming = false;
-      await stopRecorder({ reason: rawStopReason }, { fallbackReason: "server_requested", source: "server.stop_listening" });
+      await stopRecorder({ reason: rawStopReason }, {
+        fallbackReason: "server_requested",
+        source: "server.stop_listening",
+        softStop: true,
+      });
       setAsrArmInFlight(false);
       try {
         const hub = AppState?.hub;

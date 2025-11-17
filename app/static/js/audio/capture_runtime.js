@@ -456,7 +456,10 @@ export function createCaptureRuntime({
     armingGraceUntil = 0;
   }
 
-  async function performStopRecorder(reason) {
+  async function performStopRecorder(reason, options = {}) {
+    const opts = options && typeof options === "object" ? options : {};
+    const softStop = opts.softStop === true || opts.soft === true;
+
     audioStreaming = false;
     firstChunkSeen = false;
     armingGraceUntil = 0;
@@ -464,13 +467,17 @@ export function createCaptureRuntime({
     if (typeof resetTurnIntent === "function") {
       try { resetTurnIntent(stopReason); } catch {}
     }
-    clearAudioKeepaliveTimer();
+    if (softStop) {
+      scheduleAudioKeepalive();
+    } else {
+      clearAudioKeepaliveTimer();
+    }
     clearVadSilenceTimer();
     if (typeof clearPartialWatchdog === "function") {
       try { clearPartialWatchdog(); } catch {}
     }
     resetSilenceSuppression();
-    syncSenderPaused(false);
+    syncSenderPaused(softStop);
     try {
       const sender = await ensurePcmSender();
       if (sender && typeof sender.setEnabled === "function") {
@@ -493,9 +500,11 @@ export function createCaptureRuntime({
     }
     setListeningState(false);
     updatePcmSenderState();
-    try {
-      hubLog("client.pcm.capture_stop", { reason: stopReason });
-    } catch {}
+    if (!softStop) {
+      try {
+        hubLog("client.pcm.capture_stop", { reason: stopReason });
+      } catch {}
+    }
   }
 
   function evaluateStopRecorderReason(reason, fallbackReason) {
@@ -555,7 +564,7 @@ export function createCaptureRuntime({
         ? label
         : normalizeReason(fallbackReason || reason);
 
-    return performStopRecorder(normalizedLabel);
+    return performStopRecorder(normalizedLabel, opts);
   }
 
   async function startRecorderStreaming(opts = {}) {
