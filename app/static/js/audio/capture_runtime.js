@@ -460,6 +460,7 @@ export function createCaptureRuntime({
     const pauseReason = normalizeReason(reason);
     try {
       setSenderPauseReason(pauseReason, true);
+      updatePcmSenderState();
     } catch {}
     try {
       hubLog("client.pcm.soft_pause", { reason: pauseReason });
