@@ -13,7 +13,7 @@ const SILENCE_REQUIRED_FRAMES = 5;
 const SILENCE_RMS_THRESHOLD = 0.012;
 const SILENCE_PREROLL_MS = 100;
 const SILENCE_IDLE_TICK_MS = 5000;
-const AUDIO_KEEPALIVE_MS = 2000;
+const AUDIO_KEEPALIVE_MS = 1000;
 const AUDIO_KEEPALIVE_CHUNK_MS = 20;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 
@@ -397,41 +397,52 @@ export function createWsAudioRuntime(options = {}) {
     return sent;
   }
 
+  function maybeSendAudioKeepalive(now) {
+    const ws = resolveSocket();
+    if (!ws) {
+      return false;
+    }
+    if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    const listening = Boolean(AppState?.listening);
+    const streaming = typeof isAudioStreaming === "function" ? isAudioStreaming() : true;
+    const shouldSendKeepalive = (!listening || !streaming)
+      || (listening && streaming && (now - micLastChunkAt >= audioKeepaliveMs));
+    if (!shouldSendKeepalive) {
+      return false;
+    }
+    if (sendAudioKeepaliveChunk(now)) {
+      return true;
+    }
+    try {
+      if (safeSendJSON({ type: "client.ping" })) {
+        logStage("client.ping", { lane: "mic", fallback: true });
+      }
+    } catch (err) {
+      console.warn("client.ping send failed", err);
+    }
+    return false;
+  }
+
   function scheduleAudioKeepalive() {
     clearAudioKeepaliveTimer();
     if (!Number.isFinite(audioKeepaliveMs) || audioKeepaliveMs <= 0) {
       return;
     }
-    const ws = resolveSocket();
-    if (!ws) {
-      return;
-    }
-    if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
     micKeepaliveTimerId = setTimeout(() => {
       micKeepaliveTimerId = null;
-      const listening = Boolean(AppState?.listening);
-      const streaming = typeof isAudioStreaming === "function" ? isAudioStreaming() : true;
-      if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
-        return;
-      }
       const now = Date.now();
-      const shouldSendKeepalive = (!listening || !streaming)
-        || (listening && streaming && (now - micLastChunkAt >= audioKeepaliveMs));
-      if (shouldSendKeepalive) {
-        if (!sendAudioKeepaliveChunk(now)) {
-          try {
-            if (safeSendJSON({ type: "client.ping" })) {
-              logStage("client.ping", { lane: "mic", fallback: true });
-            }
-          } catch (err) {
-            console.warn("client.ping send failed", err);
-          }
-        }
-      }
+      maybeSendAudioKeepalive(now);
       scheduleAudioKeepalive();
     }, audioKeepaliveMs);
+  }
+
+  function sendAudioKeepaliveNow() {
+    const now = Date.now();
+    const sent = maybeSendAudioKeepalive(now);
+    scheduleAudioKeepalive();
+    return sent;
   }
 
   function recordRecorderChunk(timestampMs) {
@@ -913,6 +924,7 @@ export function createWsAudioRuntime(options = {}) {
     updatePcmSenderState,
     scheduleAudioKeepalive,
     clearAudioKeepaliveTimer,
+    sendAudioKeepaliveNow,
     setAudioKeepaliveMs,
   };
 }

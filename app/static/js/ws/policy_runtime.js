@@ -39,7 +39,7 @@ const DEFAULT_POLICY_FLAGS = {
     vendor: { primary: "gcp", secondary: null },
   },
   routing: { ws_version: "v2" },
-  audio: { pipeline: { mode: "pcm16" }, keepalive_ms: 2000 },
+  audio: { pipeline: { mode: "pcm16" }, keepalive_ms: 1000 },
 };
 const ASR_VENDOR_OPTIONS = ["gcp"];
 const AUDIO_PIPELINE_OPTIONS = ["pcm16"];
