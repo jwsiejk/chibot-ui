@@ -1560,6 +1560,16 @@ if (typeof createCaptureRuntime !== "function") {
       } catch (err) {
         console.warn("AudioRecorder handleTtsStart failed", err);
       }
+      try {
+        await stopRecorder({ reason: "tts_start" }, {
+          fallbackReason: "tts_start",
+          source: "tts.start",
+          softStop: true,
+          allowVadStop: true,
+        });
+      } catch (err) {
+        console.warn("Soft stop on tts.start failed", err);
+      }
       setAppStateValue("ttsActive", true);
       AppState.tts = true;
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
@@ -1637,7 +1647,11 @@ if (typeof createCaptureRuntime !== "function") {
         hubLog("client.stream.off", { reason: rawStopReason });
       }
       _audioStreaming = false;
-      await stopRecorder({ reason: rawStopReason }, { fallbackReason: "server_requested", source: "server.stop_listening" });
+      await stopRecorder({ reason: rawStopReason }, {
+        fallbackReason: "server_requested",
+        source: "server.stop_listening",
+        softStop: true,
+      });
       setAsrArmInFlight(false);
       try {
         const hub = AppState?.hub;
