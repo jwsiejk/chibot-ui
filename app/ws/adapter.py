@@ -657,6 +657,10 @@ class ChatV2Adapter:
             return
         if send is None:
             return
+        if getattr(ctx.session, "tts_active", False) and not self._allow_capture_during_tts(ctx):
+            ctx.session.queued_arm = True
+            _log.info("evt=asr_ready_deferred sid=%s where=%s reason=tts_active", ctx.sid, label)
+            return
         # GREET-FIRST: If policy syncs on tts.end and TTS is active, defer emit
         sp = self._server_policy(ctx)
         if bool(sp.get("sync_ready_on_tts_end", True)) and getattr(ctx.session, "tts_active", False):
@@ -677,6 +681,16 @@ class ChatV2Adapter:
     ) -> None:
         ctx.session.tts_active = True
         self._cancel_no_audio_watchdog(ctx)
+        if not self._allow_capture_during_tts(ctx):
+            task = ctx.asr_open_task
+            if task is not None and not task.done():
+                ctx.session.queued_arm = True
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                ctx.asr_open_task = None
+                ctx.asr_open = False
+                mark(ctx.session, "closed")
         try:
             self._bus(
                 "tts.start",
@@ -703,6 +717,11 @@ class ChatV2Adapter:
             )
         except Exception:
             _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
+        if ctx.session.queued_arm and can_open(ctx.session):
+            try:
+                self._schedule_asr_open(ctx)
+            except Exception:
+                _log.exception("evt=asr_open_after_tts_failed sid=%s", ctx.sid)
         if not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
 
