@@ -414,7 +414,7 @@ export function createWsAudioRuntime(options = {}) {
     if (!(listening && streaming)) {
       return result;
     }
-    if (Number.isFinite(audioKeepaliveIdleMs) && audioKeepaliveIdleMs > 0) {
+    if (Number.isFinite(audioKeepaliveIdleMs) && audioKeepaliveIdleMs > 0 && lastRealAudioAt > 0) {
       const idleDuration = now - lastRealAudioAt;
       if (idleDuration >= audioKeepaliveIdleMs) {
         setSenderPauseReason("idle_timeout", true);
