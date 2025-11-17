@@ -27,6 +27,7 @@ const captureRuntimeExports = captureRuntimeModule ?? {};
 const { createCaptureRuntime } = captureRuntimeExports;
 
 const AUDIO_KEEPALIVE_MS = 2000;
+const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 
 const USER_INITIATED_STOP_REASONS_FALLBACK = new Set([
   "user_requested",
@@ -739,14 +740,12 @@ if (typeof createCaptureRuntime !== "function") {
     const keepaliveMs = (typeof audio.keepalive_ms === "number" && audio.keepalive_ms > 0)
       ? audio.keepalive_ms
       : AUDIO_KEEPALIVE_MS;
-    const keepaliveIdleMs = (typeof audio.keepalive_idle_ms === "number" && audio.keepalive_idle_ms > 0)
+    const keepaliveIdleMs = (typeof audio.keepalive_idle_ms === "number" && audio.keepalive_idle_ms >= 0)
       ? audio.keepalive_idle_ms
-      : null;
+      : AUDIO_KEEPALIVE_IDLE_MS;
     try {
       audioRuntime?.setAudioKeepaliveMs?.(keepaliveMs);
-      if (Number.isFinite(keepaliveIdleMs)) {
-        audioRuntime?.setAudioKeepaliveIdleMs?.(keepaliveIdleMs);
-      }
+      audioRuntime?.setAudioKeepaliveIdleMs?.(keepaliveIdleMs);
     } catch (err) {
       console.warn("applyAudioPolicy failed", err);
     }
