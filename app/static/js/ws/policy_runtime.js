@@ -39,7 +39,7 @@ const DEFAULT_POLICY_FLAGS = {
     vendor: { primary: "gcp", secondary: null },
   },
   routing: { ws_version: "v2" },
-  audio: { pipeline: { mode: "pcm16" }, keepalive_ms: 1000 },
+  audio: { pipeline: { mode: "pcm16" }, keepalive_ms: 1000, keepalive_idle_ms: 30000 },
 };
 const ASR_VENDOR_OPTIONS = ["gcp"];
 const AUDIO_PIPELINE_OPTIONS = ["pcm16"];
@@ -361,9 +361,15 @@ export function createPolicyRuntime(AppState, options = {}) {
     };
 
     const audioSource = source && typeof source === "object" ? source.audio : null;
-    const audioDefaults = DEFAULT_POLICY_FLAGS.audio || { pipeline: { mode: "pcm16" } };
-    const audioPipeline = audioDefaults.pipeline ? { ...audioDefaults.pipeline } : { mode: "pcm16" };
+    const baseAudio = base && typeof base.audio === "object" ? base.audio : {};
+    const audioDefaults = { ...DEFAULT_POLICY_FLAGS.audio, ...baseAudio };
+    const defaultPipeline = {
+      ...(DEFAULT_POLICY_FLAGS.audio?.pipeline || { mode: "pcm16" }),
+      ...(audioDefaults.pipeline || {}),
+    };
+    const audioPipeline = { ...defaultPipeline };
     let keepaliveMs = audioDefaults.keepalive_ms;
+    let keepaliveIdleMs = audioDefaults.keepalive_idle_ms;
     if (audioSource && typeof audioSource === "object") {
       const pipeline = audioSource.pipeline && typeof audioSource.pipeline === "object"
         ? audioSource.pipeline
@@ -377,11 +383,17 @@ export function createPolicyRuntime(AppState, options = {}) {
       if (typeof audioSource.keepalive_ms === "number" && audioSource.keepalive_ms > 0) {
         keepaliveMs = audioSource.keepalive_ms;
       }
+      if (Number.isFinite(Number(audioSource.keepalive_idle_ms))) {
+        const parsed = Number(audioSource.keepalive_idle_ms);
+        if (parsed >= 0) {
+          keepaliveIdleMs = parsed;
+        }
+      }
     }
 
     policy.policy = nested;
     policy.input = nested && typeof nested.input === "object" ? { ...nested.input } : {};
-    policy.audio = { pipeline: audioPipeline, keepalive_ms: keepaliveMs };
+    policy.audio = { pipeline: audioPipeline, keepalive_ms: keepaliveMs, keepalive_idle_ms: keepaliveIdleMs };
     return policy;
   }
 
