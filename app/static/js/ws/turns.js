@@ -890,7 +890,6 @@ export function createTurnRuntime(config = {}) {
       await stopRecorder({ reason: rawStopReason }, {
         fallbackReason: "server_requested",
         source: "server.stop_listening",
-        softStop: true,
       });
       setAsrArmInFlight(false);
       try {
