@@ -420,6 +420,7 @@ if (typeof createCaptureRuntime !== "function") {
 
   let scheduleAudioKeepaliveImpl = () => {};
   let clearAudioKeepaliveTimerImpl = () => {};
+  let sendAudioKeepaliveNowImpl = () => false;
 
   let captureRuntime = null;
 
@@ -436,6 +437,15 @@ if (typeof createCaptureRuntime !== "function") {
       scheduleAudioKeepaliveImpl();
     } catch (err) {
       console.warn("scheduleAudioKeepalive failed", err);
+    }
+  }
+
+  function sendAudioKeepaliveNow() {
+    try {
+      return sendAudioKeepaliveNowImpl();
+    } catch (err) {
+      console.warn("sendAudioKeepaliveNow failed", err);
+      return false;
     }
   }
 
@@ -486,6 +496,12 @@ if (typeof createCaptureRuntime !== "function") {
   }
   if (typeof AppState.emit !== "function") {
     AppState.emit = (event, detail) => appStateEventEmitter.emit(event, detail);
+  }
+  if (typeof AppState.on === "function" && !AppState.__keepaliveListeningHandlerInstalled) {
+    AppState.__keepaliveListeningHandlerInstalled = true;
+    AppState.on("listening", () => {
+      scheduleAudioKeepalive();
+    });
   }
   if (typeof AppState.on === "function" && !AppState.__pcmBreadcrumbHandlersInstalled) {
     AppState.__pcmBreadcrumbHandlersInstalled = true;
@@ -744,6 +760,7 @@ if (typeof createCaptureRuntime !== "function") {
     updatePcmSenderState,
     scheduleAudioKeepalive: runtimeScheduleAudioKeepalive,
     clearAudioKeepaliveTimer: runtimeClearAudioKeepalive,
+    sendAudioKeepaliveNow: runtimeSendAudioKeepaliveNow,
   } = audioRuntime;
 
   scheduleAudioKeepaliveImpl = typeof runtimeScheduleAudioKeepalive === "function"
@@ -752,6 +769,9 @@ if (typeof createCaptureRuntime !== "function") {
   clearAudioKeepaliveTimerImpl = typeof runtimeClearAudioKeepalive === "function"
     ? runtimeClearAudioKeepalive
     : () => {};
+  sendAudioKeepaliveNowImpl = typeof runtimeSendAudioKeepaliveNow === "function"
+    ? runtimeSendAudioKeepaliveNow
+    : () => false;
 
   function cloneClientVadPolicyRoot(root) {
     const safeRoot = root && typeof root === "object" ? root : {};
@@ -2061,6 +2081,11 @@ if (typeof createCaptureRuntime !== "function") {
       vendor: AppState.asrVendor,
       input: sanitized.input ?? null,
     });
+    try {
+      sendAudioKeepaliveNow();
+    } catch (err) {
+      console.warn("Immediate keepalive send failed after asr.ready", err);
+    }
     return sanitized;
   }
 

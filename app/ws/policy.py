@@ -47,7 +47,7 @@ SAFE_DEFAULTS_V2: dict[str, Any] = {
         "start_on_ws_open": False,
         "header_on_first_chunk": True,
         "allow_capture_during_tts": False,
-        "keepalive_ms": 2000,
+        "keepalive_ms": 1000,
     },
     "watchdog": {
         "partial_wait_ms_first_turn": 3500,
