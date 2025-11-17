@@ -2,6 +2,18 @@
 // Encapsulates turn state, ASR control, and "can capture now?" logic.
 
 const DEFAULT_ASR_VENDOR = "gcp";
+const HARD_ASR_CLOSE_REASONS = new Set([
+  "user_requested",
+  "user_restart",
+  "user_end",
+  "client_stop",
+  "client_shutdown",
+  "end_button",
+  "server_requested",
+  "server_error",
+  "resume_invalid",
+  "asr_unavailable",
+]);
 
 const DEFAULT_MIC_OUTCOME = {
   PERM_GRANTED: "perm_granted",
@@ -403,18 +415,14 @@ export function createTurnRuntime(config = {}) {
     }
   }
 
+  function isHardAsrCloseReason(reason) {
+    if (typeof reason !== "string" || !reason) {
+      return false;
+    }
+    return HARD_ASR_CLOSE_REASONS.has(reason.toLowerCase());
+  }
+
   async function requestAsrClose(reason = "client_stop") {
-    const HARD_ASR_CLOSE_REASONS = new Set([
-      "user_requested",
-      "user_restart",
-      "user_end",
-      "client_stop",
-      "client_shutdown",
-      "end_button",
-      "server_requested",
-      "server_error",
-      "resume_invalid",
-    ]);
     const label = normalizeReason(reason);
     const normalizedLabel = typeof label === "string" && label
       ? label.toLowerCase()
@@ -453,7 +461,7 @@ export function createTurnRuntime(config = {}) {
         pendingAsrClosedSeq = null;
       }
     }
-    if (HARD_ASR_CLOSE_REASONS.has(normalizedLabel)) {
+    if (isHardAsrCloseReason(normalizedLabel)) {
       await stopRecorder(label);
     } else {
       const pauseLabel = typeof label === "string" && label ? label : "turn_completed";
@@ -883,12 +891,16 @@ export function createTurnRuntime(config = {}) {
       const rawStopReason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
         : frame?.type || "stop_listening";
+      const stopReason = normalizeReason(rawStopReason);
+      const hardStopReason = isHardAsrCloseReason(stopReason)
+        ? stopReason
+        : "server_requested";
       if (audioStreaming) {
-        hubLogger("client.stream.off", { reason: rawStopReason });
+        hubLogger("client.stream.off", { reason: hardStopReason });
       }
       audioStreaming = false;
-      await stopRecorder({ reason: rawStopReason }, {
-        fallbackReason: "server_requested",
+      await stopRecorder({ reason: hardStopReason }, {
+        fallbackReason: hardStopReason,
         source: "server.stop_listening",
       });
       setAsrArmInFlight(false);
