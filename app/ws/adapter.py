@@ -3430,7 +3430,15 @@ class ChatV2Adapter:
         send_open = not ctx.audio_send_closed
         backpressure_ok = ctx.backpressure_state != "on"
 
-        gate_open = mask_open and ready_gate and mic_open and send_open and backpressure_ok
+        mic_lane_force_open = ctx.asr_open
+        gate_open = mic_lane_force_open or (
+            mask_open and ready_gate and mic_open and send_open and backpressure_ok
+        )
+        if mic_lane_force_open and not (
+            mask_open and ready_gate and mic_open and send_open and backpressure_ok
+        ):
+            _log.debug("evt=audio_gate_bypass sid=%s reason=asr_open", ctx.sid)
+
         if not gate_open:
             _log.info(
                 "evt=audio_gate_block sid=%s mask=%s ready=%s mic=%s send=%s back=%s",
@@ -4497,23 +4505,33 @@ class ChatV2Adapter:
         )
 
         def _handle_audio_event(event: dict) -> None:
+            source = event.get("source") or "unknown"
+
+            def _log_ignored(reason: str) -> None:
+                _log.debug(
+                    "evt=audio_event_ignored sid=%s source=%s reason=%s",
+                    ctx.sid,
+                    source,
+                    reason,
+                )
+
             if event.get("sid") != ctx.sid:
+                _log_ignored("sid_mismatch")
                 return
             if ctx.audio_send_closed:
+                _log_ignored("audio_send_closed")
                 return
-            source = event.get("source")
             if source == "ws_server":
                 meta = event.get("meta")
                 audio_meta = meta.get("audio") if isinstance(meta, Mapping) else None
                 if not isinstance(audio_meta, Mapping):
-                    _log.debug(
-                        "evt=audio_event_ignored sid=%s source=%s", ctx.sid, source
-                    )
+                    _log_ignored("missing_audio_meta")
                     return
             chunk = event.get("chunk")
             if isinstance(chunk, (bytes, bytearray, memoryview)):
                 chunk_bytes = bytes(chunk)
             else:
+                _log_ignored("chunk_not_bytes")
                 return
 
             def _deliver() -> None:
