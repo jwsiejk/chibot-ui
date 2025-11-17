@@ -456,6 +456,16 @@ export function createCaptureRuntime({
     armingGraceUntil = 0;
   }
 
+  function softPauseCapture(reason = "turn_completed") {
+    const pauseReason = normalizeReason(reason);
+    try {
+      setSenderPauseReason(pauseReason, true);
+    } catch {}
+    try {
+      hubLog("client.pcm.soft_pause", { reason: pauseReason });
+    } catch {}
+  }
+
   async function performStopRecorder(reason, options = {}) {
     const opts = options && typeof options === "object" ? options : {};
     const softStop = opts.softStop === true || opts.soft === true;
@@ -646,6 +656,7 @@ export function createCaptureRuntime({
     setWsConnected,
     setWsPhase,
     resetRecorderTelemetry,
+    softPauseCapture,
     performStopRecorder,
     stopRecorder,
     startRecorderStreaming,
