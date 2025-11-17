@@ -667,9 +667,11 @@ class ChatV2Adapter:
             _log.info("evt=asr_ready_deferred sid=%s where=%s", ctx.sid, label)
             return
         try:
-            await self._open_asr(ctx)
-            await self._send_asr_ready_bundle(send, ctx)
-            _log.info("evt=asr_ready_emit sid=%s where=%s", ctx.sid, label)
+            if ctx.asr_open_task is None or ctx.asr_open_task.done():
+                self._schedule_asr_open(ctx)
+            if not ctx.asr_ready_bundle_sent_ms:
+                await self._send_asr_ready_bundle(send, ctx)
+                _log.info("evt=asr_ready_emit sid=%s where=%s", ctx.sid, label)
         except Exception:
             _log.exception("evt=asr_ready_emit_failed sid=%s where=%s", ctx.sid, label)
 
@@ -717,11 +719,6 @@ class ChatV2Adapter:
             )
         except Exception:
             _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
-        if ctx.session.queued_arm and can_open(ctx.session):
-            try:
-                self._schedule_asr_open(ctx)
-            except Exception:
-                _log.exception("evt=asr_open_after_tts_failed sid=%s", ctx.sid)
         if not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
 
