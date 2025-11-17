@@ -15,7 +15,9 @@ const SILENCE_PREROLL_MS = 100;
 const SILENCE_IDLE_TICK_MS = 5000;
 const AUDIO_KEEPALIVE_MS = 1000;
 const AUDIO_KEEPALIVE_CHUNK_MS = 20;
+const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
+let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
 
 const primedSessionIds = new Set();
 
@@ -364,6 +366,7 @@ export function createWsAudioRuntime(options = {}) {
   let silenceLastIdleTickAt = 0;
   let micKeepaliveTimerId = null;
   let micLastChunkAt = 0;
+  let lastRealAudioAt = 0;
   localFirstChunkSeen = readFirstChunkSeen();
   localMicRecordingStartAt = readMicRecordingStartAt();
   audioKeepaliveMs = Number.isFinite(initialAudioKeepaliveMs) && initialAudioKeepaliveMs > 0
@@ -398,22 +401,36 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function maybeSendAudioKeepalive(now) {
+    const result = { sentKeepalive: false, idleTimedOut: false };
     const ws = resolveSocket();
     if (!ws) {
-      return false;
+      return result;
     }
     if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
-      return false;
+      return result;
     }
     const listening = Boolean(AppState?.listening);
     const streaming = typeof isAudioStreaming === "function" ? isAudioStreaming() : true;
-    const shouldSendKeepalive = (!listening || !streaming)
-      || (listening && streaming && (now - micLastChunkAt >= audioKeepaliveMs));
+    if (!(listening && streaming)) {
+      return result;
+    }
+    if (Number.isFinite(audioKeepaliveIdleMs) && audioKeepaliveIdleMs > 0) {
+      const idleDuration = now - lastRealAudioAt;
+      if (idleDuration >= audioKeepaliveIdleMs) {
+        setSenderPauseReason("idle_timeout", true);
+        updatePcmSenderState();
+        clearAudioKeepaliveTimer();
+        result.idleTimedOut = true;
+        return result;
+      }
+    }
+    const shouldSendKeepalive = now - micLastChunkAt >= audioKeepaliveMs;
     if (!shouldSendKeepalive) {
-      return false;
+      return result;
     }
     if (sendAudioKeepaliveChunk(now)) {
-      return true;
+      result.sentKeepalive = true;
+      return result;
     }
     try {
       if (safeSendJSON({ type: "client.ping" })) {
@@ -422,7 +439,7 @@ export function createWsAudioRuntime(options = {}) {
     } catch (err) {
       console.warn("client.ping send failed", err);
     }
-    return false;
+    return result;
   }
 
   function scheduleAudioKeepalive() {
@@ -433,16 +450,20 @@ export function createWsAudioRuntime(options = {}) {
     micKeepaliveTimerId = setTimeout(() => {
       micKeepaliveTimerId = null;
       const now = Date.now();
-      maybeSendAudioKeepalive(now);
-      scheduleAudioKeepalive();
+      const result = maybeSendAudioKeepalive(now);
+      if (!result.idleTimedOut) {
+        scheduleAudioKeepalive();
+      }
     }, audioKeepaliveMs);
   }
 
   function sendAudioKeepaliveNow() {
     const now = Date.now();
-    const sent = maybeSendAudioKeepalive(now);
-    scheduleAudioKeepalive();
-    return sent;
+    const result = maybeSendAudioKeepalive(now);
+    if (!result.idleTimedOut) {
+      scheduleAudioKeepalive();
+    }
+    return result.sentKeepalive;
   }
 
   function recordRecorderChunk(timestampMs) {
@@ -451,6 +472,7 @@ export function createWsAudioRuntime(options = {}) {
       ? AppState.chunkCount
       : (typeof AppState?.getState === "function" ? (AppState.getState().chunkCount || 0) : 0);
     const nextCount = currentCount + 1;
+    lastRealAudioAt = now;
     if (AppState && typeof AppState === "object") {
       AppState.chunkCount = nextCount;
       AppState.lastChunkTs = now;
@@ -903,12 +925,18 @@ export function createWsAudioRuntime(options = {}) {
     resetSilenceSuppression();
     clearAudioKeepaliveTimer();
     micLastChunkAt = 0;
+    lastRealAudioAt = 0;
   }
 
   function setAudioKeepaliveMs(value) {
     const next = Number.isFinite(value) && value > 0 ? value : AUDIO_KEEPALIVE_MS;
     audioKeepaliveMs = next;
     scheduleAudioKeepalive();
+  }
+
+  function setAudioKeepaliveIdleMs(value) {
+    const next = Number.isFinite(value) && value > 0 ? value : AUDIO_KEEPALIVE_IDLE_MS;
+    audioKeepaliveIdleMs = next;
   }
 
   return {
@@ -926,5 +954,6 @@ export function createWsAudioRuntime(options = {}) {
     clearAudioKeepaliveTimer,
     sendAudioKeepaliveNow,
     setAudioKeepaliveMs,
+    setAudioKeepaliveIdleMs,
   };
 }
