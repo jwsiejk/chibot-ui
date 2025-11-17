@@ -398,7 +398,21 @@ export function createTurnRuntime(config = {}) {
   }
 
   async function requestAsrClose(reason = "client_stop") {
+    const HARD_ASR_CLOSE_REASONS = new Set([
+      "user_requested",
+      "user_restart",
+      "user_end",
+      "client_stop",
+      "client_shutdown",
+      "end_button",
+      "server_requested",
+      "server_error",
+      "resume_invalid",
+    ]);
     const label = normalizeReason(reason);
+    const normalizedLabel = typeof label === "string" && label
+      ? label.toLowerCase()
+      : "unspecified";
     setAsrArmInFlight(false);
     const seq = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
       ? crypto.randomUUID()
@@ -433,7 +447,13 @@ export function createTurnRuntime(config = {}) {
         pendingAsrClosedSeq = null;
       }
     }
-    await stopRecorder(label);
+    if (HARD_ASR_CLOSE_REASONS.has(normalizedLabel)) {
+      await stopRecorder(label);
+    } else {
+      const pauseLabel = typeof label === "string" && label ? label : "turn_completed";
+      setSenderPauseReason(pauseLabel, true);
+      applySenderPausedState();
+    }
     return ack;
   }
 
