@@ -517,6 +517,38 @@ export function createWsConnection({
     const payloadType = typeof data?.type === "string" ? data.type : "unknown";
     const isControl = !binary && isControlFrame(data);
 
+    if (!ws) {
+      console.warn("client.ws_send_dropped", {
+        payloadType,
+        reason: "no_ws",
+        phase,
+        readyState,
+      });
+      return false;
+    }
+
+    if (readyState === WebSocket.CONNECTING) {
+      console.warn("client.ws.send_queued", {
+        payloadType,
+        phase,
+        readyState,
+        hasWs: !!ws,
+        queueLength: connectionQueue.length,
+      });
+      queueFrame(data, !!binary);
+      return true;
+    }
+
+    if (readyState === WebSocket.CLOSING || readyState === WebSocket.CLOSED) {
+      console.warn("client.ws_send_dropped", {
+        payloadType,
+        reason: "ws_not_open",
+        phase,
+        readyState,
+      });
+      return false;
+    }
+
     if (!skipPhaseCheck && !binary && !isControl) {
       if (phase && !WS_READY_PHASES.has(phase)) {
         console.warn("client.ws.send_queued", {
@@ -531,16 +563,14 @@ export function createWsConnection({
       }
     }
 
-    if (!ws || readyState !== WebSocket.OPEN) {
-      console.warn("client.ws.send_queued", {
+    if (readyState !== WebSocket.OPEN) {
+      console.warn("client.ws_send_dropped", {
         payloadType,
+        reason: "ws_not_open",
         phase,
         readyState,
-        hasWs: !!ws,
-        queueLength: connectionQueue.length,
       });
-      queueFrame(data, !!binary);
-      return true;
+      return false;
     }
 
     const live = ws;

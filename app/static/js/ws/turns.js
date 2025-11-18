@@ -477,6 +477,17 @@ export function createTurnRuntime(config = {}) {
     }
     asrRecovering = true;
     const label = typeof reason === "string" && reason ? reason : "unknown";
+
+    if (label === "partial_timeout") {
+      clearPartialWatchdog();
+      try {
+        console.warn("ASR partial watchdog fired; skipping auto-recover", { reason: label });
+        logStage?.("client.asr_recover_skipped", { reason: label });
+      } catch {}
+      asrRecovering = false;
+      return;
+    }
+
     clearPartialWatchdog();
     try {
       await requestAsrClose(`recover:${label}`);
