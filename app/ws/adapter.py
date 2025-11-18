@@ -6434,7 +6434,12 @@ class ChatV2Adapter:
     ) -> None:
         # Safety: only process if the stream is currently open and ours.
         if ctx.session.asr_state != "open" or not ctx.asr_open or not ctx.asr_stream_id:
-            _log.info("evt=asr_result_ignored sid=%s reason=asr_not_open", ctx.sid)
+            _log.info(
+                "evt=asr_result_ignored sid=%s reason=asr_not_open state=%s stream=%s",
+                ctx.sid,
+                ctx.session.asr_state,
+                ctx.asr_stream_id,
+            )
             return
         text = transcript or ""
         vendor = "gcp"
