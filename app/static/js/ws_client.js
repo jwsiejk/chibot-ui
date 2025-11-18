@@ -1896,8 +1896,12 @@ if (typeof createCaptureRuntime !== "function") {
     const hub = AppState?.hub;
     if (hub && typeof hub.stopListening === "function") {
       try {
-        const reason =
+        const rawReason =
           options && typeof options === "object" && options.reason ? options.reason : "legacy_input";
+        let reason = rawReason;
+        if (rawReason === "input.stop") {
+          reason = "user_clicked_stop";
+        }
         hub.stopListening(reason);
       } catch (err) {
         console.warn("Hub stopListening (legacy input) failed", err);

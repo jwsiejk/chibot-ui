@@ -149,14 +149,30 @@ export async function initPcmSender(ws, {
     }
   }
 
-  const mediaStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  let mediaStream;
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const audioTracks = mediaStream?.getAudioTracks?.();
+    const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
+    const deviceId = primaryTrack?.getSettings?.()?.deviceId || null;
+    console.log('client.mic_stream_acquired_ok', {
+      deviceId,
+      sampleRate: audioCtx?.sampleRate || null,
+    });
+  } catch (err) {
+    console.error('client.mic_permission_denied', {
+      name: err?.name,
+      message: err?.message,
+    });
+    throw err;
+  }
 
   const source = audioCtx.createMediaStreamSource(mediaStream);
 
