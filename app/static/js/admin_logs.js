@@ -22,9 +22,12 @@
   const sessionTableBody = document.getElementById('sessionTableBody');
   const sessionStatus = document.getElementById('sessionStatus');
   const sidInput = document.getElementById('sidInput');
+  const sidFilterInput = document.getElementById('sid-filter');
   const liveBtn = document.getElementById('liveBtn');
   const historyBtn = document.getElementById('historyBtn');
   const downloadBtn = document.getElementById('downloadBtn');
+  const exportServerBtn = document.getElementById('export-server-logs');
+  const exportClientBtn = document.getElementById('export-client-logs');
   const typesAllBtn = document.getElementById('typesAllBtn');
   const liveStatus = document.getElementById('liveStatus');
   const liveOutput = document.getElementById('liveOutput');
@@ -45,6 +48,30 @@
   const drawerContent = document.getElementById('jsonDrawerContent');
   const drawerClose = document.getElementById('jsonDrawerClose');
   const drawerBackdrop = document.getElementById('jsonDrawerBackdrop');
+
+  function downloadFile(url, filename) {
+    fetch(url, { credentials: 'include' })
+      .then(async (res) => {
+        if (!res.ok) {
+          console.error('Export failed', res.status, await res.text());
+          alert('Export failed: ' + res.status);
+          return;
+        }
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(objectUrl);
+      })
+      .catch((err) => {
+        console.error('Export error', err);
+        alert('Export error: ' + err.message);
+      });
+  }
 
   if (userLabel) {
     if (userEmail) {
@@ -1180,6 +1207,34 @@
     buildTypesQuery(url.searchParams);
     window.open(url.toString(), '_blank', 'noopener');
   });
+
+  if (exportServerBtn) {
+    exportServerBtn.addEventListener('click', () => {
+      const sidSource = sidFilterInput || sidInput;
+      const sid = sidSource && sidSource.value ? sidSource.value.trim() : '';
+      const url = sid
+        ? `/api/v1/admin/export/server-logs?sid=${encodeURIComponent(sid)}`
+        : `/api/v1/admin/export/server-logs`;
+      const name = `server-logs-${sid || 'all'}.txt`;
+      downloadFile(url, name);
+    });
+  }
+
+  if (exportClientBtn) {
+    exportClientBtn.addEventListener('click', () => {
+      const sidSource = sidFilterInput || sidInput;
+      const sid = sidSource && sidSource.value ? sidSource.value.trim() : '';
+      const url = sid
+        ? `/api/v1/admin/export/client-logs?sid=${encodeURIComponent(sid)}`
+        : `/api/v1/admin/export/client-logs`;
+      const name = `client-logs-${sid || 'all'}.txt`;
+      downloadFile(url, name);
+    });
+  }
+
+  try {
+    console.debug('admin logs export buttons wired');
+  } catch {}
 
   liveTab.addEventListener('click', () => activateTab('live'));
   historyTab.addEventListener('click', () => activateTab('history'));
