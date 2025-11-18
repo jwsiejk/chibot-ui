@@ -1889,6 +1889,7 @@ if (typeof createCaptureRuntime !== "function") {
     scheduleRateLimitRetry,
     open: sessionOpen,
     close: sessionClose,
+    endSession: sessionEnd,
   } = sessionManager;
 
   // Coordinates turn state and ASR lifecycle (open/arm/close/recover decisions).
@@ -2558,7 +2559,9 @@ if (typeof createCaptureRuntime !== "function") {
     return ws;
   };
   WSClient.close = function wsClientClose(reason) {
-    const result = sessionClose(reason);
+    const normalizedReason = typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON;
+    const closer = normalizedReason === DEFAULT_CLOSE_REASON ? sessionEnd : sessionClose;
+    const result = closer(normalizedReason);
     const finalize = () => {
       socket = null;
       try { WSClient._ws = null; } catch {}
@@ -2571,6 +2574,10 @@ if (typeof createCaptureRuntime !== "function") {
     }
     finalize();
     return result;
+  };
+
+  WSClient.endSession = function wsClientEndSession(reason) {
+    return WSClient.close(typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON);
   };
   WSClient.send = function sendWs(payload, opts = {}) {
     const options = opts && typeof opts === "object" ? { ...opts, binary: false } : { binary: false };

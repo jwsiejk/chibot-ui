@@ -5567,6 +5567,18 @@ class ChatV2Adapter:
         if start_ms is None:
             return
 
+        if (
+            ctx.ing_bytes > 0
+            or ctx.ing_chunks > 0
+            or ctx.partial_seq > 0
+            or ctx.audio_chunks_recv > 0
+            or ctx.asr_final_emitted
+            or ctx.last_asr_partial
+        ):
+            return
+        if ctx.session.asr_state == "closed" or ctx.ws_send is None:
+            return
+
         since_ms = max(0, self._now_ms() - start_ms)
         phase = self._resolve_watchdog_phase(ctx)
         turn_id = getattr(ctx.session, "turn_id", None)
@@ -6460,8 +6472,12 @@ class ChatV2Adapter:
     async def _handle_asr_result(
         self, ctx: AdapterContext, transcript: str | None, is_final: bool
     ) -> None:
-        # Safety: only process if the stream is currently open and ours.
-        if ctx.session.asr_state != "open" or not ctx.asr_open or not ctx.asr_stream_id:
+        if not ctx.asr_stream_id:
+            _log.info("evt=asr_result_ignored sid=%s reason=no_stream_id", ctx.sid)
+            return
+
+        asr_path_open = ctx.session.asr_state == "open" and ctx.asr_open
+        if not asr_path_open and not is_final:
             _log.info(
                 "evt=asr_result_ignored sid=%s reason=asr_not_open state=%s stream=%s",
                 ctx.sid,
@@ -6469,6 +6485,15 @@ class ChatV2Adapter:
                 ctx.asr_stream_id,
             )
             return
+
+        if is_final and not asr_path_open:
+            _log.info(
+                "evt=asr_final_accepted_after_client_close sid=%s stream=%s state=%s ws_send=%s",
+                ctx.sid,
+                ctx.asr_stream_id,
+                ctx.session.asr_state,
+                bool(ctx.ws_send),
+            )
         text = transcript or ""
         vendor = "gcp"
 
@@ -6595,12 +6620,14 @@ class ChatV2Adapter:
 
         async def _on_result(transcript: str, is_final: bool, _sid=stream_id) -> None:
             # Drop late or alien results
-            if _sid != ctx.asr_stream_id or ctx.session.asr_state != "open":
+            is_same_stream = _sid == ctx.asr_stream_id
+            if (not is_same_stream) or ctx.asr_final_emitted:
                 _log.info(
-                    "evt=asr_result_dropped sid=%s reason=stale stream=%s current=%s",
+                    "evt=asr_result_dropped sid=%s reason=stale stream=%s current=%s final_emitted=%s",
                     ctx.sid,
                     _sid,
                     ctx.asr_stream_id,
+                    ctx.asr_final_emitted,
                 )
                 return
             await self._handle_asr_result(ctx, transcript, is_final)
