@@ -564,6 +564,8 @@ class AdapterContext:
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
+        # Keep a session-level turn counter available for correlation.
+        self.session.turn_index = 0
 
 
 class ChatV2Adapter:
@@ -615,10 +617,62 @@ class ChatV2Adapter:
         )
 
     def _next_turn_index(self, ctx: AdapterContext) -> int:
-        if not hasattr(ctx, "turn_index"):
-            ctx.turn_index = 0
-        ctx.turn_index += 1
-        return ctx.turn_index
+        current_turn = getattr(ctx, "turn_index", None)
+        if current_turn is None:
+            current_turn = 0
+        session_turn = getattr(ctx.session, "turn_index", None)
+        if session_turn is None:
+            session_turn = current_turn
+        next_turn = max(current_turn, session_turn) + 1
+        ctx.turn_index = next_turn
+        try:
+            ctx.session.turn_index = next_turn
+        except Exception:
+            pass
+        return next_turn
+
+    def _log_turn_timeline(self, ctx: AdapterContext, outcome: str = "final") -> None:
+        m = getattr(ctx, "metrics", {}) or {}
+        now = time.monotonic()
+
+        def _delta_ms(start: float | None) -> int | None:
+            return int((now - start) * 1000) if start is not None else None
+
+        asr_ms = _delta_ms(m.get("asr_started_at"))
+        asr_to_final_ms = (
+            int((m["asr_final_at"] - m["asr_started_at"]) * 1000)
+            if m.get("asr_started_at") is not None
+            and m.get("asr_final_at") is not None
+            else None
+        )
+        llm_ms = (
+            int((m["llm_completed_at"] - m["llm_started_at"]) * 1000)
+            if m.get("llm_started_at") is not None
+            and m.get("llm_completed_at") is not None
+            else None
+        )
+        tts_ms = (
+            int((m["tts_completed_at"] - m["tts_started_at"]) * 1000)
+            if m.get("tts_started_at") is not None
+            and m.get("tts_completed_at") is not None
+            else None
+        )
+
+        _log.info(
+            "evt=turn_timeline sid=%s turn_index=%s outcome=%s",
+            ctx.sid,
+            m.get("turn_index"),
+            outcome,
+            extra={
+                "meta": {
+                    "asr_ms": asr_ms,
+                    "asr_to_final_ms": asr_to_final_ms,
+                    "llm_ms": llm_ms,
+                    "tts_ms": tts_ms,
+                }
+            },
+        )
+        self._log_turn_event(ctx, "turn_complete")
 
     async def _call_openai(self, ctx: AdapterContext, transcript: str) -> str:
         """Execute an OpenAI Chat Completions request without blocking the event loop."""
@@ -634,9 +688,18 @@ class ChatV2Adapter:
 
         try:
             client = OpenAI(api_key=api_key)
+            metrics = getattr(ctx, "metrics", {})
+            model_name = "gpt-4o-mini"
+            metrics["llm_started_at"] = time.monotonic()
+            _log.info(
+                "evt=llm_request sid=%s turn_index=%s model=%s",
+                ctx.sid,
+                metrics.get("turn_index"),
+                model_name,
+            )
             response = await asyncio.to_thread(
                 client.chat.completions.create,
-                model="gpt-4o-mini",
+                model=model_name,
                 messages=[
                     {
                         "role": "system",
@@ -653,6 +716,17 @@ class ChatV2Adapter:
             choice = response.choices[0]
             message = getattr(choice, "message", None)
             content = getattr(message, "content", None)
+            metrics["llm_completed_at"] = time.monotonic()
+            preview = ""
+            if isinstance(content, str):
+                preview = content.strip()
+            _log.info(
+                "evt=llm_response sid=%s turn_index=%s model=%s",
+                ctx.sid,
+                metrics.get("turn_index"),
+                model_name,
+                extra={"meta": {"preview": preview[:120]}},
+            )
             if isinstance(content, str):
                 return content.strip()
             return ""
@@ -725,6 +799,8 @@ class ChatV2Adapter:
     ) -> None:
         ctx.session.tts_active = True
         self._cancel_no_audio_watchdog(ctx)
+        metrics = getattr(ctx, "metrics", {})
+        metrics["tts_started_at"] = time.monotonic()
         try:
             self._bus(
                 "tts.start",
@@ -744,6 +820,8 @@ class ChatV2Adapter:
         if ctx.asr_ready_deadline_task:
             ctx.asr_ready_deadline_task.cancel()
             ctx.asr_ready_deadline_task = None
+        metrics = getattr(ctx, "metrics", {})
+        metrics["tts_completed_at"] = time.monotonic()
         try:
             self._bus(
                 "tts.end",
@@ -751,6 +829,20 @@ class ChatV2Adapter:
             )
         except Exception:
             _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
+        provider = None
+        total_bytes: Optional[int] = None
+        if isinstance(frame, Mapping):
+            provider = frame.get("provider") or frame.get("vendor")
+            bytes_value = frame.get("bytes") or frame.get("total_bytes")
+            if isinstance(bytes_value, int):
+                total_bytes = bytes_value
+        _log.info(
+            "evt=tts_timeline sid=%s turn_index=%s provider=%s",
+            ctx.sid,
+            metrics.get("turn_index"),
+            provider or "unknown",
+            extra={"meta": {"bytes_out": total_bytes}},
+        )
         if not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
 
@@ -4058,6 +4150,7 @@ class ChatV2Adapter:
                         asr_stream_id=ctx.asr_stream_id,
                         final_emitted=ctx.asr_final_emitted,
                     )
+                    self._log_turn_timeline(ctx, outcome="final")
             elif frame_type == "turn.begin":
                 if not ctx.turn_active:
                     ctx.turn_active = True
@@ -4077,6 +4170,7 @@ class ChatV2Adapter:
                             asr_stream_id=ctx.asr_stream_id,
                             final_emitted=ctx.asr_final_emitted,
                         )
+                        self._log_turn_timeline(ctx, outcome="final")
                         _queue_payload({"type": "turn.end"})
             if frame_type == "asr.partial":
                 self._offer_partial_frame(
@@ -6549,6 +6643,8 @@ class ChatV2Adapter:
             ctx.last_asr_partial = None
 
         if is_final:
+            metrics = getattr(ctx, "metrics", {})
+            metrics["asr_final_at"] = time.monotonic()
             phase = "asr_final_from_timeout" if promoted_final else "asr_final"
             self._log_turn_event(
                 ctx,
@@ -6631,6 +6727,27 @@ class ChatV2Adapter:
         ctx.client_turn_closed = False
         ctx.last_asr_partial = None
 
+        turn_index = self._next_turn_index(ctx)
+        ctx.metrics = getattr(ctx, "metrics", {}) or {}
+        ctx.metrics.update(
+            {
+                "turn_index": turn_index,
+                "turn_started_at": time.monotonic(),
+                "asr_started_at": None,
+                "asr_final_at": None,
+                "llm_started_at": None,
+                "llm_completed_at": None,
+                "tts_started_at": None,
+                "tts_completed_at": None,
+            }
+        )
+
+        self._log_turn_event(
+            ctx,
+            "turn_start",
+            asr_stream_id=getattr(ctx, "asr_stream_id", None),
+        )
+
         try:
             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
         except RuntimeError:
@@ -6671,7 +6788,6 @@ class ChatV2Adapter:
             config, "GCP_STT_DEFAULT_LANGUAGE", "en-US"
         )
 
-        turn_index = self._next_turn_index(ctx)
         self._log_turn_event(
             ctx,
             "turn_start",
@@ -6679,7 +6795,7 @@ class ChatV2Adapter:
             asr_vendor="gcp",
             sample_rate=sample_rate,
             language=language,
-            turn_index=turn_index,
+            turn_index=getattr(ctx, "turn_index", None),
         )
 
         async def _on_result(transcript: str, is_final: bool, _sid=stream_id) -> None:
@@ -6715,6 +6831,8 @@ class ChatV2Adapter:
                 sample_rate,
                 language,
             )
+            metrics = getattr(ctx, "metrics", {})
+            metrics["asr_started_at"] = time.monotonic()
             await engine.open(
                 sample_rate=sample_rate,
                 language=language,
@@ -6733,6 +6851,13 @@ class ChatV2Adapter:
             ctx.asr_open = False
             _log.exception("evt=asr_open_failed sid=%s vendor=gcp", ctx.sid)
             self._log_turn_event(ctx, "turn_failed", error_reason="asr_open_failed")
+            _log.error(
+                "evt=turn_error sid=%s turn_index=%s reason=%s",
+                ctx.sid,
+                getattr(ctx, "turn_index", None),
+                "asr_engine_error",
+                exc_info=True,
+            )
             try:
                 await self._send_asr_error(send, ctx, "open_failed")
             except Exception:
