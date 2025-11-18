@@ -806,6 +806,7 @@ class ChatV2Adapter:
         metrics["tts_timeline_emitted_key"] = None
         metrics["tts_active_utt_id"] = None
         metrics["tts_provider"] = None
+        metrics["tts_timeline_logged"] = False
         if isinstance(frame, Mapping):
             utt_id = frame.get("utt_id")
             if isinstance(utt_id, str) and utt_id:
@@ -885,6 +886,8 @@ class ChatV2Adapter:
         elif provider:
             metrics["tts_provider"] = provider
 
+        provider_name = provider or metrics.get("tts_provider") or "elevenlabs"
+
         tts_started_at = metrics.get("tts_started_at")
         tts_completed_at = metrics.get("tts_completed_at")
         tts_ms = (
@@ -893,13 +896,14 @@ class ChatV2Adapter:
             else None
         )
 
-        if should_log_timeline:
+        if should_log_timeline and not metrics.get("tts_timeline_logged"):
+            metrics["tts_timeline_logged"] = True
             log_fn = _log.info if is_firehose_enabled() else _log.debug
             log_fn(
                 "evt=tts_timeline sid=%s turn_index=%s provider=%s",
                 ctx.sid,
                 metrics.get("turn_index"),
-                provider or "unknown",
+                provider_name,
                 extra={
                     "meta": {
                         "tts_ms": tts_ms,
@@ -6806,6 +6810,7 @@ class ChatV2Adapter:
                 "tts_active_utt_id": None,
                 "tts_provider": None,
                 "tts_timeline_emitted_key": None,
+                "tts_timeline_logged": False,
             }
         )
 
