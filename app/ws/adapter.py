@@ -718,19 +718,17 @@ class ChatV2Adapter:
             message = getattr(choice, "message", None)
             content = getattr(message, "content", None)
             metrics["llm_completed_at"] = time.monotonic()
-            preview = ""
+            llm_text = ""
             if isinstance(content, str):
-                preview = content.strip()
+                llm_text = content.strip()
             _log.info(
                 "evt=llm_response sid=%s turn_index=%s model=%s",
                 ctx.sid,
                 metrics.get("turn_index"),
                 model_name,
-                extra={"meta": {"preview": preview[:120]}},
+                extra={"meta": {"preview": llm_text[:120]}},
             )
-            if isinstance(content, str):
-                return content.strip()
-            return ""
+            return llm_text
         except NotImplementedError:
             return "OpenAI SDK not correctly installed on the server."
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -4212,12 +4210,6 @@ class ChatV2Adapter:
                 if ctx.turn_active:
                     ctx.turn_active = False
                     ctx.client_mic_open = False
-                    self._log_turn_event(
-                        ctx,
-                        "turn_complete",
-                        asr_stream_id=ctx.asr_stream_id,
-                        final_emitted=ctx.asr_final_emitted,
-                    )
                     self._log_turn_timeline(ctx, outcome="final")
             elif frame_type == "turn.begin":
                 if not ctx.turn_active:
@@ -4232,12 +4224,6 @@ class ChatV2Adapter:
                     if ctx.turn_active:
                         ctx.turn_active = False
                         ctx.client_mic_open = False
-                        self._log_turn_event(
-                            ctx,
-                            "turn_complete",
-                            asr_stream_id=ctx.asr_stream_id,
-                            final_emitted=ctx.asr_final_emitted,
-                        )
                         self._log_turn_timeline(ctx, outcome="final")
                         _queue_payload({"type": "turn.end"})
             if frame_type == "asr.partial":
