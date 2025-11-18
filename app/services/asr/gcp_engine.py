@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from array import array
 from typing import Awaitable, Callable, Optional
 
@@ -17,6 +18,50 @@ logger = logging.getLogger(__name__)
 
 
 ResultCallback = Callable[[str, bool], Optional[Awaitable[None]]]
+
+
+@dataclass
+class AsrStreamStats:
+    sid: str
+    created_ts: float = field(default_factory=time.monotonic)
+    first_audio_ts: Optional[float] = None
+    last_audio_ts: Optional[float] = None
+    bytes_sent: int = 0
+    partial_count: int = 0
+    last_partial_text: str = ""
+
+    def mark_audio_chunk(self, byte_count: int) -> None:
+        now = time.monotonic()
+        if self.first_audio_ts is None:
+            self.first_audio_ts = now
+        self.last_audio_ts = now
+        self.bytes_sent += byte_count
+
+    def mark_partial(self, text: str) -> None:
+        self.partial_count += 1
+        if text:
+            self.last_partial_text = text
+
+    def to_summary(self, outcome: str) -> dict:
+        now = time.monotonic()
+        return {
+            "sid": self.sid,
+            "outcome": outcome,
+            "created_ms_ago": int((now - self.created_ts) * 1000),
+            "first_audio_ms_ago": (
+                int((now - self.first_audio_ts) * 1000)
+                if self.first_audio_ts is not None
+                else None
+            ),
+            "last_audio_ms_ago": (
+                int((now - self.last_audio_ts) * 1000)
+                if self.last_audio_ts is not None
+                else None
+            ),
+            "bytes_sent": self.bytes_sent,
+            "partial_count": self.partial_count,
+            "last_partial_text": self.last_partial_text,
+        }
 
 
 def _apply_linear16_gain(pcm: bytes, gain: float) -> bytes:
@@ -75,6 +120,7 @@ class GCPStreamingASREngine(ASREngine):
         self._response_future: Optional[asyncio.Task[None]] = None
         self._on_result: Optional[ResultCallback] = None
         self._sid: Optional[str] = None
+        self._stats: Optional[AsrStreamStats] = None
         self._closed = False
         self._streaming_config: Optional[speech.StreamingRecognitionConfig] = None
         self._sample_rate: Optional[int] = None
@@ -98,6 +144,7 @@ class GCPStreamingASREngine(ASREngine):
         self._queue = asyncio.Queue()
         self._on_result = on_result
         self._sid = sid
+        self._stats = AsrStreamStats(sid=sid)
         self._closed = False
         self._last_transcript = None
         self._last_is_final = False
@@ -168,6 +215,7 @@ class GCPStreamingASREngine(ASREngine):
         self._sample_rate = None
         self._language = None
         self._streaming_config = None
+        self._stats = None
         self._last_transcript = None
         self._last_is_final = False
 
@@ -187,6 +235,8 @@ class GCPStreamingASREngine(ASREngine):
                 chunk = asyncio.run_coroutine_threadsafe(self._queue.get(), self._loop).result()
                 if chunk is None:
                     break
+                if self._stats is not None:
+                    self._stats.mark_audio_chunk(len(chunk))
                 yield speech.StreamingRecognizeRequest(audio_content=chunk)
 
         asr_stream_wait_start = time.monotonic()
@@ -223,11 +273,21 @@ class GCPStreamingASREngine(ASREngine):
                         transcript,
                         is_final,
                     )
+            logger.info(
+                "evt=asr_stream_summary vendor=gcp sid=%s outcome=final",
+                self._sid,
+                extra={"summary": self._stats.to_summary("final") if self._stats else None},
+            )
         except Exception as exc:
             # Treat GCP "Audio Timeout Error" as a soft end-of-turn.
             if isinstance(exc, OutOfRange) and "Audio Timeout Error" in str(exc):
                 logger.warning(
                     "evt=asr_timeout vendor=gcp sid=%s", self._sid, exc_info=True
+                )
+                logger.info(
+                    "evt=asr_stream_summary vendor=gcp sid=%s outcome=timeout",
+                    self._sid,
+                    extra={"summary": self._stats.to_summary("timeout") if self._stats else None},
                 )
                 if self._last_transcript is not None and not self._last_is_final:
                     self._loop.call_soon_threadsafe(
@@ -237,6 +297,11 @@ class GCPStreamingASREngine(ASREngine):
                     )
             else:
                 logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
+                logger.info(
+                    "evt=asr_stream_summary vendor=gcp sid=%s outcome=error",
+                    self._sid,
+                    extra={"summary": self._stats.to_summary("error") if self._stats else None},
+                )
         finally:
             if first_chunk_at is None:
                 idle_ms = int((time.monotonic() - asr_stream_wait_start) * 1000)
@@ -261,6 +326,9 @@ class GCPStreamingASREngine(ASREngine):
             logger.info("evt=asr_final vendor=gcp sid=%s", self._sid)
         else:
             logger.info("evt=asr_partial vendor=gcp sid=%s", self._sid)
+
+        if self._stats is not None:
+            self._stats.mark_partial(transcript)
 
         try:
             maybe_coro = self._on_result(transcript, is_final)
