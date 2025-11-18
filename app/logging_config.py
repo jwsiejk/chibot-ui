@@ -141,6 +141,15 @@ def configure_logging(*, extra_loggers: Iterable[str] | None = None) -> None:
         # Normal: categories at least INFO as before
         _enforce_runtime_category_levels(logging.INFO)
 
+    if is_firehose_enabled():
+        logging.getLogger(__name__).debug(
+            "FIREHOSE_LOGS enabled: root DEBUG, runtime categories DEBUG"
+        )
+    else:
+        logging.getLogger(__name__).debug(
+            "FIREHOSE_LOGS disabled: using normal logging policy"
+        )
+
     _LOG_CONFIGURED = True
 
 
