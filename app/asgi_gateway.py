@@ -128,6 +128,31 @@ ADMIN_UI_ROOT = BASE_DIR / "admin" / "ui"
 DEFAULT_LOG_PATH = EXPORT_ROOT / "logs.ndjson"
 LOG_PATH_ENV = os.environ.get("TELEMETRY_LOG_PATH")
 LOG_PATH = Path(LOG_PATH_ENV) if LOG_PATH_ENV else DEFAULT_LOG_PATH
+
+
+def _session_logs_path(sid: Optional[str]) -> Path:
+    if isinstance(sid, str) and sid:
+        candidate = EXPORT_ROOT / sid / "logs.ndjson"
+        if candidate.is_file():
+            return candidate
+    return LOG_PATH
+
+
+def _iter_all_session_logs_txt() -> Iterable[bytes]:
+    if not EXPORT_ROOT.is_dir():
+        return
+    for entry in sorted(EXPORT_ROOT.iterdir()):
+        if not entry.is_dir():
+            continue
+        session_log = entry / "logs.ndjson"
+        if not session_log.is_file():
+            continue
+        with session_log.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                yield (line + "\n").encode("utf-8")
 _DEFAULT_INDEX_HTML = (
     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
 )
@@ -522,42 +547,58 @@ async def _handle_admin_flow_live(
     return Response(status=200, body=payload, headers=headers)
 
 
-def _iter_server_logs_txt(sid: Optional[str]) -> Iterable[bytes]:
+def _iter_server_logs_txt(path: Path, sid: Optional[str]) -> Iterable[bytes]:
     """Yield raw NDJSON log lines, optionally filtered by session id."""
 
-    if not LOG_PATH.is_file():
+    if not path.is_file():
         return
 
-    with LOG_PATH.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            if sid and sid not in line:
-                continue
-            yield line.encode("utf-8")
-
-
-def _iter_client_logs_txt(sid: Optional[str]) -> Iterable[bytes]:
-    """Yield client log events as JSON lines, optionally filtered by session id."""
-
-    if not LOG_PATH.is_file():
-        return
-
-    with LOG_PATH.open("r", encoding="utf-8") as handle:
+    filter_by_sid = bool(sid) and path == LOG_PATH
+    with path.open("r", encoding="utf-8") as handle:
         for raw in handle:
             text = raw.strip()
             if not text:
                 continue
-            try:
-                event = json.loads(text)
-            except Exception:
+            if filter_by_sid and sid and sid not in text:
                 continue
-            if event.get("type") != "EVT_CLIENT_LOG":
-                continue
-            if sid and event.get("sid") != sid:
-                continue
-            serialized = json.dumps(event, ensure_ascii=False) + "\n"
-            yield serialized.encode("utf-8")
+            yield (text + "\n").encode("utf-8")
+
+
+def _iter_client_log_lines(lines: Iterable[str], sid: Optional[str]) -> Iterable[bytes]:
+    for raw in lines:
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            event = json.loads(text)
+        except Exception:
+            continue
+        if event.get("type") != "EVT_CLIENT_LOG":
+            continue
+        if sid and event.get("sid") != sid:
+            continue
+        serialized = json.dumps(event, ensure_ascii=False) + "\n"
+        yield serialized.encode("utf-8")
+
+
+def _iter_client_logs_txt(path: Path, sid: Optional[str]) -> Iterable[bytes]:
+    """Yield client log events as JSON lines, optionally filtered by session id."""
+
+    if not path.is_file():
+        return
+
+    filter_sid = sid if path == LOG_PATH else None
+    with path.open("r", encoding="utf-8") as handle:
+        yield from _iter_client_log_lines(handle, filter_sid)
+
+
+def _iter_client_logs_all_sessions() -> Iterable[bytes]:
+    for raw in _iter_all_session_logs_txt():
+        try:
+            text = raw.decode("utf-8")
+        except Exception:
+            continue
+        yield from _iter_client_log_lines((text,), None)
 
 
 async def _handle_export_server_logs(
@@ -573,10 +614,8 @@ async def _handle_export_server_logs(
 
     await _drain_request_body(receive)
 
-    if not LOG_PATH.is_file():
-        return json_response(status=404, error="not_found")
-
     sid = _get_query_argument(scope, "sid")
+    log_path = _session_logs_path(sid)
     filename = f"server-logs-{sid or 'all'}.txt"
     headers = (
         (b"content-type", b"text/plain; charset=utf-8"),
@@ -584,11 +623,23 @@ async def _handle_export_server_logs(
             b"content-disposition",
             f"attachment; filename=\"{filename}\"".encode("latin1", "ignore"),
         ),
+        (b"cache-control", b"no-cache"),
     )
 
-    return StreamingResponse(
-        status=200, body_iter=_iter_server_logs_txt(sid), headers=headers
-    )
+    if log_path.is_file():
+        filter_sid = sid if log_path == LOG_PATH else None
+        return StreamingResponse(
+            status=200,
+            body_iter=_iter_server_logs_txt(log_path, filter_sid),
+            headers=headers,
+        )
+
+    if sid is None and EXPORT_ROOT.is_dir():
+        return StreamingResponse(
+            status=200, body_iter=_iter_all_session_logs_txt(), headers=headers
+        )
+
+    return json_response(status=404, error="not_found")
 
 
 async def _handle_export_client_logs(
@@ -604,10 +655,8 @@ async def _handle_export_client_logs(
 
     await _drain_request_body(receive)
 
-    if not LOG_PATH.is_file():
-        return json_response(status=404, error="not_found")
-
     sid = _get_query_argument(scope, "sid")
+    log_path = _session_logs_path(sid)
     filename = f"client-logs-{sid or 'all'}.txt"
     headers = (
         (b"content-type", b"text/plain; charset=utf-8"),
@@ -615,11 +664,25 @@ async def _handle_export_client_logs(
             b"content-disposition",
             f"attachment; filename=\"{filename}\"".encode("latin1", "ignore"),
         ),
+        (b"cache-control", b"no-cache"),
     )
 
-    return StreamingResponse(
-        status=200, body_iter=_iter_client_logs_txt(sid), headers=headers
-    )
+    if log_path.is_file():
+        filter_sid = sid if log_path == LOG_PATH else None
+        return StreamingResponse(
+            status=200,
+            body_iter=_iter_client_logs_txt(log_path, filter_sid),
+            headers=headers,
+        )
+
+    if sid is None and EXPORT_ROOT.is_dir():
+        return StreamingResponse(
+            status=200,
+            body_iter=_iter_client_logs_all_sessions(),
+            headers=headers,
+        )
+
+    return json_response(status=404, error="not_found")
 
 
 def _get_query_argument(scope: dict, key: str) -> Optional[str]:
