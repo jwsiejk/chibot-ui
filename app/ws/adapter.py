@@ -499,6 +499,8 @@ class AdapterContext:
     asr_close_reason: Optional[str] = None
     asr_final_emitted: bool = False
     asr_closed_ack_sent: bool = False
+    asr_stream_id: Optional[str] = None
+    asr_stream_req_id: Optional[str] = None
     tts_end_ts: Optional[float] = None
     diag_audio_seen: bool = False
     diag_timer: asyncio.TimerHandle | None = None
@@ -4676,6 +4678,10 @@ class ChatV2Adapter:
         if isinstance(vendor, str) and vendor:
             frame["vendor"] = vendor
 
+        meta_stream = meta.get("stream_id") if isinstance(meta, dict) else None
+        if isinstance(meta_stream, str) and meta_stream:
+            frame["stream_id"] = meta_stream
+
         if meta is not None:
             partial_seq = meta.get("partial_seq")
             if isinstance(partial_seq, int):
@@ -6426,6 +6432,10 @@ class ChatV2Adapter:
     async def _handle_asr_result(
         self, ctx: AdapterContext, transcript: str | None, is_final: bool
     ) -> None:
+        # Safety: only process if the stream is currently open and ours.
+        if ctx.session.asr_state != "open" or not ctx.asr_open or not ctx.asr_stream_id:
+            _log.info("evt=asr_result_ignored sid=%s reason=asr_not_open", ctx.sid)
+            return
         text = transcript or ""
         vendor = "gcp"
 
@@ -6438,6 +6448,11 @@ class ChatV2Adapter:
             ctx.last_asr_partial = None
 
         meta: Dict[str, Any] = {"vendor": vendor}
+        # Correlators
+        req_for_events = ctx.asr_stream_req_id or ctx.await_user_req_id
+        if req_for_events:
+            meta["req_id"] = req_for_events
+        meta["stream_id"] = ctx.asr_stream_id
         event_payload: Dict[str, Any]
 
         if not is_final:
@@ -6449,6 +6464,7 @@ class ChatV2Adapter:
                 "text": text,
                 "vendor": vendor,
                 "meta": dict(meta),
+                "req_id": req_for_events,
             }
         else:
             if not text.strip():
@@ -6459,6 +6475,7 @@ class ChatV2Adapter:
                 "text": text,
                 "vendor": vendor,
                 "meta": dict(meta),
+                "req_id": req_for_events,
             }
             ctx.asr_final_emitted = True
 
@@ -6531,13 +6548,28 @@ class ChatV2Adapter:
         engine = self._create_asr_engine(ctx)
         ctx.session.asr_engine = engine
 
+        # New stream identity + req snapshot
+        stream_id = uuid.uuid4().hex
+        ctx.asr_stream_id = stream_id
+        # Freeze the request id that this ASR stream belongs to (if any)
+        ctx.asr_stream_req_id = ctx.await_user_req_id
+
         asr_config = self._resolve_asr_config(ctx)
         sample_rate = self._resolve_asr_sample_rate(ctx)
         language = asr_config.get("language") or getattr(
             config, "GCP_STT_DEFAULT_LANGUAGE", "en-US"
         )
 
-        async def _on_result(transcript: str, is_final: bool) -> None:
+        async def _on_result(transcript: str, is_final: bool, _sid=stream_id) -> None:
+            # Drop late or alien results
+            if _sid != ctx.asr_stream_id or ctx.session.asr_state != "open":
+                _log.info(
+                    "evt=asr_result_dropped sid=%s reason=stale stream=%s current=%s",
+                    ctx.sid,
+                    _sid,
+                    ctx.asr_stream_id,
+                )
+                return
             await self._handle_asr_result(ctx, transcript, is_final)
 
         try:
@@ -6648,6 +6680,8 @@ class ChatV2Adapter:
         ctx.session.server_vad_speech = False
         ctx.session.server_vad_since_ms = None
         ctx.last_asr_partial = None
+        ctx.asr_stream_id = None
+        ctx.asr_stream_req_id = None
 
         await self._publish(
             ASR_SINGLE_STREAM_INVARIANT,
