@@ -511,24 +511,44 @@ export function createWsConnection({
       }
     }
 
-    const live = socket;
-    const open = !!live && live.readyState === WebSocket.OPEN;
+    const ws = socket;
+    const readyState = typeof ws?.readyState === "number" ? ws.readyState : -1;
+    const phase = getAppStatePhase();
+    const payloadType = typeof data?.type === "string" ? data.type : "unknown";
     const isControl = !binary && isControlFrame(data);
 
     if (!skipPhaseCheck && !binary && !isControl) {
-      const phase = getAppStatePhase();
       if (phase && !WS_READY_PHASES.has(phase)) {
+        console.warn("client.ws.send_queued", {
+          payloadType,
+          phase,
+          readyState,
+          hasWs: !!ws,
+          queueLength: connectionQueue.length,
+        });
         queueFrame(data, false);
-        console.warn("ws.connection.send queued (phase not ready)", { phase });
         return true;
       }
     }
 
-    if (!open) {
+    if (!ws || readyState !== WebSocket.OPEN) {
+      console.warn("client.ws.send_queued", {
+        payloadType,
+        phase,
+        readyState,
+        hasWs: !!ws,
+        queueLength: connectionQueue.length,
+      });
       queueFrame(data, !!binary);
-      console.warn("ws.connection.send queued (socket not open)");
       return true;
     }
+
+    const live = ws;
+    console.log("client.ws.send_ok", {
+      payloadType,
+      phase,
+      readyState,
+    });
 
     try { live.binaryType = "arraybuffer"; } catch {}
 
@@ -676,7 +696,7 @@ export function createWsConnection({
       clearInfoWatchdog();
       if (typeof stopInputCapture === "function") {
         try {
-          stopInputCapture();
+          stopInputCapture({ reason: "ws_closed" });
         } catch (err) {
           console.warn("ws.connection stopInputCapture failed", err);
         }

@@ -41,6 +41,8 @@
 
   const WORKLET_PATH = withCacheBuster('/static/js/audio/pcm-worklet-processor.js');
 
+  let pcmChunkSeq = 0;
+
   function emitClientLog(label, detail = {}) {
     const payload = detail && typeof detail === 'object' ? detail : { value: detail };
     const AppState = typeof window !== 'undefined' ? window.AppState : null;
@@ -202,7 +204,18 @@
       if (!navigator?.mediaDevices?.getUserMedia) {
         throw new Error('MediaDevices.getUserMedia is not available');
       }
-      return await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      try {
+        const audioTracks = stream?.getAudioTracks?.();
+        const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
+        const deviceId = primaryTrack?.getSettings?.()?.deviceId || null;
+        const audioCtx = win?.__audioCtx || null;
+        console.log('client.mic_stream_acquired_ok', {
+          deviceId,
+          sampleRate: audioCtx?.sampleRate || null,
+        });
+      } catch (_) {}
+      return stream;
     } finally {
       __pcmRecorderGumInFlight = false;
     }
@@ -469,6 +482,10 @@
               ? err.message
               : err;
             const errorMessage = sanitizeLogText(errorMessageSource, 'unknown', 160);
+            console.error('client.mic_permission_denied', {
+              name: err?.name,
+              message: err?.message,
+            });
             logClientMicEventText(`evt=mic_get_user_media_fail error=${errorName} message=${errorMessage}`);
             emitClientLog('client.pcm.capture_error', {
               stage: 'getUserMedia',
@@ -568,7 +585,7 @@
       emitAppStateRecordingStarted(this._policy);
     }
 
-    stopListening(reason = {}) {
+    stopListening(reason = 'unknown') {
       if (!this._listening) {
         return;
       }
@@ -576,6 +593,18 @@
       this._listening = false;
       this._muted = false;
       this._resetClientVadState();
+      const AppState = typeof window !== 'undefined' ? window.AppState : null;
+      let snapshot = null;
+      try {
+        snapshot = typeof AppState?.getState === 'function' ? AppState.getState() : AppState;
+      } catch (_) {}
+      console.log('client.pcm.capture_stop', {
+        reason: reasonLabel,
+        micLive: snapshot?.micLive,
+        senderPaused: snapshot?.senderPaused,
+        asrReady: snapshot?.asrReady,
+        ttsActive: snapshot?.ttsActive,
+      });
       emitClientLog('client.pcm.capture_stop', { reason: reasonLabel });
     }
 
@@ -834,8 +863,16 @@
       if (!byteLength) {
         return false;
       }
+      pcmChunkSeq += 1;
       const seq = this._chunkSeq;
       this._chunkSeq += 1;
+      if (pcmChunkSeq % 25 === 0) {
+        console.log('client.pcm_chunk_generated', {
+          seq: pcmChunkSeq,
+          bytes: byteLength,
+          sampleRate: TARGET_SAMPLE_RATE,
+        });
+      }
       if (!this._firstChunkSent) {
         this._firstChunkSent = true;
         emitClientLog('client.audio_first_chunk', {
