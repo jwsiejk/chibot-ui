@@ -655,13 +655,20 @@ class ChatV2Adapter:
         ctx: AdapterContext,
         label: str,
     ) -> None:
+        # Canonical ASR readiness path: this function decides whether to schedule
+        # `_open_asr`, waits for the open task to complete, and emits the
+        # `asr.ready` + `input.start` + `start_listening` bundle via
+        # `_send_asr_ready_bundle`. Callers should rely on this method rather
+        # than invoking `_open_asr` or `_send_asr_ready_bundle` directly.
         if ctx.asr_ready_bundle_sent_ms:
             return
         if send is None:
             return
         if getattr(ctx.session, "tts_active", False) and not self._allow_capture_during_tts(ctx):
             ctx.session.queued_arm = True
-            _log.info("evt=asr_ready_deferred sid=%s where=%s reason=tts_active", ctx.sid, label)
+            self._log_event(
+                "info", "asr_ready_deferred", ctx.sid, where=label, reason="tts_active"
+            )
             return
         try:
             # Ensure an open task exists
@@ -675,14 +682,19 @@ class ChatV2Adapter:
                     await task
                 except asyncio.CancelledError:
                     # If it was cancelled (e.g., due to TTS), just bail; TTS gating will re-arm later.
-                    _log.info("evt=asr_open_task_cancelled_before_ready sid=%s where=%s", ctx.sid, label)
+                    self._log_event(
+                        "info",
+                        "asr_open_task_cancelled_before_ready",
+                        ctx.sid,
+                        where=label,
+                    )
                     return
 
             if not ctx.asr_ready_bundle_sent_ms:
                 await self._send_asr_ready_bundle(send, ctx)
-                _log.info("evt=asr_ready_emit sid=%s where=%s", ctx.sid, label)
+                self._log_event("info", "asr_ready_emit", ctx.sid, where=label)
         except Exception:
-            _log.exception("evt=asr_ready_emit_failed sid=%s where=%s", ctx.sid, label)
+            self._log_event("exception", "asr_ready_emit_failed", ctx.sid, where=label)
 
     async def _handle_tts_start(
         self,
@@ -996,10 +1008,6 @@ class ChatV2Adapter:
         ctx.session.policy = normalized
         ctx.policy_warning_logged = False
         self._emit_policy_snapshot(ctx, legacy_hits)
-
-    @staticmethod
-    def _allowed_asr_vendors() -> List[str]:
-        return ["gcp"]
 
     @staticmethod
     def _coerce_non_negative_int(value: Any, default: int) -> int:
@@ -2242,7 +2250,7 @@ class ChatV2Adapter:
         raw_type = frame.get("type")
         if not isinstance(raw_type, str):
             meta["error"] = "schema_invalid"
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            await self._publish_json_recv(ctx, meta, frame_payload)
             await self._send_error(send, ctx.sid, "schema_invalid", "Frame missing type field")
             return self._HandleResult(True)
 
@@ -2289,7 +2297,7 @@ class ChatV2Adapter:
             lane = frame.get("lane")
             if lane is not None and not isinstance(lane, str):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2303,7 +2311,7 @@ class ChatV2Adapter:
                 not isinstance(ts_value, int) or isinstance(ts_value, bool)
             ):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2328,11 +2336,11 @@ class ChatV2Adapter:
                     "meta": idle_meta,
                 }
             )
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            await self._publish_json_recv(ctx, meta, frame_payload)
             return self._HandleResult(True)
 
         if frame_type == "client.ping":
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            await self._publish_json_recv(ctx, meta, frame_payload)
             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
                 ctx.last_pong_sent_ms = now_ms
                 client_ts = frame.get("ts")
@@ -2343,12 +2351,12 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         if frame_type == "client.pong":
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            await self._publish_json_recv(ctx, meta, frame_payload)
             ctx.last_client_pong_ms = now_ms
             return self._HandleResult(True)
 
         if frame_type == "ping":
-            await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+            await self._publish_json_recv(ctx, meta, frame_payload)
             if now_ms - ctx.last_pong_sent_ms >= PING_MIN_INTERVAL_MS:
                 ctx.last_pong_sent_ms = now_ms
                 reply_ts = frame.get("t")
@@ -2375,7 +2383,7 @@ class ChatV2Adapter:
             text = frame.get("text")
             if not isinstance(text, str):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2388,7 +2396,7 @@ class ChatV2Adapter:
                 text_bytes = text.encode("utf-8")
             except UnicodeEncodeError:
                 meta["error"] = "bad_utf8"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2400,7 +2408,7 @@ class ChatV2Adapter:
             client_msg_id = frame.get("client_msg_id")
             if client_msg_id is not None and not isinstance(client_msg_id, str):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2435,14 +2443,14 @@ class ChatV2Adapter:
         else:
             if frame_type not in _ALLOWED_TEXT_FRAME_TYPES:
                 meta["error"] = "unknown_type"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(send, ctx.sid, "unknown_type", frame_type)
                 return self._HandleResult(True)
 
             is_valid, hint = validate_frame(frame)
             if not is_valid:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 detail = hint or "Frame failed validation"
                 await self._send_error(send, ctx.sid, "schema_invalid", detail)
                 return self._HandleResult(True)
@@ -2461,24 +2469,16 @@ class ChatV2Adapter:
                     ctx.sid,
                     {"state": ctx.session.asr_state},
                 )
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                await self._send_json(
-                    send,
-                    ctx.sid,
-                    {"type": "asr.error", "code": "already_open"},
-                )
+                await self._publish_json_recv(ctx, meta, frame_payload)
+                await self._send_asr_error(send, ctx, "already_open")
                 return self._HandleResult(True)
             else:
                 try:
                     self._schedule_asr_open(ctx)
                 except Exception:
                     _log.exception("evt=asr_schedule_failed sid=%s", ctx.sid)
-                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
-                    await self._send_json(
-                        send,
-                        ctx.sid,
-                        {"type": "asr.error", "code": "open_failed"},
-                    )
+                    await self._publish_json_recv(ctx, meta, frame_payload)
+                    await self._send_asr_error(send, ctx, "open_failed")
                     return self._HandleResult(True)
 
         if frame_type == "asr.close":
@@ -2534,7 +2534,7 @@ class ChatV2Adapter:
             try:
                 await self._send_json(send, ctx.sid, ack_frame)
             finally:
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
             _log.info(
                 "evt=asr_close_ack sid=%s seq=%s status=%s final_emitted=%s bytes=%d",
                 ctx.sid,
@@ -2573,7 +2573,7 @@ class ChatV2Adapter:
                 or normalized_ch != expected["channels"]
             ):
                 meta["error"] = "bad_header"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_json(
                     send,
                     ctx.sid,
@@ -2595,7 +2595,7 @@ class ChatV2Adapter:
             if seq_start is not None:
                 if not isinstance(seq_start, int):
                     meta["error"] = "schema_invalid"
-                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                    await self._publish_json_recv(ctx, meta, frame_payload)
                     await self._send_error(
                         send,
                         ctx.sid,
@@ -2605,7 +2605,7 @@ class ChatV2Adapter:
                     return self._HandleResult(False, 1003, "schema_invalid")
                 if seq_start < 0:
                     meta["error"] = "schema_invalid"
-                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                    await self._publish_json_recv(ctx, meta, frame_payload)
                     await self._send_error(
                         send,
                         ctx.sid,
@@ -2641,11 +2641,11 @@ class ChatV2Adapter:
                         incoming_rate,
                         incoming_channels,
                     )
-                    await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                    await self._publish_json_recv(ctx, meta, frame_payload)
                     return self._HandleResult(True)
 
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2669,7 +2669,7 @@ class ChatV2Adapter:
             )
             if err:
                 meta["error"] = "policy_violation"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 _log.warning("evt=policy_violation sid=%s err=%s", ctx.sid, err)
                 await self._send_error(send, ctx.sid, "policy_violation", err)
                 turn_id = getattr(ctx.session, "turn_id", None)
@@ -2858,7 +2858,7 @@ class ChatV2Adapter:
             sanitized_event = self._sanitize_client_banner_event(frame.get("event"))
             if sanitized_event is None:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2893,7 +2893,7 @@ class ChatV2Adapter:
             event_name = frame.get("event")
             if not isinstance(event_name, str) or not event_name.strip():
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2905,7 +2905,7 @@ class ChatV2Adapter:
             normalized_event = event_name.strip()
             if normalized_event not in _CLIENT_AUTOSTART_ALLOWED_EVENTS:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2934,7 +2934,7 @@ class ChatV2Adapter:
             event_name = frame.get("event")
             if event_name not in _CLIENT_TELEMETRY_ALLOWED_EVENTS:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2946,7 +2946,7 @@ class ChatV2Adapter:
             frame_sid = frame.get("sid")
             if frame_sid is not None and not isinstance(frame_sid, str):
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2962,7 +2962,7 @@ class ChatV2Adapter:
                 telemetry_meta_dict = dict(telemetry_meta)
             else:
                 meta["error"] = "schema_invalid"
-                await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+                await self._publish_json_recv(ctx, meta, frame_payload)
                 await self._send_error(
                     send,
                     ctx.sid,
@@ -2984,7 +2984,7 @@ class ChatV2Adapter:
                 }
             )
 
-        await self._publish(EVT_WS_JSON_RECV, ctx.sid, meta, frame_payload)
+        await self._publish_json_recv(ctx, meta, frame_payload)
         await self._invoke_engine("on_json", ctx.sid, frame)
         return self._HandleResult(True)
 
@@ -3849,6 +3849,32 @@ class ChatV2Adapter:
         await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
 
 
+    def _log_event(self, level: str, evt: str, sid: str, **kwargs: Any) -> None:
+        log_fn = getattr(_log, level, _log.info)
+        suffix = " ".join(f"{key}=%s" for key in kwargs)
+        if suffix:
+            log_fn(f"evt={evt} sid=%s {suffix}", sid, *kwargs.values())
+        else:
+            log_fn("evt=%s sid=%s", evt, sid)
+
+    async def _publish_event(
+        self,
+        event_name: str,
+        ctx: AdapterContext,
+        meta: Mapping[str, Any] | None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        meta_payload = dict(meta) if isinstance(meta, Mapping) else {}
+        await self._publish(event_name, ctx.sid, meta_payload, payload)
+
+    async def _publish_json_recv(
+        self,
+        ctx: AdapterContext,
+        meta: Mapping[str, Any],
+        frame_payload: Mapping[str, Any] | None,
+    ) -> None:
+        await self._publish_event(EVT_WS_JSON_RECV, ctx, meta, frame_payload)
+
     async def _send_error(
         self,
         send: Callable[[dict], Awaitable[None]],
@@ -3870,6 +3896,11 @@ class ChatV2Adapter:
         if retry_in_ms is not None:
             payload["retry_in_ms"] = int(retry_in_ms)
         await self._send_json(send, sid, payload)
+
+    async def _send_asr_error(
+        self, send: Callable[[dict], Awaitable[None]], ctx: AdapterContext, code: str
+    ) -> None:
+        await self._send_json(send, ctx.sid, {"type": "asr.error", "code": code})
 
     def _start_server_keepalive(
         self, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
@@ -4082,25 +4113,19 @@ class ChatV2Adapter:
                     except RuntimeError:
                         asyncio.create_task(self._handle_tts_end(send, ctx, payload))
                     if ctx.session.queued_arm and can_open(ctx.session):
-                        ctx.session.queued_arm = False
                         try:
-                            self._schedule_asr_open(ctx)
-                        except Exception:
-                            _log.exception("evt=asr_open_after_tts_failed sid=%s", ctx.sid)
-                        else:
-                            try:
-                                loop.create_task(
-                                    self._publish(
-                                        ASR_OPEN_AFTER_TTS,
-                                        ctx.sid,
-                                        {
-                                            "reason": "tts_end",
-                                            "state": ctx.session.asr_state,
-                                        },
-                                    )
+                            loop.create_task(
+                                self._publish_event(
+                                    ASR_OPEN_AFTER_TTS,
+                                    ctx,
+                                    {
+                                        "reason": "tts_end",
+                                        "state": ctx.session.asr_state,
+                                    },
                                 )
-                            except RuntimeError:
-                                pass
+                            )
+                        except RuntimeError:
+                            pass
                 elif frame_type == "tts.start":
                     ctx.session.tts_active = True
                     try:
@@ -6605,11 +6630,7 @@ class ChatV2Adapter:
             ctx.asr_open = False
             _log.exception("evt=asr_open_failed sid=%s vendor=gcp", ctx.sid)
             try:
-                await self._send_json(
-                    send,
-                    ctx.sid,
-                    {"type": "asr.error", "code": "open_failed"},
-                )
+                await self._send_asr_error(send, ctx, "open_failed")
             except Exception:
                 _log.exception("evt=asr_open_error_send sid=%s", ctx.sid)
             await self._publish(
