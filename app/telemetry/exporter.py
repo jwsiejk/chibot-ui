@@ -18,6 +18,7 @@ from app.voice_v2 import (
     EVT_ASR_PARTIAL,
     EVT_TTS_END,
     EVT_TTS_START,
+    EVT_CLIENT_LOG,
 )
 
 
@@ -61,6 +62,7 @@ class _SessionStats:
     logs_asr_path: Path
     logs_ws_path: Path
     logs_tts_path: Path
+    logs_client_path: Path
     events_written: int = 0
     by_type: Dict[str, int] = field(default_factory=dict)
     started_ms: Optional[int] = None
@@ -96,6 +98,7 @@ class FileExporter:
             logs_asr_path=logs_dir / "asr.jsonl",
             logs_ws_path=logs_dir / "ws.jsonl",
             logs_tts_path=logs_dir / "tts.jsonl",
+            logs_client_path=logs_dir / "client.jsonl",
             started_ms=_now_ms(),
         )
 
@@ -105,6 +108,7 @@ class FileExporter:
         stats.logs_asr_path.write_text("", encoding="utf-8")
         stats.logs_ws_path.write_text("", encoding="utf-8")
         stats.logs_tts_path.write_text("", encoding="utf-8")
+        stats.logs_client_path.write_text("", encoding="utf-8")
 
         def _callback(event: Dict[str, Any]) -> None:
             if event.get("sid") != sid:
@@ -171,7 +175,7 @@ class FileExporter:
         if isinstance(event_type, str) and event_type:
             stats.by_type[event_type] = stats.by_type.get(event_type, 0) + 1
 
-            if event_type == "EVT_LOG":
+            if event_type in {"EVT_LOG", EVT_CLIENT_LOG}:
                 log_entry: Dict[str, Any]
                 if isinstance(event, dict):
                     log_entry = dict(event)
@@ -180,6 +184,10 @@ class FileExporter:
                 with stats.logs_path.open("a", encoding="utf-8") as log_handle:
                     json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
                     log_handle.write("\n")
+                if event_type == EVT_CLIENT_LOG:
+                    with stats.logs_client_path.open("a", encoding="utf-8") as log_handle:
+                        json.dump(log_entry, log_handle, separators=(",", ":"), ensure_ascii=False)
+                        log_handle.write("\n")
 
             if event_type in _ASR_LOG_TYPES:
                 with stats.logs_asr_path.open("a", encoding="utf-8") as log_handle:
