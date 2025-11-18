@@ -386,6 +386,102 @@
     return window.WSClient || null;
   }
 
+  const TurnStats = {
+    active: null,
+  };
+
+  function startTurnStats(sid) {
+    TurnStats.active = {
+      sid,
+      startedAt: performance.now(),
+      firstChunkAt: null,
+      lastChunkAt: null,
+      chunkCount: 0,
+      lastPartialText: "",
+    };
+  }
+
+  function markTurnAudioChunk(byteLength) {
+    const t = TurnStats.active;
+    if (!t) return;
+    const now = performance.now();
+    if (t.firstChunkAt === null) t.firstChunkAt = now;
+    t.lastChunkAt = now;
+    t.chunkCount += 1;
+  }
+
+  function markTurnPartial(text) {
+    const t = TurnStats.active;
+    if (!t) return;
+    if (text) t.lastPartialText = text;
+  }
+
+  function getWsStateSnapshot() {
+    try {
+      if (typeof WSClient?.state === "string") {
+        return WSClient.state;
+      }
+    } catch {}
+    try {
+      const wsClient = getWsClient();
+      if (wsClient && typeof wsClient.state === "string") {
+        return wsClient.state;
+      }
+    } catch {}
+    try {
+      if (typeof AppState?.connectionState === "string") {
+        return AppState.connectionState;
+      }
+    } catch {}
+    try {
+      const live = getLiveSocket();
+      if (live && typeof live.readyState !== "undefined") {
+        return live.readyState;
+      }
+    } catch {}
+    return null;
+  }
+
+  function finishTurnStats(outcome, extraMeta = {}) {
+    const t = TurnStats.active;
+    if (!t) return;
+    const now = performance.now();
+    const summary = {
+      sid: t.sid || AppState?.sid || null,
+      outcome, // "final", "timeout", "error", "client_end", etc.
+      duration_ms: t.startedAt !== null ? Math.round(now - t.startedAt) : null,
+      speech_ms: t.firstChunkAt !== null && t.lastChunkAt !== null
+        ? Math.round(t.lastChunkAt - t.firstChunkAt)
+        : null,
+      chunk_count: t.chunkCount,
+      last_partial_text: t.lastPartialText,
+      ...extraMeta,
+    };
+
+    try {
+      console.debug("client_turn_summary", summary);
+      if (typeof sendClientLog === "function") {
+        sendClientLog("client.turn.summary", summary);
+      }
+    } catch (err) {
+      // best-effort only
+    } finally {
+      TurnStats.active = null;
+    }
+  }
+
+  try {
+    if (typeof window !== "undefined") {
+      window.TurnStats = TurnStats;
+      window.startTurnStats = startTurnStats;
+      window.markTurnAudioChunk = markTurnAudioChunk;
+      window.markTurnPartial = markTurnPartial;
+      window.finishTurnStats = finishTurnStats;
+    }
+  } catch {}
+
+  console.debug("client turn summary logging enabled");
+
   function getLiveSocket() {
     if (typeof WSClient !== 'undefined' && WSClient && WSClient._ws) {
       return WSClient._ws;
@@ -1012,6 +1108,9 @@
 
     // START REWRITE: window.addEventListener('ws.close', ...)
     window.addEventListener('ws.close', () => {
+      try {
+        finishTurnStats('ws_close', { ws_state: getWsStateSnapshot() });
+      } catch {}
       if (typeof AppState?.setState === 'function') {
         AppState.setState({ asrReady: false, turnState: null, policy: null });
       } else {
@@ -1621,6 +1720,9 @@
       } catch (err) {
         console.warn('WSClient.close/requestAsrClose failed', err);
       }
+      try {
+        finishTurnStats('client_end', { ws_state: getWsStateSnapshot() });
+      } catch {}
       if (audioRecorder && typeof audioRecorder.stop === 'function') {
         try { audioRecorder.stop(); } catch (err) {
           console.warn('Failed to stop audio recorder', err);
@@ -2112,8 +2214,13 @@
       updateTurnActive(true);
     });
 
-    window.addEventListener('turn.end', () => {
+    window.addEventListener('turn.end', (event) => {
       updateTurnActive(false);
+      const detail = event && event.detail;
+      const reason = typeof detail?.reason === 'string' ? detail.reason : null;
+      try {
+        finishTurnStats('final', { ws_state: getWsStateSnapshot(), reason });
+      } catch {}
     });
 
 window.addEventListener('tts.start', (event) => {
@@ -2190,6 +2297,14 @@ window.addEventListener('tts.end', () => {
 });
 // END REWRITE: window.addEventListener('tts.end', ...)
 
+window.addEventListener('asr.partial', (event) => {
+  const frame = event && event.detail;
+  const partialText = typeof frame?.text === 'string'
+    ? frame.text
+    : (typeof frame?.partial === 'string' ? frame.partial : '');
+  try { markTurnPartial(partialText); } catch {}
+});
+
 window.addEventListener('asr.final', () => {
   try {
     window.AppState.processing = true;
@@ -2228,6 +2343,9 @@ window.addEventListener('asr.unavailable', (event) => {
   } else if (AppState) {
     AppState.asrReady = false;
   }
+  try {
+    finishTurnStats('error', { ws_state: getWsStateSnapshot(), reason: 'asr.unavailable' });
+  } catch {}
   const detail = event && typeof event === 'object' ? event.detail : undefined;
   let reason = null;
   if (detail && typeof detail === 'object') {
@@ -2266,6 +2384,10 @@ window.addEventListener('asr.unavailable', (event) => {
 // START REWRITE: window.addEventListener('asr.ready', ...)
 window.addEventListener('asr.ready', (event) => {
   // CRITICAL FIX: REMOVE ASYNCHRONOUS DEFERRAL TO BEAT SERVER TIMEOUT
+
+  try {
+    startTurnStats(AppState?.sid);
+  } catch {}
 
   rearmSilenceWatchdogAfterDelay('asr.ready');
   if (typeof AppState?.setState === 'function') {
