@@ -745,6 +745,11 @@ export function createWsConnection({
     ws.__intentionalClose = false;
     const handlers = {
       open: () => {
+        console.log("client.ws_open", {
+          url: ws.url,
+          protocol: ws.protocol,
+          time: Date.now(),
+        });
         const negotiated = typeof ws?.protocol === "string" && ws.protocol === MSGPACK_SUBPROTOCOL
           ? "msgpack"
           : "json";
@@ -772,6 +777,9 @@ export function createWsConnection({
         }
       },
       error: (event) => {
+        console.error("client.ws_error", {
+          message: event?.message || null,
+        });
         console.error("WebSocket error", event);
         const message = event && typeof event?.message === "string" && event.message
           ? event.message
@@ -780,6 +788,11 @@ export function createWsConnection({
         emit("error", event);
       },
       close: (event) => {
+        console.warn("client.ws_close", {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+        });
         const expected = ws.__intentionalClose === true;
         const detailReason = event && typeof event?.reason === "string" && event.reason
           ? event.reason

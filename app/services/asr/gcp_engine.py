@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from array import array
 from typing import Awaitable, Callable, Optional
 
@@ -188,12 +189,30 @@ class GCPStreamingASREngine(ASREngine):
                     break
                 yield speech.StreamingRecognizeRequest(audio_content=chunk)
 
+        asr_stream_wait_start = time.monotonic()
+        logger.info(
+            "evt=asr_stream_wait_start vendor=gcp",
+            extra={"sid": self._sid},
+        )
+
+        first_chunk_at = None
         try:
             responses = self._client.streaming_recognize(
                 config=self._streaming_config,
                 requests=request_generator(),
             )
             for response in responses:
+                now = time.monotonic()
+                if first_chunk_at is None:
+                    first_chunk_at = now
+                    wait_ms = int((now - asr_stream_wait_start) * 1000)
+                    logger.info(
+                        "evt=asr_first_audio_chunk vendor=gcp",
+                        extra={
+                            "sid": self._sid,
+                            "wait_ms": wait_ms,
+                        },
+                    )
                 for result in response.results:
                     if not result.alternatives:
                         continue
@@ -219,6 +238,15 @@ class GCPStreamingASREngine(ASREngine):
             else:
                 logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
         finally:
+            if first_chunk_at is None:
+                idle_ms = int((time.monotonic() - asr_stream_wait_start) * 1000)
+                logger.warning(
+                    "evt=asr_no_audio_before_timeout vendor=gcp",
+                    extra={
+                        "sid": self._sid,
+                        "idle_ms": idle_ms,
+                    },
+                )
             # Ensure request generator exits.
             asyncio.run_coroutine_threadsafe(self._queue.put(None), self._loop)
 
