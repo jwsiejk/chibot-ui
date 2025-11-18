@@ -806,7 +806,7 @@ class ChatV2Adapter:
         metrics["tts_timeline_emitted_key"] = None
         metrics["tts_active_utt_id"] = None
         metrics["tts_provider"] = None
-        metrics["tts_timeline_logged"] = False
+        metrics.setdefault("tts_timeline_logged", False)
         if isinstance(frame, Mapping):
             utt_id = frame.get("utt_id")
             if isinstance(utt_id, str) and utt_id:
