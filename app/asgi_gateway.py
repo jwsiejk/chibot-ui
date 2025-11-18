@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
+from typing import Any, AsyncIterable, Awaitable, Callable, Dict, Iterable, Mapping, Optional
 from urllib.parse import parse_qs
 
 from app import config
@@ -70,6 +70,15 @@ class Response:
     headers: tuple[tuple[bytes, bytes], ...]
 
 
+@dataclass(frozen=True)
+class StreamingResponse:
+    """Container describing a streaming HTTP response."""
+
+    status: int
+    body_iter: Iterable[bytes] | AsyncIterable[bytes]
+    headers: tuple[tuple[bytes, bytes], ...]
+
+
 def json_response(*, status: int = 200, **payload: Any) -> Response:
     """Serialize a payload to JSON using a compact representation."""
 
@@ -105,6 +114,9 @@ ADMIN_FLOW_TRACE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/trace"
 ADMIN_FLOW_ZIP_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/zip"
 ADMIN_FLOW_SESSIONS_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/sessions"
 ADMIN_FLOW_LIVE_ROUTE = f"{ADMIN_FLOW_ROUTE_PREFIX}/live"
+ADMIN_EXPORT_ROUTE_PREFIX = "/api/v1/admin/export"
+ADMIN_EXPORT_SERVER_LOGS_ROUTE = f"{ADMIN_EXPORT_ROUTE_PREFIX}/server-logs"
+ADMIN_EXPORT_CLIENT_LOGS_ROUTE = f"{ADMIN_EXPORT_ROUTE_PREFIX}/client-logs"
 EXPORT_ROOT = Path("exports")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_ROOT = BASE_DIR / "static"
@@ -113,6 +125,7 @@ INDEX_PATH = TEMPLATES_ROOT / "index.html"
 ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
 FAVICON_PATH = STATIC_ROOT / "favicon.ico"
 ADMIN_UI_ROOT = BASE_DIR / "admin" / "ui"
+LOG_PATH = Path(os.environ.get("TELEMETRY_LOG_PATH", "logs/logs.ndjson"))
 _DEFAULT_INDEX_HTML = (
     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
 )
@@ -121,7 +134,9 @@ _DEFAULT_ADMIN_HTML = (
 )
 
 
-HttpHandler = Callable[[dict, Callable[[], Awaitable[dict]]], Awaitable[Response]]
+HttpHandler = Callable[
+    [dict, Callable[[], Awaitable[dict]]], Awaitable[Response | StreamingResponse]
+]
 
 _adapter: Optional[ChatV2Adapter] = None
 _lifespan_started = False
@@ -505,6 +520,106 @@ async def _handle_admin_flow_live(
     return Response(status=200, body=payload, headers=headers)
 
 
+def _iter_server_logs_txt(sid: Optional[str]) -> Iterable[bytes]:
+    """Yield raw NDJSON log lines, optionally filtered by session id."""
+
+    if not LOG_PATH.is_file():
+        return
+
+    with LOG_PATH.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            if sid and sid not in line:
+                continue
+            yield line.encode("utf-8")
+
+
+def _iter_client_logs_txt(sid: Optional[str]) -> Iterable[bytes]:
+    """Yield client log events as JSON lines, optionally filtered by session id."""
+
+    if not LOG_PATH.is_file():
+        return
+
+    with LOG_PATH.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            text = raw.strip()
+            if not text:
+                continue
+            try:
+                event = json.loads(text)
+            except Exception:
+                continue
+            if event.get("type") != "EVT_CLIENT_LOG":
+                continue
+            if sid and event.get("sid") != sid:
+                continue
+            serialized = json.dumps(event, ensure_ascii=False) + "\n"
+            yield serialized.encode("utf-8")
+
+
+async def _handle_export_server_logs(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response | StreamingResponse:
+    rejection = await _require_admin_api(scope, receive)
+    if rejection is not None:
+        return rejection
+
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+
+    if not LOG_PATH.is_file():
+        return json_response(status=404, error="not_found")
+
+    sid = _get_query_argument(scope, "sid")
+    filename = f"server-logs-{sid or 'all'}.txt"
+    headers = (
+        (b"content-type", b"text/plain; charset=utf-8"),
+        (
+            b"content-disposition",
+            f"attachment; filename=\"{filename}\"".encode("latin1", "ignore"),
+        ),
+    )
+
+    return StreamingResponse(
+        status=200, body_iter=_iter_server_logs_txt(sid), headers=headers
+    )
+
+
+async def _handle_export_client_logs(
+    scope: dict, receive: Callable[[], Awaitable[dict]]
+) -> Response | StreamingResponse:
+    rejection = await _require_admin_api(scope, receive)
+    if rejection is not None:
+        return rejection
+
+    if not _method_is_get(scope):
+        await _drain_request_body(receive)
+        return json_response(status=405, error="method_not_allowed")
+
+    await _drain_request_body(receive)
+
+    if not LOG_PATH.is_file():
+        return json_response(status=404, error="not_found")
+
+    sid = _get_query_argument(scope, "sid")
+    filename = f"client-logs-{sid or 'all'}.txt"
+    headers = (
+        (b"content-type", b"text/plain; charset=utf-8"),
+        (
+            b"content-disposition",
+            f"attachment; filename=\"{filename}\"".encode("latin1", "ignore"),
+        ),
+    )
+
+    return StreamingResponse(
+        status=200, body_iter=_iter_client_logs_txt(sid), headers=headers
+    )
+
+
 def _get_query_argument(scope: dict, key: str) -> Optional[str]:
     query = scope.get("query_string") or b""
     try:
@@ -799,12 +914,49 @@ async def _reject_websocket(receive: Callable[[], Awaitable[dict]], send: Callab
         await send({"type": "websocket.close", "code": 1000})
 
 
-async def _send_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
+async def _send_response(
+    send: Callable[[dict], Awaitable[None]], response: Response | StreamingResponse
+) -> None:
     """Emit a prepared HTTP response through the ASGI channel."""
 
     headers = list(apply_cache_headers(response.headers))
     await send({"type": "http.response.start", "status": response.status, "headers": headers})
-    await send({"type": "http.response.body", "body": response.body, "more_body": False})
+
+    body_iter = getattr(response, "body_iter", None)
+    if body_iter is None:
+        await send({"type": "http.response.body", "body": response.body, "more_body": False})
+        return
+
+    if isinstance(body_iter, AsyncIterable):
+        async for chunk in body_iter:
+            data = _coerce_body_chunk(chunk)
+            if data is None:
+                continue
+            await send({"type": "http.response.body", "body": data, "more_body": True})
+    else:
+        for chunk in body_iter:
+            data = _coerce_body_chunk(chunk)
+            if data is None:
+                continue
+            await send({"type": "http.response.body", "body": data, "more_body": True})
+
+    await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
+def _coerce_body_chunk(chunk: object) -> Optional[bytes]:
+    if chunk is None:
+        return None
+    if isinstance(chunk, bytes):
+        return chunk
+    if isinstance(chunk, str):
+        return chunk.encode("utf-8")
+    try:
+        return bytes(chunk)
+    except Exception:
+        try:
+            return str(chunk).encode("utf-8")
+        except Exception:
+            return None
 
 
 async def _send_ws_response(send: Callable[[dict], Awaitable[None]], response: Response) -> None:
@@ -917,6 +1069,8 @@ _HTTP_ROUTES: Dict[str, HttpHandler] = {
     ADMIN_FLOW_ZIP_ROUTE: _handle_admin_flow_zip_query,
     ADMIN_FLOW_SESSIONS_ROUTE: _handle_admin_flow_sessions,
     ADMIN_FLOW_LIVE_ROUTE: _handle_admin_flow_live_query,
+    ADMIN_EXPORT_SERVER_LOGS_ROUTE: _handle_export_server_logs,
+    ADMIN_EXPORT_CLIENT_LOGS_ROUTE: _handle_export_client_logs,
 }
 
 
