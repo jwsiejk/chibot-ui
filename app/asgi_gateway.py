@@ -125,7 +125,9 @@ INDEX_PATH = TEMPLATES_ROOT / "index.html"
 ADMIN_LOGS_PATH = TEMPLATES_ROOT / "admin_logs.html"
 FAVICON_PATH = STATIC_ROOT / "favicon.ico"
 ADMIN_UI_ROOT = BASE_DIR / "admin" / "ui"
-LOG_PATH = Path(os.environ.get("TELEMETRY_LOG_PATH", "logs/logs.ndjson"))
+DEFAULT_LOG_PATH = EXPORT_ROOT / "logs.ndjson"
+LOG_PATH_ENV = os.environ.get("TELEMETRY_LOG_PATH")
+LOG_PATH = Path(LOG_PATH_ENV) if LOG_PATH_ENV else DEFAULT_LOG_PATH
 _DEFAULT_INDEX_HTML = (
     "<!doctype html><title>AskChip</title><div id='app'></div>".encode("utf-8")
 )
