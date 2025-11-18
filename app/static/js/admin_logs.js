@@ -459,11 +459,21 @@
   const liveState = {
     source: null,
     lines: [],
-    limit: 500,
+    // Firehose debugging: keep many lines in memory.
+    // Use window.__LIVE_LOG_LIMIT if set; default to 5000.
+    limit: (typeof window !== "undefined"
+      && typeof window.__LIVE_LOG_LIMIT === "number"
+      && window.__LIVE_LOG_LIMIT > 0)
+      ? window.__LIVE_LOG_LIMIT
+      : 5000,
     pollTimer: null,
     sinceMs: null,
     sid: null,
   };
+
+  try {
+    console.debug("admin live logs: liveState.limit =", liveState.limit);
+  } catch {}
 
   const LIVE_POLL_INTERVAL_MS = 3000;
   const LIVE_POLL_ERROR_INTERVAL_MS = 8000;
