@@ -532,6 +532,7 @@ class AdapterContext:
     listen_handoff_task_key: Optional[str] = None
     asr_ready_deadline_task: asyncio.Task[None] | None = None
     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    turn_index: int = 0
     client_banner_info: Optional[Dict[str, Any]] = None
     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
     allowed_asr_vendors: List[str] = field(default_factory=list)
@@ -598,6 +599,26 @@ class ChatV2Adapter:
         self._last_throttle_emit_ms: int = 0
         # (no-op if unused; helps explicitness)
         self._noop = None
+
+    def _log_turn_event(self, ctx: AdapterContext, phase: str, **meta: object) -> None:
+        """
+        Log a high-level turn lifecycle event. Phase values are things like:
+        'turn_start', 'asr_final', 'asr_timeout', 'turn_complete', 'turn_failed'.
+        """
+
+        _log.info(
+            "evt=turn_lifecycle sid=%s turn_index=%s phase=%s",
+            ctx.sid,
+            getattr(ctx, "turn_index", None),
+            phase,
+            extra={"meta": meta},
+        )
+
+    def _next_turn_index(self, ctx: AdapterContext) -> int:
+        if not hasattr(ctx, "turn_index"):
+            ctx.turn_index = 0
+        ctx.turn_index += 1
+        return ctx.turn_index
 
     async def _call_openai(self, ctx: AdapterContext, transcript: str) -> str:
         """Execute an OpenAI Chat Completions request without blocking the event loop."""
@@ -3027,10 +3048,15 @@ class ChatV2Adapter:
 
         try:
             if not ctx.asr_final_emitted and isinstance(ctx.last_asr_partial, str) and ctx.last_asr_partial.strip():
-                await self._handle_asr_result(ctx, ctx.last_asr_partial, True)
+                await self._handle_asr_result(
+                    ctx, ctx.last_asr_partial, True, promoted_final=True
+                )
                 return
         except Exception:
             _log.exception("evt=client_turn_stop_force_final_failed sid=%s", ctx.sid)
+            self._log_turn_event(
+                ctx, "turn_failed", error_reason="force_final_failed"
+            )
 
         try:
             await self._close_asr(ctx, reason=reason_label)
@@ -4026,6 +4052,12 @@ class ChatV2Adapter:
                 if ctx.turn_active:
                     ctx.turn_active = False
                     ctx.client_mic_open = False
+                    self._log_turn_event(
+                        ctx,
+                        "turn_complete",
+                        asr_stream_id=ctx.asr_stream_id,
+                        final_emitted=ctx.asr_final_emitted,
+                    )
             elif frame_type == "turn.begin":
                 if not ctx.turn_active:
                     ctx.turn_active = True
@@ -4039,6 +4071,12 @@ class ChatV2Adapter:
                     if ctx.turn_active:
                         ctx.turn_active = False
                         ctx.client_mic_open = False
+                        self._log_turn_event(
+                            ctx,
+                            "turn_complete",
+                            asr_stream_id=ctx.asr_stream_id,
+                            final_emitted=ctx.asr_final_emitted,
+                        )
                         _queue_payload({"type": "turn.end"})
             if frame_type == "asr.partial":
                 self._offer_partial_frame(
@@ -6470,7 +6508,12 @@ class ChatV2Adapter:
         return GCPStreamingASREngine()
 
     async def _handle_asr_result(
-        self, ctx: AdapterContext, transcript: str | None, is_final: bool
+        self,
+        ctx: AdapterContext,
+        transcript: str | None,
+        is_final: bool,
+        *,
+        promoted_final: bool = False,
     ) -> None:
         if not ctx.asr_stream_id:
             _log.info("evt=asr_result_ignored sid=%s reason=no_stream_id", ctx.sid)
@@ -6504,6 +6547,16 @@ class ChatV2Adapter:
             ctx.last_asr_partial = text
         else:
             ctx.last_asr_partial = None
+
+        if is_final:
+            phase = "asr_final_from_timeout" if promoted_final else "asr_final"
+            self._log_turn_event(
+                ctx,
+                phase,
+                transcript=text,
+                asr_stream_id=ctx.asr_stream_id,
+                asr_req_id=getattr(ctx, "asr_stream_req_id", None),
+            )
 
         meta: Dict[str, Any] = {"vendor": vendor}
         # Correlators
@@ -6618,15 +6671,38 @@ class ChatV2Adapter:
             config, "GCP_STT_DEFAULT_LANGUAGE", "en-US"
         )
 
+        turn_index = self._next_turn_index(ctx)
+        self._log_turn_event(
+            ctx,
+            "turn_start",
+            asr_stream_id=stream_id,
+            asr_vendor="gcp",
+            sample_rate=sample_rate,
+            language=language,
+            turn_index=turn_index,
+        )
+
         async def _on_result(transcript: str, is_final: bool, _sid=stream_id) -> None:
             # Drop late or alien results
             is_same_stream = _sid == ctx.asr_stream_id
-            if (not is_same_stream) or ctx.asr_final_emitted:
+            is_open = ctx.session.asr_state == "open"
+
+            if (not is_same_stream) or (not is_open) or ctx.asr_final_emitted:
+                reasons: list[str] = []
+                if not is_same_stream:
+                    reasons.append("stream_mismatch")
+                if not is_open:
+                    reasons.append("state_not_open")
+                if ctx.asr_final_emitted:
+                    reasons.append("final_already_emitted")
+                reason_label = ",".join(reasons) if reasons else "stale"
                 _log.info(
-                    "evt=asr_result_dropped sid=%s reason=stale stream=%s current=%s final_emitted=%s",
+                    "evt=asr_result_dropped sid=%s reason=%s stream=%s current=%s asr_state=%s final_emitted=%s",
                     ctx.sid,
+                    reason_label,
                     _sid,
                     ctx.asr_stream_id,
+                    ctx.session.asr_state,
                     ctx.asr_final_emitted,
                 )
                 return
@@ -6656,6 +6732,7 @@ class ChatV2Adapter:
             ctx.asr_open_task = None
             ctx.asr_open = False
             _log.exception("evt=asr_open_failed sid=%s vendor=gcp", ctx.sid)
+            self._log_turn_event(ctx, "turn_failed", error_reason="asr_open_failed")
             try:
                 await self._send_asr_error(send, ctx, "open_failed")
             except Exception:
