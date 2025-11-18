@@ -29,6 +29,7 @@ from app.auth.http_handlers import (
     _is_admin as _auth_is_admin,
 )
 from app.db import neon
+from app.firehose import is_firehose_enabled
 from app.logging_config import configure_logging
 from app.logging_setup import install_bus_handler
 from app.telemetry import bus as telemetry_bus
@@ -41,11 +42,15 @@ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 
 configure_logging()
-install_bus_handler(telemetry_bus, level=logging.INFO)
+install_bus_handler(
+    telemetry_bus,
+    level=logging.DEBUG if is_firehose_enabled() else logging.INFO,
+)
 
-logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
-logging.getLogger("app.security.jwt").setLevel(logging.INFO)
-logging.getLogger("app.auth.http").setLevel(logging.INFO)
+if not is_firehose_enabled():
+    logging.getLogger("app.ws.adapter").setLevel(logging.INFO)
+    logging.getLogger("app.security.jwt").setLevel(logging.INFO)
+    logging.getLogger("app.auth.http").setLevel(logging.INFO)
 
 for _logger_name in ("app.voice_v2.tts_runtime", "app.voice_v2.tts_provider"):
     _category_logger = logging.getLogger(_logger_name)

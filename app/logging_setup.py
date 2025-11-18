@@ -3,11 +3,15 @@ import time
 from contextvars import ContextVar
 from typing import Optional
 
+from app.firehose import is_firehose_enabled
+
 current_sid: ContextVar[Optional[str]] = ContextVar("current_sid", default=None)
 
 
 class TelemetryBusHandler(logging.Handler):
     def __init__(self, bus, level: int = logging.INFO) -> None:
+        if is_firehose_enabled():
+            level = logging.DEBUG
         super().__init__(level)
         self.bus = bus
 
@@ -31,6 +35,8 @@ class TelemetryBusHandler(logging.Handler):
 
 
 def install_bus_handler(bus, level: int = logging.INFO) -> None:
+    if is_firehose_enabled():
+        level = logging.DEBUG
     root = logging.getLogger()
 
     # Ensure there is always at least one non-telemetry handler so log events
@@ -51,5 +57,6 @@ def install_bus_handler(bus, level: int = logging.INFO) -> None:
     if any(isinstance(handler, TelemetryBusHandler) for handler in root.handlers):
         return
     handler = TelemetryBusHandler(bus, level)
-    handler.setLevel(level)
+    # Let the logger hierarchy decide actual filtering
+    handler.setLevel(logging.NOTSET)
     root.addHandler(handler)
