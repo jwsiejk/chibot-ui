@@ -42,6 +42,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
 from app import config
 from app.config_build import current_build_id
+from app.firehose import is_firehose_enabled
 from app.logging_setup import current_sid
 from app.security.jwt_utils import verify_ws_token
 from app.telemetry import bus
@@ -801,6 +802,21 @@ class ChatV2Adapter:
         self._cancel_no_audio_watchdog(ctx)
         metrics = getattr(ctx, "metrics", {})
         metrics["tts_started_at"] = time.monotonic()
+        metrics["tts_completed_at"] = None
+        metrics["tts_timeline_emitted_key"] = None
+        metrics["tts_active_utt_id"] = None
+        metrics["tts_provider"] = None
+        if isinstance(frame, Mapping):
+            utt_id = frame.get("utt_id")
+            if isinstance(utt_id, str) and utt_id:
+                metrics["tts_active_utt_id"] = utt_id
+            else:
+                metrics["tts_active_utt_id"] = None
+            provider_value = frame.get("provider") or frame.get("vendor")
+            meta = frame.get("meta") if isinstance(frame, Mapping) else None
+            if isinstance(meta, Mapping):
+                provider_value = meta.get("provider") or provider_value
+            metrics["tts_provider"] = provider_value or None
         try:
             self._bus(
                 "tts.start",
@@ -831,18 +847,66 @@ class ChatV2Adapter:
             _log.exception("evt=tts_end_bus_failed sid=%s", ctx.sid)
         provider = None
         total_bytes: Optional[int] = None
+        emission_key: Any = None
         if isinstance(frame, Mapping):
             provider = frame.get("provider") or frame.get("vendor")
             bytes_value = frame.get("bytes") or frame.get("total_bytes")
-            if isinstance(bytes_value, int):
-                total_bytes = bytes_value
-        _log.info(
-            "evt=tts_timeline sid=%s turn_index=%s provider=%s",
-            ctx.sid,
-            metrics.get("turn_index"),
-            provider or "unknown",
-            extra={"meta": {"bytes_out": total_bytes}},
+            meta = frame.get("meta")
+            if isinstance(meta, Mapping):
+                provider = meta.get("provider") or provider
+                meta_bytes = meta.get("bytes") or meta.get("total_bytes")
+                tts_meta = meta.get("tts") if isinstance(meta, Mapping) else None
+                if isinstance(tts_meta, Mapping):
+                    provider = tts_meta.get("provider") or provider
+                    meta_bytes = meta_bytes or tts_meta.get("bytes") or tts_meta.get("total_bytes")
+                bytes_value = bytes_value or meta_bytes
+                meta_utt = meta.get("utt_id")
+                if emission_key is None and isinstance(meta_utt, str) and meta_utt:
+                    emission_key = meta_utt
+            for key in ("utt_id", "req_id", "request_id"):
+                frame_val = frame.get(key)
+                if emission_key is None and isinstance(frame_val, str) and frame_val:
+                    emission_key = frame_val
+            if isinstance(bytes_value, (int, float)):
+                total_bytes = int(bytes_value)
+        if emission_key is None:
+            emission_key = metrics.get("tts_active_utt_id")
+        if emission_key is None:
+            emission_key = metrics.get("turn_index")
+        if emission_key is None:
+            emission_key = "__default__"
+        elif isinstance(emission_key, (int, float)):
+            emission_key = str(emission_key)
+        should_log_timeline = metrics.get("tts_timeline_emitted_key") != emission_key
+        metrics["tts_timeline_emitted_key"] = emission_key
+
+        if provider is None:
+            provider = metrics.get("tts_provider")
+        elif provider:
+            metrics["tts_provider"] = provider
+
+        tts_started_at = metrics.get("tts_started_at")
+        tts_completed_at = metrics.get("tts_completed_at")
+        tts_ms = (
+            int((tts_completed_at - tts_started_at) * 1000)
+            if tts_started_at is not None and tts_completed_at is not None
+            else None
         )
+
+        if should_log_timeline:
+            log_fn = _log.info if is_firehose_enabled() else _log.debug
+            log_fn(
+                "evt=tts_timeline sid=%s turn_index=%s provider=%s",
+                ctx.sid,
+                metrics.get("turn_index"),
+                provider or "unknown",
+                extra={
+                    "meta": {
+                        "tts_ms": tts_ms,
+                        "bytes_out": int(total_bytes) if total_bytes is not None else None,
+                    }
+                },
+            )
         if not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
 
@@ -6739,6 +6803,9 @@ class ChatV2Adapter:
                 "llm_completed_at": None,
                 "tts_started_at": None,
                 "tts_completed_at": None,
+                "tts_active_utt_id": None,
+                "tts_provider": None,
+                "tts_timeline_emitted_key": None,
             }
         )
 
