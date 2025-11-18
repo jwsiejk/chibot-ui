@@ -460,37 +460,18 @@
     }
   }
 
-  const CLIENT_LOG_RATE_LIMIT_CAPACITY = 25;
-  const CLIENT_LOG_RATE_LIMIT_WINDOW_SECONDS = 2.0;
-  const CLIENT_LOG_RATE_LIMIT_WINDOW_MS = CLIENT_LOG_RATE_LIMIT_WINDOW_SECONDS * 1000;
+  // Firehose debugging: no rate limiting of client.log frames.
+  const CLIENT_LOG_RATE_LIMIT_CAPACITY = Number.POSITIVE_INFINITY;
+  const CLIENT_LOG_RATE_LIMIT_WINDOW_SECONDS = 0;
+  const CLIENT_LOG_RATE_LIMIT_WINDOW_MS = 0;
 
   const clientLogRateLimiter = {
     tokens: CLIENT_LOG_RATE_LIMIT_CAPACITY,
     lastRefill: Date.now(),
   };
 
-  function refillClientLogTokens(now) {
-    const limiter = clientLogRateLimiter;
-    const elapsed = now - limiter.lastRefill;
-    if (!(elapsed > 0)) {
-      return;
-    }
-    const tokensToAdd = (elapsed / CLIENT_LOG_RATE_LIMIT_WINDOW_MS) * CLIENT_LOG_RATE_LIMIT_CAPACITY;
-    limiter.tokens = Math.min(
-      CLIENT_LOG_RATE_LIMIT_CAPACITY,
-      limiter.tokens + tokensToAdd
-    );
-    limiter.lastRefill = now;
-  }
-
   function tryConsumeClientLogToken(count = 1) {
-    const limiter = clientLogRateLimiter;
-    const now = Date.now();
-    refillClientLogTokens(now);
-    if (limiter.tokens < count) {
-      return false;
-    }
-    limiter.tokens -= count;
+    // Always allow; server-side will handle any downstream limits.
     return true;
   }
 
@@ -656,6 +637,11 @@
     const WSClient = window.WSClient;
     const audioRecorder = window.AudioRecorder || null;
 
+    console.debug("client firehose logging enabled: no rate limit; large deferred buffer");
+    if (typeof console !== "undefined") {
+      console.debug("AskChip client starting with firehose-style logging (no client rate limit).");
+    }
+
     try {
       if (typeof WSClient === "undefined" || typeof WSClient.sendAudioChunk !== "function") {
         console.error(
@@ -671,7 +657,7 @@
     const deferredClientLogs = [];
     let deferredClientLogFlushTimer = null;
 
-    const MAX_DEFERRED_CLIENT_LOGS = 64;
+    const MAX_DEFERRED_CLIENT_LOGS = 2048;
     const DEFERRED_CLIENT_LOG_FLUSH_DELAY_MS = 500;
 
     function scheduleDeferredClientLogFlush() {
@@ -696,9 +682,10 @@
       }
       const normalizedLabel = typeof label === "string" && label ? label : "event";
       const normalizedDetail = cloneDiagDetail(detail);
-      if (deferredClientLogs.length >= MAX_DEFERRED_CLIENT_LOGS) {
-        deferredClientLogs.shift();
-      }
+      // Firehose: keep all deferred client logs until WS flush.
+      // if (deferredClientLogs.length >= MAX_DEFERRED_CLIENT_LOGS) {
+      //   deferredClientLogs.shift();
+      // }
       deferredClientLogs.push({ label: normalizedLabel, detail: normalizedDetail });
       scheduleDeferredClientLogFlush();
     }
