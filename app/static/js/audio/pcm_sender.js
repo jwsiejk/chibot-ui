@@ -531,9 +531,33 @@ export async function initPcmSender(ws, {
     }
   }
 
+  function getStateSnapshot() {
+    const tracks = mediaStream?.getAudioTracks?.() || [];
+    const trackStates = [];
+    for (const track of tracks) {
+      trackStates.push({
+        id: track?.id || null,
+        kind: track?.kind || null,
+        label: track?.label || null,
+        enabled: Boolean(track?.enabled),
+        muted: Boolean(track?.muted),
+        readyState: track?.readyState || null,
+      });
+    }
+    return {
+      enabled,
+      mediaStreamActive: Boolean(mediaStream?.active),
+      mediaStreamId: mediaStream?.id || null,
+      audioContextState: audioCtx?.state || null,
+      trackCount: trackStates.length,
+      tracks: trackStates,
+    };
+  }
+
   return {
     audioContext: audioCtx,
     mediaStream,
+    getStateSnapshot,
     resume,
     setEnabled,
     setWebSocket,

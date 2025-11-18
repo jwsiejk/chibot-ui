@@ -114,6 +114,8 @@ export function createWsAudioRuntime(options = {}) {
     setMicBytes,
     updateMicRms,
     audioKeepaliveMs: initialAudioKeepaliveMs = AUDIO_KEEPALIVE_MS,
+    onFirstClientAudioFrame = null,
+    onClientAudioChunkSend = null,
   } = options;
 
   let localMicChunks = 0;
@@ -804,6 +806,13 @@ export function createWsAudioRuntime(options = {}) {
       }
       try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
       try { logStage("client.audio_first_chunk", { bytes: wire.byteLength }); } catch {}
+      if (typeof onFirstClientAudioFrame === "function") {
+        try {
+          onFirstClientAudioFrame({ ...firstFrameDetail, ts_ms: now });
+        } catch (err) {
+          console.warn("onFirstClientAudioFrame failed", err);
+        }
+      }
     }
 
     micLastChunkAt = now;
@@ -848,6 +857,13 @@ export function createWsAudioRuntime(options = {}) {
     }
     const bytes = chunk.byteLength;
     logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount });
+    if (typeof onClientAudioChunkSend === "function") {
+      try {
+        onClientAudioChunkSend({ seq, bytes, batch_chunks: chunkCount, ts_ms: Date.now() });
+      } catch (err) {
+        console.warn("onClientAudioChunkSend failed", err);
+      }
+    }
     const nextChunkTotal = getMicChunksValue() + chunkCount;
     const nextByteTotal = getMicBytesValue() + bytes;
     setMicChunksValue(nextChunkTotal);
@@ -912,6 +928,33 @@ export function createWsAudioRuntime(options = {}) {
     return pcmRing;
   }
 
+  function getPcmSenderSnapshot() {
+    const sender = pcmSender || null;
+    const snapshot = sender && typeof sender.getStateSnapshot === "function"
+      ? sender.getStateSnapshot()
+      : null;
+    const stream = sender?.mediaStream || null;
+    const tracks = stream?.getAudioTracks?.() || [];
+    const trackStates = snapshot?.tracks || tracks.map((track) => ({
+      id: track?.id || null,
+      kind: track?.kind || null,
+      label: track?.label || null,
+      enabled: Boolean(track?.enabled),
+      muted: Boolean(track?.muted),
+      readyState: track?.readyState || null,
+    }));
+    return {
+      hasSender: Boolean(sender),
+      mediaStreamActive: snapshot?.mediaStreamActive ?? Boolean(stream?.active),
+      mediaStreamId: snapshot?.mediaStreamId || stream?.id || null,
+      audioContextState: snapshot?.audioContextState || sender?.audioContext?.state || null,
+      senderEnabled: snapshot?.enabled ?? null,
+      trackCount: Array.isArray(trackStates) ? trackStates.length : 0,
+      tracks: trackStates,
+      lastChunkAt: micLastChunkAt || null,
+    };
+  }
+
   function recordRecorderChunkPublic(tsMs) {
     recordRecorderChunk(tsMs);
   }
@@ -947,6 +990,7 @@ export function createWsAudioRuntime(options = {}) {
     primeAsrStreamFromRing,
     recordRecorderChunk: recordRecorderChunkPublic,
     getPcmRing,
+    getPcmSenderSnapshot,
     resetPcmStateForTesting,
     resetSilenceSuppression,
     updatePcmSenderState,

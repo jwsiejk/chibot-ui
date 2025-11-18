@@ -117,6 +117,7 @@ export function createCaptureRuntime({
   MIC_OUTCOME = {},
   onVadSilenceStop = null,
   canAutoStopFromVad = null,
+  onCaptureStop = null,
 }) {
   const MAX_GATE_SILENCE_MS = 3000;
   const VAD_SILENCE_TIMEOUT_SAMPLE_RATE = 10;
@@ -512,6 +513,18 @@ export function createCaptureRuntime({
     setListeningState(false);
     updatePcmSenderState();
     if (!softStop) {
+      try {
+        if (typeof onCaptureStop === "function") {
+          onCaptureStop({
+            reason: stopReason,
+            source: opts.source || null,
+            sender_paused: senderPaused,
+            arming_grace_until: armingGraceUntil,
+          });
+        }
+      } catch (err) {
+        try { console.warn("onCaptureStop handler failed", err); } catch {}
+      }
       try {
         hubLog("client.pcm.capture_stop", { reason: stopReason });
       } catch {}

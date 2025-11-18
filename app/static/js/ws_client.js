@@ -192,6 +192,11 @@ if (typeof createCaptureRuntime !== "function") {
   let __armingGraceUntil = 0; // ms epoch; brief window after capture start
   let __pauseSendUntil = 0;
   let __throttleTimer = null;
+  let __ttsEndCount = 0;
+  let __secondGreetingTraceActive = false;
+  let __secondGreetingTraceCompleted = false;
+  let __secondGreetingTraceStartMs = 0;
+  let __secondGreetingStartChunkCount = 0;
 
   let _audioStreaming = false;
   let awaitingAsrClosedAck = false;
@@ -694,6 +699,88 @@ if (typeof createCaptureRuntime !== "function") {
     return false;
   }
 
+  function captureSecondGreetingMicSnapshot() {
+    const listening = Boolean(AppState?.listening);
+    const audioStreaming = Boolean(_audioStreaming);
+    const micActive = Boolean((listening || audioStreaming) && !senderPaused);
+    return {
+      is_active: micActive,
+      listening,
+      audio_streaming: audioStreaming,
+      sender_paused: Boolean(senderPaused),
+      asr_ready: Boolean(AppState?.asrReady),
+      asr_arm_in_flight: Boolean(AppState?.asrArmInFlight),
+      warmup_until: warmupUntil || null,
+    };
+  }
+
+  function captureSecondGreetingMediaSnapshot() {
+    try {
+      const snapshot = typeof getPcmSenderSnapshot === "function" ? getPcmSenderSnapshot() : {};
+      if (snapshot && typeof snapshot === "object") {
+        return snapshot;
+      }
+    } catch (err) {
+      console.warn("captureSecondGreetingMediaSnapshot failed", err);
+    }
+    return {};
+  }
+
+  function logSecondGreetingTrace(event, extra = {}) {
+    if (!__secondGreetingTraceActive && event !== "start") {
+      return;
+    }
+    if (__secondGreetingTraceCompleted && event !== "first_chunk_send") {
+      return;
+    }
+    const payload = {
+      event,
+      ts_ms: Date.now(),
+      mic: captureSecondGreetingMicSnapshot(),
+      media_stream: captureSecondGreetingMediaSnapshot(),
+      chunk_count: Number.isFinite(AppState?.chunkCount) ? AppState.chunkCount : null,
+      ...extra,
+    };
+    try {
+      logStage("client.turn2.arm_trace", payload);
+    } catch {}
+  }
+
+  function startSecondGreetingTrace(frame) {
+    __secondGreetingTraceActive = true;
+    __secondGreetingTraceCompleted = false;
+    __secondGreetingTraceStartMs = Date.now();
+    __secondGreetingStartChunkCount = Number.isFinite(AppState?.chunkCount) ? AppState.chunkCount : 0;
+    logSecondGreetingTrace("start", { reason: "tts_end", utt_id: frame?.utt_id || null });
+  }
+
+  function handleFirstClientAudioFrameTelemetry(detail = {}) {
+    if (!__secondGreetingTraceActive || __secondGreetingTraceCompleted) {
+      return;
+    }
+    logSecondGreetingTrace("first_pcm_frame", detail || {});
+  }
+
+  function handleClientAudioChunkSendTelemetry(detail = {}) {
+    if (!__secondGreetingTraceActive || __secondGreetingTraceCompleted) {
+      return;
+    }
+    __secondGreetingTraceCompleted = true;
+    __secondGreetingTraceActive = false;
+    const now = Date.now();
+    const elapsedMs = __secondGreetingTraceStartMs ? Math.max(0, now - __secondGreetingTraceStartMs) : null;
+    const currentChunks = Number.isFinite(AppState?.chunkCount) ? AppState.chunkCount : 0;
+    const chunkDelta = Math.max(0, currentChunks - __secondGreetingStartChunkCount);
+    logSecondGreetingTrace("first_chunk_send", { ...detail, elapsed_ms: elapsedMs, chunk_delta: chunkDelta });
+  }
+
+  function handleCaptureStopTelemetry(detail = {}) {
+    if (!__secondGreetingTraceActive || __secondGreetingTraceCompleted) {
+      return;
+    }
+    logSecondGreetingTrace("capture_stop", detail || {});
+  }
+
   // Owns PCM ring buffer, PCM sender wiring, and ASR priming from recent audio.
   const audioRuntime = createWsAudioRuntime({
     AppState,
@@ -701,6 +788,8 @@ if (typeof createCaptureRuntime !== "function") {
     hubLog,
     updateState,
     logStage,
+    onFirstClientAudioFrame: handleFirstClientAudioFrameTelemetry,
+    onClientAudioChunkSend: handleClientAudioChunkSendTelemetry,
     getSocket: () => socket,
     WSClient,
     getWsClient: () => WSClient,
@@ -759,6 +848,7 @@ if (typeof createCaptureRuntime !== "function") {
     primeAsrStreamFromRing,
     recordRecorderChunk,
     getPcmRing,
+    getPcmSenderSnapshot,
     resetSilenceSuppression,
     updatePcmSenderState,
     scheduleAudioKeepalive: runtimeScheduleAudioKeepalive,
@@ -868,6 +958,7 @@ if (typeof createCaptureRuntime !== "function") {
     MIC_OUTCOME,
     onVadSilenceStop: handleVadSilenceStop,
     canAutoStopFromVad: () => speechSeenThisTurn === true,
+    onCaptureStop: handleCaptureStopTelemetry,
   });
 
   const {
@@ -1086,6 +1177,13 @@ if (typeof createCaptureRuntime !== "function") {
   }
 
   function requestAsrArm(reason) {
+    if (__secondGreetingTraceActive && !__secondGreetingTraceCompleted) {
+      logSecondGreetingTrace("request_asr_arm", {
+        reason: typeof reason === "string" ? reason : null,
+        asr_ready: Boolean(AppState?.asrReady),
+        sender_paused: Boolean(senderPaused),
+      });
+    }
     if (typeof runtimeRequestAsrArm === "function") {
       return runtimeRequestAsrArm(reason);
     }
@@ -1610,6 +1708,11 @@ if (typeof createCaptureRuntime !== "function") {
       const uttIdEnd = frame?.utt_id || 'utt-00001';
       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
       logStage('client.tts', { outcome: 'ended', utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
+
+      __ttsEndCount += 1;
+      if (__ttsEndCount === 2) {
+        startSecondGreetingTrace(frame);
+      }
 
       // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
       // We rely on the server to send asr.ready back when it processes this.
