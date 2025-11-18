@@ -756,6 +756,11 @@ if (typeof createCaptureRuntime !== "function") {
   }
 
   function handleClientAudioChunkSendTelemetry(detail = {}) {
+    try {
+      if (typeof markTurnAudioChunk === "function") {
+        markTurnAudioChunk(detail?.bytes);
+      }
+    } catch {}
     if (!__secondGreetingTraceActive || __secondGreetingTraceCompleted) {
       return;
     }
