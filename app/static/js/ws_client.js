@@ -302,12 +302,6 @@ if (typeof createCaptureRuntime !== "function") {
           }));
         }
       } catch {}
-
-      try {
-        void recoverFromAsrFault("partial_timeout");
-      } catch (err) {
-        try { console.warn("Partial watchdog recovery failed", err); } catch (_) {}
-      }
     }, delay);
   }
 
