@@ -45,6 +45,7 @@ export function createSessionManager({
   let autoResumeAttemptToken = null;
   let lastTokenValue = null;
   let lastTokenMintedAt = null;
+  let sessionEnding = false;
 
   function updateState(patch) {
     if (!patch || typeof patch !== "object") {
@@ -307,6 +308,7 @@ export function createSessionManager({
   }
 
   function open(options = {}, protocolsOverride) {
+    sessionEnding = false;
     let resumeTokenValue = null;
     let skipRateLimitCancel = false;
     let urlOverride = null;
@@ -451,6 +453,11 @@ export function createSessionManager({
   }
 
   async function close(reason = DEFAULT_CLOSE_REASON) {
+    const normalizedInput = typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON;
+    if (normalizedInput === DEFAULT_CLOSE_REASON && sessionEnding !== true) {
+      try { console.debug("client.ws_close_skipped", { reason: normalizedInput, sessionEnding }); } catch {}
+      return;
+    }
     const evaluation = evaluateStopRecorderReason(reason, DEFAULT_CLOSE_REASON);
     const normalizedReason = typeof evaluation?.label === "string" && evaluation.label
       ? evaluation.label
@@ -462,41 +469,52 @@ export function createSessionManager({
       return;
     }
     const closeReason = normalizedReason || DEFAULT_CLOSE_REASON;
-    const wasStreaming = isAudioStreamingActive();
-    if (wasStreaming) {
-      const offReason = closeReason || "client_shutdown";
-      hubLog("client.stream.off", { reason: offReason });
-    }
-    setAudioStreaming(false);
-    recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(closeReason || "", 80) });
-    try { resetAudioHeaderSent(); } catch {}
-    await stopRecorder(closeReason || "client_shutdown", { source: "ws.close" });
-    setAsrArmInFlight(false);
-    setAppStateValue("ttsActive", false);
-    setWsPhase("closing");
-    setWsConnected(false);
-    const emitResumeInvalid = () => {
-      if (closeReason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    try {
+      const wasStreaming = isAudioStreamingActive();
+      if (wasStreaming) {
+        const offReason = closeReason || "client_shutdown";
+        hubLog("client.stream.off", { reason: offReason });
+      }
+      setAudioStreaming(false);
+      recordClientBannerEvent("ws.close.request", { reason: truncateBannerString(closeReason || "", 80) });
+      try { resetAudioHeaderSent(); } catch {}
+      await stopRecorder(closeReason || "client_shutdown", { source: "ws.close" });
+      setAsrArmInFlight(false);
+      setAppStateValue("ttsActive", false);
+      setWsPhase("closing");
+      setWsConnected(false);
+      const emitResumeInvalid = () => {
+        if (closeReason === "resume_invalid" && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+          try {
+            window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason: closeReason } }));
+          } catch {}
+        }
+      };
+      connection.close(closeReason);
+      if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
         try {
-          window.dispatchEvent(new CustomEvent("ws.resume_invalid", { detail: { reason: closeReason } }));
-        } catch {}
+          window.WSErrorUI.cancelRateLimitCountdown(closeReason);
+        } catch (err) {
+          console.warn("Failed to cancel countdown on close", err);
+        }
       }
-    };
-    connection.close(closeReason);
-    if (window.WSErrorUI && typeof window.WSErrorUI.cancelRateLimitCountdown === "function") {
-      try {
-        window.WSErrorUI.cancelRateLimitCountdown(closeReason);
-      } catch (err) {
-        console.warn("Failed to cancel countdown on close", err);
-      }
+      setSocket(null);
+      try { WSClient._ws = null; } catch {}
+      clearRateLimitRetryTimer();
+      rateLimitRetryCount = 0;
+      autoResumeAttemptToken = null;
+      emitResumeInvalid();
+      updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
+    } finally {
+      sessionEnding = false;
     }
-    setSocket(null);
-    try { WSClient._ws = null; } catch {}
-    clearRateLimitRetryTimer();
-    rateLimitRetryCount = 0;
-    autoResumeAttemptToken = null;
-    emitResumeInvalid();
-    updateState({ connectionState: "disconnected", websocket: null, infoFrame: null, serverBanner: null });
+  }
+
+  async function endSession(reason = DEFAULT_CLOSE_REASON) {
+    const normalizedReason = typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON;
+    sessionEnding = true;
+    try { console.debug("client.session_end", { reason: normalizedReason }); } catch {}
+    return close(normalizedReason);
   }
 
   return {
@@ -512,5 +530,6 @@ export function createSessionManager({
     scheduleRateLimitRetry,
     open,
     close,
+    endSession,
   };
 }
