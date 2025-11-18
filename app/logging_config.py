@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable, Mapping, MutableSet
 
+from app.firehose import is_firehose_enabled
 from app.policy.loader import InteractionPolicySnapshot, load_interaction_policy
 
 _LEVEL_ALIASES = {
@@ -131,7 +132,14 @@ def configure_logging(*, extra_loggers: Iterable[str] | None = None) -> None:
 
     policy = load_interaction_policy()
     apply_logging_policy(policy)
-    _enforce_runtime_category_levels(logging.INFO)
+    root = logging.getLogger()
+    if is_firehose_enabled():
+        # Firehose: root DEBUG, categories not clamped above DEBUG
+        root.setLevel(logging.DEBUG)
+        _enforce_runtime_category_levels(logging.DEBUG)
+    else:
+        # Normal: categories at least INFO as before
+        _enforce_runtime_category_levels(logging.INFO)
 
     _LOG_CONFIGURED = True
 
