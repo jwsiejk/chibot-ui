@@ -2747,9 +2747,12 @@ class ChatV2Adapter:
             self._emit_hud_state(ctx, "Listening")
             # --- END FIX ---
             try:
-                await self._send_asr_ready_bundle(send, ctx)
+                # Use the standard ASR readiness path so we never emit asr.ready
+                # without a corresponding, fully-open ASR stream.
+                await self._ensure_asr_ready(send, ctx, "asr_rearm_request")
             except Exception:  # pragma: no cover - defensive logging
                 _log.exception("evt=ws_asr_ready_bundle_failed sid=%s", ctx.sid)
+            return self._HandleResult(True)
 
         if frame_type == "client.ready":
             mic_info = frame.get("mic")
