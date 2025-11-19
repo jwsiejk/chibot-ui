@@ -2260,6 +2260,25 @@ if (typeof createCaptureRuntime !== "function") {
       vendor: AppState.asrVendor,
       input: sanitized.input ?? null,
     });
+
+    // If the server already asked for input, start recording immediately.
+    try {
+      if (_audioStreaming && typeof startRecorderStreaming === "function") {
+        logStage("client.mic", {
+          outcome: MIC_OUTCOME.ARMED,
+          message: "asr.ready → startRecorderStreaming",
+        });
+        startRecorderStreaming(AppState?.policy || {}, "asr.ready");
+      }
+    } catch (err) {
+      console.warn("asr.ready mic start failed", err);
+      try {
+        logStage("client.mic", {
+          outcome: MIC_OUTCOME.ERROR_STATE_GUARD,
+          message: err?.message || "asr.ready mic start failed",
+        });
+      } catch {}
+    }
     try {
       sendAudioKeepaliveNow();
     } catch (err) {
