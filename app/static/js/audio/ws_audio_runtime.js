@@ -252,17 +252,17 @@ export function createWsAudioRuntime(options = {}) {
     const currentReqId = typeof getCurrentTurnReqId === "function"
       ? (getCurrentTurnReqId() || null)
       : null;
+    const enrichedMeta = meta && typeof meta === "object" ? { ...meta } : {};
     if (!currentReqId) {
       if (!warnedMissingReqId) {
-        console.warn("ws_audio_runtime: dropping audio chunk without active req_id");
+        console.warn("ws_audio_runtime: audio chunk without active req_id; sending anyway");
         warnedMissingReqId = true;
       }
-      return false;
-    }
-    warnedMissingReqId = false;
-    const enrichedMeta = meta && typeof meta === "object" ? { ...meta } : {};
-    if (!enrichedMeta.reqId) {
-      enrichedMeta.reqId = currentReqId;
+    } else {
+      warnedMissingReqId = false;
+      if (!enrichedMeta.reqId) {
+        enrichedMeta.reqId = currentReqId;
+      }
     }
     if (!enrichedMeta.sampleRateHz && typeof enrichedMeta.sampleRate === "number") {
       enrichedMeta.sampleRateHz = enrichedMeta.sampleRate;
