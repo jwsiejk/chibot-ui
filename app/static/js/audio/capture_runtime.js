@@ -604,9 +604,6 @@ export function createCaptureRuntime({
       reason = null;
     }
 
-    if (AppState?.listening) {
-      return true;
-    }
     firstChunkSeen = false;
     clearVadSilenceTimer();
     const captureReason = typeof reason === "string" && reason ? reason : "auto";
