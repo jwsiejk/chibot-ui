@@ -2629,7 +2629,7 @@ if (typeof createCaptureRuntime !== "function") {
       return false;
     }
     const options = opts && typeof opts === "object" ? { ...opts } : {};
-    if (typeof options.lane === "undefined") {
+    if (typeof options.lane === "undefined" || (typeof options.lane === "string" && !options.lane)) {
       options.lane = "mic";
     }
     const lane = typeof options.lane === "string" ? options.lane : "mic";
@@ -2645,46 +2645,37 @@ if (typeof createCaptureRuntime !== "function") {
     const reqId = typeof options.reqId === "string" && options.reqId
       ? options.reqId
       : getCurrentTurnReqIdValue();
-    if (!reqId) {
-      console.warn("sendAudioChunk skipped: missing req_id");
-      return false;
+    if (reqId) {
+      options.reqId = reqId;
+    } else {
+      delete options.reqId;
     }
-    const payload = arrayBufferToBase64(arrayBuffer);
-    if (!payload) {
-      console.warn("sendAudioChunk failed to encode payload");
-      return false;
-    }
-    const meta = {
-      lane,
-      encoding: "LINEAR16",
-      channels: 1,
-    };
     const srHz = Number.isFinite(options.sampleRateHz) && options.sampleRateHz > 0
       ? Math.round(options.sampleRateHz)
       : (Number.isFinite(options.sampleRate) && options.sampleRate > 0
         ? Math.round(options.sampleRate)
         : null);
     if (srHz) {
-      meta.sample_rate_hz = srHz;
+      options.sampleRateHz = srHz;
+      if (!Number.isFinite(options.sampleRate) || options.sampleRate <= 0) {
+        options.sampleRate = srHz;
+      }
+    } else if (typeof options.sampleRateHz === "undefined") {
+      options.sampleRateHz = AUDIO_HEADER_FRAME.sample_rate;
+      if (!Number.isFinite(options.sampleRate) || options.sampleRate <= 0) {
+        options.sampleRate = AUDIO_HEADER_FRAME.sample_rate;
+      }
+    }
+    if (typeof options.keepalive !== "boolean") {
+      delete options.keepalive;
+    }
+    if (!Number.isFinite(options.chunkCount) || options.chunkCount <= 0) {
+      delete options.chunkCount;
     } else {
-      meta.sample_rate_hz = AUDIO_HEADER_FRAME.sample_rate;
+      options.chunkCount = Number(options.chunkCount);
     }
-    if (typeof options.keepalive === "boolean") {
-      meta.keepalive = options.keepalive;
-    }
-    if (Number.isFinite(options.chunkCount) && options.chunkCount > 0) {
-      meta.chunk_count = Number(options.chunkCount);
-    }
-    const frame = {
-      type: "audio.chunk",
-      req_id: reqId,
-      payload,
-      meta,
-    };
-    if (Number.isFinite(options.seq)) {
-      frame.seq = Number(options.seq);
-    }
-    const result = WSClient.sendJSON(frame);
+    options.lane = lane;
+    const result = connection.sendBinary(arrayBuffer, options);
     if (result && typeof result.then === "function") {
       return result;
     }
