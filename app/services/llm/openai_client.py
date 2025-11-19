@@ -8,6 +8,7 @@ import asyncio
 import logging
 import queue
 import threading
+import time
 
 from openai import OpenAI
 
@@ -233,12 +234,17 @@ class OpenAILLMProvider(LLMProviderBase):
                 raise TypeError("message role/content must be strings")
             prepared.append({"role": role, "content": content})
 
+        prompt_text = "\n\n".join(
+            f"{msg.get('role', '')}: {msg.get('content', '')}" for msg in prepared
+        )
+
         client = self._client
         assert client is not None  # for type-checkers
 
         model = kwargs.get("model") or self._default_model
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens")
+        sid = kwargs.get("sid")
         kwargs.pop("purpose", None)
 
         request_kwargs: Dict[str, Any] = {
@@ -251,33 +257,60 @@ class OpenAILLMProvider(LLMProviderBase):
             request_kwargs["max_tokens"] = max_tokens
 
         def _stream_tokens() -> Iterable[str]:
+            llm_started_at = time.monotonic()
+            _log.info(
+                "evt=llm_request sid=%s model=%s",
+                sid,
+                model,
+                extra={"meta": {"prompt_preview": prompt_text[:120]}},
+            )
+            response_tokens: list[str] = []
             try:
                 stream = client.chat.completions.create(stream=True, **request_kwargs)
             except Exception as exc:  # pragma: no cover - defensive
                 raise RuntimeError("OpenAI chat request failed") from exc
 
-            for chunk in stream:
-                if chunk is None:
-                    continue
-                choices = getattr(chunk, "choices", None)
-                if not choices:
-                    continue
-                for choice in choices:
-                    delta = getattr(choice, "delta", None)
-                    if delta is None:
+            try:
+                for chunk in stream:
+                    if chunk is None:
                         continue
-                    content = getattr(delta, "content", None)
-                    if isinstance(content, str):
-                        yield content
-                    elif isinstance(content, Iterable):
-                        for part in content:
-                            if isinstance(part, str):
-                                yield part
-                            elif isinstance(part, dict):
-                                if part.get("type") == "text":
-                                    part_text = part.get("text")
-                                    if isinstance(part_text, str):
-                                        yield part_text
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
+                        continue
+                    for choice in choices:
+                        delta = getattr(choice, "delta", None)
+                        if delta is None:
+                            continue
+                        content = getattr(delta, "content", None)
+                        if isinstance(content, str):
+                            response_tokens.append(content)
+                            yield content
+                        elif isinstance(content, Iterable):
+                            for part in content:
+                                if isinstance(part, str):
+                                    response_tokens.append(part)
+                                    yield part
+                                elif isinstance(part, dict):
+                                    if part.get("type") == "text":
+                                        part_text = part.get("text")
+                                        if isinstance(part_text, str):
+                                            response_tokens.append(part_text)
+                                            yield part_text
+            finally:
+                llm_completed_at = time.monotonic()
+                llm_ms = int((llm_completed_at - llm_started_at) * 1000)
+                response_text = "".join(response_tokens).strip()
+                _log.info(
+                    "evt=llm_response sid=%s model=%s",
+                    sid,
+                    model,
+                    extra={
+                        "meta": {
+                            "llm_ms": llm_ms,
+                            "preview": response_text[:120],
+                        }
+                    },
+                )
 
         return ThreadedTokenStream(producer=_stream_tokens)
 
