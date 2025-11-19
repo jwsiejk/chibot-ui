@@ -116,12 +116,14 @@ export function createWsAudioRuntime(options = {}) {
     audioKeepaliveMs: initialAudioKeepaliveMs = AUDIO_KEEPALIVE_MS,
     onFirstClientAudioFrame = null,
     onClientAudioChunkSend = null,
+    getCurrentTurnReqId = () => null,
   } = options;
 
   let localMicChunks = 0;
   let localMicBytes = 0;
   let localFirstChunkSeen = false;
   let localMicRecordingStartAt = null;
+  let warnedMissingReqId = false;
 
   const resolveWsClient = () => {
     if (typeof getWsClient === "function") {
@@ -247,9 +249,27 @@ export function createWsAudioRuntime(options = {}) {
   };
 
   const safeSendAudioChunk = (payload, meta = {}) => {
+    const currentReqId = typeof getCurrentTurnReqId === "function"
+      ? (getCurrentTurnReqId() || null)
+      : null;
+    if (!currentReqId) {
+      if (!warnedMissingReqId) {
+        console.warn("ws_audio_runtime: dropping audio chunk without active req_id");
+        warnedMissingReqId = true;
+      }
+      return false;
+    }
+    warnedMissingReqId = false;
+    const enrichedMeta = meta && typeof meta === "object" ? { ...meta } : {};
+    if (!enrichedMeta.reqId) {
+      enrichedMeta.reqId = currentReqId;
+    }
+    if (!enrichedMeta.sampleRateHz && typeof enrichedMeta.sampleRate === "number") {
+      enrichedMeta.sampleRateHz = enrichedMeta.sampleRate;
+    }
     if (typeof sendAudioChunk === "function") {
       try {
-        sendAudioChunk(payload, meta);
+        sendAudioChunk(payload, enrichedMeta);
         return true;
       } catch (err) {
         console.warn("sendAudioChunk delegate failed", err);
@@ -258,7 +278,7 @@ export function createWsAudioRuntime(options = {}) {
     const wsClient = resolveWsClient();
     if (wsClient && typeof wsClient.sendAudioChunk === "function") {
       try {
-        wsClient.sendAudioChunk(payload, meta);
+        wsClient.sendAudioChunk(payload, enrichedMeta);
         return true;
       } catch (err) {
         console.warn("WSClient.sendAudioChunk failed", err);
@@ -392,7 +412,11 @@ export function createWsAudioRuntime(options = {}) {
       return false;
     }
     const silenceChunk = new Int16Array(samples);
-    const sent = safeSendAudioChunk(silenceChunk, { lane: "mic", keepalive: true });
+    const sent = safeSendAudioChunk(silenceChunk, {
+      lane: "mic",
+      keepalive: true,
+      sampleRateHz: sampleRate,
+    });
     if (sent) {
       micLastChunkAt = now;
       try {
@@ -639,14 +663,6 @@ export function createWsAudioRuntime(options = {}) {
         continue;
       }
       const sr = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : asrRate;
-      if (pcmSender && typeof pcmSender.sendImmediate === "function") {
-        try {
-          pcmSender.sendImmediate(payload, { chunkCount: 1, sampleRate: sr });
-          continue;
-        } catch (err) {
-          console.warn("pcmSender.sendImmediate failed", err);
-        }
-      }
       if (!safeSendAudioChunk(payload, { lane: "mic" })) {
         console.warn("preroll send fallback failed");
       } else {
@@ -890,6 +906,45 @@ export function createWsAudioRuntime(options = {}) {
     pcmSender.setEnabled(shouldSend);
   }
 
+  let pcmSenderSocketShim = null;
+
+  function getPcmSenderSocketShim() {
+    if (pcmSenderSocketShim) {
+      return pcmSenderSocketShim;
+    }
+    const OPEN_STATE = typeof WebSocket !== "undefined" && typeof WebSocket.OPEN === "number"
+      ? WebSocket.OPEN
+      : 1;
+    const CLOSED_STATE = typeof WebSocket !== "undefined" && typeof WebSocket.CLOSED === "number"
+      ? WebSocket.CLOSED
+      : 3;
+    let active = true;
+    pcmSenderSocketShim = {
+      send(data) {
+        if (!active) {
+          return false;
+        }
+        const buffer = toArrayBuffer(data);
+        if (!buffer) {
+          console.warn("pcm_sender_socket_shim: invalid payload");
+          return false;
+        }
+        const chunk = new Int16Array(buffer);
+        if (!(chunk instanceof Int16Array) || !chunk.length) {
+          return false;
+        }
+        return safeSendAudioChunk(chunk, { lane: "mic" });
+      },
+      setActive(value) {
+        active = Boolean(value);
+      },
+      get readyState() {
+        return active ? OPEN_STATE : CLOSED_STATE;
+      },
+    };
+    return pcmSenderSocketShim;
+  }
+
   async function ensurePcmSender() {
     if (pcmSender) {
       return pcmSender;
@@ -897,10 +952,7 @@ export function createWsAudioRuntime(options = {}) {
     if (pcmSenderInitPromise) {
       return pcmSenderInitPromise;
     }
-    const ws = resolveSocket();
-    if (!ws) {
-      throw new Error("WebSocket unavailable for PCM sender");
-    }
+    const ws = getPcmSenderSocketShim();
     if (typeof initPcmSender !== "function") {
       throw new Error("initPcmSender not provided");
     }
@@ -913,6 +965,23 @@ export function createWsAudioRuntime(options = {}) {
       flushIntervalMs: PCM_FLUSH_TIMER_MS,
     }).then((sender) => {
       pcmSender = sender;
+      const shim = getPcmSenderSocketShim();
+      if (pcmSender && typeof pcmSender.setWebSocket === "function") {
+        const originalSetWebSocket = pcmSender.setWebSocket.bind(pcmSender);
+        pcmSender.setWebSocket = (nextWs) => {
+          if (nextWs) {
+            shim.setActive(true);
+            return originalSetWebSocket(shim);
+          }
+          shim.setActive(false);
+          return originalSetWebSocket(null);
+        };
+        try {
+          originalSetWebSocket(shim);
+        } catch (err) {
+          console.warn("pcmSender.setWebSocket attach failed", err);
+        }
+      }
       pcmSenderInitPromise = null;
       updatePcmSenderState();
       return sender;
