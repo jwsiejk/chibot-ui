@@ -441,6 +441,12 @@ export function createWsAudioRuntime(options = {}) {
       return false;
     }
     const silenceChunk = new Int16Array(samples);
+    try {
+      logStage("client.audio_keepalive_attempt", {
+        samples,
+        sampleRate,
+      });
+    } catch (_) {}
     const sent = safeSendAudioChunk(silenceChunk, {
       lane: "mic",
       keepalive: true,
@@ -450,6 +456,13 @@ export function createWsAudioRuntime(options = {}) {
       micLastChunkAt = now;
       try {
         logStage("client.audio_keepalive", { bytes: silenceChunk.byteLength, interval_ms: audioKeepaliveMs });
+      } catch (_) {}
+    } else {
+      try {
+        logStage("client.audio_keepalive_failed", {
+          samples,
+          sampleRate,
+        });
       } catch (_) {}
     }
     return sent;
@@ -469,8 +482,9 @@ export function createWsAudioRuntime(options = {}) {
     if (!(listening && streaming)) {
       return result;
     }
+    let idleDuration = null;
     if (Number.isFinite(audioKeepaliveIdleMs) && audioKeepaliveIdleMs > 0 && lastRealAudioAt > 0) {
-      const idleDuration = now - lastRealAudioAt;
+      idleDuration = now - lastRealAudioAt;
       if (idleDuration >= audioKeepaliveIdleMs) {
         setSenderPauseReason("idle_timeout", true);
         updatePcmSenderState();
@@ -483,6 +497,13 @@ export function createWsAudioRuntime(options = {}) {
     if (!shouldSendKeepalive) {
       return result;
     }
+    try {
+      logStage("client.audio_keepalive_eligible", {
+        listening,
+        streaming,
+        idle_ms: idleDuration,
+      });
+    } catch (_) {}
     if (sendAudioKeepaliveChunk(now)) {
       result.sentKeepalive = true;
       return result;
