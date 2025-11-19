@@ -453,6 +453,8 @@ class AdapterContext:
     sid_bucket: Optional[TokenBucket] = None
     ip_bucket: Optional[TokenBucket] = None
     audio_profile: Optional[Dict[str, Any]] = None
+    audio_meta: Optional[Dict[str, Any]] = None
+    audio_meta_req_id: Optional[str] = None
     accepting_audio: bool = True
     audio_violation_count: int = 0
     client_turn_closed: bool = False
@@ -467,6 +469,7 @@ class AdapterContext:
     audio_tasks: set[asyncio.Task[None]] = field(default_factory=set)
     audio_send_closed: bool = False
     asr_ready: bool = False
+    using_null_asr_engine: bool = False
     asr_subscription_token: Optional[str] = None
     asr_subscription_bus: Optional[Any] = None
     asr_open_subscription_token: Optional[str] = None
@@ -534,6 +537,10 @@ class AdapterContext:
     asr_ready_deadline_task: asyncio.Task[None] | None = None
     listen_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     turn_index: int = 0
+    turn_req_id: Optional[str] = None
+    previous_turn_req_id: Optional[str] = None
+    active_req_id: Optional[str] = None
+    last_partial_for_turn: Optional[str] = None
     client_banner_info: Optional[Dict[str, Any]] = None
     client_banner_events: List[Dict[str, Any]] = field(default_factory=list)
     allowed_asr_vendors: List[str] = field(default_factory=list)
@@ -562,11 +569,45 @@ class AdapterContext:
     asr_turn_active: bool = False
     asr_turn_begin_sent: bool = False
     asr_turn_armed_sent: bool = False
+    _logged_missing_audio_meta: bool = False
+    _logged_partial_req_id_mismatch: bool = False
+    _logged_final_req_id_mismatch: bool = False
+    _logged_header_req_id_mismatch: bool = False
+    _logged_asr_timeout: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
         # Keep a session-level turn counter available for correlation.
         self.session.turn_index = 0
+
+
+class _NullASREngine(ASREngine):
+    """Lightweight ASR engine stub for unit tests and offline environments."""
+
+    def __init__(self) -> None:
+        self.is_null_engine = True
+        self._closed = True
+        self._opened = False
+
+    async def open(
+        self,
+        *,
+        sample_rate: int,
+        language: str,
+        sid: str,
+        on_result: Callable[[str, bool], Optional[Awaitable[None]]] | None = None,
+    ) -> None:
+        del sample_rate, language, sid, on_result
+        self._closed = False
+        self._opened = True
+
+    async def write(self, pcm: bytes) -> None:  # pragma: no cover - trivial
+        del pcm
+        if self._closed:
+            raise RuntimeError("Null ASR engine is closed")
+
+    async def close(self) -> None:
+        self._closed = True
 
 
 class ChatV2Adapter:
@@ -616,6 +657,162 @@ class ChatV2Adapter:
             phase,
             extra={"meta": meta},
         )
+
+    @staticmethod
+    def _normalize_req_id(candidate: Any) -> Optional[str]:
+        if isinstance(candidate, str):
+            normalized = candidate.strip()
+            if normalized:
+                return normalized
+        return None
+
+    def _make_req_id(self, ctx: AdapterContext) -> str:
+        return f"req-{uuid.uuid4().hex}"
+
+    def _start_user_turn(self, ctx: AdapterContext) -> None:
+        new_req_id = self._make_req_id(ctx)
+        ctx.turn_req_id = new_req_id
+        ctx.active_req_id = new_req_id
+        ctx.audio_meta = None
+        ctx.audio_meta_req_id = None
+        ctx.last_partial_for_turn = None
+        ctx._logged_missing_audio_meta = False
+        ctx._logged_partial_req_id_mismatch = False
+        ctx._logged_final_req_id_mismatch = False
+        ctx._logged_header_req_id_mismatch = False
+        ctx._logged_asr_timeout = False
+
+    def _end_user_turn(self, ctx: AdapterContext) -> None:
+        ctx.previous_turn_req_id = getattr(ctx, "turn_req_id", None)
+        ctx.turn_req_id = None
+        ctx.active_req_id = None
+        ctx.audio_meta = None
+        ctx.audio_meta_req_id = None
+        ctx.last_partial_for_turn = None
+        ctx._logged_missing_audio_meta = False
+        ctx._logged_partial_req_id_mismatch = False
+        ctx._logged_final_req_id_mismatch = False
+        ctx._logged_header_req_id_mismatch = False
+        ctx._logged_asr_timeout = False
+
+    def _policy_default_sample_rate(self, ctx: AdapterContext) -> int:
+        profile = ctx.audio_profile
+        if not isinstance(profile, Mapping):
+            profile = getattr(ctx.session, "audio_profile", None)
+        if isinstance(profile, Mapping):
+            candidate = profile.get("sample_rate") or profile.get("sample_rate_hz")
+            try:
+                parsed = int(candidate)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, int) and parsed > 0:
+                return parsed
+        default_rate = getattr(
+            config, "GCP_STT_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ
+        )
+        try:
+            parsed_default = int(default_rate)
+        except (TypeError, ValueError):
+            parsed_default = _DEFAULT_GCP_SAMPLE_RATE_HZ
+        if parsed_default <= 0:
+            return _DEFAULT_GCP_SAMPLE_RATE_HZ
+        return parsed_default
+
+    def _should_use_null_asr_engine(self) -> bool:
+        if os.getenv("ASKCHIP_FAKE_GCP_ASR", "0").strip() == "1":
+            return True
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return True
+        return False
+
+    def _ensure_audio_meta(self, ctx: AdapterContext) -> Dict[str, Any]:
+        audio_meta = ctx.audio_meta if isinstance(ctx.audio_meta, Mapping) else None
+        if audio_meta is None:
+            fallback = {
+                "encoding": "LINEAR16",
+                "sample_rate_hz": self._policy_default_sample_rate(ctx),
+                "channels": 1,
+            }
+            ctx.audio_meta = dict(fallback)
+            if not ctx._logged_missing_audio_meta:
+                ctx._logged_missing_audio_meta = True
+                meta: Dict[str, Any] = {
+                    "req_id": ctx.active_req_id or ctx.turn_req_id,
+                }
+                self._emit_session_step(
+                    ctx.sid,
+                    "audio_event_missing_meta_fallback",
+                    summary="Missing audio_meta; using default fallback",
+                    meta=meta,
+                    source="ws.audio",
+                )
+        return dict(ctx.audio_meta or {})
+
+    def _log_asr_req_id_mismatch(
+        self,
+        ctx: AdapterContext,
+        kind: Literal["partial", "final"],
+        *,
+        active_req_id: Optional[str],
+        provided_req_id: Optional[str],
+    ) -> None:
+        if kind == "partial":
+            if ctx._logged_partial_req_id_mismatch:
+                return
+            ctx._logged_partial_req_id_mismatch = True
+        else:
+            if ctx._logged_final_req_id_mismatch:
+                return
+            ctx._logged_final_req_id_mismatch = True
+        meta = {
+            "active_req_id": active_req_id,
+            "provided_req_id": provided_req_id,
+        }
+        self._emit_session_step(
+            ctx.sid,
+            f"asr_{kind}_req_id_mismatch",
+            summary=f"Ignoring ASR {kind} with mismatched req_id",
+            meta=meta,
+            source="ws.asr",
+        )
+
+    def _log_asr_timeout(self, ctx: AdapterContext, reason: str) -> None:
+        if ctx._logged_asr_timeout:
+            return
+        ctx._logged_asr_timeout = True
+        meta = {
+            "req_id": ctx.active_req_id or ctx.turn_req_id,
+            "reason": reason,
+        }
+        self._emit_session_step(
+            ctx.sid,
+            "asr_timeout",
+            summary="ASR stream timed out waiting for audio",
+            meta=meta,
+            source="ws.asr",
+        )
+
+    async def _handle_asr_timeout(self, ctx: AdapterContext, reason: str) -> None:
+        active_req_id = ctx.active_req_id
+        if not active_req_id:
+            return
+        self._log_asr_timeout(ctx, reason)
+        if not ctx.asr_stream_id:
+            ctx.asr_final_emitted = True
+            self._end_user_turn(ctx)
+            return
+        transcript = ctx.last_partial_for_turn or ""
+        await self._handle_asr_result(
+            ctx,
+            transcript,
+            True,
+            promoted_final=True,
+            timeout=True,
+        )
+
+    async def _ensure_previous_turn_closed(self, ctx: AdapterContext, reason: str) -> None:
+        if ctx.active_req_id and not ctx.asr_final_emitted:
+            await self._handle_asr_timeout(ctx, reason)
 
     def _next_turn_index(self, ctx: AdapterContext) -> int:
         current_turn = getattr(ctx, "turn_index", None)
@@ -767,6 +964,7 @@ class ChatV2Adapter:
         try:
             # Ensure an open task exists
             if ctx.asr_open_task is None or ctx.asr_open_task.done():
+                await self._ensure_previous_turn_closed(ctx, "auto_ready")
                 self._schedule_asr_open(ctx)
 
             # Wait for the open task to complete before sending asr.ready
@@ -1820,10 +2018,13 @@ class ChatV2Adapter:
         payload = ctx.pending_start_listening
         if not isinstance(payload, dict):
             return
+        mask_phase = ctx.tts_mask_phase or "off"
+        if mask_phase != "off":
+            return
         frame = dict(payload)
-        ctx.pending_start_listening = None
         was_sent = getattr(ctx, "pending_start_listening_sent", False)
         ctx.pending_start_listening_sent = False
+        ctx.pending_start_listening = None
         if was_sent:
             return
         outbox = ctx.outbox
@@ -1842,6 +2043,13 @@ class ChatV2Adapter:
                     )
                 except RuntimeError:
                     pass
+            else:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop:
+                    self._schedule_mic_open_guard(ctx, loop)
         else:
             telemetry_bus.publish(
                 {
@@ -2453,7 +2661,6 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         if frame_type in (
-            "client.ready",
             "client.telemetry",
             "client.diag",
         ):
@@ -2653,6 +2860,7 @@ class ChatV2Adapter:
                 return self._HandleResult(True)
             else:
                 try:
+                    await self._ensure_previous_turn_closed(ctx, "client_asr_open")
                     self._schedule_asr_open(ctx)
                 except Exception:
                     _log.exception("evt=asr_schedule_failed sid=%s", ctx.sid)
@@ -2733,6 +2941,25 @@ class ChatV2Adapter:
             ctx.client_mic_open = True
             self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
             _log.info("evt=mic_gate_open sid=%s reason=audio_header", ctx.sid)
+            provided_req_id = self._normalize_req_id(frame.get("req_id"))
+            original_req_id = provided_req_id
+            canonical_req_id = self._normalize_req_id(ctx.turn_req_id)
+            if canonical_req_id is None:
+                canonical_req_id = provided_req_id or self._make_req_id(ctx)
+                ctx.turn_req_id = canonical_req_id
+            elif provided_req_id and provided_req_id != canonical_req_id:
+                if not ctx._logged_header_req_id_mismatch:
+                    ctx._logged_header_req_id_mismatch = True
+                    _log.warning(
+                        "evt=audio_header_req_id_mismatch sid=%s provided=%s expected=%s",
+                        ctx.sid,
+                        provided_req_id,
+                        canonical_req_id,
+                    )
+                provided_req_id = canonical_req_id
+            ctx.active_req_id = canonical_req_id
+            if canonical_req_id:
+                frame["req_id"] = canonical_req_id
             expected = {"format": "pcm16", "sample_rate": 16000, "channels": 1}
             fmt = frame.get("format")
             sample_rate = frame.get("sample_rate")
@@ -2762,7 +2989,6 @@ class ChatV2Adapter:
                         "expected": expected,
                     },
                 )
-                return self._HandleResult(True)
             profile = {
                 "format": "pcm16",
                 "codec": frame.get("codec") or "pcm_s16le",
@@ -2814,7 +3040,7 @@ class ChatV2Adapter:
                     and incoming_channels == existing_channels
                 ):
                     _log.info(
-                        "evt=audio_header_duplicate sid=%s codec=%s rate_hz=%s ch=%s",
+                        "evt=audio_header_dup_ignored sid=%s codec=%s rate_hz=%s ch=%s",
                         ctx.sid,
                         incoming_codec,
                         incoming_rate,
@@ -2829,7 +3055,7 @@ class ChatV2Adapter:
                     send,
                     ctx.sid,
                     "schema_invalid",
-                    "conflicting audio.header",
+                    "duplicate or conflicting audio.header",
                 )
                 return self._HandleResult(True)
             normalized_header = dict(frame)
@@ -2890,26 +3116,27 @@ class ChatV2Adapter:
                 ctx.audio_expected_seq = ctx.audio_seq
                 ctx.audio_highest_seq = ctx.audio_seq - 1
                 ctx.audio_buffer.clear()
-            audio_meta = {
-                key: value
-                for key, value in (
-                    ("format", profile.get("format")),
-                    ("sample_rate", profile.get("sample_rate")),
-                    ("channels", profile.get("channels")),
-                    ("seq_start", profile.get("seq_start")),
-                )
-                if value is not None
+            audio_meta: Dict[str, Any] = {
+                "encoding": "LINEAR16",
+                "format": profile.get("format"),
+                "sample_rate": profile.get("sample_rate"),
+                "sample_rate_hz": profile.get("sample_rate"),
+                "channels": profile.get("channels"),
             }
+            if profile.get("seq_start") is not None:
+                audio_meta["seq_start"] = profile.get("seq_start")
+            ctx.audio_meta = {key: value for key, value in audio_meta.items() if value is not None}
+            ctx.audio_meta_req_id = original_req_id
             await self._publish(
                 WS_AUDIO_HEADER_ACCEPT,
                 ctx.sid,
-                audio_meta,
+                ctx.audio_meta,
             )
             self._emit_session_step(
                 ctx.sid,
                 "audio.header.accepted",
                 summary="Accepted audio header",
-                meta=audio_meta,
+                meta=ctx.audio_meta,
                 source="ws.audio",
             )
             self._emit_asr_turn_armed(ctx)
@@ -2945,6 +3172,7 @@ class ChatV2Adapter:
                         ctx,
                         vendor=vendor if isinstance(vendor, str) else None,
                         opened_ts=ts_value,
+                        force=True,
                     )
                     ctx.mic_nudge_sent = False
                 ready_meta = {
@@ -3323,7 +3551,7 @@ class ChatV2Adapter:
                         )
                         return self._HandleResult(False, 1003, "audio_not_expected")
 
-        if ctx.session.asr_state != "open":
+        if ctx.session.asr_state != "open" and not (ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR):
             drop_meta = {
                 "reason": "not_open",
                 "byte_count": byte_count,
@@ -3595,6 +3823,7 @@ class ChatV2Adapter:
 
     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
         byte_count = len(chunk)
+        self._ensure_audio_meta(ctx)
         meta = {
             "byte_count": byte_count,
             "seq": seq,
@@ -4205,7 +4434,6 @@ class ChatV2Adapter:
             frame_type = payload.get("type")
             if frame_type == "input.start":
                 self._mark_input_start(ctx)
-                ctx.client_mic_open = True
             elif frame_type == "turn.end":
                 if ctx.turn_active:
                     ctx.turn_active = False
@@ -4336,14 +4564,46 @@ class ChatV2Adapter:
 
             event_type = event.get("type")
             if event_type in {EVT_ASR_PARTIAL, EVT_ASR_FINAL}:
+                event_req_id = self._normalize_req_id(event.get("req_id"))
+                active_req_id = self._normalize_req_id(ctx.active_req_id)
+                if not active_req_id:
+                    active_req_id = self._normalize_req_id(ctx.turn_req_id)
+                    if active_req_id:
+                        ctx.active_req_id = active_req_id
+                if not active_req_id and event_req_id:
+                    ctx.active_req_id = event_req_id
+                    active_req_id = event_req_id
                 now_ms = self._now_ms()
                 ctx.session.last_vendor_activity_ms = float(now_ms)
                 if isinstance(event, Mapping):
                     self._emit_server_vendor_activity(ctx, event_type, event, now_ms)
                 if event_type == EVT_ASR_PARTIAL:
                     self._maybe_emit_first_token_latency(ctx, "partial", now_ms)
+                    text_value = event.get("text")
+                    if isinstance(text_value, str) and text_value.strip():
+                        ctx.last_partial_for_turn = text_value.strip()
                 else:
                     self._maybe_emit_first_token_latency(ctx, "final", now_ms)
+                if active_req_id and event_req_id is None:
+                    event["req_id"] = active_req_id
+                    event_req_id = active_req_id
+                if (
+                    active_req_id
+                    and event_req_id
+                    and event_req_id != active_req_id
+                ):
+                    if event_req_id == ctx.previous_turn_req_id:
+                        return
+                    mismatch_kind: Literal["partial", "final"] = (
+                        "partial" if event_type == EVT_ASR_PARTIAL else "final"
+                    )
+                    self._log_asr_req_id_mismatch(
+                        ctx,
+                        mismatch_kind,
+                        active_req_id=active_req_id,
+                        provided_req_id=event_req_id,
+                    )
+                    return
 
             def _on_loop() -> None:
                 frame = self._coerce_asr_frame(ctx, event)
@@ -4668,6 +4928,7 @@ class ChatV2Adapter:
                     ctx.mic_nudge_sent = False
                     self._cancel_mic_open_timer(ctx)
                     return
+                self._publish_pending_start_listening(ctx, bus)
                 _schedule_listen_handoff(None)
 
             try:
@@ -4741,6 +5002,8 @@ class ChatV2Adapter:
                 meta = event.get("meta")
                 audio_meta = meta.get("audio") if isinstance(meta, Mapping) else None
                 if not isinstance(audio_meta, Mapping):
+                    audio_meta = self._ensure_audio_meta(ctx)
+                if not audio_meta:
                     _log_ignored("missing_audio_meta")
                     return
             chunk = event.get("chunk")
@@ -5965,8 +6228,9 @@ class ChatV2Adapter:
         *,
         vendor: Optional[str] = None,
         opened_ts: Optional[int] = None,
+        force: bool = False,
     ) -> None:
-        if ctx.client_mic_open:
+        if ctx.client_mic_open and not force:
             return
 
         self._cancel_mic_open_timer(ctx)
@@ -6653,7 +6917,17 @@ class ChatV2Adapter:
     def _create_asr_engine(self, ctx: AdapterContext) -> ASREngine:
         """Create the ASR engine for the session."""
 
-        return GCPStreamingASREngine()
+        try:
+            return GCPStreamingASREngine()
+        except Exception as exc:
+            if self._should_use_null_asr_engine():
+                _log.warning(
+                    "evt=asr_engine_fallback sid=%s reason=%s fallback=null_asr",
+                    ctx.sid,
+                    exc,
+                )
+                return _NullASREngine()
+            raise
 
     async def _handle_asr_result(
         self,
@@ -6662,6 +6936,7 @@ class ChatV2Adapter:
         is_final: bool,
         *,
         promoted_final: bool = False,
+        timeout: bool = False,
     ) -> None:
         if not ctx.asr_stream_id:
             _log.info("evt=asr_result_ignored sid=%s reason=no_stream_id", ctx.sid)
@@ -6710,9 +6985,16 @@ class ChatV2Adapter:
 
         meta: Dict[str, Any] = {"vendor": vendor}
         # Correlators
-        req_for_events = ctx.asr_stream_req_id or ctx.await_user_req_id
+        req_for_events = (
+            ctx.active_req_id
+            or ctx.turn_req_id
+            or ctx.asr_stream_req_id
+            or ctx.await_user_req_id
+        )
         if req_for_events:
             meta["req_id"] = req_for_events
+        if timeout:
+            meta["timeout"] = True
         meta["stream_id"] = ctx.asr_stream_id
         event_payload: Dict[str, Any]
 
@@ -6746,13 +7028,14 @@ class ChatV2Adapter:
         ctx.session.last_vendor_activity_ms = float(now_ms)
 
         if not is_final:
-            req_id = ctx.await_user_req_id if isinstance(ctx.await_user_req_id, str) else ""
+            req_id = ctx.turn_req_id if isinstance(ctx.turn_req_id, str) else ""
             await self._invoke_engine("on_asr_partial", ctx.sid, req_id, 1.0, text)
             return
 
-        req_id_final = ctx.await_user_req_id if isinstance(ctx.await_user_req_id, str) else None
+        req_id_final = ctx.turn_req_id if isinstance(ctx.turn_req_id, str) else None
         await self._invoke_engine("on_asr_final", ctx.sid, text, req_id_final)
         await self._close_asr(ctx, reason="final_transcript")
+        self._end_user_turn(ctx)
 
     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
         if ctx.ws_send is None:
@@ -6765,6 +7048,7 @@ class ChatV2Adapter:
         if ctx.asr_open_task and not ctx.asr_open_task.done():
             return
 
+        self._start_user_turn(ctx)
         mark(ctx.session, "opening")
         ctx.asr_bytes_sent = 0
         ctx.asr_opened_ms = None
@@ -6833,12 +7117,14 @@ class ChatV2Adapter:
 
         engine = self._create_asr_engine(ctx)
         ctx.session.asr_engine = engine
+        engine_is_null = bool(getattr(engine, "is_null_engine", False))
+        ctx.using_null_asr_engine = engine_is_null
 
         # New stream identity + req snapshot
         stream_id = uuid.uuid4().hex
         ctx.asr_stream_id = stream_id
-        # Freeze the request id that this ASR stream belongs to (if any)
-        ctx.asr_stream_req_id = ctx.await_user_req_id
+        # Freeze the request id that this ASR stream belongs to
+        ctx.asr_stream_req_id = ctx.turn_req_id
 
         asr_config = self._resolve_asr_config(ctx)
         sample_rate = self._resolve_asr_sample_rate(ctx)
@@ -6941,24 +7227,25 @@ class ChatV2Adapter:
             {"state": "open", "ok": True, "vendor": "gcp"},
         )
 
-        bus.publish(
-            {
-                "type": EVT_ASR_OPEN,
-                "sid": ctx.sid,
-                "who": "server",
-                "source": "ws.adapter",
-                "vendor": "gcp",
-            }
-        )
-        bus.publish(
-            {
-                "type": EVT_ASR_READY,
-                "sid": ctx.sid,
-                "who": "server",
-                "source": "ws.adapter",
-                "vendor": "gcp",
-            }
-        )
+        if not engine_is_null:
+            bus.publish(
+                {
+                    "type": EVT_ASR_OPEN,
+                    "sid": ctx.sid,
+                    "who": "server",
+                    "source": "ws.adapter",
+                    "vendor": "gcp",
+                }
+            )
+            bus.publish(
+                {
+                    "type": EVT_ASR_READY,
+                    "sid": ctx.sid,
+                    "who": "server",
+                    "source": "ws.adapter",
+                    "vendor": "gcp",
+                }
+            )
 
     async def _close_asr(
         self,
@@ -7134,13 +7421,19 @@ class ChatV2Adapter:
 
         self._mark_input_start(ctx)
         await self._send_json(send, ctx.sid, input_start)
-        ctx.client_mic_open = True  # allow first audio chunk through immediately
         ctx.pending_start_listening = dict(start_payload)
         ctx.pending_start_listening_sent = False
-        if ctx.asr_ready:
+        mask_phase = ctx.tts_mask_phase or "off"
+        if ctx.asr_ready and mask_phase == "off":
             await self._send_json(send, ctx.sid, start_payload)
             ctx.pending_start_listening = None
             ctx.pending_start_listening_sent = False
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop:
+                self._schedule_mic_open_guard(ctx, loop)
         turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
         if turn_begin_payload is not None:
             try:
