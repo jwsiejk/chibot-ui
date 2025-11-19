@@ -1453,14 +1453,8 @@ if (typeof createCaptureRuntime !== "function") {
       const context = typeof window !== "undefined" ? window : null;
       return handler.call(context, { trigger });
     }
-    const hub = AppState?.hub;
-    if (hub && typeof hub.startListening === "function") {
-      try {
-        return hub.startListening({ trigger });
-      } catch (err) {
-        console.warn("Hub startListening failed", err);
-        throw err;
-      }
+    if (typeof startRecorderStreaming === "function") {
+      return startRecorderStreaming(AppState?.policy || {}, trigger || "invoke");
     }
     throw new Error("startRecording_unavailable");
   }
@@ -1822,18 +1816,7 @@ if (typeof createCaptureRuntime !== "function") {
         source: "server.stop_listening",
       });
       setAsrArmInFlight(false);
-      try {
-        const hub = AppState?.hub;
-        if (hub && typeof hub.stopListening === "function") {
-          hub.stopListening("server_requested");
-        } else {
-          stopInputCapture({ reason: "server_requested" });
-        }
-        logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
-      } catch (err) {
-        console.warn("Hub stop_listening handler error", err);
-        logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
-      }
+      logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
       resetTurnAudioContext();
       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
         try {
@@ -2043,47 +2026,52 @@ if (typeof createCaptureRuntime !== "function") {
     const policy = frame?.policy || {};
     const hasPolicy = policy && typeof policy === "object" && Object.keys(policy).length > 0;
     const source = frame?.type || "input.start";
-    const unifiedRecorder = window?.AudioRecorder && typeof window.AudioRecorder.startListening === "function";
 
-    if (unifiedRecorder) {
-      try {
-        logStage("client.input.capture", { source, hasPolicy, skipped: "unified_recorder" });
-      } catch {}
-      // In unified mode we don't start here; asr.ready will trigger streaming.
+    try {
+      logStage("client.input.capture", { source, hasPolicy });
+    } catch {}
+
+    if (typeof startRecorderStreaming !== "function") {
+      console.warn("startInputCapture unavailable: capture runtime not ready");
       return;
     }
 
-    const hub = AppState?.hub;
-    if (hub && typeof hub.startListening === "function") {
-      try {
-        try {
-          logStage("client.input.capture", { source, hasPolicy });
-        } catch {}
-        return hub.startListening(policy);
-      } catch (err) {
-        console.warn("Hub startListening (legacy input) failed", err);
+    try {
+      const result = startRecorderStreaming(policy, source);
+      if (result && typeof result.catch === "function") {
+        result.catch((err) => console.warn("startInputCapture failed", err));
       }
+      return result;
+    } catch (err) {
+      console.warn("startInputCapture failed", err);
+      return null;
     }
-    console.warn("Legacy input capture is disabled; recorder hub missing.", frame);
   }
 
   function stopInputCapture(options = {}) {
-    const hub = AppState?.hub;
-    if (hub && typeof hub.stopListening === "function") {
-      try {
-        const rawReason =
-          options && typeof options === "object" && options.reason ? options.reason : "legacy_input";
-        let reason = rawReason;
-        if (rawReason === "input.stop") {
-          reason = "user_clicked_stop";
-        }
-        hub.stopListening(reason);
-      } catch (err) {
-        console.warn("Hub stopListening (legacy input) failed", err);
-      }
-      return;
+    const rawReason = options && typeof options === "object" && typeof options.reason === "string" && options.reason
+      ? options.reason
+      : "legacy_input";
+    let fallbackReason = typeof options?.fallbackReason === "string" && options.fallbackReason
+      ? options.fallbackReason
+      : rawReason;
+    if (!fallbackReason || fallbackReason === "legacy_input") {
+      fallbackReason = "client_stop";
+    } else if (fallbackReason === "input.stop") {
+      fallbackReason = "server_requested";
     }
-    void options;
+    const source = typeof options?.source === "string" && options.source
+      ? options.source
+      : "stop_input_capture";
+
+    try {
+      const result = stopRecorder(rawReason, { fallbackReason, source });
+      if (result && typeof result.catch === "function") {
+        result.catch((err) => console.warn("stopInputCapture failed", err));
+      }
+    } catch (err) {
+      console.warn("stopInputCapture failed", err);
+    }
   }
 
   async function handleInputStartFrame(frame) {
