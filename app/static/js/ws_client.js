@@ -2268,7 +2268,18 @@ if (typeof createCaptureRuntime !== "function") {
           outcome: MIC_OUTCOME.ARMED,
           message: "asr.ready → startRecorderStreaming",
         });
-        startRecorderStreaming(AppState?.policy || {}, "asr.ready");
+        const result = startRecorderStreaming(AppState?.policy || {}, "asr.ready");
+        if (result && typeof result.catch === "function") {
+          result.catch((err) => {
+            console.warn("asr.ready mic start failed", err);
+            try {
+              logStage("client.mic", {
+                outcome: MIC_OUTCOME.ERROR_STATE_GUARD,
+                message: err?.message || "asr.ready mic start failed",
+              });
+            } catch {}
+          });
+        }
       }
     } catch (err) {
       console.warn("asr.ready mic start failed", err);
