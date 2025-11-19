@@ -138,6 +138,14 @@ def _session_logs_path(sid: Optional[str]) -> Path:
     return LOG_PATH
 
 
+def _session_client_logs_path(sid: Optional[str]) -> Path | None:
+    if isinstance(sid, str) and sid:
+        candidate = EXPORT_ROOT / sid / "logs" / "client.jsonl"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _iter_all_session_logs_txt() -> Iterable[bytes]:
     if not EXPORT_ROOT.is_dir():
         return
@@ -593,12 +601,22 @@ def _iter_client_logs_txt(path: Path, sid: Optional[str]) -> Iterable[bytes]:
 
 
 def _iter_client_logs_all_sessions() -> Iterable[bytes]:
-    for raw in _iter_all_session_logs_txt():
-        try:
-            text = raw.decode("utf-8")
-        except Exception:
+    if not EXPORT_ROOT.is_dir():
+        return
+
+    for entry in sorted(EXPORT_ROOT.iterdir()):
+        if not entry.is_dir():
             continue
-        yield from _iter_client_log_lines((text,), None)
+        client_log = entry / "logs" / "client.jsonl"
+        if client_log.is_file():
+            with client_log.open("r", encoding="utf-8") as handle:
+                yield from _iter_client_log_lines(handle, None)
+            continue
+
+        session_log = entry / "logs.ndjson"
+        if session_log.is_file():
+            with session_log.open("r", encoding="utf-8") as handle:
+                yield from _iter_client_log_lines(handle, None)
 
 
 async def _handle_export_server_logs(
@@ -656,7 +674,7 @@ async def _handle_export_client_logs(
     await _drain_request_body(receive)
 
     sid = _get_query_argument(scope, "sid")
-    log_path = _session_logs_path(sid)
+    log_path = _session_client_logs_path(sid) or _session_logs_path(sid)
     filename = f"client-logs-{sid or 'all'}.txt"
     headers = (
         (b"content-type", b"text/plain; charset=utf-8"),
