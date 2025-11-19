@@ -18,6 +18,7 @@ const AUDIO_KEEPALIVE_CHUNK_MS = 20;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
+let __firstPcmFrameLogged = false;
 
 const primedSessionIds = new Set();
 
@@ -118,6 +119,8 @@ export function createWsAudioRuntime(options = {}) {
     onClientAudioChunkSend = null,
     getCurrentTurnReqId = () => null,
   } = options;
+
+  __firstPcmFrameLogged = false;
 
   let localMicChunks = 0;
   let localMicBytes = 0;
@@ -270,6 +273,15 @@ export function createWsAudioRuntime(options = {}) {
     if (typeof sendAudioChunk === "function") {
       try {
         sendAudioChunk(payload, enrichedMeta);
+        try {
+          logStage("client.audio_chunk_send", {
+            lane: enrichedMeta.lane || "mic",
+            reqId: enrichedMeta.reqId || null,
+            keepalive: !!enrichedMeta.keepalive,
+            sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
+            source: "delegate",
+          });
+        } catch (_) {}
         return true;
       } catch (err) {
         console.warn("sendAudioChunk delegate failed", err);
@@ -279,11 +291,28 @@ export function createWsAudioRuntime(options = {}) {
     if (wsClient && typeof wsClient.sendAudioChunk === "function") {
       try {
         wsClient.sendAudioChunk(payload, enrichedMeta);
+        try {
+          logStage("client.audio_chunk_send", {
+            lane: enrichedMeta.lane || "mic",
+            reqId: enrichedMeta.reqId || null,
+            keepalive: !!enrichedMeta.keepalive,
+            sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
+            source: "wsclient",
+          });
+        } catch (_) {}
         return true;
       } catch (err) {
         console.warn("WSClient.sendAudioChunk failed", err);
       }
     }
+    try {
+      logStage("client.audio_chunk_send_failed", {
+        lane: enrichedMeta.lane || "mic",
+        reqId: enrichedMeta.reqId || null,
+        keepalive: !!enrichedMeta.keepalive,
+        sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
+      });
+    } catch (_) {}
     return false;
   };
 
@@ -746,6 +775,21 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function handlePcmFrame(frame, meta = {}) {
+    if (!__firstPcmFrameLogged && frame instanceof Int16Array && frame.length) {
+      __firstPcmFrameLogged = true;
+      try {
+        logStage("client.pcm.first_frame", {
+          samples: frame.length,
+          sampleRate: meta?.sampleRate || null,
+        });
+      } catch (_) {}
+      try {
+        hubLog("client.pcm.first_frame", {
+          samples: frame.length,
+          sampleRate: meta?.sampleRate || null,
+        });
+      } catch (_) {}
+    }
     if (!frame) {
       return;
     }
@@ -864,6 +908,17 @@ export function createWsAudioRuntime(options = {}) {
   function handlePcmSend(chunk, meta = {}) {
     if (!(chunk instanceof Int16Array) || !chunk.length) {
       return;
+    }
+    const sr = meta?.sampleRate || meta?.sampleRateHz || null;
+    const sampledBytes = chunk.byteLength || 0;
+    if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
+      try {
+        logStage("client.pcm.send", {
+          bytes: sampledBytes,
+          samples: chunk.length || null,
+          sampleRate: sr,
+        });
+      } catch (_) {}
     }
     const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
     const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
