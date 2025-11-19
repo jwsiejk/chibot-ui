@@ -145,6 +145,8 @@ export function createCaptureRuntime({
   const senderPauseReasons = new Set();
   let senderPaused = false;
   let audioStreaming = false;
+  let pcmSenderReady = false;
+  let pcmSenderReadyLogged = false;
   let firstChunkSeen = false;
   let armingGraceUntil = 0;
   let micRecordingStartAt = null;
@@ -427,9 +429,29 @@ export function createCaptureRuntime({
   }
 
   function setListeningState(active) {
-    const listening = Boolean(active);
-    updateState({ listening });
-    if (!listening && AppState?.wsConnected) {
+    const nextListening = Boolean(active);
+    if (nextListening) {
+      if (!pcmSenderReady) {
+        try {
+          logStage("client.mic", {
+            outcome: MIC_OUTCOME.ERROR_STATE_GUARD,
+            message: "setListeningState(true) called before pcmSenderReady",
+          });
+        } catch {}
+        return;
+      }
+      if (!audioStreaming) {
+        try {
+          logStage("client.mic", {
+            outcome: MIC_OUTCOME.ERROR_STATE_GUARD,
+            message: "setListeningState(true) called while audioStreaming=false",
+          });
+        } catch {}
+        return;
+      }
+    }
+    updateState({ listening: nextListening });
+    if (!nextListening && AppState?.wsConnected) {
       setWsPhase("connected");
     }
     updatePcmSenderState();
@@ -604,6 +626,16 @@ export function createCaptureRuntime({
       reason = null;
     }
 
+    const alreadyListening = Boolean(AppState?.listening);
+    if (alreadyListening) {
+      try {
+        logStage("client.mic", {
+          outcome: MIC_OUTCOME.ERROR_STATE_GUARD,
+          message: "startRecorderStreaming called while AppState.listening=true",
+        });
+      } catch {}
+    }
+
     firstChunkSeen = false;
     clearVadSilenceTimer();
     const captureReason = typeof reason === "string" && reason ? reason : "auto";
@@ -627,6 +659,18 @@ export function createCaptureRuntime({
         audioStreaming = false;
         console.warn("PCM sender unavailable; cannot start streaming");
         return false;
+      }
+      if (!pcmSenderReady) {
+        pcmSenderReady = true;
+        if (!pcmSenderReadyLogged) {
+          pcmSenderReadyLogged = true;
+          try {
+            logStage("client.mic", {
+              outcome: MIC_OUTCOME.STREAMING_HEARTBEAT,
+              message: "pcm_sender_ready",
+            });
+          } catch {}
+        }
       }
       resetRecorderTelemetry();
       resetSilenceSuppression();
