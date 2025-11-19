@@ -819,6 +819,7 @@ if (typeof createCaptureRuntime !== "function") {
     getMicBytes: () => __micBytes,
     setMicBytes: (value) => { __micBytes = Number.isFinite(value) ? Number(value) : 0; },
     audioKeepaliveMs: AUDIO_KEEPALIVE_MS,
+    getCurrentTurnReqId: () => getCurrentTurnReqIdValue(),
   });
 
   function applyAudioPolicy(policy) {
@@ -1040,6 +1041,7 @@ if (typeof createCaptureRuntime !== "function") {
       // Ensure a fresh turn-stop guard when we locally begin a new capture/turn.
       resetTurnStopFlag();
       resetSpeechFlag();
+      ensureTurnAudioReqId(policy || AppState?.policy || {});
       return startRecorderStreaming(policy, source);
     } catch (err) {
       console.warn("WSClient.startRecorderStreaming failed", err);
@@ -1069,12 +1071,33 @@ if (typeof createCaptureRuntime !== "function") {
     sample_rate: 16000,
     channels: 1,
   });
+
+  function makeReqId() {
+    return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  let currentTurnReqId = null;
+
+  function setCurrentTurnReqId(value) {
+    if (typeof value === "string" && value) {
+      currentTurnReqId = value;
+      return;
+    }
+    currentTurnReqId = null;
+  }
+
+  function getCurrentTurnReqIdValue() {
+    return typeof currentTurnReqId === "string" && currentTurnReqId
+      ? currentTurnReqId
+      : null;
+  }
+
   // --- Begin: header idempotency + strict schema ---
   let __audioHeaderSent = false;
   function __resetAudioHeaderSent() {
     __audioHeaderSent = false;
   }
-  function __buildStrictAudioHeader(frameOrPolicy) {
+  function __buildStrictAudioHeader(frameOrPolicy, headerOptions = {}) {
     const base = AUDIO_HEADER_FRAME;
     const source = (frameOrPolicy?.policy || frameOrPolicy) || {};
     const audioPolicy = source && typeof source.audio === "object" ? source.audio : {};
@@ -1088,6 +1111,21 @@ if (typeof createCaptureRuntime !== "function") {
     const normalizedRate = Number(rateCandidate);
     const normalizedChannels = Number(channelsCandidate);
 
+    const requestedRate = Number(headerOptions?.sampleRateHz);
+    const sampleRate = Number.isFinite(requestedRate) && requestedRate > 0
+      ? requestedRate
+      : (Number.isFinite(normalizedRate) ? normalizedRate : base.sample_rate);
+    const channels = Number.isFinite(normalizedChannels) && normalizedChannels > 0
+      ? normalizedChannels
+      : base.channels;
+
+    const reqId = typeof headerOptions?.reqId === "string" && headerOptions.reqId
+      ? headerOptions.reqId
+      : null;
+    if (!reqId) {
+      throw new Error("audio.header requires req_id");
+    }
+
     if (formatCandidate && formatCandidate !== "pcm16") {
       try {
         console.warn(
@@ -1100,24 +1138,22 @@ if (typeof createCaptureRuntime !== "function") {
 
     return {
       type: base.type,
+      req_id: reqId,
       format: "pcm16",
-      sample_rate: Number.isFinite(normalizedRate) ? normalizedRate : base.sample_rate,
-      channels: Number.isFinite(normalizedChannels) ? normalizedChannels : base.channels,
+      sample_rate: sampleRate,
+      channels,
+      meta: {
+        encoding: "LINEAR16",
+        sample_rate_hz: sampleRate,
+        channels,
+      },
       codec: "pcm_s16le",
     };
   }
-  function __sendAudioHeaderOnce(frameOrPolicy = AppState?.policy) {
+  function __sendAudioHeaderOnce(header) {
     if (__audioHeaderSent) {
       try { console.warn("audio.header already sent; skipping"); } catch {}
       return true;
-    }
-
-    let header;
-    try {
-      header = __buildStrictAudioHeader(frameOrPolicy);
-    } catch (err) {
-      console.warn("Failed to build audio header", err);
-      return false;
     }
 
     const sendJSON = (WSClient && typeof WSClient.sendJSON === "function")
@@ -1158,8 +1194,41 @@ if (typeof createCaptureRuntime !== "function") {
     console.warn("Failed to send audio header: transport returned false");
     return false;
   }
-  function sendAudioHeader(frameOrPolicy = AppState?.policy) {
-    return __sendAudioHeaderOnce(frameOrPolicy);
+  function sendAudioHeader(frameOrPolicy = AppState?.policy, headerOptions = {}) {
+    const explicitReq = typeof headerOptions?.reqId === "string" && headerOptions.reqId
+      ? headerOptions.reqId
+      : null;
+    const reqId = explicitReq || getCurrentTurnReqIdValue();
+    if (!reqId) {
+      try { console.debug("sendAudioHeader skipped: missing req_id"); } catch {}
+      return false;
+    }
+    let header;
+    try {
+      header = __buildStrictAudioHeader(frameOrPolicy, { ...headerOptions, reqId });
+    } catch (err) {
+      console.warn("Failed to build audio header", err);
+      return false;
+    }
+    return __sendAudioHeaderOnce(header);
+  }
+
+  function resetTurnAudioContext() {
+    setCurrentTurnReqId(null);
+    __resetAudioHeaderSent();
+  }
+
+  function ensureTurnAudioReqId(policy) {
+    const existing = getCurrentTurnReqIdValue();
+    if (existing) {
+      sendAudioHeader(policy, { reqId: existing });
+      return existing;
+    }
+    const nextId = makeReqId();
+    setCurrentTurnReqId(nextId);
+    __resetAudioHeaderSent();
+    sendAudioHeader(policy, { reqId: nextId });
+    return nextId;
   }
   // --- End: header idempotency + strict schema ---
   let __lastErrorSig = null, __lastErrorAt = 0;
@@ -1765,6 +1834,7 @@ if (typeof createCaptureRuntime !== "function") {
         console.warn("Hub stop_listening handler error", err);
         logMic({ outcome: MIC_OUTCOME.ERROR_STATE_GUARD, message: err?.message });
       }
+      resetTurnAudioContext();
       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
         try {
           const reason =
@@ -1778,6 +1848,7 @@ if (typeof createCaptureRuntime !== "function") {
     } else if (frame.type === "input.start") {
       _audioStreaming = true;
       setListeningState(true);
+      ensureTurnAudioReqId(frame?.policy || AppState?.policy || {});
       emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
       const reason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
@@ -1802,7 +1873,7 @@ if (typeof createCaptureRuntime !== "function") {
       resetTurnIntent(reason);
       emitConsoleBusEvent("client.ui_badge", { state: "Ready" });
       stopInputCapture({ reason: "input.stop" });
-      __resetAudioHeaderSent();
+      resetTurnAudioContext();
     } else if (frame.type === "assistant.await_user") {
       const reason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
@@ -1813,6 +1884,7 @@ if (typeof createCaptureRuntime !== "function") {
       _audioStreaming = false;
       setListeningState(false);
       resetTurnIntent(reason);
+      resetTurnAudioContext();
     } else if (frame.type === "chat.history") {
       handleChatHistoryFrame(frame);
     }
@@ -1876,7 +1948,7 @@ if (typeof createCaptureRuntime !== "function") {
     getAudioStreaming: () => _audioStreaming,
     setAudioStreaming: (value) => { _audioStreaming = Boolean(value); },
     ensurePcmSender,
-    resetAudioHeaderSent: () => __resetAudioHeaderSent(),
+    resetAudioHeaderSent: () => resetTurnAudioContext(),
     isTypedObjectPayload,
     validateOutboundPayload,
   });
@@ -2284,7 +2356,7 @@ if (typeof createCaptureRuntime !== "function") {
       try { stopInputCapture({ reason: code }); } catch {}
       try { clearAudioKeepaliveTimer(); } catch {}
       try { setAsrArmInFlight(false); } catch {}
-      __resetAudioHeaderSent();
+      resetTurnAudioContext();
     }
     const errorMeta = {};
     if (frame && typeof frame.code === "string") {
@@ -2491,6 +2563,35 @@ if (typeof createCaptureRuntime !== "function") {
   };
 
   // ===== Public WSClient API wiring (window.WSClient = …) =====
+  function arrayBufferToBase64(buffer) {
+    if (!(buffer instanceof ArrayBuffer)) {
+      return null;
+    }
+    if (typeof Buffer === "function" && typeof Buffer.from === "function") {
+      try {
+        return Buffer.from(buffer).toString("base64");
+      } catch (err) {
+        console.warn("arrayBufferToBase64 buffer conversion failed", err);
+      }
+    }
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(bytes.length, i + chunkSize));
+      binary += String.fromCharCode(...chunk);
+    }
+    const encode = typeof btoa === "function"
+      ? btoa
+      : (typeof window !== "undefined" && typeof window.btoa === "function"
+        ? window.btoa
+        : null);
+    if (encode) {
+      return encode(binary);
+    }
+    return null;
+  }
+
   WSClient.sendJSON = function sendJSONPayload(obj) {
     if (obj instanceof ArrayBuffer || ArrayBuffer.isView(obj)) {
       logTransportMisuse("binary_sent_to_sendJSON");
@@ -2512,20 +2613,20 @@ if (typeof createCaptureRuntime !== "function") {
 
   WSClient.sendAudioChunk = function sendAudioChunk(buf, opts = {}) {
     if (buf instanceof Blob) {
-      const blobResult = connection.sendBinary(buf, { ...opts, lane: opts && typeof opts === "object" && typeof opts.lane !== "undefined" ? opts.lane : "mic" });
-      if (blobResult && typeof blobResult.then === "function") {
-        return blobResult;
-      }
-      return blobResult !== false;
+      return buf.arrayBuffer().then((buffer) => WSClient.sendAudioChunk(buffer, opts));
     }
-    if (!(buf instanceof ArrayBuffer) && !isTypedArray(buf)) {
-      const coerced = toArrayBuffer(buf);
-      if (!coerced) {
-        logTransportMisuse("sendAudioChunk_invalid_payload");
-        console.error("sendAudioChunk: expected ArrayBuffer or TypedArray");
-        return false;
-      }
-      buf = coerced;
+    let arrayBuffer = null;
+    if (buf instanceof ArrayBuffer) {
+      arrayBuffer = buf;
+    } else if (ArrayBuffer.isView(buf)) {
+      arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    } else {
+      arrayBuffer = toArrayBuffer(buf);
+    }
+    if (!arrayBuffer) {
+      logTransportMisuse("sendAudioChunk_invalid_payload");
+      console.error("sendAudioChunk: expected ArrayBuffer or TypedArray");
+      return false;
     }
     const options = opts && typeof opts === "object" ? { ...opts } : {};
     if (typeof options.lane === "undefined") {
@@ -2541,7 +2642,49 @@ if (typeof createCaptureRuntime !== "function") {
         return true;
       }
     }
-    const result = connection.sendBinary(buf, options);
+    const reqId = typeof options.reqId === "string" && options.reqId
+      ? options.reqId
+      : getCurrentTurnReqIdValue();
+    if (!reqId) {
+      console.warn("sendAudioChunk skipped: missing req_id");
+      return false;
+    }
+    const payload = arrayBufferToBase64(arrayBuffer);
+    if (!payload) {
+      console.warn("sendAudioChunk failed to encode payload");
+      return false;
+    }
+    const meta = {
+      lane,
+      encoding: "LINEAR16",
+      channels: 1,
+    };
+    const srHz = Number.isFinite(options.sampleRateHz) && options.sampleRateHz > 0
+      ? Math.round(options.sampleRateHz)
+      : (Number.isFinite(options.sampleRate) && options.sampleRate > 0
+        ? Math.round(options.sampleRate)
+        : null);
+    if (srHz) {
+      meta.sample_rate_hz = srHz;
+    } else {
+      meta.sample_rate_hz = AUDIO_HEADER_FRAME.sample_rate;
+    }
+    if (typeof options.keepalive === "boolean") {
+      meta.keepalive = options.keepalive;
+    }
+    if (Number.isFinite(options.chunkCount) && options.chunkCount > 0) {
+      meta.chunk_count = Number(options.chunkCount);
+    }
+    const frame = {
+      type: "audio.chunk",
+      req_id: reqId,
+      payload,
+      meta,
+    };
+    if (Number.isFinite(options.seq)) {
+      frame.seq = Number(options.seq);
+    }
+    const result = WSClient.sendJSON(frame);
     if (result && typeof result.then === "function") {
       return result;
     }
@@ -2692,11 +2835,11 @@ if (typeof createCaptureRuntime !== "function") {
   WSClient._ws = WSClient._ws || null;
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("ws.close", () => {
-      __resetAudioHeaderSent();
+      resetTurnAudioContext();
       resetTurnIntent("ws.close");
     });
     window.addEventListener("ws.resume_invalid", () => {
-      __resetAudioHeaderSent();
+      resetTurnAudioContext();
       resetTurnIntent("ws.resume_invalid");
     });
   }
