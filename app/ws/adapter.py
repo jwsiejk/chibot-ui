@@ -1842,6 +1842,18 @@ class ChatV2Adapter:
         else:
             ctx.client_vad_last_event_ms = now_ms
 
+        if isinstance(event_name, str) and event_name.startswith("client."):
+            detail = dict(meta)
+            detail.setdefault("session_id", ctx.sid)
+            try:
+                self._emit_hub_log(ctx, event_name, detail)
+            except Exception:
+                _log.exception(
+                    "evt=client_telemetry_hub_log_failed sid=%s label=%s",
+                    ctx.sid,
+                    event_name,
+                )
+
     def _maybe_trigger_vad_eot_from_client_gate(
         self,
         ctx: AdapterContext,
