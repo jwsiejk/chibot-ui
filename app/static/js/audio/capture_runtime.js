@@ -613,6 +613,21 @@ export function createCaptureRuntime({
     try {
       const sender = await ensurePcmSender();
       if (!sender) {
+        try {
+          logStage("client.mic", {
+            outcome: MIC_OUTCOME.ERROR_SENDER_INIT || MIC_OUTCOME.ERROR_UNKNOWN,
+            name: "SenderInitError",
+            message: "PCM sender unavailable",
+          });
+        } catch {}
+        try {
+          recordClientBannerEvent?.("mic.error", {
+            name: "SenderInitError",
+            detail: "PCM sender unavailable",
+          });
+        } catch {}
+        setListeningState(false);
+        audioStreaming = false;
         console.warn("PCM sender unavailable; cannot start streaming");
         return false;
       }
@@ -640,11 +655,22 @@ export function createCaptureRuntime({
       } catch {}
       return true;
     } catch (err) {
-      if (err?.name === "NotAllowedError") {
-        try {
-          logStage("client.mic", { outcome: MIC_OUTCOME.ERROR_DENIED, message: err.message || "permission" });
-        } catch {}
-      }
+      const meta = {
+        name: err?.name || "Error",
+        message: err?.message || "",
+      };
+      const outcome = err?.name === "NotAllowedError"
+        ? MIC_OUTCOME.ERROR_DENIED
+        : MIC_OUTCOME.ERROR_UNKNOWN;
+      try {
+        logStage("client.mic", { outcome, ...meta });
+      } catch {}
+      try {
+        recordClientBannerEvent?.("mic.error", {
+          name: meta.name,
+          detail: meta.message,
+        });
+      } catch {}
       setListeningState(false);
       audioStreaming = false;
       throw err;

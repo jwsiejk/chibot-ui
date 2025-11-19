@@ -21,6 +21,7 @@ export const MIC_OUTCOME = {
   ERROR_SILENT: 'error_silent_stream',
   ERROR_WS_SEND: 'error_ws_send',
   ERROR_STATE_GUARD: 'error_state_guard',
+  ERROR_SENDER_INIT: 'error_sender_init',
   ERROR_UNKNOWN: 'error_unknown',
 };
 
