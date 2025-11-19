@@ -982,45 +982,6 @@ export function createWsAudioRuntime(options = {}) {
     pcmSender.setEnabled(shouldSend);
   }
 
-  let pcmSenderSocketShim = null;
-
-  function getPcmSenderSocketShim() {
-    if (pcmSenderSocketShim) {
-      return pcmSenderSocketShim;
-    }
-    const OPEN_STATE = typeof WebSocket !== "undefined" && typeof WebSocket.OPEN === "number"
-      ? WebSocket.OPEN
-      : 1;
-    const CLOSED_STATE = typeof WebSocket !== "undefined" && typeof WebSocket.CLOSED === "number"
-      ? WebSocket.CLOSED
-      : 3;
-    let active = true;
-    pcmSenderSocketShim = {
-      send(data) {
-        if (!active) {
-          return false;
-        }
-        const buffer = toArrayBuffer(data);
-        if (!buffer) {
-          console.warn("pcm_sender_socket_shim: invalid payload");
-          return false;
-        }
-        const chunk = new Int16Array(buffer);
-        if (!(chunk instanceof Int16Array) || !chunk.length) {
-          return false;
-        }
-        return safeSendAudioChunk(chunk, { lane: "mic" });
-      },
-      setActive(value) {
-        active = Boolean(value);
-      },
-      get readyState() {
-        return active ? OPEN_STATE : CLOSED_STATE;
-      },
-    };
-    return pcmSenderSocketShim;
-  }
-
   async function ensurePcmSender() {
     if (pcmSender) {
       return pcmSender;
@@ -1028,11 +989,10 @@ export function createWsAudioRuntime(options = {}) {
     if (pcmSenderInitPromise) {
       return pcmSenderInitPromise;
     }
-    const ws = getPcmSenderSocketShim();
     if (typeof initPcmSender !== "function") {
       throw new Error("initPcmSender not provided");
     }
-    pcmSenderInitPromise = initPcmSender(ws, {
+    pcmSenderInitPromise = initPcmSender(null, {
       onSampleRate: handleSampleRate,
       onFrame: handlePcmFrame,
       onSend: handlePcmSend,
@@ -1041,23 +1001,6 @@ export function createWsAudioRuntime(options = {}) {
       flushIntervalMs: PCM_FLUSH_TIMER_MS,
     }).then((sender) => {
       pcmSender = sender;
-      const shim = getPcmSenderSocketShim();
-      if (pcmSender && typeof pcmSender.setWebSocket === "function") {
-        const originalSetWebSocket = pcmSender.setWebSocket.bind(pcmSender);
-        pcmSender.setWebSocket = (nextWs) => {
-          if (nextWs) {
-            shim.setActive(true);
-            return originalSetWebSocket(shim);
-          }
-          shim.setActive(false);
-          return originalSetWebSocket(null);
-        };
-        try {
-          originalSetWebSocket(shim);
-        } catch (err) {
-          console.warn("pcmSender.setWebSocket attach failed", err);
-        }
-      }
       pcmSenderInitPromise = null;
       updatePcmSenderState();
       return sender;

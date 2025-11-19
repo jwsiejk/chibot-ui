@@ -102,7 +102,7 @@ function ensureAudioContext() {
   return new AudioContextCtor();
 }
 
-export async function initPcmSender(ws, {
+export async function initPcmSender(_wsIgnored, {
   onSampleRate,
   onFrame,
   onSend,
@@ -110,10 +110,6 @@ export async function initPcmSender(ws, {
   chunkMs = DEFAULT_CHUNK_MS,
   flushIntervalMs = DEFAULT_FLUSH_MS,
 } = {}) {
-  if (!ws || typeof ws.send !== "function") {
-    throw new Error("initPcmSender requires an active WebSocket");
-  }
-
   const audioCtx = ensureAudioContext();
   const chunkDurationMs = Number.isFinite(chunkMs) && chunkMs > 0 ? chunkMs : DEFAULT_CHUNK_MS;
   const flushMs = Number.isFinite(flushIntervalMs) && flushIntervalMs > 0
@@ -180,7 +176,6 @@ export async function initPcmSender(ws, {
     const bufferSize = 2048;
     processor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
   }
-  let activeWs = ws;
   let enabled = false;
   let seq = 0;
   let queue = [];
@@ -319,36 +314,14 @@ export async function initPcmSender(ws, {
     if (!offset) {
       return;
     }
-    if (!activeWs || activeWs.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    try {
-      activeWs.send(new Uint8Array(out.buffer));
-      if (typeof onSend === "function") {
-        try {
-          onSend(out, {
-            seq: firstSeq == null ? seq : firstSeq,
-            samples: out.length,
-            bytes: out.byteLength,
-            chunkCount,
-            sampleRate: effectiveSampleRate,
-          });
-        } catch (err) {
-          console.warn("[pcm_sender] onSend callback failed", err);
-        }
-      }
+    const chunkSeq = firstSeq == null ? seq : firstSeq;
+    if (emitChunk(out, { chunkCount, seq: chunkSeq })) {
       seq += 1;
-    } catch (err) {
-      notifyError(err);
-      console.warn("[pcm_sender] failed to send audio chunk", err);
     }
   }
 
   function sendImmediate(pcm16, meta = {}) {
     if (!pcm16 || typeof pcm16.length !== "number" || pcm16.length === 0) {
-      return false;
-    }
-    if (!activeWs || activeWs.readyState !== WebSocket.OPEN) {
       return false;
     }
     let typed = pcm16 instanceof Int16Array ? pcm16 : null;
@@ -366,36 +339,64 @@ export async function initPcmSender(ws, {
     if (typed.byteOffset !== 0 || typed.byteLength !== typed.buffer.byteLength) {
       typed = typed.slice();
     }
-    const view = new Uint8Array(typed.buffer);
     resetQueue();
-    try {
-      activeWs.send(view);
-      if (typeof onSend === "function") {
-        const chunkCount = Number.isFinite(meta?.chunkCount) && meta.chunkCount > 0
-          ? Number(meta.chunkCount)
-          : 1;
-        const sampleRateMeta = Number.isFinite(meta?.sampleRate) && meta.sampleRate > 0
-          ? Number(meta.sampleRate)
-          : effectiveSampleRate;
-        try {
-          onSend(typed, {
-            seq,
-            samples: typed.length,
-            bytes: typed.byteLength,
-            chunkCount,
-            sampleRate: sampleRateMeta,
-          });
-        } catch (err) {
-          console.warn("[pcm_sender] sendImmediate onSend failed", err);
-        }
-      }
+    if (emitChunk(typed, {
+      chunkCount: Number.isFinite(meta?.chunkCount) && meta.chunkCount > 0
+        ? Number(meta.chunkCount)
+        : 1,
+      sampleRate: Number.isFinite(meta?.sampleRate) && meta.sampleRate > 0
+        ? Number(meta.sampleRate)
+        : effectiveSampleRate,
+      seq,
+    })) {
       seq += 1;
       return true;
-    } catch (err) {
-      notifyError(err);
-      console.warn("[pcm_sender] sendImmediate send failed", err);
+    }
+    return false;
+  }
+
+  function emitChunk(pcm16, meta = {}) {
+    if (!pcm16 || typeof pcm16.length !== "number" || pcm16.length === 0) {
       return false;
     }
+    if (!enabled) {
+      return false;
+    }
+    let chunk = pcm16;
+    if (!(chunk instanceof Int16Array)) {
+      try {
+        chunk = new Int16Array(pcm16);
+      } catch (err) {
+        console.warn("[pcm_sender] emitChunk failed to coerce", err);
+        return false;
+      }
+    }
+    if (chunk.byteOffset !== 0 || chunk.byteLength !== chunk.buffer.byteLength) {
+      chunk = chunk.slice();
+    }
+    const sampleRateMeta = Number.isFinite(meta.sampleRate) && meta.sampleRate > 0
+      ? Number(meta.sampleRate)
+      : effectiveSampleRate;
+    const chunkCountMeta = Number.isFinite(meta.chunkCount) && meta.chunkCount > 0
+      ? Number(meta.chunkCount)
+      : 1;
+    const seqMeta = Number.isFinite(meta.seq) ? Number(meta.seq) : seq;
+    if (typeof onSend === "function") {
+      try {
+        onSend(chunk, {
+          seq: seqMeta,
+          samples: chunk.length,
+          bytes: chunk.byteLength,
+          chunkCount: chunkCountMeta,
+          sampleRate: sampleRateMeta,
+        });
+      } catch (err) {
+        notifyError(err);
+        console.warn("[pcm_sender] onSend callback failed", err);
+        return false;
+      }
+    }
+    return true;
   }
 
   if (usingWorklet && workletPort) {
@@ -477,14 +478,6 @@ export async function initPcmSender(ws, {
     }
   }
 
-  function setWebSocket(nextWs) {
-    if (nextWs && typeof nextWs.send !== "function") {
-      console.warn("[pcm_sender] setWebSocket ignored: invalid target");
-      return;
-    }
-    activeWs = nextWs || null;
-  }
-
   async function destroy() {
     try {
       setEnabled(false);
@@ -560,7 +553,6 @@ export async function initPcmSender(ws, {
     getStateSnapshot,
     resume,
     setEnabled,
-    setWebSocket,
     sendImmediate,
     destroy,
   };
