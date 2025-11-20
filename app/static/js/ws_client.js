@@ -1016,14 +1016,9 @@ if (typeof createCaptureRuntime !== "function") {
       resetTurnStopFlag();
       resetSpeechFlag();
       ensureTurnAudioReqId(policy || AppState?.policy || {});
-      const started = await startRecorderStreaming(policy, source);
+      const started = await startRecorderStreaming({ policy, reason: source });
       if (!started) {
         return false;
-      }
-      try {
-        await ensurePcmSender();
-      } catch (err) {
-        console.warn("WSClient.ensurePcmSender failed", err);
       }
       _audioStreaming = true;
       setSenderPauseReason("server", false);
