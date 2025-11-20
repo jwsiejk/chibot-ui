@@ -5078,11 +5078,13 @@ class ChatV2Adapter:
                         current = asyncio.current_task()
                         if current is not None:
                             ctx.audio_tasks.discard(current)
-                        _log.info(
-                            "evt=audio_task_complete sid=%s duration_ms=%d",
-                            ctx.sid,
-                            duration_ms,
-                        )
+                        if duration_ms > 0:
+                            _log.info(
+                                "evt=audio_task_complete sid=%s duration_ms=%d",
+                                ctx.sid,
+                                duration_ms,
+                                extra={"sid": ctx.sid, "event": "audio_task_complete"},
+                            )
 
                 if len(ctx.audio_tasks) >= _AUDIO_THROTTLE_AUDIO_TASK_THRESHOLD:
                     _schedule_throttle("audio_backlog")
