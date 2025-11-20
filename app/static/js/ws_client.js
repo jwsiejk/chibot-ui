@@ -552,7 +552,7 @@ if (typeof createCaptureRuntime !== "function") {
     __turnOpen = true;
     __turnOpenAt = Date.now();
     try {
-      hubLog("client.turn.intent", { action: "open", reason: reasonLabel });
+      logStage("client.turn.intent", { action: "open", reason: reasonLabel });
     } catch {}
     return true;
   }
@@ -562,7 +562,7 @@ if (typeof createCaptureRuntime !== "function") {
       __turnOpen = false;
       __turnOpenAt = 0;
       try {
-        hubLog("client.turn.intent", { action: "close", reason: reason || "reset" });
+        logStage("client.turn.intent", { action: "close", reason: reason || "reset" });
       } catch {}
     }
     if (typeof runtimeResetTurnIntent === "function") {
@@ -598,22 +598,18 @@ if (typeof createCaptureRuntime !== "function") {
     if (__transportMisuseLogging) {
       return;
     }
-    let hub = null;
-    try {
-      hub = window.AppState?.hub || null;
-    } catch {}
-    if (!hub || typeof hub.log !== "function") {
-      return;
-    }
     __transportMisuseLogging = true;
     try {
+      const logPayload = () => logStage("client.ws.misuse", { kind });
       // CRITICAL FIX: Decouple the hub log from the synchronous error handling flow
       if (typeof setTimeout === 'function') {
-        setTimeout(() => hub.log("client.ws.misuse", { kind }), 0);
+        setTimeout(logPayload, 0);
+      } else {
+        logPayload();
       }
     } catch (err) {
       try {
-        console.warn("WS misuse hub.log failed", err);
+        console.warn("WS misuse log failed", err);
       } catch {}
     } finally {
       __transportMisuseLogging = false;
@@ -663,36 +659,6 @@ if (typeof createCaptureRuntime !== "function") {
   function syncSenderPaused(value) {
     setSenderPauseReason("legacy", value);
   }
-  let __hubLoggingInFlight = false;
-
-  function hubLog(label, detail) {
-    if (__hubLoggingInFlight) {
-      return false;
-    }
-    const state = typeof window !== "undefined" ? window.AppState : null;
-    const hub = state && state.hub;
-    if (hub && typeof hub.log === "function") {
-      __hubLoggingInFlight = true;
-      try {
-        hub.log(label, detail);
-        return true;
-      } catch (err) {
-        console.warn("AppState.hub.log failed", err);
-      } finally {
-        __hubLoggingInFlight = false;
-      }
-    }
-    if (typeof window !== "undefined") {
-      try {
-        window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail } }));
-        return true;
-      } catch (err) {
-        console.warn("client.log dispatch failed", err);
-      }
-    }
-    return false;
-  }
-
   function captureSecondGreetingMicSnapshot() {
     const listening = Boolean(AppState?.listening);
     const audioStreaming = Boolean(_audioStreaming);
@@ -784,7 +750,6 @@ if (typeof createCaptureRuntime !== "function") {
   const audioRuntime = createWsAudioRuntime({
     AppState,
     initPcmSender,
-    hubLog,
     updateState,
     logStage,
     onFirstClientAudioFrame: handleFirstClientAudioFrameTelemetry,
@@ -949,7 +914,7 @@ if (typeof createCaptureRuntime !== "function") {
     audioRuntime,
     initVAD,
     consoleBus,
-    hubLog,
+    hubLog: logStage,
     logStage,
     recordClientBannerEvent,
     schedulePartialWatchdog,
@@ -1491,7 +1456,7 @@ if (typeof createCaptureRuntime !== "function") {
   // Delivers ASR/chat frames into the transcript UI and tracks streaming state.
   const transcriptBridge = createTranscriptBridge({
     AppState,
-    hubLog,
+    hubLog: logStage,
     logStage,
     dispatchFrame,
   });
@@ -1640,7 +1605,7 @@ if (typeof createCaptureRuntime !== "function") {
         AppState._throttleUntil = __pauseSendUntil;
       }
       try {
-        hubLog("client.audio.throttle", { ms, until: __pauseSendUntil });
+        logStage("client.audio.throttle", { ms, until: __pauseSendUntil });
       } catch {}
       if (__throttleTimer) {
         clearTimeout(__throttleTimer);
@@ -1653,10 +1618,10 @@ if (typeof createCaptureRuntime !== "function") {
           if (AppState && typeof AppState === "object") {
             AppState._throttleUntil = 0;
           }
-          try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
+          try { logStage('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
         }, delay);
       } else {
-        try { AppState?.hub?.log?.('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
+        try { logStage('client.audio.resume_after_throttle', { at: Date.now() }); } catch {}
         if (AppState && typeof AppState === "object") {
           AppState._throttleUntil = 0;
         }
@@ -1808,7 +1773,7 @@ if (typeof createCaptureRuntime !== "function") {
         ? frame.reason
         : frame?.type || "stop_listening";
       if (_audioStreaming) {
-        hubLog("client.stream.off", { reason: rawStopReason });
+        logStage("client.stream.off", { reason: rawStopReason });
       }
       _audioStreaming = false;
       await stopRecorder({ reason: rawStopReason }, {
@@ -1840,7 +1805,7 @@ if (typeof createCaptureRuntime !== "function") {
       resetSpeechFlag();
       __turnOpen = true;
       __turnOpenAt = Date.now();
-      hubLog("client.stream.on", { reason });
+      logStage("client.stream.on", { reason });
       await openTurnOnce(reason);
       await handleInputStartFrame(frame);  // now always starts mic
     } else if (frame.type === "input.stop") {
@@ -1848,7 +1813,7 @@ if (typeof createCaptureRuntime !== "function") {
         ? frame.reason
         : frame?.type || "input.stop";
       if (_audioStreaming) {
-        hubLog("client.stream.off", { reason });
+        logStage("client.stream.off", { reason });
       }
       _audioStreaming = false;
       setListeningState(false);
@@ -1861,7 +1826,7 @@ if (typeof createCaptureRuntime !== "function") {
         ? frame.reason
         : frame?.type || "assistant.await_user";
       if (_audioStreaming) {
-        hubLog("client.stream.off", { reason });
+        logStage("client.stream.off", { reason });
       }
       _audioStreaming = false;
       setListeningState(false);
@@ -1884,12 +1849,12 @@ if (typeof createCaptureRuntime !== "function") {
     },
     policyRuntime,
     audioRuntime,
-    hubLog,
+    hubLog: logStage,
     handleIncomingFrame,
   });
 
   const frameParser = createFrameParser({
-    hubLog,
+    hubLog: logStage,
     logStage,
     connection,
     handleMessageFrame: (frame) => {
@@ -1922,7 +1887,7 @@ if (typeof createCaptureRuntime !== "function") {
     bannerClient,
     logStage,
     recordClientBannerEvent,
-    hubLog,
+    hubLog: logStage,
     recordLastError,
     DEFAULT_SUBPROTOCOLS,
     DEFAULT_CLOSE_REASON,
@@ -1961,7 +1926,7 @@ if (typeof createCaptureRuntime !== "function") {
       logStage,
       recordClientBannerEvent,
     },
-    hubLog,
+    hubLog: logStage,
   });
 
   ({

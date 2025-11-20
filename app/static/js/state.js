@@ -1,5 +1,7 @@
 // state.js - FINAL, CLEAN VERSION (FLAT STATE ARCHITECTURE)
 
+import { logStage } from "./ws/telemetry.js";
+
 (() => {
   function isPlainObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -111,10 +113,7 @@
 
   function publishTelemetry(label, payload) {
     try {
-      const hub = window.AppState && window.AppState.hub;
-      if (hub && typeof hub.log === "function") {
-        hub.log(label, payload);
-      }
+      logStage(label, payload);
     } catch (err) {
       try {
         console.warn("AppState telemetry publish failed", label, err);
