@@ -2,9 +2,9 @@
 //
 // index.html includes only this script (app.js) alongside the standalone
 // auth/status bar entry points. Every other client module - including
-// state.js, audio_player.js, audio/pcm_recorder.js, audio/vad_client.js,
-// ws_client.js, transcript_view.js, and errors.js - is loaded dynamically via
-// loadScript() below so they share the same versioned ?v= query parameters.
+// state.js, audio_player.js, audio/vad_client.js, ws_client.js,
+// transcript_view.js, and errors.js - is loaded dynamically via loadScript()
+// below so they share the same versioned ?v= query parameters.
 
 (() => {
   function getMainScriptElement() {
@@ -51,7 +51,7 @@
     }
   } catch (_) {}
 
-  // Mic capture is centralized in pcm_recorder.js and follows policy.capture.constraints.
+  // Mic capture helper; capture stack follows policy.capture.constraints.
   let __gumInFlight = false;
   async function getMicOnce(constraints) {
     if (__gumInFlight) {
@@ -233,7 +233,7 @@
         wsConning: snapshot.wsConning ?? snapshot.wsConnecting ?? appState.wsConnecting,
         asrReady: snapshot.asrReady ?? appState.asrReady,
         // Now only checks the single, unified 'listening' flag:
-        micLive: snapshot.listening ?? appState.listening ?? window.AudioRecorder?.listening, 
+        micLive: snapshot.listening ?? appState.listening,
         tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts,
         senderPaused: snapshot.senderPaused ?? appState.senderPaused,
         processing: snapshot.processing ?? appState.processing,
@@ -704,9 +704,7 @@
     if (!window.AudioPlayer) {
       await loadScript("audio_player.js");
     }
-    if (!window.AudioRecorder) {
-      await loadScript("audio/pcm_recorder.js");
-    }
+    // Legacy AudioRecorder path removed; capture_runtime/ws_audio_runtime handle mic now.
     await loadScript("audio/vad_client.js");
     const needsWsClient = !window.WSClient
       || typeof window.WSClient.open !== "function";
@@ -731,7 +729,6 @@
     const urlParams = new URLSearchParams(window.location ? window.location.search : '');
     const AppState = window.AppState;
     const WSClient = window.WSClient;
-    const audioRecorder = window.AudioRecorder || null;
 
     console.debug("client firehose logging enabled: no rate limit; large deferred buffer");
     if (typeof console !== "undefined") {
@@ -910,43 +907,16 @@
             return;
           }
           boundSocket = next;
-          if (audioRecorder && typeof audioRecorder.setSocket === "function") {
-            try {
-              audioRecorder.setSocket(next);
-            } catch (err) {
-              console.warn("AudioRecorder bindSocket failed", err);
-            }
-          }
           const outcome = next ? "bound" : "cleared";
           // This call triggers the log path:
           hubImpl.log("client.ws", { outcome, source: "hub.bindSocket" });
         },
         startListening(policy) {
-          if (!audioRecorder || typeof audioRecorder.startListening !== "function") {
-            return undefined;
-          }
-          try {
-            return audioRecorder.startListening(policy || {});
-          } catch (err) {
-            console.warn("AudioRecorder startListening failed", err);
-            return undefined;
-          }
+          // Legacy AudioRecorder path removed; capture_runtime handles start.
+          return undefined;
         },
         stopListening(reason) {
-          if (!audioRecorder || typeof audioRecorder.stopListening !== "function") {
-            return;
-          }
-          try {
-            if (reason && typeof reason === "object") {
-              audioRecorder.stopListening(reason);
-            } else if (reason !== undefined) {
-              audioRecorder.stopListening({ reason });
-            } else {
-              audioRecorder.stopListening();
-            }
-          } catch (err) {
-            console.warn("AudioRecorder stopListening failed", err);
-          }
+          // Legacy AudioRecorder path removed; capture_runtime handles stop.
         },
       };
 
@@ -994,8 +964,7 @@
       if (stateSnapshot && typeof stateSnapshot.listening === "boolean") {
         return stateSnapshot.listening;
       }
-      // Fallback to hardware check if state is missing
-      return !!window.AudioRecorder?.listening;
+      return false;
     }
 
     function logClientMicEventText(text) {
@@ -1043,30 +1012,6 @@
 
       window.AppUI?.refresh?.();
       return next;
-    }
-
-    function startMicCapture() {
-      if (!audioRecorder || typeof audioRecorder.startMicCaptureIfIdle !== 'function') {
-        return Promise.reject(new Error('startMicCapture_unavailable'));
-      }
-      let outcome;
-      try {
-        outcome = audioRecorder.startMicCaptureIfIdle();
-      } catch (err) {
-        return Promise.reject(err);
-      }
-      if (outcome && typeof outcome.then === 'function') {
-        return outcome.then((value) => {
-          if (value) {
-            setMicPermissionGranted(true, 'startMicCapture');
-          }
-          return value;
-        });
-      }
-      if (outcome) {
-        setMicPermissionGranted(true, 'startMicCapture');
-      }
-      return Promise.resolve(outcome);
     }
 
     function setMicPermissionGranted(granted) {
@@ -1723,11 +1668,6 @@
       try {
         finishTurnStats('client_end', { ws_state: getWsStateSnapshot() });
       } catch {}
-      if (audioRecorder && typeof audioRecorder.stop === 'function') {
-        try { audioRecorder.stop(); } catch (err) {
-          console.warn('Failed to stop audio recorder', err);
-        }
-      }
       updateRecordingState(false, 'end_button');
       if (window.AudioPlayer && typeof window.AudioPlayer.interrupt === 'function') {
         try {
@@ -2129,26 +2069,8 @@
         } catch (err) {
           console.warn('AppState.hub.bindSocket connect failed', err);
         }
-        if (audioRecorder && typeof audioRecorder.start === 'function') {
-          audioRecorder.start()
-            .then(() => {
-              setMicPermissionGranted(true, 'recorder.start');
-            })
-            .catch((err) => {
-              console.error('AudioRecorder start error', err);
-              setMicPermissionGranted(false, 'recorder.start_error');
-            });
-        }
       } else if (becameDisconnected) {
         Waveform.stop();
-
-        if (audioRecorder && typeof audioRecorder.stop === 'function') {
-          try {
-            audioRecorder.stop();
-          } catch (err) {
-            console.warn('AudioRecorder stop error', err);
-          }
-        }
         try {
           AppState?.hub?.bindSocket?.(null);
         } catch (err) {
@@ -2238,13 +2160,6 @@ window.addEventListener('tts.start', (event) => {
     // REMOVED: window.AppState.state.processing = false;
     window.AppUI?.refresh?.();
   } catch {}
-  if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsStart === 'function') {
-    try {
-      window.AudioRecorder.handleTtsStart();
-    } catch (err) {
-      console.warn('AudioRecorder handleTtsStart failed', err);
-    }
-  }
   window.AppUI?.refresh?.();
 });
 
@@ -2254,11 +2169,8 @@ window.addEventListener('policy.snapshot', (event) => {
     const policy = frame && typeof frame === 'object' ? frame.policy : undefined;
     const normalized = policy && typeof policy === 'object' ? policy : null;
     try { AppState.policy = normalized; } catch {}
-    if (audioRecorder && typeof audioRecorder.setPolicy === 'function') {
-      audioRecorder.setPolicy(normalized);
-    }
   } catch (err) {
-    console.warn('AudioRecorder setPolicy failed', err);
+    console.warn('Failed to update policy from snapshot', err);
   }
 });
 
@@ -2282,13 +2194,6 @@ window.addEventListener('turn.state', (event) => {
 // Assistant TTS finished → open mic after optional delay
 window.addEventListener('tts.end', () => {
   const release = () => {
-    if (window.AudioRecorder && typeof window.AudioRecorder.handleTtsEnd === 'function') {
-      try {
-        window.AudioRecorder.handleTtsEnd();
-      } catch (err) {
-        console.warn('AudioRecorder handleTtsEnd failed', err);
-      }
-    }
     // The ASR arm request is handled by WSClient.js IMMEDIATELY on receiving the tts.end frame.
     // No action is required here except UI refresh.
     window.AppUI?.refresh?.();
@@ -2453,16 +2358,9 @@ window.addEventListener('ws.open', async () => {
     } catch (err) {
       console.warn('ws.open warmup failed', err);
     }
-    try {
-      const recorder = window.AudioRecorder;
-      if (recorder && typeof recorder.startMicCaptureIfIdle === 'function') {
-        const micReady = await recorder.startMicCaptureIfIdle();
-        setMicPermissionGranted(Boolean(micReady), micReady ? 'ws.open_start' : 'ws.open_start_error');
-      }
-    } catch (err) {
-      console.warn('AudioRecorder.startMicCaptureIfIdle on ws.open failed', err);
-      setMicPermissionGranted(false, 'ws.open_start_error');
-    }
+
+    // Legacy AudioRecorder path removed; rely on WSClient.startRecorderStreaming +
+    // capture_runtime/asr.ready/input.start to manage mic lifecycle.
     try {
       if (WSClient && typeof WSClient.startRecorderStreaming === 'function') {
         WSClient.startRecorderStreaming(pol, 'ws_open');
