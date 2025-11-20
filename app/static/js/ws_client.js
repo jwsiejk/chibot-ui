@@ -2262,14 +2262,17 @@ if (typeof createCaptureRuntime !== "function") {
       input: sanitized.input ?? null,
     });
 
-    // If the server already asked for input, start recording immediately.
+    // If the server asked for input and policy allows auto-record, start the recorder.
     try {
-      if (_audioStreaming && typeof startRecorderStreaming === "function") {
+      const policy = AppState?.policy || {};
+      const autoAfterGreet = policy?.auto_record_after_greet !== false;
+
+      if (typeof WSClient?.startRecorderStreaming === "function" && !_audioStreaming && autoAfterGreet) {
         logStage("client.mic", {
           outcome: MIC_OUTCOME.ARMED,
-          message: "asr.ready → startRecorderStreaming",
+          message: "asr.ready → WSClient.startRecorderStreaming",
         });
-        const result = startRecorderStreaming(AppState?.policy || {}, "asr.ready");
+        const result = WSClient.startRecorderStreaming(policy, "asr.ready");
         if (result && typeof result.catch === "function") {
           result.catch((err) => {
             console.warn("asr.ready mic start failed", err);
