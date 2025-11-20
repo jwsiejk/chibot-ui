@@ -1,6 +1,28 @@
 // app/static/js/ws/frame_parser.js
 // Decodes incoming WS messages (JSON/msgpack/control frames) and forwards
 // normalized frames to a handler.
+//
+// This module is intentionally small and predictable:
+//  - connection.js owns the low-level socket + binaryType.
+//  - frame_parser.js owns "data → JS frame" and light normalization.
+//  - ws_client.js owns policy/turn/mic behavior.
+//
+// Contract:
+//   createFrameParser({
+//     hubLog,                 // (label, detail) => void
+//     logStage,               // (stage, meta) => void
+//     connection,             // createWsConnection(...) instance
+//     handleMessageFrame,     // (frame) => void
+//     handleErrorFrame,       // (frame) => void
+//     getNegotiatedControlCodec, // () => "json" | "msgpack"
+//     getAudioPlayer,         // () => window.AudioPlayer | null (optional)
+//     ignoredVendorMessages,  // Set<string> of vendor messageType values to drop
+//   }) -> {
+//     normalizeIncomingFrame,
+//     processControlFrameObject,
+//     parseMessageData,
+//     handleRawMessageData,
+//   }
 
 import { decodeMessagePack } from "../utils/msgpack.mjs";
 
@@ -16,205 +38,256 @@ export function createFrameParser({
   handleMessageFrame, // function(frame) from ws_client.js
   handleErrorFrame,
   getNegotiatedControlCodec,
-  getAudioPlayer = () => (typeof window !== "undefined" ? window.AudioPlayer : null),
+  getAudioPlayer = () =>
+    (typeof window !== "undefined" ? window.AudioPlayer : null),
   ignoredVendorMessages = DEFAULT_IGNORED_VENDOR_MESSAGES,
 }) {
+  // --- Codec negotiation ----------------------------------------------------
+
   function resolveControlCodec() {
     try {
       if (typeof getNegotiatedControlCodec === "function") {
         const codec = getNegotiatedControlCodec();
-        if (codec === "msgpack") {
-          return "msgpack";
-        }
-        if (codec === "json") {
-          return "json";
-        }
+        if (codec === "msgpack") return "msgpack";
+        if (codec === "json") return "json";
       }
-    } catch {}
-    try {
-      if (connection && typeof connection.getNegotiatedControlCodec === "function") {
-        const codec = connection.getNegotiatedControlCodec();
-        if (codec === "msgpack") {
-          return "msgpack";
-        }
-        if (codec === "json") {
-          return "json";
-        }
-      }
-    } catch {}
+    } catch (err) {
+      console.warn("frame_parser.getNegotiatedControlCodec failed", err);
+    }
+    // Default to JSON for control frames; msgpack is only used for
+    // binary/vendor payloads.
     return "json";
   }
 
+  // --- Helpers --------------------------------------------------------------
+
   function tryDecodeMsgpackFrame(buffer) {
     try {
-      const view = buffer instanceof ArrayBuffer
-        ? new Uint8Array(buffer)
-        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      const view =
+        buffer instanceof ArrayBuffer
+          ? new Uint8Array(buffer)
+          : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
       const decoded = decodeMessagePack(view);
-      if (decoded && typeof decoded === "object" && typeof decoded.type === "string") {
+      if (
+        decoded &&
+        typeof decoded === "object" &&
+        !Array.isArray(decoded) &&
+        typeof decoded.type === "string"
+      ) {
         return decoded;
       }
-    } catch {}
+    } catch (err) {
+      console.warn("frame_parser msgpack decode failed", err);
+      try {
+        hubLog?.("client.ws.parse_error", {
+          kind: "msgpack",
+          error: err?.message,
+        });
+      } catch {}
+    }
     return null;
   }
 
-  function normalizeIncomingFrame(frame) {
+  function isVendorFrame(frame) {
+    if (!frame || typeof frame !== "object") return false;
+    const vendor = frame.vendor || frame.provider || frame.source;
+    const msgType = frame.messageType || frame.message_type || frame.kind;
+    return typeof vendor === "string" && typeof msgType === "string";
+  }
+
+  function isIgnoredVendorFrame(frame) {
+    if (!isVendorFrame(frame)) return false;
+    const msgType =
+      frame.messageType || frame.message_type || frame.kind || frame.type;
+    return typeof msgType === "string" && ignoredVendorMessages.has(msgType);
+  }
+
+  function isErrorFrame(frame) {
+    if (!frame || typeof frame !== "object") return false;
+    if (frame.type === "error" || frame.level === "error") return true;
+    if (frame.error && typeof frame.error === "object") return true;
+    if (typeof frame.code === "string" && frame.code.toLowerCase().includes("error")) {
+      return true;
+    }
+    return false;
+  }
+
+  // --- Normalization --------------------------------------------------------
+
+  function normalizeIncomingFrame(raw) {
+    if (!raw || typeof raw !== "object") {
+      return null;
+    }
+
+    // Some vendors wrap their payloads, e.g. { data: {...} } or
+    // { message: {...} }. Unwrap shallowly if it looks safe.
+    if (
+      raw.data &&
+      typeof raw.data === "object" &&
+      !Array.isArray(raw.data) &&
+      typeof raw.type !== "string" &&
+      typeof raw.data.type === "string"
+    ) {
+      raw = raw.data;
+    } else if (
+      raw.message &&
+      typeof raw.message === "object" &&
+      !Array.isArray(raw.message) &&
+      typeof raw.type !== "string" &&
+      typeof raw.message.type === "string"
+    ) {
+      raw = raw.message;
+    }
+
+    // Ensure .type is a simple string when present.
+    if (typeof raw.type === "string") {
+      raw.type = raw.type.trim();
+    }
+
+    return raw;
+  }
+
+  // --- Core parsing ---------------------------------------------------------
+
+  function parseMessageData(data) {
+    if (data == null) {
+      return null;
+    }
+
+    let frame = null;
+    let binary = false;
+
+    if (typeof data === "string") {
+      // Text frames are JSON.
+      try {
+        frame = JSON.parse(data);
+      } catch (err) {
+        console.warn("frame_parser JSON parse failed", err);
+        try {
+          hubLog?.("client.ws.parse_error", {
+            kind: "json",
+            error: err?.message,
+          });
+        } catch {}
+        return null;
+      }
+    } else if (
+      data instanceof ArrayBuffer ||
+      ArrayBuffer.isView?.(data)
+    ) {
+      binary = true;
+      const codec = resolveControlCodec();
+      if (codec === "msgpack") {
+        frame = tryDecodeMsgpackFrame(data);
+      } else {
+        // Even when controlFrames codec is json, vendor traffic is msgpack
+        // in practice; try to decode anyway.
+        frame = tryDecodeMsgpackFrame(data);
+      }
+      if (!frame) {
+        // Not a structured control frame; let higher layers treat this as
+        // pure binary (e.g. audio). That path does NOT go through frame_parser.
+        return null;
+      }
+    } else {
+      console.warn("frame_parser unknown WS message type", {
+        type: typeof data,
+        constructor: data && data.constructor && data.constructor.name,
+      });
+      return null;
+    }
+
     if (!frame || typeof frame !== "object") {
       return null;
     }
-    if (typeof frame.type === "string" && frame.type) {
-      return frame;
-    }
-    let inferredType = null;
-    if (typeof frame.kind === "string" && frame.kind) {
-      inferredType = frame.kind;
-    } else if (typeof frame.event === "string" && frame.event) {
-      inferredType = frame.event;
-    } else if (
-      typeof frame.code === "string" ||
-      typeof frame.detail === "string" ||
-      typeof frame.message === "string"
-    ) {
-      inferredType = "error";
-    }
-    if (!inferredType) {
-      return null;
-    }
-    return { ...frame, type: inferredType };
+
+    return { frame, binary };
   }
 
-  async function processControlFrameObject(frame) {
-    const ignoredMessages = ignoredVendorMessages || DEFAULT_IGNORED_VENDOR_MESSAGES;
-    if (frame && typeof frame.message === "string") {
-      const normalizedType =
-        (typeof frame.type === "string" && frame.type) ||
-        (typeof frame.kind === "string" && frame.kind) ||
-        (typeof frame.event === "string" && frame.event) ||
-        null;
-      if (normalizedType !== "chat.message") {
-        if (ignoredMessages.has(frame.message)) {
-          return null;
-        }
-      } else if (ignoredMessages.has(frame.message)) {
-        console.warn("chat.message dropped", { phase: AppState?.wsPhase, reason: "filtered" });
-      }
+  // --- Routing --------------------------------------------------------------
+
+  function processControlFrameObject(frame) {
+    // This is called *after* normalization, only for structured objects.
+    if (!frame || typeof frame !== "object") {
+      return;
     }
-    const normalizedFrame = normalizeIncomingFrame(frame);
-    if (!normalizedFrame) {
-      console.warn("Dropping WS frame without recognizable type", frame);
-      if (typeof handleErrorFrame === "function") {
-        await handleErrorFrame({
-          type: "error",
-          code: typeof frame?.code === "string" ? frame.code : "schema_invalid",
-          detail:
-            typeof frame?.detail === "string"
-              ? frame.detail
-              : "Frame missing type field",
+
+    // Ignore noisy vendor-only messages we don't surface in the UI.
+    if (isIgnoredVendorFrame(frame)) {
+      try {
+        hubLog?.("client.ws.vendor_ignored", {
+          vendor: frame.vendor || frame.provider || frame.source || null,
+          messageType:
+            frame.messageType || frame.message_type || frame.kind || null,
         });
-      }
-      return null;
-    }
-    if (normalizedFrame.type === "server.ping") {
-      try {
-        connection?.send?.({ type: "client.pong", ts: Date.now(), echo: normalizedFrame.ts });
       } catch {}
-      return null;
+      return;
     }
-    await handleMessageFrame(normalizedFrame);
-    return normalizedFrame;
+
+    // Error frames get their own handler so we can banner/log separately.
+    if (isErrorFrame(frame)) {
+      try {
+        handleErrorFrame?.(frame);
+      } catch (err) {
+        console.warn("frame_parser error handler crashed", err);
+      }
+      return;
+    }
+
+    // Everything else is a normal message frame from the server.
+    try {
+      handleMessageFrame?.(frame);
+    } catch (err) {
+      console.error("frame_parser message handler crashed", err);
+      try {
+        hubLog?.("client.ws.parse_handler_crash", {
+          error: err?.message,
+          type: frame.type || null,
+        });
+      } catch {}
+    }
   }
 
-  async function parseMessageData(data) {
-    if (typeof data === "string") {
-      try {
-        return JSON.parse(data);
-      } catch (err) {
-        console.error("Failed to parse WS frame", err, data);
-        return null;
-      }
-    }
-    if (typeof Blob !== "undefined" && data instanceof Blob) {
-      if (resolveControlCodec() === "msgpack") {
-        try {
-          const buffer = await data.arrayBuffer();
-          const frame = tryDecodeMsgpackFrame(buffer);
-          if (frame) {
-            return frame;
-          }
-        } catch (err) {
-          console.warn("Failed to decode msgpack blob", err);
-        }
-      }
-      const audioPlayer = getAudioPlayer?.();
-      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-        audioPlayer.enqueueChunk(data);
-      }
-      try {
-        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-          window.dispatchEvent(new CustomEvent("binary", { detail: data }));
-        }
-      } catch {}
-      return null;
-    }
-    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-      const chunk = data instanceof ArrayBuffer
-        ? data
-        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-      if (resolveControlCodec() === "msgpack") {
-        const frame = tryDecodeMsgpackFrame(chunk);
-        if (frame) {
-          return frame;
-        }
-      }
-      const audioPlayer = getAudioPlayer?.();
-      if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
-        audioPlayer.enqueueChunk(chunk);
-      }
-      try {
-        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-          window.dispatchEvent(new CustomEvent("binary", { detail: chunk }));
-        }
-      } catch {}
-      return null;
-    }
-    console.warn("Unknown WS frame type", data);
-    return null;
-  }
+  // --- Raw entrypoint from connection.js -----------------------------------
 
   function handleRawMessageData(data) {
     try {
-      const maybeFrame = parseMessageData(data);
-      if (!maybeFrame) {
+      const parsed = parseMessageData(data);
+      if (!parsed) {
+        // Unknown / unstructured frame; someone else (audio, etc.) may own it.
         return;
       }
-      if (typeof maybeFrame.then === "function") {
-        maybeFrame
-          .then((resolved) => {
-            if (!resolved) {
-              return;
-            }
-            const maybeProcessed = processControlFrameObject(resolved);
-            if (maybeProcessed && typeof maybeProcessed.then === "function") {
-              maybeProcessed.catch((err) => {
-                console.error("WS frame handler async failure", err);
-              });
-            }
-          })
-          .catch((err) => {
-            console.error("WS frame handler async failure", err);
-          });
+
+      let { frame } = parsed;
+      const { binary } = parsed;
+
+      frame = normalizeIncomingFrame(frame);
+      if (!frame) {
         return;
       }
-      const maybeProcessed = processControlFrameObject(maybeFrame);
-      if (maybeProcessed && typeof maybeProcessed.then === "function") {
-        maybeProcessed.catch((err) => {
-          console.error("WS frame handler async failure", err);
+
+      if (binary) {
+        // In practice, if we successfully decoded msgpack into an object,
+        // we can treat it like any other control/message frame.
+        logStage?.("client.ws.frame", {
+          kind: "binary",
+          type: frame.type || null,
+        });
+      } else {
+        logStage?.("client.ws.frame", {
+          kind: "text",
+          type: frame.type || null,
         });
       }
+
+      processControlFrameObject(frame);
     } catch (outerErr) {
-      console.error("Uncaught exception in parseFrame", outerErr);
+      console.error("Uncaught exception in handleRawMessageData", outerErr);
       try {
-        hubLog?.("client.ws.parse_crash", { error: outerErr?.message, frame_data: data });
+        hubLog?.("client.ws.parse_crash", {
+          error: outerErr?.message,
+          source: "frame_parser",
+        });
       } catch {}
     }
   }
