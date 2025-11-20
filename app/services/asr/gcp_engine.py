@@ -175,6 +175,7 @@ class GCPStreamingASREngine(ASREngine):
             sid,
             resolved_sample_rate,
             resolved_language,
+            extra={"sid": sid, "event": "asr_vendor_open"},
         )
 
         self._response_future = asyncio.create_task(self._run_streaming())
@@ -186,7 +187,11 @@ class GCPStreamingASREngine(ASREngine):
             try:
                 pcm = _apply_linear16_gain(pcm, self._input_gain)
             except Exception:  # pragma: no cover - defensive
-                logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
+                logger.exception(
+                    "evt=asr_error vendor=gcp sid=%s",
+                    self._sid,
+                    extra={"sid": self._sid, "event": "asr_error"},
+                )
         await self._queue.put(pcm)
 
     async def close(self) -> None:
@@ -207,6 +212,7 @@ class GCPStreamingASREngine(ASREngine):
             self._sid,
             self._sample_rate,
             self._language,
+            extra={"sid": self._sid, "event": "asr_vendor_close"},
         )
 
         self._queue = None
@@ -242,7 +248,7 @@ class GCPStreamingASREngine(ASREngine):
         asr_stream_wait_start = time.monotonic()
         logger.info(
             "evt=asr_stream_wait_start vendor=gcp",
-            extra={"sid": self._sid},
+            extra={"sid": self._sid, "event": "asr_stream_wait_start"},
         )
 
         first_chunk_at = None
@@ -260,6 +266,7 @@ class GCPStreamingASREngine(ASREngine):
                         "evt=asr_first_audio_chunk vendor=gcp",
                         extra={
                             "sid": self._sid,
+                            "event": "asr_first_audio_chunk",
                             "wait_ms": wait_ms,
                         },
                     )
@@ -276,18 +283,29 @@ class GCPStreamingASREngine(ASREngine):
             logger.info(
                 "evt=asr_stream_summary vendor=gcp sid=%s outcome=final",
                 self._sid,
-                extra={"summary": self._stats.to_summary("final") if self._stats else None},
+                extra={
+                    "sid": self._sid,
+                    "event": "asr_stream_summary",
+                    "summary": self._stats.to_summary("final") if self._stats else None,
+                },
             )
         except Exception as exc:
             # Treat GCP "Audio Timeout Error" as a soft end-of-turn.
             if isinstance(exc, OutOfRange) and "Audio Timeout Error" in str(exc):
                 logger.warning(
-                    "evt=asr_timeout vendor=gcp sid=%s", self._sid, exc_info=True
+                    "evt=asr_timeout vendor=gcp sid=%s",
+                    self._sid,
+                    exc_info=True,
+                    extra={"sid": self._sid, "event": "asr_timeout"},
                 )
                 logger.info(
                     "evt=asr_stream_summary vendor=gcp sid=%s outcome=timeout",
                     self._sid,
-                    extra={"summary": self._stats.to_summary("timeout") if self._stats else None},
+                    extra={
+                        "sid": self._sid,
+                        "event": "asr_stream_summary",
+                        "summary": self._stats.to_summary("timeout") if self._stats else None,
+                    },
                 )
                 if self._last_transcript is not None and not self._last_is_final:
                     self._loop.call_soon_threadsafe(
@@ -296,11 +314,19 @@ class GCPStreamingASREngine(ASREngine):
                         True,
                     )
             else:
-                logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
+                logger.exception(
+                    "evt=asr_error vendor=gcp sid=%s",
+                    self._sid,
+                    extra={"sid": self._sid, "event": "asr_error"},
+                )
                 logger.info(
                     "evt=asr_stream_summary vendor=gcp sid=%s outcome=error",
                     self._sid,
-                    extra={"summary": self._stats.to_summary("error") if self._stats else None},
+                    extra={
+                        "sid": self._sid,
+                        "event": "asr_stream_summary",
+                        "summary": self._stats.to_summary("error") if self._stats else None,
+                    },
                 )
         finally:
             if first_chunk_at is None:
@@ -309,6 +335,7 @@ class GCPStreamingASREngine(ASREngine):
                     "evt=asr_no_audio_before_timeout vendor=gcp",
                     extra={
                         "sid": self._sid,
+                        "event": "asr_no_audio_before_timeout",
                         "idle_ms": idle_ms,
                     },
                 )
@@ -323,9 +350,17 @@ class GCPStreamingASREngine(ASREngine):
         self._last_is_final = is_final
 
         if is_final:
-            logger.info("evt=asr_final vendor=gcp sid=%s", self._sid)
+            logger.info(
+                "evt=asr_final vendor=gcp sid=%s",
+                self._sid,
+                extra={"sid": self._sid, "event": "asr_final"},
+            )
         else:
-            logger.info("evt=asr_partial vendor=gcp sid=%s", self._sid)
+            logger.info(
+                "evt=asr_partial vendor=gcp sid=%s",
+                self._sid,
+                extra={"sid": self._sid, "event": "asr_partial"},
+            )
 
         if self._stats is not None:
             self._stats.mark_partial(transcript)
@@ -335,4 +370,8 @@ class GCPStreamingASREngine(ASREngine):
             if asyncio.iscoroutine(maybe_coro):
                 asyncio.create_task(maybe_coro)
         except Exception:  # pragma: no cover - defensive
-            logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
+            logger.exception(
+                "evt=asr_error vendor=gcp sid=%s",
+                self._sid,
+                extra={"sid": self._sid, "event": "asr_error"},
+            )

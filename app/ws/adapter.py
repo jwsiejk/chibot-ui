@@ -3238,6 +3238,7 @@ class ChatV2Adapter:
                     sanitized_log.get("label"),
                     outcome,
                     attempts,
+                    extra={"sid": ctx.sid, "event": "ws_client_log"},
                 )
                 if vendor_value == "gcp" and stage_value in {"ready", "started", "closed"}:
                     bus.publish(
@@ -3252,20 +3253,17 @@ class ChatV2Adapter:
                             },
                         }
                     )
-                bus.publish(
-                    {
-                        "type": EVT_CLIENT_LOG,
-                        "sid": ctx.sid,
-                        "who": "client",
-                        "source": "client_log",
-                        "meta": sanitized_log,
-                    }
+                self._emit_hub_log(
+                    ctx,
+                    sanitized_log.get("label") or "client.log",
+                    sanitized_log,
                 )
             else:
                 _log.info(
                     "evt=ws_client_log sid=%s label=%s detail=empty",
                     ctx.sid,
                     frame.get("label"),
+                    extra={"sid": ctx.sid, "event": "ws_client_log"},
                 )
 
         if frame_type == "client.banner":

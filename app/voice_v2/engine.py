@@ -360,7 +360,12 @@ class EngineV2:
         session = self._ensure_session(sid)
         # Drop duplicate chat.user events if the client re-submits the same client_msg_id
         if isinstance(client_msg_id, str) and client_msg_id and session.last_client_msg_id == client_msg_id:
-            _log.info("evt=chat_user_dedup sid=%s client_msg_id=%s", sid, client_msg_id)
+            _log.info(
+                "evt=chat_user_dedup sid=%s client_msg_id=%s",
+                sid,
+                client_msg_id,
+                extra={"sid": sid, "event": "chat_user_dedup"},
+            )
             return
         session.last_client_msg_id = client_msg_id if isinstance(client_msg_id, str) else None
         previous_state = session.state
@@ -486,7 +491,11 @@ class EngineV2:
             session, "_vad_energy_logged", False
         ):
             _log.info(
-                "evt=auto_vad_energy sid=%s dbfs=%.1f frame_ms=%d", sid, dbfs, frame_ms
+                "evt=auto_vad_energy sid=%s dbfs=%.1f frame_ms=%d",
+                sid,
+                dbfs,
+                frame_ms,
+                extra={"sid": sid, "event": "auto_vad_energy"},
             )
             session._vad_energy_logged = True
         meta = {"dir": "in", "byte_count": byte_count, "seq": seq}
@@ -809,7 +818,7 @@ class EngineV2:
                 _log.warning(
                     "evt=auto_barge_ready_blocked state=%s",
                     session.state,
-                    extra={"sid": sid},
+                    extra={"sid": sid, "event": "auto_barge_ready_blocked"},
                 )
                 self._reject_auto_barge(sid, "ready_state_blocked")
         else:
@@ -825,7 +834,7 @@ class EngineV2:
                 "evt=barge_auto_denied reason=%s source=%s",
                 reject_reason,
                 source,
-                extra={"sid": sid},
+                extra={"sid": sid, "event": "barge_auto_denied"},
             )
 
     def cancel_current_tts(self, sid: str, *, reason: str = "canceled") -> bool:
@@ -2207,7 +2216,7 @@ class EngineV2:
             if value is not None:
                 parts.append(f"{label}={value}")
 
-        _log.info(" ".join(parts))
+        _log.info(" ".join(parts), extra={"sid": sid, "event": "turn_metrics"})
 
     @staticmethod
     def _safe_duration(
@@ -2321,7 +2330,7 @@ class VoiceEngine(EngineV2):
         if not getattr(runtime, "is_active", False):
             return
 
-        _log.info("evt=barge_in_detected sid=%s", sid)
+        _log.info("evt=barge_in_detected sid=%s", sid, extra={"sid": sid, "event": "barge_in_detected"})
 
         llm_task = getattr(self, "_llm_generator_task", None)
         if isinstance(llm_task, asyncio.Task):
@@ -2332,7 +2341,11 @@ class VoiceEngine(EngineV2):
                 except asyncio.CancelledError:
                     pass
                 except Exception:  # pragma: no cover - defensive logging
-                    _log.exception("evt=barge_in_llm_cancel_failed sid=%s", sid)
+                    _log.exception(
+                        "evt=barge_in_llm_cancel_failed sid=%s",
+                        sid,
+                        extra={"sid": sid, "event": "barge_in_llm_cancel_failed"},
+                    )
         self._llm_generator_task = None
 
         interrupt = getattr(runtime, "interrupt", None)
@@ -2340,9 +2353,17 @@ class VoiceEngine(EngineV2):
             try:
                 interrupt()
             except Exception:  # pragma: no cover - defensive logging
-                _log.exception("evt=barge_in_tts_interrupt_failed sid=%s", sid)
+                _log.exception(
+                    "evt=barge_in_tts_interrupt_failed sid=%s",
+                    sid,
+                    extra={"sid": sid, "event": "barge_in_tts_interrupt_failed"},
+                )
             else:
-                _log.info("evt=barge_in_tts_interrupted sid=%s", sid)
+                _log.info(
+                    "evt=barge_in_tts_interrupted sid=%s",
+                    sid,
+                    extra={"sid": sid, "event": "barge_in_tts_interrupted"},
+                )
 
     def _on_client_mic_open(self, sid: str, event: Mapping[str, Any] | None) -> None:
         runtime = getattr(self, "tts_runtime", None)
