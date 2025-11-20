@@ -573,7 +573,7 @@ export function createCaptureRuntime({
     syncSenderPaused(softStop);
     try {
       logMic({ outcome: "STOPPED", source: "capture_runtime" });
-      logStage("client.mic.stopped", { source: "capture_runtime" });
+      logStage("client.mic.stopped", { source: "capture_runtime", reason: stopReason || "unknown" });
     } catch (_) {}
     try {
       const sender = await ensurePcmSender();
@@ -597,6 +597,12 @@ export function createCaptureRuntime({
     }
     setListeningState(false);
     updatePcmSenderState();
+    try {
+      logStage("client.pcm.capture_stop", {
+        source: "capture_runtime",
+        reason: stopReason || "unknown",
+      });
+    } catch (_) {}
     if (!softStop) {
       try {
         if (typeof onCaptureStop === "function") {
@@ -837,6 +843,13 @@ export function createCaptureRuntime({
       updatePcmSenderState();
       scheduleAudioKeepalive();
       setListeningState(true);
+      const normalizedCaptureReason = normalizeReason(captureReason);
+      try {
+        logStage("client.pcm.capture_start", {
+          source: "capture_runtime",
+          reason: normalizedCaptureReason || captureReason || "unknown",
+        });
+      } catch (_) {}
       armingGraceUntil = Date.now() + 1200;
       try {
         hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });

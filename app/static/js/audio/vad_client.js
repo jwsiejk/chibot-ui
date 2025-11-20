@@ -169,6 +169,9 @@ export function initVAD({
         gatePausedAt = 0;
         lastGateHeartbeatAt = 0;
         onGateChange("resume", "policy_disabled");
+        try {
+          logStage("client.vad.gate", { action: "resume", reason: "policy_disabled" });
+        } catch (_) {}
         safePublish(publish, "client.vad.gate", { action: "resume", reason: "policy_disabled" });
       }
       return;
@@ -180,6 +183,9 @@ export function initVAD({
         gatePausedAt = 0;
         lastGateHeartbeatAt = 0;
         onGateChange("resume", reason || "speech_detected");
+        try {
+          logStage("client.vad.gate", { action: "resume", reason: reason || "speech_detected" });
+        } catch (_) {}
         safePublish(publish, "client.vad.gate", { action: "resume", reason: reason || "speech_detected" });
       }
     } else {
@@ -188,6 +194,9 @@ export function initVAD({
         gatePausedAt = nowMs;
         lastGateHeartbeatAt = nowMs;
         onGateChange("pause", reason || "silence");
+        try {
+          logStage("client.vad.gate", { action: "pause", reason: reason || "silence" });
+        } catch (_) {}
         safePublish(publish, "client.vad.gate", { action: "pause", reason: reason || "silence" });
       }
       if (gatePaused) {
@@ -216,6 +225,14 @@ export function initVAD({
       energyDb: vadEnergyDb,
       noiseDb: vadNoiseDb,
     });
+    try {
+      logStage("client.vad.state", {
+        energyDb: vadEnergyDb,
+        noiseDb: vadNoiseDb,
+        thresholdDb: computeThresholdDb(),
+        speech: vadSpeech,
+      });
+    } catch (_) {}
   }
 
   function computeConfidence(nowMs) {
@@ -246,6 +263,9 @@ export function initVAD({
     initialized = false;
     if (gatePaused && typeof onGateChange === "function") {
       onGateChange("resume", "reset");
+      try {
+        logStage("client.vad.gate", { action: "resume", reason: "reset" });
+      } catch (_) {}
       safePublish(publish, "client.vad.gate", { action: "resume", reason: "reset" });
     }
     gatePaused = false;
@@ -297,6 +317,14 @@ export function initVAD({
           energyDb: vadEnergyDb,
           noiseDb: vadNoiseDb,
         });
+        try {
+          logStage("client.vad.speech_start", {
+            energyDb: vadEnergyDb,
+            noiseDb: vadNoiseDb,
+            thresholdDb: computeThresholdDb(),
+            timestampMs: nowMs,
+          });
+        } catch (_) {}
         emitState(nowMs, true);
       }
     } else {
@@ -309,6 +337,14 @@ export function initVAD({
         holdUntilMs = nowMs + DEFAULTS.holdMs;
         const durationMs = speechStartedAt ? Math.max(0, nowMs - speechStartedAt) : 0;
         safePublish(publish, "client.vad.speech_end", { duration_ms: durationMs });
+        try {
+          logStage("client.vad.speech_end", {
+            energyDb: vadEnergyDb,
+            noiseDb: vadNoiseDb,
+            thresholdDb: computeThresholdDb(),
+            timestampMs: nowMs,
+          });
+        } catch (_) {}
         emitState(nowMs, true);
         speechStartedAt = null;
       }
