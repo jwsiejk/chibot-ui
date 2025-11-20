@@ -92,7 +92,6 @@ export function createWsAudioRuntime(options = {}) {
   const {
     AppState = {},
     initPcmSender,
-    hubLog = () => {},
     updateState = () => {},
     logStage = () => {},
     getSocket,
@@ -804,12 +803,6 @@ export function createWsAudioRuntime(options = {}) {
           sampleRate: meta?.sampleRate || null,
         });
       } catch (_) {}
-      try {
-        hubLog("client.pcm.first_frame", {
-          samples: frame.length,
-          sampleRate: meta?.sampleRate || null,
-        });
-      } catch (_) {}
     }
     if (!frame) {
       return;
@@ -885,7 +878,7 @@ export function createWsAudioRuntime(options = {}) {
       if (firstFrameMs !== null) {
         firstFrameDetail.ms_since_recording_start = firstFrameMs;
       }
-      try { hubLog("client.pcm.first_frame", firstFrameDetail); } catch {}
+      try { logStage("client.pcm.first_frame", firstFrameDetail); } catch {}
       try { logStage("client.audio_first_chunk", { bytes: wire.byteLength }); } catch {}
       if (typeof onFirstClientAudioFrame === "function") {
         try {
@@ -964,7 +957,7 @@ export function createWsAudioRuntime(options = {}) {
       const samplesPerMs = pcmSampleRate / 1000;
       if (samplesPerMs > 0 && ((Math.random() * 50) | 0) === 0) {
         const ms_est = Math.round(chunk.length / samplesPerMs);
-        hubLog("client.pcm.flush", { samples: chunk.length, ms_est, ws_state: resolveSocket()?.readyState });
+        logStage("client.pcm.flush", { samples: chunk.length, ms_est, ws_state: resolveSocket()?.readyState });
       }
     }
     scheduleAudioKeepalive();

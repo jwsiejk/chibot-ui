@@ -224,6 +224,12 @@ export function recordClientBannerEvent(label, meta) {
     info,
     event: entry,
   });
+  try {
+    const normalizedMeta = sanitizedMeta && typeof sanitizedMeta === "object"
+      ? sanitizedMeta
+      : undefined;
+    logStage("client.banner", { label: entry.label, meta: normalizedMeta });
+  } catch {}
 }
 
 function ensureClientBannerState() {
