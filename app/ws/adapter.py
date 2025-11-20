@@ -889,6 +889,13 @@ class ChatV2Adapter:
             metrics = getattr(ctx, "metrics", {})
             model_name = "gpt-4o-mini"
             metrics["llm_started_at"] = time.monotonic()
+            self._emit_session_step(
+                ctx.sid,
+                "llm.request",
+                summary="Sending prompt to LLM",
+                meta={"model": model_name},
+                source="llm",
+            )
             _log.info(
                 "evt=llm_request sid=%s turn_index=%s model=%s",
                 ctx.sid,
@@ -918,6 +925,16 @@ class ChatV2Adapter:
             llm_text = ""
             if isinstance(content, str):
                 llm_text = content.strip()
+            latency_ms: Optional[int] = None
+            if metrics.get("llm_started_at") is not None:
+                latency_ms = int((metrics["llm_completed_at"] - metrics["llm_started_at"]) * 1000)
+            self._emit_session_step(
+                ctx.sid,
+                "llm.response",
+                summary="Received LLM response",
+                meta={key: value for key, value in {"model": model_name, "latency_ms": latency_ms}.items() if value is not None},
+                source="llm",
+            )
             _log.info(
                 "evt=llm_response sid=%s turn_index=%s model=%s",
                 ctx.sid,
@@ -1014,6 +1031,15 @@ class ChatV2Adapter:
             if isinstance(meta, Mapping):
                 provider_value = meta.get("provider") or provider_value
             metrics["tts_provider"] = provider_value or None
+        utt_id = metrics.get("tts_active_utt_id")
+        provider_name = metrics.get("tts_provider") or "elevenlabs"
+        self._emit_session_step(
+            ctx.sid,
+            "tts.start",
+            summary="TTS started",
+            meta={"provider": provider_name, "utt_id": utt_id},
+            source="tts",
+        )
         try:
             self._bus(
                 "tts.start",
@@ -1083,6 +1109,18 @@ class ChatV2Adapter:
             metrics["tts_provider"] = provider
 
         provider_name = provider or metrics.get("tts_provider") or "elevenlabs"
+        utt_id_value = metrics.get("tts_active_utt_id")
+        if utt_id_value is None and isinstance(frame, Mapping):
+            frame_utt = frame.get("utt_id")
+            if isinstance(frame_utt, str) and frame_utt:
+                utt_id_value = frame_utt
+        self._emit_session_step(
+            ctx.sid,
+            "tts.end",
+            summary="TTS ended",
+            meta={"provider": provider_name, "utt_id": utt_id_value},
+            source="tts",
+        )
 
         tts_started_at = metrics.get("tts_started_at")
         tts_completed_at = metrics.get("tts_completed_at")
@@ -6465,19 +6503,17 @@ class ChatV2Adapter:
             loop = None
 
         if loop and loop.is_running():
-            loop.create_task(self._publish(EVT_SESSION_STEP, sid, payload))
+            loop.call_soon_threadsafe(
+                self._emit_session_step,
+                sid,
+                step_value,
+                meta=payload,
+                source="ws_server",
+            )
             return
 
-        fallback_event = {
-            "schema_version": "1",
-            "type": EVT_SESSION_STEP,
-            "sid": sid,
-            "who": "server",
-            "source": "ws_server",
-            "meta": payload,
-        }
         try:
-            bus.publish(fallback_event)
+            self._emit_session_step(sid, step_value, meta=payload, source="ws_server")
         except Exception:  # pragma: no cover - defensive fallback
             _log.exception("evt=session_step_publish_failed sid=%s step=%s", sid, step_value)
 
@@ -7034,6 +7070,15 @@ class ChatV2Adapter:
 
         bus.publish(event_payload)
 
+        if is_final:
+            self._emit_session_step(
+                ctx.sid,
+                "asr.final",
+                summary="Final ASR transcript",
+                meta={"text": text},
+                source="asr",
+            )
+
         now_ms = self._now_ms()
         ctx.session.last_vendor_activity_ms = float(now_ms)
 
@@ -7237,6 +7282,14 @@ class ChatV2Adapter:
             {"state": "open", "ok": True, "vendor": "gcp"},
         )
 
+        self._emit_session_step(
+            ctx.sid,
+            "asr.open",
+            summary="ASR engine opened",
+            meta={"vendor": "gcp", "sample_rate": sample_rate},
+            source="asr",
+        )
+
         if not engine_is_null:
             bus.publish(
                 {
@@ -7347,6 +7400,15 @@ class ChatV2Adapter:
         ctx.asr_bytes_sent = 0
         ctx.asr_first_packet_monotonic = None
         self._bus("asr.turn.begin", {"sid": ctx.sid, "reason": reason})
+        turn_index_value = getattr(ctx, "turn_index", None)
+        meta = {"turn_index": turn_index_value} if turn_index_value is not None else None
+        self._emit_session_step(
+            ctx.sid,
+            "turn.begin",
+            summary="Turn began (user side)",
+            meta=meta,
+            source="ws.adapter",
+        )
         return {"type": "asr.turn", "state": "begin"}
 
     def _emit_asr_turn_armed(self, ctx: AdapterContext) -> None:
@@ -7362,6 +7424,13 @@ class ChatV2Adapter:
         ctx.asr_turn_begin_sent = False
         ctx.asr_turn_armed_sent = False
         self._bus("asr.turn.end", {"sid": ctx.sid, "reason": reason})
+        self._emit_session_step(
+            ctx.sid,
+            "turn.end",
+            summary="Turn ended (assistant side)",
+            meta={"ended_reason": reason},
+            source="ws.adapter",
+        )
         return {"type": "asr.turn", "state": "end"}
 
     async def _send_asr_ready_bundle(
