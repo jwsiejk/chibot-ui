@@ -998,8 +998,17 @@ if (typeof createCaptureRuntime !== "function") {
     WSClient.clearResume = function wsClientClearResume() {
       try { clearResumeState(); } catch (err) { console.warn('WSClient.clearResume failed', err); }
     };
+    try {
+      logStage("client.mic.start_requested", {
+        source: source || "unknown",
+        policy_audio: policy?.audio || null,
+      });
+    } catch (_) {}
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
+      try {
+        logStage("client.mic.start_skipped", { reason: "no_capture_runtime" });
+      } catch (_) {}
       return;
     }
     try {
@@ -1010,6 +1019,9 @@ if (typeof createCaptureRuntime !== "function") {
       return startRecorderStreaming(policy, source);
     } catch (err) {
       console.warn("WSClient.startRecorderStreaming failed", err);
+      try {
+        logStage("client.mic.start_skipped", { reason: err?.message || "start_failed" });
+      } catch (_) {}
     }
   };
 

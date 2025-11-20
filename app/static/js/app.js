@@ -59,10 +59,62 @@
     }
     __gumInFlight = true;
     try {
-      if (!navigator?.mediaDevices?.getUserMedia) {
-        throw new Error('MediaDevices.getUserMedia unavailable');
-      }
-      return await navigator.mediaDevices.getUserMedia(constraints);
+      try {
+        logStage("client.mic.gum_request", { constraints });
+      } catch (_) {}
+      const summarizeConstraints = (value) => {
+        if (value === null || value === undefined) {
+          return null;
+        }
+        if (typeof value !== "object") {
+          return value;
+        }
+        const audio = value && typeof value.audio === "object" && !Array.isArray(value.audio)
+          ? value.audio
+          : null;
+        const audioSummary = audio
+          ? {
+            channelCount: audio.channelCount ?? null,
+            deviceId: audio.deviceId ?? null,
+            sampleRate: audio.sampleRate ?? null,
+            echoCancellation: audio.echoCancellation ?? null,
+            noiseSuppression: audio.noiseSuppression ?? null,
+            autoGainControl: audio.autoGainControl ?? null,
+          }
+          : value?.audio ?? null;
+        return { audio: audioSummary };
+      };
+      const constraintsSummary = summarizeConstraints(constraints);
+      try {
+        if (!navigator?.mediaDevices?.getUserMedia) {
+          throw new Error('MediaDevices.getUserMedia unavailable');
+        }
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      try {
+        logMic({
+          outcome: "GUM_GRANTED",
+          kind: "getMicOnce",
+          constraints_summary: constraintsSummary,
+        });
+      } catch (_) {}
+      try {
+        const hasAudioTracks = Array.isArray(stream?.getAudioTracks?.()) && stream.getAudioTracks().length > 0;
+        logStage("client.mic.gum_success", { has_audio_tracks: hasAudioTracks });
+      } catch (_) {}
+      return stream;
+    } catch (err) {
+      try {
+        logMic({
+          outcome: "ERROR_PERMISSIONS",
+          kind: "getMicOnce",
+          error_name: err?.name,
+          error_message: err?.message,
+        });
+      } catch (_) {}
+      try {
+        logStage("client.mic.gum_error", { name: err?.name, message: err?.message });
+      } catch (_) {}
+      throw err;
     } finally {
       __gumInFlight = false;
     }

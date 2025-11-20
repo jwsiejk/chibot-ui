@@ -1,5 +1,7 @@
 /* eslint-disable no-console */
 
+import { logStage } from "../ws/telemetry.js";
+
 const DEFAULT_CHUNK_MS = 60;
 const DEFAULT_FLUSH_MS = 50;
 const TARGET_SAMPLE_RATE = 16000;
@@ -119,6 +121,13 @@ export async function initPcmSender(_wsIgnored, {
   const frameHintMs = Math.max(10, Math.min(chunkDurationMs, flushMs));
   const minFrameSamples = Math.max(160, Math.round((frameHintMs / 1000) * targetSampleRate));
   const maxFrameSamples = Math.max(minFrameSamples, Math.round((chunkDurationMs / 1000) * targetSampleRate));
+
+  try {
+    logStage("client.pcm_sender.init", {
+      targetSampleRate,
+      channels: 1,
+    });
+  } catch (_) {}
 
   const supportsWorklet = Boolean(
     audioCtx.audioWorklet && typeof audioCtx.audioWorklet.addModule === "function",
@@ -472,6 +481,9 @@ export async function initPcmSender(_wsIgnored, {
     if (enabled === desired) {
       return;
     }
+    try {
+      logStage("client.pcm_sender.enabled", { enabled: desired });
+    } catch (_) {}
     enabled = desired;
     if (!enabled) {
       resetQueue();

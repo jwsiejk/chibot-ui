@@ -126,6 +126,8 @@ export function createWsAudioRuntime(options = {}) {
   let localFirstChunkSeen = false;
   let localMicRecordingStartAt = null;
   let warnedMissingReqId = false;
+  let pcmSenderStateLast = null;
+  let firstRuntimeFrameLogged = false;
 
   const resolveWsClient = () => {
     if (typeof getWsClient === "function") {
@@ -848,6 +850,16 @@ export function createWsAudioRuntime(options = {}) {
       }
     }
 
+    if (!firstRuntimeFrameLogged && wire.length) {
+      firstRuntimeFrameLogged = true;
+      try {
+        logStage("client.pcm.first_frame_runtime", {
+          samples: wire.length,
+          sampleRate: currentSampleRate || null,
+        });
+      } catch (_) {}
+    }
+
     try {
       if (typeof pcmRing?.push === "function") {
         pcmRing.push(wire);
@@ -972,6 +984,19 @@ export function createWsAudioRuntime(options = {}) {
       ? Boolean(AppState.turnActive)
       : true;
     const shouldSend = Boolean(isAudioStreaming() && !isSenderPaused() && canCaptureNow() && asrReady && turnActive);
+    if (pcmSenderStateLast !== shouldSend) {
+      try {
+        logStage("client.audio_stream_state", {
+          enabled: shouldSend,
+          isAudioStreaming: isAudioStreaming(),
+          senderPaused: isSenderPaused(),
+          canCaptureNow: canCaptureNow(),
+          asrReady,
+          turnActive,
+        });
+      } catch (_) {}
+      pcmSenderStateLast = shouldSend;
+    }
     pcmSender.setEnabled(shouldSend);
   }
 

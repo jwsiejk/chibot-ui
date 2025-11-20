@@ -2,6 +2,8 @@
 // Encapsulates VAD+AppState bridge, consoleBus publishing, silence timers,
 // and recorder start/stop lifecycle for AskChip.
 
+import { logMic as telemetryLogMic, logStage as telemetryLogStage } from "../ws/telemetry.js";
+
 const USER_INITIATED_STOP_REASONS = new Set([
   "user_requested",
   "user_restart",
@@ -109,7 +111,7 @@ export function createCaptureRuntime({
   initVAD,                // existing initVAD(...) function
   consoleBus,             // existing console event bus
   hubLog,                 // logging helper
-  logStage,               // telemetry logStage from ws/telemetry.js
+  logStage: providedLogStage,               // telemetry logStage from ws/telemetry.js
   recordClientBannerEvent, // telemetry banner from ws/telemetry.js
   schedulePartialWatchdog = null,
   clearPartialWatchdog = null,
@@ -128,6 +130,9 @@ export function createCaptureRuntime({
     "vadEnergyDb",
     "vadNoiseDb",
   ];
+
+  const logStage = providedLogStage || telemetryLogStage;
+  const logMic = telemetryLogMic;
 
   const {
     getClientVadPolicyRoot = () => ({}),
@@ -513,6 +518,10 @@ export function createCaptureRuntime({
     resetSilenceSuppression();
     syncSenderPaused(softStop);
     try {
+      logMic({ outcome: "STOPPED", source: "capture_runtime" });
+      logStage("client.mic.stopped", { source: "capture_runtime" });
+    } catch (_) {}
+    try {
       const sender = await ensurePcmSender();
       if (sender && typeof sender.setEnabled === "function") {
         try {
@@ -691,6 +700,17 @@ export function createCaptureRuntime({
       scheduleAudioKeepalive();
       setListeningState(true);
       armingGraceUntil = Date.now() + 1200;
+      try {
+        logMic({ outcome: "OPENED", source: "capture_runtime", has_stream: true });
+        logStage("client.mic.opened", { source: "capture_runtime" });
+      } catch (_) {}
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        try {
+          window.dispatchEvent(new CustomEvent("EVT_CLIENT_MIC_OPEN", {
+            detail: { source: "capture_runtime", ts_ms: Date.now() },
+          }));
+        } catch (_) {}
+      }
       try {
         hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
       } catch {}
