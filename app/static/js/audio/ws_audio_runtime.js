@@ -103,6 +103,7 @@ export function createWsAudioRuntime(options = {}) {
     canCaptureNow = () => true,
     isSenderPaused = () => false,
     setSenderPauseReason = () => {},
+    getCaptureStream = null,
     getVadController = () => null,
     getFirstChunkSeen,
     setFirstChunkSeen,
@@ -128,6 +129,7 @@ export function createWsAudioRuntime(options = {}) {
   let warnedMissingReqId = false;
   let pcmSenderStateLast = null;
   let firstRuntimeFrameLogged = false;
+  let captureStreamProvider = typeof getCaptureStream === "function" ? getCaptureStream : null;
 
   const resolveWsClient = () => {
     if (typeof getWsClient === "function") {
@@ -1010,7 +1012,8 @@ export function createWsAudioRuntime(options = {}) {
     if (typeof initPcmSender !== "function") {
       throw new Error("initPcmSender not provided");
     }
-    pcmSenderInitPromise = initPcmSender(null, {
+    const stream = captureStreamProvider ? await captureStreamProvider() : null;
+    pcmSenderInitPromise = initPcmSender(stream, {
       onSampleRate: handleSampleRate,
       onFrame: handlePcmFrame,
       onSend: handlePcmSend,
@@ -1077,6 +1080,10 @@ export function createWsAudioRuntime(options = {}) {
     lastRealAudioAt = 0;
   }
 
+  function setCaptureStreamProvider(fn) {
+    captureStreamProvider = typeof fn === "function" ? fn : null;
+  }
+
   function setAudioKeepaliveMs(value) {
     const next = Number.isFinite(value) && value > 0 ? value : AUDIO_KEEPALIVE_MS;
     audioKeepaliveMs = next;
@@ -1098,6 +1105,7 @@ export function createWsAudioRuntime(options = {}) {
     getPcmRing,
     getPcmSenderSnapshot,
     resetPcmStateForTesting,
+    setCaptureStreamProvider,
     resetSilenceSuppression,
     updatePcmSenderState,
     scheduleAudioKeepalive,
