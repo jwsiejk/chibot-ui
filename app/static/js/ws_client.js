@@ -1841,9 +1841,8 @@ if (typeof createCaptureRuntime !== "function") {
       __turnOpen = true;
       __turnOpenAt = Date.now();
       hubLog("client.stream.on", { reason });
-      // NEW: Rely on input.start to open turn, but mic start is tied to ASR readiness
       await openTurnOnce(reason);
-      await handleInputStartFrame(frame);
+      await handleInputStartFrame(frame);  // now always starts mic
     } else if (frame.type === "input.stop") {
       const reason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
@@ -2075,17 +2074,34 @@ if (typeof createCaptureRuntime !== "function") {
   }
 
   async function handleInputStartFrame(frame) {
-    // REMOVED: All complex logic for pending start and asrReady check
-    // The mic start logic is now centralized in the ASR.ready handler.
-    
-    // We only call openTurnOnce here to ensure the turn is registered early
-    const asrReady = Boolean(AppState?.asrReady);
-    if (asrReady) {
+    const policy = frame?.policy || AppState?.policy || {};
+    const reason = "input.start";
+    try {
+      const started = await startRecorderStreaming(policy, reason);
+      if (!started) {
+        console.warn("handleInputStartFrame: startRecorderStreaming returned false");
         try {
-          await startRecorderStreaming(frame?.policy || {}, "input.start_asr_ready");
-        } catch (err) {
-          console.error("input.start deferred start failed", err);
-        }
+          logStage("client.mic", {
+            outcome: MIC_OUTCOME.ERROR_STATE_GUARD,
+            message: "startRecorderStreaming returned false from input.start",
+          });
+        } catch {}
+      } else {
+        try {
+          logStage("client.mic", {
+            outcome: MIC_OUTCOME.ARMED,
+            message: "input.start → startRecorderStreaming",
+          });
+        } catch {}
+      }
+    } catch (err) {
+      console.error("handleInputStartFrame mic start failed", err);
+      try {
+        logStage("client.mic", {
+          outcome: MIC_OUTCOME.ERROR_STATE_GUARD,
+          message: err?.message || "input.start mic start failed",
+        });
+      } catch {}
     }
   }
 
