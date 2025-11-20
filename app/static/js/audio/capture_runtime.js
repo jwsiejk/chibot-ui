@@ -696,11 +696,29 @@ export function createCaptureRuntime({
       ? window.getMicOnce
       : null;
     try {
+      try {
+        logStage("client.mic.request_gum", {
+          source: "capture_runtime",
+          reason,
+          constraints: summary,
+        });
+      } catch (_) {}
       const stream = gum
         ? await gum(constraints)
         : await navigator.mediaDevices.getUserMedia(constraints);
       captureStream = stream;
       ensureStreamProvider(stream);
+      try {
+        const track = (stream && stream.getAudioTracks && stream.getAudioTracks()[0]) || null;
+        const trackSettings = track && track.getSettings ? track.getSettings() : {};
+        logStage("client.mic.stream_success", {
+          source: "capture_runtime",
+          reason,
+          sampleRate: trackSettings.sampleRate || null,
+          deviceId: trackSettings.deviceId || null,
+          channelCount: trackSettings.channelCount || null,
+        });
+      } catch (_) {}
       try {
         logMic({ outcome: "OPENED", source: "capture_runtime", constraints_summary: summary });
         logStage("client.mic.opened", { source: "capture_runtime", reason, constraints: summary });
@@ -716,6 +734,14 @@ export function createCaptureRuntime({
     } catch (err) {
       try {
         logStage("client.mic.start_failed", { source: "capture_runtime", reason: err?.message || "gum_failed" });
+      } catch (_) {}
+      try {
+        logStage("client.mic.start_failed_error", {
+          source: "capture_runtime",
+          reason: err?.message || "gum_failed",
+          error_name: err?.name || null,
+          error_detail: err?.message || null,
+        });
       } catch (_) {}
       return null;
     }

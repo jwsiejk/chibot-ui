@@ -1,4 +1,5 @@
 /* eslint-disable no-console */
+import { logStage } from "../ws/telemetry.js";
 const DB_FLOOR = -120;
 const SAMPLE_MAX = 32768;
 const STATE_PUBLISH_INTERVAL_MS = 500;
@@ -256,6 +257,12 @@ export function initVAD({
   }
 
   function onPcmFrame(buffer, timestampMs) {
+    try {
+      logStage("vad.frame_input", {
+        timestampMs: typeof timestampMs === "number" ? timestampMs : null,
+        length: Array.isArray(buffer) || buffer instanceof Int16Array ? buffer.length : 0,
+      });
+    } catch (_) {}
     const nowMs = Number.isFinite(timestampMs) ? timestampMs : Date.now();
     const frame = toInt16Frame(buffer);
     vadEnergyDb = rmsDbFromPcm(frame);

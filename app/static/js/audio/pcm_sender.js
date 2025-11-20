@@ -188,6 +188,13 @@ export async function initPcmSender(mediaStream = null, {
       deviceId,
       sampleRate: audioCtx?.sampleRate || null,
     });
+    try {
+      logStage("client.pcm_sender.acquired_stream", {
+        audioCtxState: audioCtx?.state || null,
+        audioCtxSampleRate: audioCtx?.sampleRate || null,
+        mediaStreamId: mediaStream?.id || null,
+      });
+    } catch (_) {}
   } catch (err) {
     console.error('client.mic_permission_denied', {
       name: err?.name,
@@ -263,6 +270,12 @@ export async function initPcmSender(mediaStream = null, {
   }
 
   function handleFrame(pcm16, frameInfo = {}) {
+    try {
+      logStage("pcm_sender.frame_received", {
+        length: Array.isArray(pcm16) || pcm16 instanceof Int16Array ? pcm16.length : 0,
+        timestampMs: typeof frameInfo?.timestamp === "number" ? frameInfo.timestamp : null,
+      });
+    } catch (_) {}
     if (!pcm16 || typeof pcm16.length !== "number" || pcm16.length === 0) {
       return;
     }
@@ -461,9 +474,20 @@ export async function initPcmSender(mediaStream = null, {
     if (!usingWorklet && processor && typeof processor.connect === "function") {
       processor.connect(audioCtx.destination);
     }
+    try {
+      logStage("client.pcm_sender.node_connect_success", {
+        usingWorklet,
+      });
+    } catch (_) {}
   } catch (err) {
     notifyError(err);
     console.warn("[pcm_sender] failed to connect audio nodes", err);
+    try {
+      logStage("client.pcm_sender.node_connect_failure", {
+        error_name: err?.name || null,
+        error_message: err?.message || null,
+      });
+    } catch (_) {}
     if (usingWorklet && workletPort) {
       try { workletPort.onmessage = null; } catch (_) {}
     } else if (processor) {
