@@ -104,6 +104,34 @@ function ensureAudioContext() {
   return new AudioContextCtor();
 }
 
+async function resumeAudioContext(audioCtx, { stage } = {}) {
+  if (!audioCtx || typeof audioCtx.resume !== "function") {
+    return;
+  }
+  if (audioCtx.state !== "suspended") {
+    return;
+  }
+  const label = typeof stage === "string" && stage ? stage : "unknown";
+  try {
+    logStage("client.pcm_sender.resume_attempt", { stage: label });
+  } catch (_) {}
+  try {
+    await audioCtx.resume();
+    try {
+      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
+    } catch (_) {}
+  } catch (err) {
+    try {
+      logStage("client.pcm_sender.resume_failed", {
+        stage: label,
+        error_name: err?.name || null,
+        error_message: err?.message || null,
+      });
+    } catch (_) {}
+    throw err;
+  }
+}
+
 export async function initPcmSender(mediaStream = null, {
   onSampleRate,
   onFrame,
@@ -219,6 +247,17 @@ export async function initPcmSender(mediaStream = null, {
   console.log("[pcm_sender] audioCtx.sampleRate", sampleRate);
   let effectiveSampleRate = targetSampleRate;
   let samplesPerMs = effectiveSampleRate / 1000;
+
+  // Attempt to move the AudioContext to a running state immediately after creation
+  // (within the same user gesture that triggered initPcmSender). Browsers may keep
+  // a newly created context suspended until resume() is called from a trusted
+  // gesture, and without a running context the worklet/processor callbacks never
+  // fire, starving PCM/VAD.
+  try {
+    await resumeAudioContext(audioCtx, { stage: "init" });
+  } catch (err) {
+    console.warn("[pcm_sender] audioCtx initial resume failed", err);
+  }
 
   function clearFlushTimer() {
     if (flushTimer) {
@@ -507,13 +546,11 @@ export async function initPcmSender(mediaStream = null, {
   }
 
   async function resume() {
-    if (audioCtx.state === "suspended") {
-      try {
-        await audioCtx.resume();
-      } catch (err) {
-        notifyError(err);
-        console.warn("[pcm_sender] failed to resume AudioContext", err);
-      }
+    try {
+      await resumeAudioContext(audioCtx, { stage: "resume" });
+    } catch (err) {
+      notifyError(err);
+      console.warn("[pcm_sender] failed to resume AudioContext", err);
     }
   }
 
@@ -530,6 +567,11 @@ export async function initPcmSender(mediaStream = null, {
       }
     } catch (_) {}
     enabled = desired;
+    if (enabled) {
+      resume().catch((err) => {
+        console.warn("[pcm_sender] resume from setEnabled failed", err);
+      });
+    }
     if (!enabled) {
       resetQueue();
     }
