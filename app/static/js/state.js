@@ -1,7 +1,5 @@
 // state.js - FINAL, CLEAN VERSION (FLAT STATE ARCHITECTURE)
 
-import { logStage } from "./ws/telemetry.js";
-
 (() => {
   function isPlainObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -113,7 +111,16 @@ import { logStage } from "./ws/telemetry.js";
 
   function publishTelemetry(label, payload) {
     try {
-      logStage(label, payload);
+      const hub = window.AppState && window.AppState.hub;
+      if (hub && typeof hub.log === "function") {
+        hub.log(label, payload);
+        return;
+      }
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        window.dispatchEvent(
+          new CustomEvent("client.log", { detail: { label, detail: payload } })
+        );
+      }
     } catch (err) {
       try {
         console.warn("AppState telemetry publish failed", label, err);
