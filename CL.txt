@@ -1,50 +1,55 @@
-BUILD_ID 0032a71.95106fc989072c0b
+UILD_ID 42f1d75.a4d65d47b52d1bd8
 app.js:50 AskChip build: (no v param on app.js)
-app.js:792 client.vad.state
-app.js:792 client.appstate.delta
-app.js:1605 evt=ws_open_attempt Object
+app.js:483 client turn summary logging enabled
+/api/v1/auth/me:1  Failed to load resource: the server responded with a status of 401 ()Understand this error
+auth_ui.js?v=42f1d75.a4d65d47b52d1bd8:124 evt=ui_modal_show Object
+app.js:736 client firehose logging enabled: no rate limit; large deferred buffer
+app.js:738 AskChip client starting with firehose-style logging (no client rate limit).
+app.js:887 client.vad.state
+app.js:887 client.appstate.delta
+app.js:1690 evt=ws_open_attempt Object
 session_manager.js:377 evt=ws_client_open_params Object
 session_manager.js:381 WS opening Object
 connection.js:862 evt=ws_connection_open_params Object
-app.js:792 client.ws
-app.js:792 client.appstate.heartbeat
-app.js:792 client.ws
-ws_client.js?v=0032a71.95106fc989072c0b:1857 WS server banner Object
-app.js:792 client.ws
-app.js:792 client.appstate.delta
-app.js:792 client.ws
-app.js:792 client.audio.worklet_load_ok
-2app.js:792 client.mic
-app.js:792 client.ws
-app.js:908 evt=mic_start timeslice_ms=unknown
-app.js:792 client.mic
-app.js:2301 diag=asr_ready
-app.js:792 client.asr
-app.js:792 client.ws_ready_check
-app.js:792 diag
-app.js:792 client.asr_arm_clear
-app.js:2301 diag=asr_ready
-app.js:792 client.stream.on
-ws_client.js?v=0032a71.95106fc989072c0b:1453 start_listening received after ASR ready; relying on automatic mic start. Object
-app.js:792 client.appstate.delta
-app.js:2301 diag=asr_ready
-app.js:792 client.asr
-app.js:792 client.ws_ready_check
-app.js:792 diag
-app.js:792 client.asr_arm_clear
-app.js:2301 diag=asr_ready
-app.js:792 client.appstate.heartbeat
-app.js:792 client.stream.off
-app.js:792 client.turn.intent
+app.js:887 client.ws
+app.js:887 client.appstate.heartbeat
+app.js:887 client.ws
+ws_client.js?v=42f1d75.a4d65d47b52d1bd8:2171 WS server banner Object
+app.js:887 client.ws
+app.js:887 client.audio.worklet_load_ok
+2app.js:887 client.mic
+2app.js:887 client.ws
+app.js:1003 evt=mic_start timeslice_ms=unknown
+app.js:887 client.mic
+app.js:2410 diag=asr_ready
+app.js:887 client.asr
+app.js:887 client.ws_ready_check
+app.js:887 diag
+app.js:887 client.asr_arm_clear
+app.js:2410 diag=asr_ready
+app.js:887 client.stream.on
+ws_client.js?v=42f1d75.a4d65d47b52d1bd8:1739 start_listening received after ASR ready; relying on automatic mic start. Object
+app.js:2410 diag=asr_ready
+app.js:887 client.asr
+app.js:887 client.ws_ready_check
+app.js:887 diag
+app.js:887 client.asr_arm_clear
+app.js:2410 diag=asr_ready
+app.js:887 client.appstate.delta
+app.js:887 client.appstate.heartbeat
+2app.js:887 client.ws
+app.js:887 client.stream.off
+app.js:887 client.turn.intent
 pcm_sender.js:175 [pcm_sender] audioCtx.sampleRate 48000
 ws_audio_runtime.js:632 client.pcm.hardware_sample_rate 48000
 ws_audio_runtime.js:640 client.pcm.target_sample_rate 16000
 ws_audio_runtime.js:641 client.pcm.sample_rate 16000
-app.js:792 client.vad.state
-app.js:792 client.pcm.capture_stop
+app.js:887 client.vad.state
+app.js:887 client.pcm.capture_stop
 connection.js:515 ws.connection.send queued (phase not ready) Object
 send @ connection.js:515Understand this warning
 connection.js:515 ws.connection.send queued (phase not ready) Object
 send @ connection.js:515Understand this warning
-app.js:792 client.ws
-app.js:792 client.appstate.delta
+app.js:462 client_turn_summary Object
+app.js:887 client.ws
+app.js:887 client.appstate.delta

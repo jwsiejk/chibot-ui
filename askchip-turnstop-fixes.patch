@@ -1,0 +1,122 @@
+diff --git a/app/static/js/ws_client.js b/app/static/js/ws_client.js
+--- a/app/static/js/ws_client.js
++++ b/app/static/js/ws_client.js
+@@ -153,6 +153,12 @@
+   let partialWatchdogDeadline = 0;
+   let partialWatchdogFirstTurn = true;
+   let turnStopSent = false;
++
++  function resetTurnStopFlag() {
++    // Start each user turn fresh: allow exactly one client-side input.stop
++    // signal per turn and never block audio based on this flag.
++    turnStopSent = false;
++  }
+ 
+   function maybeSendTurnStop(reason = "vad_silence") {
+     if (turnStopSent) {
+@@ -171,11 +177,13 @@
+     return true;
+   }
+ 
+   async function handleVadSilenceStop(reason = "vad_silence") {
+     const normalized = fallbackToReasonKey(reason) || "vad_silence";
+     maybeSendTurnStop(normalized);
+     try {
+-      await stopRecorder({ reason: normalized }, {
++      // IMPORTANT: stopRecorder expects a string reason, not an object.
++      await stopRecorder(normalized, {
+         fallbackReason: "vad_silence",
+         source: "client.vad_silence",
+         allowVadStop: true,
+       });
+     } catch (err) {
+       try { console.warn("vad_silence_stop_failed", err); } catch {}
+@@ -332,15 +340,16 @@
+     startRecorderStreaming,
+   } = captureRuntime;
+ 
+   async function stopRecorder(reason, options = {}) {
+     const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
+-    const normalized = fallbackToReasonKey(reason) || fallbackToReasonKey(opts.fallbackReason) || "unspecified";
+-    const allowTurnStop = opts.allowVadStop === true || fallbackReasonLooksUserInitiated(normalized);
+-    if (allowTurnStop) {
+-      maybeSendTurnStop(normalized);
+-    }
+-    return captureStopRecorder(reason, options);
++    const normalized = fallbackToReasonKey(reason) || fallbackToReasonKey(opts.fallbackReason) || "unspecified";
++
++    // Only send a client-side input.stop when explicitly allowed by caller (e.g., VAD silence, manual stop).
++    // Do NOT block audio sending based on this; the recorder lifecycle should control that.
++    if (opts.allowVadStop === true) maybeSendTurnStop(normalized);
++
++    // Always pass a string reason downstream to the capture runtime.
++    return captureStopRecorder(normalized, options);
+   }
+ 
+   WSClient.startRecorderStreaming = function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
+     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
+       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
+@@ -1286,6 +1295,7 @@
+     } else if (frame.type === "input.start") {
+       _audioStreaming = true;
+       setListeningState(true);
+       emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
+       const reason = typeof frame?.reason === "string" && frame.reason
+         ? frame.reason
+         : frame?.type || "input.start";
++      resetTurnStopFlag(); // also reset when the server explicitly opens a new turn
+       __turnOpen = true;
+       __turnOpenAt = Date.now();
+       hubLog("client.stream.on", { reason });
+       // NEW: Rely on input.start to open turn, but mic start is tied to ASR readiness
+       await openTurnOnce(reason);
+@@ -2045,13 +2055,6 @@
+     if (typeof options.lane === "undefined") {
+       options.lane = "mic";
+     }
+     const lane = typeof options.lane === "string" ? options.lane : "mic";
+     if (lane === "mic") {
+-      const now = Date.now();
+-      if (turnStopSent) {
+-        try { AppState?.hub?.log?.('client.audio.chunk_dropped_turn_stop', { ts: now }); } catch {}
+-        // DO NOT drop audio just because we sent input.stop previously.
+-        // Recorder/mic lifecycle controls audio; server will ignore late audio after turn stop.
+-        return true;
+-      }
+       if (now < __pauseSendUntil) {
+         const pauseMs = __pauseSendUntil - now;
+         const ts = Number.isFinite(options.ts) ? Number(options.ts) : now;
+         try { AppState?.hub?.log?.('client.audio.chunk_dropped_throttle', { ts, pause_ms: pauseMs }); } catch {}
+         return true;
+diff --git a/app/static/js/audio/capture_runtime.js b/app/static/js/audio/capture_runtime.js
+--- a/app/static/js/audio/capture_runtime.js
++++ b/app/static/js/audio/capture_runtime.js
+@@ -514,8 +514,12 @@
+   async function stopRecorder(reason, options = {}) {
+     const legacyFallback = arguments.length > 1 && typeof options !== "object"
+       ? options
+       : undefined;
+     const opts = (options && typeof options === "object" && !Array.isArray(options)) ? options : {};
+     const fallbackReason = Object.prototype.hasOwnProperty.call(opts, "fallbackReason") ? opts.fallbackReason : legacyFallback;
++    const allowVadStop = opts.allowVadStop === true;
+     const source = Object.prototype.hasOwnProperty.call(opts, "source") ? opts.source : null;
+     const { allowed, blocked, label } = evaluateStopRecorderReason(reason, fallbackReason);
+-    if (!allowed) {
++    if (!allowed && !allowVadStop) {
+       try {
+         const meta = { reason: label, source };
+         if (blocked) {
+           console.info("stopRecorder skipped for VAD/mic trigger", meta);
+         } else {
+           console.info("stopRecorder skipped for non user/server trigger", meta);
+         }
+       } catch {}
+       return false;
+     }
+-    return performStopRecorder(label);
++    const normalizedLabel = typeof label === "string" && label
++      ? label
++      : normalizeReason(fallbackReason || reason);
++    return performStopRecorder(normalizedLabel);
+   }
+ 
