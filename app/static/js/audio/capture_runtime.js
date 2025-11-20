@@ -724,12 +724,19 @@ export function createCaptureRuntime({
   async function startRecorderStreaming(opts = {}) {
     let policy = null;
     let reason = null;
-    if (arguments.length >= 2 && (typeof arguments[0] !== "object" || Array.isArray(arguments[0]))) {
-      policy = arguments[0];
-      reason = arguments[1];
-    } else if (opts && typeof opts === "object" && !Array.isArray(opts)) {
-      ({ policy = null, reason = null } = opts);
+
+    if (opts && typeof opts === "object" && !Array.isArray(opts)) {
+      if ("policy" in opts || "reason" in opts) {
+        // Called like startRecorderStreaming({ policy, reason })
+        policy = opts.policy ?? null;
+        reason = opts.reason ?? null;
+      } else {
+        // Called like startRecorderStreaming(policyObject)
+        policy = opts;
+        reason = null;
+      }
     } else {
+      // Primitive or other unexpected input; treat as policy
       policy = opts;
       reason = null;
     }
