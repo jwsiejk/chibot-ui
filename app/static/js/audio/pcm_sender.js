@@ -104,7 +104,7 @@ function ensureAudioContext() {
   return new AudioContextCtor();
 }
 
-export async function initPcmSender(_wsIgnored, {
+export async function initPcmSender(mediaStream = null, {
   onSampleRate,
   onFrame,
   onSend,
@@ -154,16 +154,33 @@ export async function initPcmSender(_wsIgnored, {
     }
   }
 
-  let mediaStream;
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    if (!mediaStream) {
+      const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
+        ? window.getMicOnce
+        : null;
+      if (gum) {
+        mediaStream = await gum({
+          audio: {
+            channelCount: 1,
+            sampleRate: TARGET_SAMPLE_RATE,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      }
+    }
+    if (!mediaStream) {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    }
     const audioTracks = mediaStream?.getAudioTracks?.();
     const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
     const deviceId = primaryTrack?.getSettings?.()?.deviceId || null;

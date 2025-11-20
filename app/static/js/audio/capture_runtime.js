@@ -134,6 +134,16 @@ export function createCaptureRuntime({
   const logStage = providedLogStage || telemetryLogStage;
   const logMic = telemetryLogMic;
 
+  const DEFAULT_CAPTURE_CONSTRAINTS = {
+    audio: {
+      channelCount: 1,
+      sampleRate: 16000,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  };
+
   const {
     getClientVadPolicyRoot = () => ({}),
   } = policyRuntime || {};
@@ -155,6 +165,7 @@ export function createCaptureRuntime({
   let firstChunkSeen = false;
   let armingGraceUntil = 0;
   let micRecordingStartAt = null;
+  let captureStream = null;
   // ===== Internal VAD state =====
   let vadController = null;
   let vadSilenceTimerId = null;
@@ -168,6 +179,49 @@ export function createCaptureRuntime({
         AppState.setState(patch);
       }
     } catch {}
+  }
+
+  function summarizeConstraints(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value !== "object") {
+      return value;
+    }
+    const audio = value && typeof value.audio === "object" && !Array.isArray(value.audio)
+      ? value.audio
+      : null;
+    const audioSummary = audio
+      ? {
+          channelCount: audio.channelCount ?? null,
+          deviceId: audio.deviceId ?? null,
+          sampleRate: audio.sampleRate ?? null,
+          echoCancellation: audio.echoCancellation ?? null,
+          noiseSuppression: audio.noiseSuppression ?? null,
+          autoGainControl: audio.autoGainControl ?? null,
+        }
+      : value?.audio ?? null;
+    return { audio: audioSummary };
+  }
+
+  function buildConstraintsFromPolicy(policy) {
+    const capture = policy && typeof policy === "object" && policy.capture && typeof policy.capture === "object"
+      ? policy.capture
+      : null;
+    if (capture && capture.constraints && typeof capture.constraints === "object") {
+      return capture.constraints;
+    }
+    return DEFAULT_CAPTURE_CONSTRAINTS;
+  }
+
+  function ensureStreamProvider(stream) {
+    if (typeof audioRuntime?.setCaptureStreamProvider === "function") {
+      try {
+        audioRuntime.setCaptureStreamProvider(() => stream);
+      } catch (err) {
+        console.warn("capture_runtime: setCaptureStreamProvider failed", err);
+      }
+    }
   }
 
   function applySenderPausedState() {
@@ -622,6 +676,51 @@ export function createCaptureRuntime({
     return performStopRecorder(normalizedLabel, opts);
   }
 
+  function streamIsActive(stream) {
+    try {
+      const tracks = typeof stream?.getAudioTracks === "function" ? stream.getAudioTracks() : [];
+      return Array.isArray(tracks) && tracks.some((track) => track && track.readyState === "live");
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function startCaptureFromPolicy(policy, reason = "auto") {
+    if (captureStream && streamIsActive(captureStream)) {
+      ensureStreamProvider(captureStream);
+      return captureStream;
+    }
+    const constraints = buildConstraintsFromPolicy(policy || {});
+    const summary = summarizeConstraints(constraints);
+    const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
+      ? window.getMicOnce
+      : null;
+    try {
+      const stream = gum
+        ? await gum(constraints)
+        : await navigator.mediaDevices.getUserMedia(constraints);
+      captureStream = stream;
+      ensureStreamProvider(stream);
+      try {
+        logMic({ outcome: "OPENED", source: "capture_runtime", constraints_summary: summary });
+        logStage("client.mic.opened", { source: "capture_runtime", reason, constraints: summary });
+      } catch (_) {}
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        try {
+          window.dispatchEvent(new CustomEvent("EVT_CLIENT_MIC_OPEN", {
+            detail: { source: "capture_runtime", ts_ms: Date.now(), constraints: summary },
+          }));
+        } catch (_) {}
+      }
+      return captureStream;
+    } catch (err) {
+      try {
+        logStage("client.mic.start_failed", { source: "capture_runtime", reason: err?.message || "gum_failed" });
+      } catch (_) {}
+      return null;
+    }
+  }
+
   async function startRecorderStreaming(opts = {}) {
     let policy = null;
     let reason = null;
@@ -649,6 +748,12 @@ export function createCaptureRuntime({
     clearVadSilenceTimer();
     const captureReason = typeof reason === "string" && reason ? reason : "auto";
     try {
+      const stream = await startCaptureFromPolicy(policy || {}, captureReason);
+      if (!stream) {
+        setListeningState(false);
+        audioStreaming = false;
+        return false;
+      }
       const sender = await ensurePcmSender();
       if (!sender) {
         try {
@@ -700,17 +805,6 @@ export function createCaptureRuntime({
       scheduleAudioKeepalive();
       setListeningState(true);
       armingGraceUntil = Date.now() + 1200;
-      try {
-        logMic({ outcome: "OPENED", source: "capture_runtime", has_stream: true });
-        logStage("client.mic.opened", { source: "capture_runtime" });
-      } catch (_) {}
-      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
-        try {
-          window.dispatchEvent(new CustomEvent("EVT_CLIENT_MIC_OPEN", {
-            detail: { source: "capture_runtime", ts_ms: Date.now() },
-          }));
-        } catch (_) {}
-      }
       try {
         hubLog("client.pcm.capture_start", { reason: captureReason, policy: !!policy });
       } catch {}

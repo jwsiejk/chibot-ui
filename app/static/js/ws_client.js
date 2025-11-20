@@ -979,7 +979,7 @@ if (typeof createCaptureRuntime !== "function") {
     return captureStopRecorder(normalized, opts);
   }
 
-  WSClient.startRecorderStreaming = function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
+  WSClient.startRecorderStreaming = async function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
     // Expose stopRecorder and input.stop helpers publicly so UI can pause mic on text input
     WSClient.stopRecorder = function wsClientStopRecorder(reason = "text_input", options = {}) {
       try {
@@ -1007,16 +1007,29 @@ if (typeof createCaptureRuntime !== "function") {
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
       try {
-        logStage("client.mic.start_skipped", { reason: "no_capture_runtime" });
+        logStage("client.mic.start_failed", { reason: "no_capture_runtime" });
       } catch (_) {}
-      return;
+      return false;
     }
     try {
       // Ensure a fresh turn-stop guard when we locally begin a new capture/turn.
       resetTurnStopFlag();
       resetSpeechFlag();
       ensureTurnAudioReqId(policy || AppState?.policy || {});
-      return startRecorderStreaming(policy, source);
+      const started = await startRecorderStreaming(policy, source);
+      if (!started) {
+        return false;
+      }
+      try {
+        await ensurePcmSender();
+      } catch (err) {
+        console.warn("WSClient.ensurePcmSender failed", err);
+      }
+      _audioStreaming = true;
+      setSenderPauseReason("server", false);
+      setSenderPauseReason("tts", false);
+      updatePcmSenderState();
+      return started;
     } catch (err) {
       console.warn("WSClient.startRecorderStreaming failed", err);
       try {
