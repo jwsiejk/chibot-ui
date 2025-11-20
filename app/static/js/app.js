@@ -58,22 +58,36 @@
       return null;
     }
     __gumInFlight = true;
-    try {
+
+    // Safe wrappers around telemetry so this works even before ws_client is loaded
+    const safeLogStage = (label, detail) => {
       try {
-        logStage("client.mic.gum_request", { constraints });
+        if (typeof window !== "undefined" && typeof window.__logStage === "function") {
+          window.__logStage(label, detail);
+        }
       } catch (_) {}
-      const summarizeConstraints = (value) => {
-        if (value === null || value === undefined) {
-          return null;
+    };
+
+    const safeLogMic = (detail) => {
+      try {
+        if (typeof window !== "undefined" && typeof window.__logMic === "function") {
+          window.__logMic(detail);
         }
-        if (typeof value !== "object") {
-          return value;
-        }
-        const audio = value && typeof value.audio === "object" && !Array.isArray(value.audio)
-          ? value.audio
-          : null;
-        const audioSummary = audio
-          ? {
+      } catch (_) {}
+    };
+
+    const summarizeConstraints = (value) => {
+      if (value === null || value === undefined) {
+        return null;
+      }
+      if (typeof value !== "object") {
+        return value;
+      }
+      const audio = value && typeof value.audio === "object" && !Array.isArray(value.audio)
+        ? value.audio
+        : null;
+      const audioSummary = audio
+        ? {
             channelCount: audio.channelCount ?? null,
             deviceId: audio.deviceId ?? null,
             sampleRate: audio.sampleRate ?? null,
@@ -81,39 +95,51 @@
             noiseSuppression: audio.noiseSuppression ?? null,
             autoGainControl: audio.autoGainControl ?? null,
           }
-          : value?.audio ?? null;
-        return { audio: audioSummary };
-      };
+        : value?.audio ?? null;
+      return { audio: audioSummary };
+    };
+
+    try {
       const constraintsSummary = summarizeConstraints(constraints);
-      try {
-        if (!navigator?.mediaDevices?.getUserMedia) {
-          throw new Error('MediaDevices.getUserMedia unavailable');
-        }
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      try {
-        logMic({
-          outcome: "GUM_GRANTED",
-          kind: "getMicOnce",
-          constraints_summary: constraintsSummary,
-        });
-      } catch (_) {}
-      try {
-        const hasAudioTracks = Array.isArray(stream?.getAudioTracks?.()) && stream.getAudioTracks().length > 0;
-        logStage("client.mic.gum_success", { has_audio_tracks: hasAudioTracks });
-      } catch (_) {}
-      return stream;
-    } catch (err) {
-      try {
-        logMic({
+      safeLogStage("client.mic.gum_request", { constraints: constraintsSummary });
+
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        const err = new Error("MediaDevices.getUserMedia unavailable");
+        safeLogMic({
           outcome: "ERROR_PERMISSIONS",
           kind: "getMicOnce",
-          error_name: err?.name,
-          error_message: err?.message,
+          error_name: err.name,
+          error_message: err.message,
         });
-      } catch (_) {}
+        safeLogStage("client.mic.gum_error", { name: err.name, message: err.message });
+        throw err;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      safeLogMic({
+        outcome: "GUM_GRANTED",
+        kind: "getMicOnce",
+        constraints_summary: constraintsSummary,
+      });
+
+      let hasAudioTracks = false;
       try {
-        logStage("client.mic.gum_error", { name: err?.name, message: err?.message });
+        const tracks = typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : [];
+        hasAudioTracks = Array.isArray(tracks) && tracks.length > 0;
       } catch (_) {}
+
+      safeLogStage("client.mic.gum_success", { has_audio_tracks: hasAudioTracks });
+
+      return stream;
+    } catch (err) {
+      safeLogMic({
+        outcome: "ERROR_PERMISSIONS",
+        kind: "getMicOnce",
+        error_name: err?.name,
+        error_message: err?.message,
+      });
+      safeLogStage("client.mic.gum_error", { name: err?.name, message: err?.message });
       throw err;
     } finally {
       __gumInFlight = false;
