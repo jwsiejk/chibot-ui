@@ -523,7 +523,11 @@ export async function initPcmSender(mediaStream = null, {
       return;
     }
     try {
-      logStage("client.pcm_sender.enabled", { enabled: desired });
+      if (desired) {
+        logStage("client.pcm_sender.enabled", {});
+      } else {
+        logStage("client.pcm_sender.disabled", {});
+      }
     } catch (_) {}
     enabled = desired;
     if (!enabled) {

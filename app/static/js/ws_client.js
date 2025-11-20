@@ -975,6 +975,13 @@ if (typeof createCaptureRuntime !== "function") {
       maybeSendTurnStop(normalized);
     }
 
+    try {
+      logStage("client.mic", {
+        outcome: MIC_OUTCOME.STOPPED,
+        reason: normalized || "unknown",
+      });
+    } catch (_) {}
+
     // Always pass a normalized string reason into the capture runtime.
     return captureStopRecorder(normalized, opts);
   }
@@ -1007,7 +1014,7 @@ if (typeof createCaptureRuntime !== "function") {
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
       try {
-        logStage("client.mic.start_failed", { reason: "no_capture_runtime" });
+        logStage("client.mic.start_failed", { source: source || "unknown", reason: "no_capture_runtime" });
       } catch (_) {}
       return false;
     }
@@ -1018,6 +1025,12 @@ if (typeof createCaptureRuntime !== "function") {
       ensureTurnAudioReqId(policy || AppState?.policy || {});
       const started = await startRecorderStreaming({ policy, reason: source });
       if (!started) {
+        try {
+          logStage("client.mic.start_skipped", {
+            source: source || "unknown",
+            reason: "startRecorderStreaming_returned_false",
+          });
+        } catch (_) {}
         return false;
       }
       _audioStreaming = true;
@@ -1028,7 +1041,10 @@ if (typeof createCaptureRuntime !== "function") {
     } catch (err) {
       console.warn("WSClient.startRecorderStreaming failed", err);
       try {
-        logStage("client.mic.start_skipped", { reason: err?.message || "start_failed" });
+        logStage("client.mic.start_failed", {
+          source: source || "unknown",
+          message: err?.message || "mic_start_failed",
+        });
       } catch (_) {}
     }
   };
@@ -1223,6 +1239,12 @@ if (typeof createCaptureRuntime !== "function") {
   }
 
   function openAsr(opts = {}) {
+    try {
+      logStage("client.asr", {
+        stage: "open_request",
+        vendor: AppState.asrVendor || null,
+      });
+    } catch (_) {}
     if (typeof runtimeOpenAsr === "function") {
       return runtimeOpenAsr(opts);
     }
@@ -1582,12 +1604,40 @@ if (typeof createCaptureRuntime !== "function") {
 
       case "asr.final":
         clearPartialWatchdog();
+        try {
+          const finalText = frame?.text ?? frame?.transcript ?? frame?.final ?? null;
+          logStage("client.asr", {
+            stage: "final",
+            text: typeof finalText === "string" ? finalText : null,
+            isPartial: false,
+          });
+        } catch (_) {}
         if (transcriptFrameAllowed(frame)) {
           deliverAsr(frame);
         } else {
           logStage("ui_transcript_filter", { allow: false, type: frame.type });
         }
         handledByTranscriptDispatch = true;
+        break;
+
+      case "asr.open":
+        try {
+          logStage("client.asr", {
+            stage: "open",
+            vendor: AppState.asrVendor || null,
+          });
+        } catch (_) {}
+        break;
+
+      case "asr.close":
+        try {
+          const closeReason = typeof frame?.reason === "string" && frame.reason ? frame.reason : null;
+          logStage("client.asr", {
+            stage: "close",
+            vendor: AppState.asrVendor || null,
+            reason: closeReason,
+          });
+        } catch (_) {}
         break;
 
       default:
