@@ -968,8 +968,39 @@ export function createWsAudioRuntime(options = {}) {
     if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
       pcmSampleRate = metaSampleRate;
     }
+
+    const effectiveSampleRate =
+      sr ||
+      metaSampleRate ||
+      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
+
+    // ✅ NEW: actually send the PCM over the WebSocket.
+    const sent = safeSendAudioChunk(chunk, {
+      lane: "mic",
+      sampleRateHz: effectiveSampleRate,
+      chunkCount,
+      seq,
+    });
+
+    if (!sent) {
+      try {
+        logStage("client.audio_chunk_send_failed", {
+          seq,
+          bytes: chunk.byteLength,
+          chunkCount,
+          sampleRate: effectiveSampleRate,
+        });
+      } catch (_) {}
+      return;
+    }
+
     const bytes = chunk.byteLength;
-    logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount });
+
+    // Existing metrics + telemetry
+    try {
+      logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount });
+    } catch (_) {}
+
     if (typeof onClientAudioChunkSend === "function") {
       try {
         onClientAudioChunkSend({ seq, bytes, batch_chunks: chunkCount, ts_ms: Date.now() });
@@ -977,17 +1008,26 @@ export function createWsAudioRuntime(options = {}) {
         console.warn("onClientAudioChunkSend failed", err);
       }
     }
+
     const nextChunkTotal = getMicChunksValue() + chunkCount;
     const nextByteTotal = getMicBytesValue() + bytes;
     setMicChunksValue(nextChunkTotal);
     setMicBytesValue(nextByteTotal);
+
     if (pcmSampleRate && Number.isFinite(pcmSampleRate)) {
       const samplesPerMs = pcmSampleRate / 1000;
       if (samplesPerMs > 0 && ((Math.random() * 50) | 0) === 0) {
         const ms_est = Math.round(chunk.length / samplesPerMs);
-        logStage("client.pcm.flush", { samples: chunk.length, ms_est, ws_state: resolveSocket()?.readyState });
+        try {
+          logStage("client.pcm.flush", {
+            samples: chunk.length,
+            ms_est,
+            ws_state: resolveSocket()?.readyState,
+          });
+        } catch (_) {}
       }
     }
+
     scheduleAudioKeepalive();
   }
 
