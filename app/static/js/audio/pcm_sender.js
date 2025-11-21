@@ -108,13 +108,16 @@ async function resumeAudioContext(audioCtx, { stage } = {}) {
   if (!audioCtx || typeof audioCtx.resume !== "function") {
     return;
   }
-  if (audioCtx.state !== "suspended") {
-    return;
-  }
   const label = typeof stage === "string" && stage ? stage : "unknown";
   try {
     logStage("client.pcm_sender.resume_attempt", { stage: label });
   } catch (_) {}
+  if (audioCtx.state !== "suspended") {
+    try {
+      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
+    } catch (_) {}
+    return;
+  }
   try {
     await audioCtx.resume();
     try {
@@ -163,6 +166,8 @@ export async function initPcmSender(mediaStream = null, {
   let workletPort = null;
   let usingWorklet = false;
   let processor = null;
+  let workletCallbackSeen = false;
+  let processorCallbackSeen = false;
 
   if (supportsWorklet) {
     try {
@@ -486,6 +491,14 @@ export async function initPcmSender(mediaStream = null, {
       const frameSampleRate = Number.isFinite(message.sampleRate) && message.sampleRate > 0
         ? message.sampleRate
         : targetSampleRate;
+      if (!workletCallbackSeen) {
+        workletCallbackSeen = true;
+        try {
+          logStage("client.pcm_sender.worklet_callback", {
+            sampleRate: frameSampleRate,
+          });
+        } catch (_) {}
+      }
       const pcm16 = new Int16Array(message.buffer);
       handleFrame(pcm16, { sampleRate: frameSampleRate, timestamp: message.timestamp });
     };
@@ -497,6 +510,14 @@ export async function initPcmSender(mediaStream = null, {
       const channelData = event.inputBuffer.getChannelData(0);
       if (!channelData || !channelData.length) {
         return;
+      }
+      if (!processorCallbackSeen) {
+        processorCallbackSeen = true;
+        try {
+          logStage("client.pcm_sender.processor_callback", {
+            sampleRate: sampleRate,
+          });
+        } catch (_) {}
       }
       const downsampled = downsampleTo16k(channelData, sampleRate);
       if (!downsampled.length) {
