@@ -1837,6 +1837,15 @@ if (typeof createCaptureRuntime !== "function") {
       console.info("start_listening received after ASR ready; relying on automatic mic start.", {
         vendor: policy?.asr?.vendor?.primary ?? null,
       });
+      // BUG FIX: actually start the mic when the server sends start_listening
+      try {
+        // Reuse the existing mic start pipeline so telemetry and state stay consistent
+        await WSClient.startRecorderStreaming(policy, "server.start_listening");
+      } catch (err) {
+        try {
+          console.warn("WSClient.startRecorderStreaming from start_listening failed", err);
+        } catch (_) {}
+      }
       return;
     } else if (frame.type === "stop_listening") {
       const rawStopReason = typeof frame?.reason === "string" && frame.reason
