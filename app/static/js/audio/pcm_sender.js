@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 
-import { logStage } from "../ws/telemetry.js";
+import { emitClientLog } from "../ws/telemetry.js";
 
 const DEFAULT_CHUNK_MS = 60;
 const DEFAULT_FLUSH_MS = 50;
@@ -110,22 +110,22 @@ async function resumeAudioContext(audioCtx, { stage } = {}) {
   }
   const label = typeof stage === "string" && stage ? stage : "unknown";
   try {
-    logStage("client.pcm_sender.resume_attempt", { stage: label });
+    emitClientLog("client.pcm_sender.resume_attempt", { stage: label });
   } catch (_) {}
   if (audioCtx.state !== "suspended") {
     try {
-      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
+      emitClientLog("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
     } catch (_) {}
     return;
   }
   try {
     await audioCtx.resume();
     try {
-      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
+      emitClientLog("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
     } catch (_) {}
   } catch (err) {
     try {
-      logStage("client.pcm_sender.resume_failed", {
+      emitClientLog("client.pcm_sender.resume_failed", {
         stage: label,
         error_name: err?.name || null,
         error_message: err?.message || null,
@@ -154,8 +154,10 @@ export async function initPcmSender(mediaStream = null, {
   const maxFrameSamples = Math.max(minFrameSamples, Math.round((chunkDurationMs / 1000) * targetSampleRate));
 
   try {
-    logStage("client.pcm_sender.init", {
+    emitClientLog("client.pcm_sender.init", {
       targetSampleRate,
+      chunkMs: chunkDurationMs,
+      flushIntervalMs: flushMs,
       channels: 1,
     });
   } catch (_) {}
@@ -222,7 +224,7 @@ export async function initPcmSender(mediaStream = null, {
       sampleRate: audioCtx?.sampleRate || null,
     });
     try {
-      logStage("client.pcm_sender.acquired_stream", {
+      emitClientLog("client.pcm_sender.acquired_stream", {
         audioCtxState: audioCtx?.state || null,
         audioCtxSampleRate: audioCtx?.sampleRate || null,
         mediaStreamId: mediaStream?.id || null,
@@ -315,8 +317,9 @@ export async function initPcmSender(mediaStream = null, {
 
   function handleFrame(pcm16, frameInfo = {}) {
     try {
-      logStage("pcm_sender.frame_received", {
+      emitClientLog("client.pcm_sender.frame_received", {
         length: Array.isArray(pcm16) || pcm16 instanceof Int16Array ? pcm16.length : 0,
+        sampleRate: Number.isFinite(frameInfo?.sampleRate) ? frameInfo.sampleRate : null,
         timestampMs: typeof frameInfo?.timestamp === "number" ? frameInfo.timestamp : null,
       });
     } catch (_) {}
@@ -494,7 +497,7 @@ export async function initPcmSender(mediaStream = null, {
       if (!workletCallbackSeen) {
         workletCallbackSeen = true;
         try {
-          logStage("client.pcm_sender.worklet_callback", {
+          emitClientLog("client.pcm_sender.worklet_callback", {
             sampleRate: frameSampleRate,
           });
         } catch (_) {}
@@ -514,8 +517,8 @@ export async function initPcmSender(mediaStream = null, {
       if (!processorCallbackSeen) {
         processorCallbackSeen = true;
         try {
-          logStage("client.pcm_sender.processor_callback", {
-            sampleRate: sampleRate,
+          emitClientLog("client.pcm_sender.processor_callback", {
+            sampleRate,
           });
         } catch (_) {}
       }
@@ -535,15 +538,18 @@ export async function initPcmSender(mediaStream = null, {
       processor.connect(audioCtx.destination);
     }
     try {
-      logStage("client.pcm_sender.node_connect_success", {
+      emitClientLog("client.pcm_sender.node_connect_success", {
         usingWorklet,
+        audioCtxState: audioCtx?.state || null,
+        sampleRate,
       });
     } catch (_) {}
   } catch (err) {
     notifyError(err);
     console.warn("[pcm_sender] failed to connect audio nodes", err);
     try {
-      logStage("client.pcm_sender.node_connect_failure", {
+      emitClientLog("client.pcm_sender.node_connect_failure", {
+        audioCtxState: audioCtx?.state || null,
         error_name: err?.name || null,
         error_message: err?.message || null,
       });
@@ -582,9 +588,9 @@ export async function initPcmSender(mediaStream = null, {
     }
     try {
       if (desired) {
-        logStage("client.pcm_sender.enabled", {});
+        emitClientLog("client.pcm_sender.enabled", {});
       } else {
-        logStage("client.pcm_sender.disabled", {});
+        emitClientLog("client.pcm_sender.disabled", {});
       }
     } catch (_) {}
     enabled = desired;
