@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 
-import { emitClientLog } from "../ws/telemetry.js";
+import { emitClientLog, logStage } from "../ws/telemetry.js";
 
 const DEFAULT_CHUNK_MS = 60;
 const DEFAULT_FLUSH_MS = 50;
@@ -110,22 +110,22 @@ async function resumeAudioContext(audioCtx, { stage } = {}) {
   }
   const label = typeof stage === "string" && stage ? stage : "unknown";
   try {
-    emitClientLog("client.pcm_sender.resume_attempt", { stage: label });
+    logStage("client.pcm_sender.resume_attempt", { stage: label });
   } catch (_) {}
   if (audioCtx.state !== "suspended") {
     try {
-      emitClientLog("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
+      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
     } catch (_) {}
     return;
   }
   try {
     await audioCtx.resume();
     try {
-      emitClientLog("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
+      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
     } catch (_) {}
   } catch (err) {
     try {
-      emitClientLog("client.pcm_sender.resume_failed", {
+      logStage("client.pcm_sender.resume_failed", {
         stage: label,
         error_name: err?.name || null,
         error_message: err?.message || null,
@@ -317,7 +317,7 @@ export async function initPcmSender(mediaStream = null, {
 
   function handleFrame(pcm16, frameInfo = {}) {
     try {
-      emitClientLog("client.pcm_sender.frame_received", {
+      logStage("client.pcm_sender.frame_received", {
         length: Array.isArray(pcm16) || pcm16 instanceof Int16Array ? pcm16.length : 0,
         sampleRate: Number.isFinite(frameInfo?.sampleRate) ? frameInfo.sampleRate : null,
         timestampMs: typeof frameInfo?.timestamp === "number" ? frameInfo.timestamp : null,
@@ -538,7 +538,7 @@ export async function initPcmSender(mediaStream = null, {
       processor.connect(audioCtx.destination);
     }
     try {
-      emitClientLog("client.pcm_sender.node_connect_success", {
+      logStage("client.pcm_sender.node_connect_success", {
         usingWorklet,
         audioCtxState: audioCtx?.state || null,
         sampleRate,
@@ -548,7 +548,7 @@ export async function initPcmSender(mediaStream = null, {
     notifyError(err);
     console.warn("[pcm_sender] failed to connect audio nodes", err);
     try {
-      emitClientLog("client.pcm_sender.node_connect_failure", {
+      logStage("client.pcm_sender.node_connect_failure", {
         audioCtxState: audioCtx?.state || null,
         error_name: err?.name || null,
         error_message: err?.message || null,
