@@ -1840,13 +1840,27 @@ if (typeof createCaptureRuntime !== "function") {
       // BUG FIX: actually start the mic when the server sends start_listening
       try {
         // Reuse the existing mic start pipeline so telemetry and state stay consistent
-        await WSClient.startRecorderStreaming(policy, "server.start_listening");
+        const started = await WSClient.startRecorderStreaming(policy, "server.start_listening");
+        if (started) {
+          const reason = typeof frame?.reason === "string" && frame.reason
+            ? frame.reason
+            : frame?.type || "start_listening";
+          _audioStreaming = true;
+          setListeningState(true);
+          ensureTurnAudioReqId(policy || AppState?.policy || {});
+          emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
+          resetTurnStopFlag();
+          resetSpeechFlag();
+          __turnOpen = true;
+          __turnOpenAt = Date.now();
+          logStage("client.stream.on", { reason });
+          await openTurnOnce(reason);
+        }
       } catch (err) {
         try {
           console.warn("WSClient.startRecorderStreaming from start_listening failed", err);
         } catch (_) {}
       }
-      return;
     } else if (frame.type === "stop_listening") {
       const rawStopReason = typeof frame?.reason === "string" && frame.reason
         ? frame.reason
