@@ -819,12 +819,26 @@ export function createWsAudioRuntime(options = {}) {
     } else {
       if (isTypedArray(frame) && frame.BYTES_PER_ELEMENT && frame.BYTES_PER_ELEMENT !== 2) {
         console.warn("ws_audio_runtime: invalid PCM chunk, expected ArrayBuffer or TypedArray");
+        try {
+          logStage("client.pcm.invalid_chunk", {
+            reason: "wrong_element_size",
+            bytes_per_element: frame && frame.BYTES_PER_ELEMENT ? frame.BYTES_PER_ELEMENT : null,
+            constructor: frame && frame.constructor ? frame.constructor.name : null,
+          });
+        } catch (_) {}
         return;
       }
 
       const buffer = toArrayBuffer(frame);
       if (!buffer) {
         console.warn("ws_audio_runtime: invalid PCM chunk, expected ArrayBuffer or TypedArray");
+        try {
+          logStage("client.pcm.invalid_chunk", {
+            reason: "toArrayBuffer_failed",
+            constructor: frame && frame.constructor ? frame.constructor.name : null,
+            typeof: typeof frame,
+          });
+        } catch (_) {}
         return;
       }
 

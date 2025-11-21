@@ -2697,6 +2697,12 @@ if (typeof createCaptureRuntime !== "function") {
     }
     if (!arrayBuffer) {
       logTransportMisuse("sendAudioChunk_invalid_payload");
+      try {
+        logStage("client.audio_chunk_invalid_payload", {
+          lane: typeof opts?.lane === "string" ? opts.lane : null,
+          type: buf && buf.constructor ? buf.constructor.name : typeof buf,
+        });
+      } catch (_) {}
       console.error("sendAudioChunk: expected ArrayBuffer or TypedArray");
       return false;
     }
