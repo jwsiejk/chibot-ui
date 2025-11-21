@@ -164,10 +164,21 @@ export function logMic(detail = {}) {
   } catch {}
 }
 
-export function logStage(label, detail = {}) {
+export function emitClientLog(label, detail = {}) {
+  if (typeof label !== "string" || !label) {
+    return;
+  }
+  const payload = detail && typeof detail === "object" ? { ...detail } : {};
   try {
-    hubLog(label, { trace_id: __turnTraceId || null, ...detail });
+    hubLog(label, payload);
   } catch {}
+  try {
+    console.log(label, payload);
+  } catch {}
+}
+
+export function logStage(label, detail = {}) {
+  emitClientLog(label, { trace_id: __turnTraceId || null, ...detail });
 }
 
 export function normalizeErrorDetail(detail) {
