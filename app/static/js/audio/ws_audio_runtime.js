@@ -801,6 +801,16 @@ export function createWsAudioRuntime(options = {}) {
       AppState.audio = audioState;
       updateState({ audio: audioState });
     }
+
+    // Force a sender-state evaluation whenever we learn the sample rate.
+    // This guarantees updatePcmSenderState runs at least once during setup.
+    try {
+      updatePcmSenderState("handleSampleRate");
+    } catch (err) {
+      try {
+        console.warn("[ws_audio_runtime] updatePcmSenderState from handleSampleRate failed", err);
+      } catch (_) {}
+    }
   }
 
   function handlePcmFrame(frame, meta = {}) {
