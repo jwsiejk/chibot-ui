@@ -1036,10 +1036,7 @@ export function createWsAudioRuntime(options = {}) {
     scheduleAudioKeepalive();
   }
 
-  function updatePcmSenderState() {
-    if (!pcmSender || typeof pcmSender.setEnabled !== "function") {
-      return;
-    }
+  function updatePcmSenderState(reason = "unknown") {
     const asrReady = Boolean(AppState?.asrReady);
     const turnActive = Object.prototype.hasOwnProperty.call(AppState || {}, "turnActive")
       ? Boolean(AppState.turnActive)
@@ -1055,9 +1052,45 @@ export function createWsAudioRuntime(options = {}) {
       turnActive
     );
     const shouldSend = FORCE_PCM_SEND ? asrReady : shouldSendBase;
+
+    // Always log the raw inputs on every call
+    try {
+      logStage("client.audio_stream_state_inputs", {
+        reason,
+        shouldSend,
+        base_enabled: shouldSendBase,
+        force_pcm_send: FORCE_PCM_SEND,
+        isAudioStreaming: audioStreaming,
+        senderPaused,
+        canCaptureNow: captureAllowed,
+        asrReady,
+        turnActive,
+        hasPcmSender: !!pcmSender,
+      });
+    } catch (_) {}
+    try {
+      console.log("[ws_audio_runtime] updatePcmSenderState.inputs", {
+        reason,
+        shouldSend,
+        base_enabled: shouldSendBase,
+        force_pcm_send: FORCE_PCM_SEND,
+        isAudioStreaming: audioStreaming,
+        senderPaused,
+        canCaptureNow: captureAllowed,
+        asrReady,
+        turnActive,
+        hasPcmSender: !!pcmSender,
+      });
+    } catch (_) {}
+
+    if (!pcmSender || typeof pcmSender.setEnabled !== "function") {
+      return;
+    }
+
     if (pcmSenderStateLast !== shouldSend) {
       try {
         logStage("client.audio_stream_state", {
+          reason,
           enabled: shouldSend,
           base_enabled: shouldSendBase,
           force_pcm_send: FORCE_PCM_SEND,
@@ -1070,6 +1103,7 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
       try {
         console.log("[ws_audio_runtime] updatePcmSenderState", {
+          reason,
           enabled: shouldSend,
           base_enabled: shouldSendBase,
           force_pcm_send: FORCE_PCM_SEND,
@@ -1082,6 +1116,7 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
       pcmSenderStateLast = shouldSend;
     }
+
     pcmSender.setEnabled(shouldSend);
   }
 
