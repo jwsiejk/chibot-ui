@@ -122,6 +122,11 @@ export function createWsAudioRuntime(options = {}) {
 
   __firstPcmFrameLogged = false;
 
+  // Diagnostic: when true, we bypass the normal PCM sender gate and always
+  // enable the PCM sender while ASR is ready. This should only be used for
+  // short, controlled tests.
+  const FORCE_PCM_SEND = false; // set to true temporarily for diagnostics
+
   let localMicChunks = 0;
   let localMicBytes = 0;
   let localFirstChunkSeen = false;
@@ -1039,14 +1044,38 @@ export function createWsAudioRuntime(options = {}) {
     const turnActive = Object.prototype.hasOwnProperty.call(AppState || {}, "turnActive")
       ? Boolean(AppState.turnActive)
       : true;
-    const shouldSend = Boolean(isAudioStreaming() && !isSenderPaused() && canCaptureNow() && asrReady && turnActive);
+    const audioStreaming = Boolean(isAudioStreaming());
+    const senderPaused = Boolean(isSenderPaused());
+    const captureAllowed = Boolean(canCaptureNow());
+    const shouldSendBase = Boolean(
+      audioStreaming &&
+      !senderPaused &&
+      captureAllowed &&
+      asrReady &&
+      turnActive
+    );
+    const shouldSend = FORCE_PCM_SEND ? asrReady : shouldSendBase;
     if (pcmSenderStateLast !== shouldSend) {
       try {
         logStage("client.audio_stream_state", {
           enabled: shouldSend,
-          isAudioStreaming: isAudioStreaming(),
-          senderPaused: isSenderPaused(),
-          canCaptureNow: canCaptureNow(),
+          base_enabled: shouldSendBase,
+          force_pcm_send: FORCE_PCM_SEND,
+          isAudioStreaming: audioStreaming,
+          senderPaused,
+          canCaptureNow: captureAllowed,
+          asrReady,
+          turnActive,
+        });
+      } catch (_) {}
+      try {
+        console.log("[ws_audio_runtime] updatePcmSenderState", {
+          enabled: shouldSend,
+          base_enabled: shouldSendBase,
+          force_pcm_send: FORCE_PCM_SEND,
+          isAudioStreaming: audioStreaming,
+          senderPaused,
+          canCaptureNow: captureAllowed,
           asrReady,
           turnActive,
         });
