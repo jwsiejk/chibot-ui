@@ -7575,9 +7575,9 @@ class ChatV2Adapter:
                             "evt=turn_begin_send_failed sid=%s reason=ready_bundle",
                             ctx.sid,
                             exc_info=True,
-                )
-            else:
-                ctx.turn_active = True
+                        )
+                else:
+                    ctx.turn_active = True
 
     @staticmethod
     def _extract_tts_utt_id(frame: Mapping[str, Any] | None) -> Optional[str]:
