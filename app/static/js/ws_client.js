@@ -2167,6 +2167,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } else if (frame.type === "error") {
       await handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
+      if (!greetCandidateSeen) {
+        markGreetStart(frame);
+      }
       const shouldMuteDuringTts = Boolean(AppState?.policy?.recorder?.mute_send_during_tts);
       if (shouldMuteDuringTts) {
         try {
@@ -2214,6 +2217,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
+      }
+      if (!greetCompleted && greetCandidateSeen) {
+        markGreetEnd();
+        enterConversationAfterGreet("greet_tts_end_handler");
       }
       const uttIdEnd = frame?.utt_id || 'utt-00001';
       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
