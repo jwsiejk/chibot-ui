@@ -181,6 +181,8 @@ export function createCaptureRuntime({
     } catch {}
   }
 
+  const resolvePhase = () => (typeof AppState?.phase === "string" ? AppState.phase : null);
+
   function summarizeConstraints(value) {
     if (value === null || value === undefined) {
       return null;
@@ -573,7 +575,7 @@ export function createCaptureRuntime({
     syncSenderPaused(softStop);
     try {
       logMic({ outcome: "STOPPED", source: "capture_runtime" });
-      logStage("client.mic.stopped", { source: "capture_runtime", reason: stopReason || "unknown" });
+      logStage("client.mic.stopped", { source: "capture_runtime", reason: stopReason || "unknown", phase: resolvePhase() });
     } catch (_) {}
     try {
       const sender = await ensurePcmSender();
@@ -601,6 +603,7 @@ export function createCaptureRuntime({
       logStage("client.pcm.capture_stop", {
         source: "capture_runtime",
         reason: stopReason || "unknown",
+        phase: resolvePhase(),
       });
     } catch (_) {}
     if (!softStop) {
@@ -707,6 +710,7 @@ export function createCaptureRuntime({
           source: "capture_runtime",
           reason,
           constraints: summary,
+          phase: resolvePhase(),
         });
       } catch (_) {}
       const stream = gum
@@ -723,11 +727,12 @@ export function createCaptureRuntime({
           sampleRate: trackSettings.sampleRate || null,
           deviceId: trackSettings.deviceId || null,
           channelCount: trackSettings.channelCount || null,
+          phase: resolvePhase(),
         });
       } catch (_) {}
       try {
         logMic({ outcome: "OPENED", source: "capture_runtime", constraints_summary: summary });
-        logStage("client.mic.opened", { source: "capture_runtime", reason, constraints: summary });
+        logStage("client.mic.opened", { source: "capture_runtime", reason, constraints: summary, phase: resolvePhase() });
       } catch (_) {}
       if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
         try {
@@ -739,7 +744,7 @@ export function createCaptureRuntime({
       return captureStream;
     } catch (err) {
       try {
-        logStage("client.mic.start_failed", { source: "capture_runtime", reason: err?.message || "gum_failed" });
+        logStage("client.mic.start_failed", { source: "capture_runtime", reason: err?.message || "gum_failed", phase: resolvePhase() });
       } catch (_) {}
       try {
         logStage("client.mic.start_failed_error", {
@@ -747,6 +752,7 @@ export function createCaptureRuntime({
           reason: err?.message || "gum_failed",
           error_name: err?.name || null,
           error_detail: err?.message || null,
+          phase: resolvePhase(),
         });
       } catch (_) {}
       return null;
@@ -848,6 +854,7 @@ export function createCaptureRuntime({
         logStage("client.pcm.capture_start", {
           source: "capture_runtime",
           reason: normalizedCaptureReason || captureReason || "unknown",
+          phase: resolvePhase(),
         });
       } catch (_) {}
       armingGraceUntil = Date.now() + 1200;

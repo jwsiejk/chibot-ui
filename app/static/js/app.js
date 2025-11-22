@@ -33,6 +33,9 @@
     if (typeof window.AppState.turnActive !== 'boolean') {
       window.AppState.turnActive = false;
     }
+    if (typeof window.AppState.phase !== 'string') {
+      window.AppState.phase = 'greet';
+    }
   } catch {}
 
   function hubLog(label, detail) {
