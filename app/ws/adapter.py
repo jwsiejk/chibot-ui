@@ -1054,6 +1054,20 @@ class ChatV2Adapter:
             greet_utt_id = self._extract_tts_utt_id(frame) or utt_id
             if greet_utt_id and self._frame_signals_greet(frame):
                 ctx.greet_utt_id = greet_utt_id
+                if send is not None:
+                    try:
+                        await self._send_json(
+                            send,
+                            ctx.sid,
+                            {
+                                "type": "greet.start",
+                                "utt_id": greet_utt_id,
+                                "meta": {"is_greet": True, "provider": provider_name},
+                            },
+                            ctx=ctx,
+                        )
+                    except Exception:
+                        _log.exception("evt=greet_start_emit_failed sid=%s", ctx.sid)
         try:
             self._bus(
                 "tts.start",
@@ -1173,6 +1187,20 @@ class ChatV2Adapter:
                 summary="Greet TTS completed",
                 source="tts",
             )
+            if send is not None:
+                try:
+                    await self._send_json(
+                        send,
+                        ctx.sid,
+                        {
+                            "type": "greet.complete",
+                            "utt_id": frame_utt_id,
+                            "meta": {"is_greet": True, "provider": provider_name},
+                        },
+                        ctx=ctx,
+                    )
+                except Exception:
+                    _log.exception("evt=greet_complete_emit_failed sid=%s", ctx.sid)
         if ctx.greet_completed and not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
 
