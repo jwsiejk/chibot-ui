@@ -19,6 +19,7 @@ const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
 let __firstPcmFrameLogged = false;
+const WS_READY_PHASES = new Set(["connected", "ready", "arming", "resuming"]);
 
 const primedSessionIds = new Set();
 
@@ -1059,6 +1060,8 @@ export function createWsAudioRuntime(options = {}) {
       : true;
     const phaseValue = typeof AppState?.phase === "string" ? AppState.phase : null;
     const phaseAllowsSend = phaseValue ? phaseValue === "conversation" : true;
+    const wsPhase = typeof AppState?.wsPhase === "string" ? AppState.wsPhase : null;
+    const wsReadyForAudio = wsPhase ? WS_READY_PHASES.has(wsPhase) : true;
     const audioStreaming = Boolean(isAudioStreaming());
     const senderPaused = Boolean(isSenderPaused());
     const captureAllowed = Boolean(canCaptureNow());
@@ -1068,7 +1071,8 @@ export function createWsAudioRuntime(options = {}) {
       captureAllowed &&
       asrReady &&
       turnActive &&
-      phaseAllowsSend
+      phaseAllowsSend &&
+      wsReadyForAudio
     );
     const shouldSend = FORCE_PCM_SEND ? asrReady : shouldSendBase;
 
@@ -1087,6 +1091,8 @@ export function createWsAudioRuntime(options = {}) {
         hasPcmSender: !!pcmSender,
         phase: phaseValue,
         phase_allows_send: phaseAllowsSend,
+        wsPhase,
+        ws_ready: wsReadyForAudio,
       });
     } catch (_) {}
     try {
@@ -1103,6 +1109,8 @@ export function createWsAudioRuntime(options = {}) {
         hasPcmSender: !!pcmSender,
         phase: phaseValue,
         phase_allows_send: phaseAllowsSend,
+        wsPhase,
+        ws_ready: wsReadyForAudio,
       });
     } catch (_) {}
 
@@ -1114,6 +1122,8 @@ export function createWsAudioRuntime(options = {}) {
       wsConnected: socket ? socket.readyState === WebSocket.OPEN : false,
       senderPaused,
       vadGateOpen: captureAllowed,
+      wsPhase,
+      wsReadyForAudio,
       shouldSend,
     };
 
@@ -1142,6 +1152,8 @@ export function createWsAudioRuntime(options = {}) {
           turnActive,
           phase: typeof AppState?.phase === "string" ? AppState.phase : null,
           phase_allows_send: phaseAllowsSend,
+          wsPhase,
+          ws_ready: wsReadyForAudio,
         });
       } catch (_) {}
       try {
@@ -1156,9 +1168,19 @@ export function createWsAudioRuntime(options = {}) {
           asrReady,
           turnActive,
           phase_allows_send: phaseAllowsSend,
+          wsPhase,
+          ws_ready: wsReadyForAudio,
         });
       } catch (_) {}
       pcmSenderStateLast = shouldSend;
+      try {
+        console.log("client.pcm_sender.state", {
+          enabled: shouldSend,
+          reason,
+          wsPhase,
+          ws_ready: wsReadyForAudio,
+        });
+      } catch {}
     }
 
     pcmSender.setEnabled(shouldSend);
