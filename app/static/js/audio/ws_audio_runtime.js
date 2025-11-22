@@ -19,7 +19,7 @@ const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
 let __firstPcmFrameLogged = false;
-const WS_READY_PHASES = new Set(["connected", "ready", "arming", "resuming"]);
+const WS_READY_PHASES = new Set(["connected", "ready"]);
 
 const primedSessionIds = new Set();
 
@@ -1061,7 +1061,8 @@ export function createWsAudioRuntime(options = {}) {
     const phaseValue = typeof AppState?.phase === "string" ? AppState.phase : null;
     const phaseAllowsSend = phaseValue ? phaseValue === "conversation" : true;
     const wsPhase = typeof AppState?.wsPhase === "string" ? AppState.wsPhase : null;
-    const wsReadyForAudio = wsPhase ? WS_READY_PHASES.has(wsPhase) : true;
+    const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
+    const wsReadyForAudio = wsPhaseKnown ? WS_READY_PHASES.has(wsPhase) : true;
     const audioStreaming = Boolean(isAudioStreaming());
     const senderPaused = Boolean(isSenderPaused());
     const captureAllowed = Boolean(canCaptureNow());
@@ -1092,6 +1093,7 @@ export function createWsAudioRuntime(options = {}) {
         phase: phaseValue,
         phase_allows_send: phaseAllowsSend,
         wsPhase,
+        wsPhaseKnown,
         ws_ready: wsReadyForAudio,
       });
     } catch (_) {}
@@ -1110,6 +1112,7 @@ export function createWsAudioRuntime(options = {}) {
         phase: phaseValue,
         phase_allows_send: phaseAllowsSend,
         wsPhase,
+        wsPhaseKnown,
         ws_ready: wsReadyForAudio,
       });
     } catch (_) {}
@@ -1123,6 +1126,7 @@ export function createWsAudioRuntime(options = {}) {
       senderPaused,
       vadGateOpen: captureAllowed,
       wsPhase,
+      wsPhaseKnown,
       wsReadyForAudio,
       shouldSend,
     };
@@ -1153,6 +1157,7 @@ export function createWsAudioRuntime(options = {}) {
           phase: typeof AppState?.phase === "string" ? AppState.phase : null,
           phase_allows_send: phaseAllowsSend,
           wsPhase,
+          wsPhaseKnown,
           ws_ready: wsReadyForAudio,
         });
       } catch (_) {}
@@ -1169,6 +1174,7 @@ export function createWsAudioRuntime(options = {}) {
           turnActive,
           phase_allows_send: phaseAllowsSend,
           wsPhase,
+          wsPhaseKnown,
           ws_ready: wsReadyForAudio,
         });
       } catch (_) {}
@@ -1178,9 +1184,21 @@ export function createWsAudioRuntime(options = {}) {
           enabled: shouldSend,
           reason,
           wsPhase,
+          wsPhaseKnown,
           ws_ready: wsReadyForAudio,
         });
       } catch {}
+      try {
+        logStage("client.pcm_sender.state", {
+          enabled: shouldSend,
+          reason,
+          senderPaused,
+          asrReady,
+          wsPhase,
+          wsPhaseKnown,
+          wsReady: wsReadyForAudio,
+        });
+      } catch (_) {}
     }
 
     pcmSender.setEnabled(shouldSend);
