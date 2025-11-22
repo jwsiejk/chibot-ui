@@ -522,6 +522,7 @@ class AdapterContext:
     tts_bus_token_start: Optional[str] = None
     tts_bus_token_end: Optional[str] = None
     turn_state_subscription_token: Optional[str] = None
+    greet_completed: bool = False
     hud_state: Optional[str] = None
     client_mic_open: bool = False
     turn_active: bool = False
@@ -968,6 +969,14 @@ class ChatV2Adapter:
         # `asr.ready` + `input.start` + `start_listening` bundle via
         # `_send_asr_ready_bundle`. Callers should rely on this method rather
         # than invoking `_open_asr` or `_send_asr_ready_bundle` directly.
+        if not ctx.greet_completed:
+            self._emit_session_step(
+                ctx.sid,
+                "asr.skip_pre_greet",
+                summary="Skipped pre-greet ASR open",
+                meta={"reason": "greet_not_completed", "where": label},
+            )
+            return
         if ctx.asr_ready_bundle_sent_ms:
             return
         if send is None:
@@ -1144,6 +1153,14 @@ class ChatV2Adapter:
                         "bytes_out": int(total_bytes) if total_bytes is not None else None,
                     }
                 },
+            )
+        if not ctx.greet_completed:
+            ctx.greet_completed = True
+            self._emit_session_step(
+                ctx.sid,
+                "greet.completed",
+                summary="Greet TTS completed",
+                source="tts",
             )
         if not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
@@ -2892,6 +2909,15 @@ class ChatV2Adapter:
                 return self._HandleResult(True)
 
         if frame_type == "asr.open":
+            if not ctx.greet_completed:
+                self._emit_session_step(
+                    ctx.sid,
+                    "asr.open_ignored_pre_greet",
+                    summary="Ignored client asr.open before greet complete",
+                    meta={"reason": "greet_not_completed"},
+                )
+                await self._publish_json_recv(ctx, meta, frame_payload)
+                return self._HandleResult(True)
             if ctx.session.tts_active:
                 ctx.session.queued_arm = True
                 await self._publish(
