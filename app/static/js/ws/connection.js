@@ -535,6 +535,16 @@ export function createWsConnection({
         hasWs: !!ws,
         queueLength: connectionQueue.length,
       });
+      try {
+        console.log("ws.connection.send.queue", {
+          payloadType,
+          reason: "connecting",
+          phase,
+          readyState,
+          binary: !!binary,
+          queueLength: connectionQueue.length + 1,
+        });
+      } catch {}
       queueFrame(data, !!binary);
       return true;
     }
@@ -558,6 +568,16 @@ export function createWsConnection({
           hasWs: !!ws,
           queueLength: connectionQueue.length,
         });
+        try {
+          console.log("ws.connection.send.queue", {
+            payloadType,
+            reason: "phase_gate",
+            phase,
+            readyState,
+            binary: !!binary,
+            queueLength: connectionQueue.length + 1,
+          });
+        } catch {}
         queueFrame(data, false);
         return true;
       }
@@ -589,6 +609,16 @@ export function createWsConnection({
         return false;
       }
       try {
+        console.log("ws.connection.send.flush", {
+          payloadType,
+          binary: false,
+          phase,
+          readyState,
+          bytes: encoded.payload?.byteLength || null,
+          reason: "control_frame",
+        });
+      } catch {}
+      try {
         live.send(encoded.payload);
         return true;
       } catch (err) {
@@ -601,6 +631,16 @@ export function createWsConnection({
       if (payload instanceof Blob) {
         return payload.arrayBuffer().then((buf) => {
           try {
+            try {
+              console.log("ws.connection.send.flush", {
+                payloadType,
+                binary: true,
+                phase,
+                readyState,
+                bytes: buf?.byteLength || null,
+                reason: "blob_resolved",
+              });
+            } catch {}
             live.send(buf);
             return true;
           } catch (err) {
@@ -614,6 +654,16 @@ export function createWsConnection({
           ? payload
           : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
         try {
+          try {
+            console.log("ws.connection.send.flush", {
+              payloadType,
+              binary: true,
+              phase,
+              readyState,
+              bytes: buffer?.byteLength || null,
+              reason: "binary_buffer",
+            });
+          } catch {}
           live.send(buffer);
           return true;
         } catch (err) {
@@ -627,6 +677,16 @@ export function createWsConnection({
 
     const text = typeof data === "string" ? data : JSON.stringify(data);
     try {
+      try {
+        console.log("ws.connection.send.flush", {
+          payloadType,
+          binary: false,
+          phase,
+          readyState,
+          bytes: typeof text === "string" ? text.length : null,
+          reason: "json_text",
+        });
+      } catch {}
       live.send(text);
       return true;
     } catch (err) {
@@ -637,6 +697,16 @@ export function createWsConnection({
 
   function sendBinary(payload, opts = {}) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
+      try {
+        console.log("ws.connection.send.queue", {
+          payloadType: typeof opts?.type === "string" ? opts.type : "binary",
+          reason: "binary_not_open",
+          phase: getAppStatePhase(),
+          readyState: socket?.readyState,
+          binary: true,
+          queueLength: connectionQueue.length + 1,
+        });
+      } catch {}
       queueFrame(payload, true, opts && typeof opts === "object" ? { ...opts } : undefined);
       return false;
     }

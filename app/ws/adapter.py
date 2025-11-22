@@ -3504,6 +3504,14 @@ class ChatV2Adapter:
         ctx.last_client_activity_ms = int(time.time() * 1000)
         self._cancel_no_audio_watchdog(ctx)
 
+        self._emit_session_step(
+            ctx.sid,
+            "audio.frame.received",
+            summary="Got audio frame",
+            meta={"len": byte_count},
+            source="ws.audio",
+        )
+
         if byte_count > self.binary_limit_bytes:
             await self._publish(
                 EVT_WS_AUDIO_RECV,

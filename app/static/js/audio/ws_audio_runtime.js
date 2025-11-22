@@ -264,6 +264,12 @@ export function createWsAudioRuntime(options = {}) {
       ? (getCurrentTurnReqId() || null)
       : null;
     const enrichedMeta = meta && typeof meta === "object" ? { ...meta } : {};
+    try {
+      logStage("client.audio_chunk_send", {
+        length: payload?.byteLength || payload?.length || null,
+        ws_ready: resolveSocket()?.readyState,
+      });
+    } catch (_) {}
     if (!currentReqId) {
       if (!warnedMissingReqId) {
         console.warn("ws_audio_runtime: audio chunk without active req_id; sending anyway");
