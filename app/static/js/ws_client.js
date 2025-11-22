@@ -47,62 +47,60 @@ try {
   });
 } catch (_) {}
 
-(() => {
-  const PHASE = {
-    Greet: "greet",
-    Conversation: "conversation",
+const PHASE = {
+  Greet: "greet",
+  Conversation: "conversation",
+};
+
+function getPhase() {
+  return AppState?.phase || PHASE.Greet;
+}
+
+function setPhase(nextPhase, options = {}) {
+  const force = options && options.force === true;
+  if (!AppState || typeof AppState !== "object") return;
+  if (!force && AppState.phase === nextPhase) return;
+  AppState.phase = nextPhase;
+  try {
+    if (typeof setSenderPauseReason === "function") {
+      setSenderPauseReason("phase_greet", nextPhase === PHASE.Greet);
+      applySenderPausedState?.();
+      updatePcmSenderState?.();
+    }
+  } catch (_) {}
+  try {
+    logStage("client.phase.change", { phase: nextPhase });
+  } catch (_) {}
+}
+const missingAudioExports = [];
+if (typeof createCaptureRuntime !== "function") {
+  missingAudioExports.push("createCaptureRuntime");
+}
+if (typeof initVAD !== "function") {
+  missingAudioExports.push("initVAD");
+}
+if (typeof initPcmSender !== "function") {
+  missingAudioExports.push("initPcmSender");
+}
+if (typeof createWsAudioRuntime !== "function") {
+  missingAudioExports.push("createWsAudioRuntime");
+}
+if (missingAudioExports.length > 0) {
+  const detail = {
+    missing: missingAudioExports,
+    vadModuleLoaded: Boolean(vadModule),
+    captureRuntimeModuleLoaded: Boolean(captureRuntimeModule),
+    pcmSenderModuleLoaded: Boolean(pcmSenderModule),
+    wsAudioRuntimeModuleLoaded: Boolean(wsAudioRuntimeModule),
   };
-
-  function getPhase() {
-    return AppState?.phase || PHASE.Greet;
-  }
-
-  function setPhase(nextPhase, options = {}) {
-    const force = options && options.force === true;
-    if (!AppState || typeof AppState !== "object") return;
-    if (!force && AppState.phase === nextPhase) return;
-    AppState.phase = nextPhase;
-    try {
-      if (typeof setSenderPauseReason === "function") {
-        setSenderPauseReason("phase_greet", nextPhase === PHASE.Greet);
-        applySenderPausedState?.();
-        updatePcmSenderState?.();
-      }
-    } catch (_) {}
-    try {
-      logStage("client.phase.change", { phase: nextPhase });
-    } catch (_) {}
-  }
-  const missingAudioExports = [];
-  if (typeof createCaptureRuntime !== "function") {
-    missingAudioExports.push("createCaptureRuntime");
-  }
-  if (typeof initVAD !== "function") {
-    missingAudioExports.push("initVAD");
-  }
-  if (typeof initPcmSender !== "function") {
-    missingAudioExports.push("initPcmSender");
-  }
-  if (typeof createWsAudioRuntime !== "function") {
-    missingAudioExports.push("createWsAudioRuntime");
-  }
-  if (missingAudioExports.length > 0) {
-    const detail = {
-      missing: missingAudioExports,
-      vadModuleLoaded: Boolean(vadModule),
-      captureRuntimeModuleLoaded: Boolean(captureRuntimeModule),
-      pcmSenderModuleLoaded: Boolean(pcmSenderModule),
-      wsAudioRuntimeModuleLoaded: Boolean(wsAudioRuntimeModule),
-    };
-    try {
-      logStage("client.audio.init_error", detail);
-    } catch (_) {}
-    console.error("Audio runtime modules missing exports", detail);
-    throw new Error(
-      `Audio runtime initialization failed; missing exports: ${missingAudioExports.join(", ")}`
-    );
-  }
-})();
+  try {
+    logStage("client.audio.init_error", detail);
+  } catch (_) {}
+  console.error("Audio runtime modules missing exports", detail);
+  throw new Error(
+    `Audio runtime initialization failed; missing exports: ${missingAudioExports.join(", ")}`
+  );
+}
 
 const AUDIO_KEEPALIVE_MS = 1000;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
