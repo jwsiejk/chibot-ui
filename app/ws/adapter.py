@@ -732,6 +732,30 @@ class ChatV2Adapter:
         ctx._logged_header_req_id_mismatch = False
         ctx._logged_asr_timeout = False
 
+    def _ensure_greet_turn(self, ctx: AdapterContext) -> None:
+        """Ensure greet metrics/turn_index are initialized before first TTS."""
+
+        ctx.turn_index = 0
+        try:
+            ctx.session.turn_index = max(0, int(getattr(ctx.session, "turn_index", 0) or 0))
+        except Exception:
+            ctx.session.turn_index = 0
+
+        metrics = getattr(ctx, "metrics", {}) or {}
+        metrics.setdefault("turn_index", 0)
+        metrics.setdefault("turn_started_at", time.monotonic())
+        metrics.setdefault("asr_started_at", None)
+        metrics.setdefault("asr_final_at", None)
+        metrics.setdefault("llm_started_at", None)
+        metrics.setdefault("llm_completed_at", None)
+        metrics.setdefault("tts_started_at", None)
+        metrics.setdefault("tts_completed_at", None)
+        metrics.setdefault("tts_active_utt_id", None)
+        metrics.setdefault("tts_provider", None)
+        metrics.setdefault("tts_timeline_emitted_key", None)
+        metrics.setdefault("tts_timeline_logged", False)
+        ctx.metrics = metrics
+
     def _end_user_turn(self, ctx: AdapterContext) -> None:
         ctx.previous_turn_req_id = getattr(ctx, "turn_req_id", None)
         ctx.turn_req_id = None
@@ -1069,15 +1093,16 @@ class ChatV2Adapter:
         ctx: AdapterContext,
         frame: Mapping[str, Any] | None,
     ) -> None:
+        if not ctx.greet_completed:
+            self._ensure_greet_turn(ctx)
         ctx.session.tts_active = True
         self._cancel_no_audio_watchdog(ctx)
         metrics = getattr(ctx, "metrics", {})
         metrics["tts_started_at"] = time.monotonic()
         metrics["tts_completed_at"] = None
-        metrics["tts_timeline_emitted_key"] = None
         metrics["tts_active_utt_id"] = None
         metrics["tts_provider"] = None
-        metrics.setdefault("tts_timeline_logged", False)
+        metrics["tts_timeline_logged"] = False
         if isinstance(frame, Mapping):
             utt_id = frame.get("utt_id")
             if isinstance(utt_id, str) and utt_id:
@@ -4791,6 +4816,26 @@ class ChatV2Adapter:
                 return
 
             def _on_loop() -> None:
+                if (
+                    ctx.greet_completed
+                    and ctx.asr_opened_ms is None
+                    and not ctx.asr_ready_bundle_sent_ms
+                    and not ctx.asr_open
+                ):
+                    _log.info(
+                        "evt=asr_close_ignored_pre_open sid=%s reason=pre_open_close",
+                        ctx.sid,
+                    )
+                    try:
+                        loop.create_task(
+                            self._ensure_asr_ready(ctx.ws_send, ctx, "asr_closed_pre_open")
+                        )
+                    except RuntimeError:
+                        asyncio.create_task(
+                            self._ensure_asr_ready(ctx.ws_send, ctx, "asr_closed_pre_open")
+                        )
+                    return
+
                 turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
                 if turn_end_payload is not None:
                     _enqueue(turn_end_payload)
