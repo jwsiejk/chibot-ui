@@ -63,8 +63,9 @@ function setPhase(nextPhase, options = {}) {
   if (!AppState || typeof AppState !== "object") return;
   if (!force && AppState.phase === nextPhase) return;
   AppState.phase = nextPhase;
-  // Phase is now a semantic flag only; we no longer use it to pause the PCM
-  // sender (that is handled by canCaptureNow() via ttsActive, listening, etc.).
+  // Phase is a semantic flag, and updatePcmSenderState will gate sends based on
+  // phaseAllowsSend; other pause logic is handled by canCaptureNow(),
+  // ttsActive, listening, etc.
   try {
     updatePcmSenderState?.("phase_change");
   } catch (_) {}
@@ -385,10 +386,21 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       } catch (_) {}
       return;
     }
-    if (typeof requestAsrArm === "function") {
-      return requestAsrArm(reason);
+    try {
+      if (typeof requestAsrArm === "function") {
+        requestAsrArm(reason);
+      }
+    } catch (err) {
+      console.warn("safeRequestAsrOpen: requestAsrArm failed", err);
     }
-    return undefined;
+
+    try {
+      if (typeof openAsr === "function") {
+        openAsr({ reason });
+      }
+    } catch (err) {
+      console.warn("safeRequestAsrOpen: openAsr failed", err);
+    }
   }
 
   function safeStartRecorderStreaming(policy, source) {
@@ -3192,7 +3204,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   WSClient.sendBinary = (payload, opts = {}) => connection.sendBinary(payload, opts);
   WSClient.getBufferedAmount = () => connection.getBufferedAmount();
   WSClient.requestAsrArm = function wsClientRequestAsrArm(reason) {
-    return safeRequestAsrOpen(reason);
+    return requestAsrArm(reason);
   };
   WSClient.openAsr = function wsClientOpenAsr(opts = {}) {
     return openAsr(opts);
