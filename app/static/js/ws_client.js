@@ -433,6 +433,14 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     }
     setPhase(PHASE.Conversation);
     try {
+      if (connection && typeof connection.setWsPhase === "function") {
+        connection.setWsPhase("ready");
+      }
+      if (connection && typeof connection.flushQueuedFrames === "function") {
+        connection.flushQueuedFrames();
+      }
+    } catch (_) {}
+    try {
       setSenderPauseReason("greet", false);
       applySenderPausedState();
       updatePcmSenderState("post_greet_phase_change");
@@ -1852,12 +1860,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     }
     if (frameSignalsGreetEnd(frame)) {
       markGreetEnd();
-      const scheduleConversation = () => enterConversationAfterGreet("greet_tts_end");
-      if (typeof setTimeout === "function") {
-        conversationStartTimer = setTimeout(scheduleConversation, CONVERSATION_START_DELAY_MS);
-      } else {
-        scheduleConversation();
-      }
+      enterConversationAfterGreet("greet_complete_frame");
     }
 
     if (typeof WSClient?.emit === "function") {
@@ -1984,6 +1987,11 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     );
 
     if (delegateToTurnRuntime) {
+      if (frame.type === "asr.ready") {
+        try {
+          enterConversationAfterGreet("asr.ready");
+        } catch (_) {}
+      }
       await handleAsrStateFrame(frame);
       const dispatchable = frame.type === "asr.ready"
         ? sanitizeAsrReadyFrame(frame)
@@ -2356,6 +2364,30 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       recordClientBannerEvent,
     },
     hubLog: logStage,
+    helpers: {
+      startRecorderStreaming,
+      stopRecorder: performStopRecorder,
+      stopInputCapture,
+      handleInputStartFrame,
+      clearPartialWatchdog,
+      sendAudioHeader,
+      resetAudioHeaderSent: () => resetTurnAudioContext(),
+      emitConsoleBusEvent,
+      openTurnOnce,
+      setWsPhase: connection && typeof connection.setWsPhase === "function"
+        ? connection.setWsPhase
+        : undefined,
+      setWsConnected,
+      setAsrArmInFlight,
+      setListeningState,
+      getSocket: () => socket,
+      sendJson: (payload, opts = {}) => {
+        if (connection && typeof connection.send === "function") {
+          return connection.send(payload, { binary: false, ...(opts || {}) });
+        }
+        return false;
+      },
+    },
   });
 
   ({
