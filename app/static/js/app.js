@@ -30,11 +30,13 @@
   try {
     window.AppState = window.AppState || {};
     window.AppState.policy = window.AppState.policy || {};
-    if (typeof window.AppState.turnActive !== 'boolean') {
-      window.AppState.turnActive = false;
-    }
-    if (typeof window.AppState.phase !== 'string') {
-      window.AppState.phase = 'greet';
+    // NOTE:
+    // - AppState.turnActive is driven by ws/turns.js from "turn.begin"/"turn.end".
+    // - ws_audio_runtime treats a *missing* turnActive as "true" so audio can flow.
+    //   Forcing an initial false here permanently blocks PCM in environments
+    //   that don't emit explicit turn frames (your current setup).
+    if (typeof window.AppState.phase !== "string") {
+      window.AppState.phase = "greet";
     }
   } catch {}
 
