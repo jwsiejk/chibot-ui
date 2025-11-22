@@ -1994,21 +1994,39 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
       const policy = frame?.policy || {};
+      // As soon as the server explicitly asks us to start listening,
+      // we consider the greet phase complete and move into conversation.
+      // This guarantees we clear the "phase_greet" sender pause and allow
+      // PCM to flow for the user's response.
+      try {
+        if (getPhase() === PHASE.Greet) {
+          setPhase(PHASE.Conversation);
+        }
+      } catch (_) {}
+
       if (!AppState?.asrReady) {
-        console.warn("Received start_listening before ASR ready; ignoring until asr.ready arrives.", frame);
+        console.warn(
+          "Received start_listening before ASR ready; ignoring until asr.ready arrives.",
+          frame
+        );
         return;
       }
-      console.info("start_listening received after ASR ready; relying on automatic mic start.", {
-        vendor: policy?.asr?.vendor?.primary ?? null,
-      });
+      console.info(
+        "start_listening received after ASR ready; relying on automatic mic start.",
+        { vendor: policy?.asr?.vendor?.primary ?? null }
+      );
       // BUG FIX: actually start the mic when the server sends start_listening
       try {
         // Reuse the existing mic start pipeline so telemetry and state stay consistent
-        const started = await WSClient.startRecorderStreaming(policy, "server.start_listening");
+        const started = await WSClient.startRecorderStreaming(
+          policy,
+          "server.start_listening"
+        );
         if (started) {
-          const reason = typeof frame?.reason === "string" && frame.reason
-            ? frame.reason
-            : frame?.type || "start_listening";
+          const reason =
+            (typeof frame?.reason === "string" && frame.reason) ||
+            frame?.type ||
+            "start_listening";
           _audioStreaming = true;
           setListeningState(true);
           ensureTurnAudioReqId(policy || AppState?.policy || {});
