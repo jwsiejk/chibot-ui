@@ -1097,7 +1097,8 @@ class ChatV2Adapter:
             self._ensure_greet_turn(ctx)
         ctx.session.tts_active = True
         self._cancel_no_audio_watchdog(ctx)
-        metrics = getattr(ctx, "metrics", {})
+        metrics = getattr(ctx, "metrics", {}) or {}
+        ctx.metrics = metrics
         metrics["tts_started_at"] = time.monotonic()
         metrics["tts_completed_at"] = None
         metrics["tts_active_utt_id"] = None
