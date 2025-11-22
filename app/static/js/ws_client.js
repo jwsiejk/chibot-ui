@@ -346,6 +346,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     setPhase(PHASE.Greet, { force: true });
     try {
+      setBaseEnabled?.(false, "greet_start");
       setSenderPauseReason("greet", true);
       applySenderPausedState();
       updatePcmSenderState("greet_start");
@@ -448,6 +449,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       setSenderPauseReason("greet", false);
       applySenderPausedState();
       updatePcmSenderState("post_greet_phase_change");
+    } catch (_) {}
+    try {
+      setBaseEnabled?.(true, "post_greet");
     } catch (_) {}
     try {
       setAppStateValue?.("barge_in_enabled", true);
@@ -1076,6 +1080,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     recordRecorderChunk,
     getPcmRing,
     getPcmSenderSnapshot,
+    setBaseEnabled,
     resetSilenceSuppression,
     updatePcmSenderState,
     scheduleAudioKeepalive: runtimeScheduleAudioKeepalive,

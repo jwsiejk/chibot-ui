@@ -136,6 +136,7 @@ export function createWsAudioRuntime(options = {}) {
   let pcmSenderStateLast = null;
   let firstRuntimeFrameLogged = false;
   let captureStreamProvider = typeof getCaptureStream === "function" ? getCaptureStream : null;
+  let captureStreamResolved = null;
 
   const resolveWsClient = () => {
     if (typeof getWsClient === "function") {
@@ -427,6 +428,8 @@ export function createWsAudioRuntime(options = {}) {
   let pcmLastSeq = 0;
   let pcmSampleRate = asrRate;
   let pcmHardwareSampleRate = null;
+  let baseEnabled = false;
+  let baseEnabledReason = "boot";
   let silenceConsecutiveFrames = 0;
   let silenceSuppressed = false;
   let silenceLastIdleTickAt = 0;
@@ -1066,7 +1069,14 @@ export function createWsAudioRuntime(options = {}) {
     const audioStreaming = Boolean(isAudioStreaming());
     const senderPaused = Boolean(isSenderPaused());
     const captureAllowed = Boolean(canCaptureNow());
+    const hasStream = Boolean(
+      captureStreamResolved ||
+      pcmSender?.mediaStream ||
+      (pcmSender && typeof pcmSender.getStateSnapshot === "function" && pcmSender.getStateSnapshot()?.mediaStreamActive)
+    );
+    const baseGate = baseEnabled && hasStream;
     const shouldSendBase = Boolean(
+      baseGate &&
       audioStreaming &&
       !senderPaused &&
       captureAllowed &&
@@ -1082,7 +1092,7 @@ export function createWsAudioRuntime(options = {}) {
       logStage("client.audio_stream_state_inputs", {
         reason,
         shouldSend,
-        base_enabled: shouldSendBase,
+        base_enabled: baseGate,
         force_pcm_send: FORCE_PCM_SEND,
         isAudioStreaming: audioStreaming,
         senderPaused,
@@ -1090,6 +1100,7 @@ export function createWsAudioRuntime(options = {}) {
         asrReady,
         turnActive,
         hasPcmSender: !!pcmSender,
+        baseEnabledReason,
         phase: phaseValue,
         phase_allows_send: phaseAllowsSend,
         wsPhase,
@@ -1101,7 +1112,7 @@ export function createWsAudioRuntime(options = {}) {
       console.log("[ws_audio_runtime] updatePcmSenderState.inputs", {
         reason,
         shouldSend,
-        base_enabled: shouldSendBase,
+        base_enabled: baseGate,
         force_pcm_send: FORCE_PCM_SEND,
         isAudioStreaming: audioStreaming,
         senderPaused,
@@ -1109,6 +1120,7 @@ export function createWsAudioRuntime(options = {}) {
         asrReady,
         turnActive,
         hasPcmSender: !!pcmSender,
+        baseEnabledReason,
         phase: phaseValue,
         phase_allows_send: phaseAllowsSend,
         wsPhase,
@@ -1121,7 +1133,7 @@ export function createWsAudioRuntime(options = {}) {
     const summary = {
       reason,
       phase: phaseValue,
-      hasStream: Boolean(captureStreamProvider),
+      hasStream,
       wsConnected: socket ? socket.readyState === WebSocket.OPEN : false,
       senderPaused,
       vadGateOpen: captureAllowed,
@@ -1129,6 +1141,10 @@ export function createWsAudioRuntime(options = {}) {
       wsPhaseKnown,
       wsReadyForAudio,
       shouldSend,
+      base_enabled: baseGate,
+      enabled: shouldSend,
+      isAudioStreaming: audioStreaming,
+      baseEnabledReason,
     };
 
     try {
@@ -1215,6 +1231,9 @@ export function createWsAudioRuntime(options = {}) {
       throw new Error("initPcmSender not provided");
     }
     const stream = captureStreamProvider ? await captureStreamProvider() : null;
+    if (stream) {
+      captureStreamResolved = stream;
+    }
     pcmSenderInitPromise = initPcmSender(stream, {
       onSampleRate: handleSampleRate,
       onFrame: handlePcmFrame,
@@ -1276,6 +1295,8 @@ export function createWsAudioRuntime(options = {}) {
     pcmLastSeq = 0;
     pcmSampleRate = asrRate;
     pcmHardwareSampleRate = null;
+    baseEnabled = false;
+    baseEnabledReason = "reset";
     resetSilenceSuppression();
     clearAudioKeepaliveTimer();
     micLastChunkAt = 0;
@@ -1284,6 +1305,22 @@ export function createWsAudioRuntime(options = {}) {
 
   function setCaptureStreamProvider(fn) {
     captureStreamProvider = typeof fn === "function" ? fn : null;
+    if (typeof fn === "function") {
+      try {
+        const maybeStream = fn();
+        if (maybeStream && typeof maybeStream.then === "function") {
+          maybeStream
+            .then((stream) => {
+              captureStreamResolved = stream || captureStreamResolved;
+              updatePcmSenderState("capture_stream_resolved");
+            })
+            .catch(() => {});
+        } else {
+          captureStreamResolved = maybeStream || captureStreamResolved;
+        }
+      } catch (_) {}
+    }
+    updatePcmSenderState("capture_stream_provider_set");
   }
 
   function setAudioKeepaliveMs(value) {
@@ -1308,6 +1345,7 @@ export function createWsAudioRuntime(options = {}) {
     getPcmSenderSnapshot,
     resetPcmStateForTesting,
     setCaptureStreamProvider,
+    setBaseEnabled,
     resetSilenceSuppression,
     updatePcmSenderState,
     scheduleAudioKeepalive,
