@@ -197,6 +197,25 @@ export function createTurnRuntime(config = {}) {
     setAppStateValue("wsConnected", Boolean(connected));
   }
 
+  function setAsrReadyFlag(ready, meta = {}) {
+    const desired = Boolean(ready);
+    const prev = typeof AppState?.asrReady === "boolean" ? AppState.asrReady : null;
+    const vendor = meta && Object.prototype.hasOwnProperty.call(meta, "vendor")
+      ? meta.vendor
+      : (AppState?.asrVendor ?? null);
+    AppState.asrReady = desired;
+    const patch = desired
+      ? { asrReady: true, asrVendor: vendor }
+      : { asrReady: false, asrVendor: null };
+    updateState(patch);
+    try {
+      logStage("client.asr.state", { ready: desired, prev, vendor });
+    } catch {}
+    try {
+      console.log("client.asr.state", { ready: desired, prev, vendor });
+    } catch {}
+  }
+
   function setAsrArmInFlight(inFlight) {
     if (typeof externalSetAsrArmInFlight === "function") {
       externalSetAsrArmInFlight(inFlight);
@@ -615,13 +634,12 @@ export function createTurnRuntime(config = {}) {
     } else if (frame && typeof frame.sid === "string" && frame.sid) {
       AppState.asrSid = frame.sid;
     }
-    AppState.asrReady = true;
     try {
       window.dispatchEvent(new CustomEvent("asr.ready"));
     } catch {}
     AppState.asrVendor = sanitized.vendor || DEFAULT_ASR_VENDOR;
+    setAsrReadyFlag(true, { vendor: AppState.asrVendor });
     beginWarmup(getWarmupMs());
-    updateState({ asrReady: true, asrVendor: AppState.asrVendor });
     try {
       updatePcmSenderState();
     } catch {}
@@ -655,6 +673,9 @@ export function createTurnRuntime(config = {}) {
     if (frame.type === "asr.error" || frame.type === "asr.closed" || frame.type === "asr.reset") {
       clearPartialWatchdog();
       resetAudioHeaderSent();
+      if (frame.type === "asr.closed" || frame.type === "asr.reset") {
+        setAsrReadyFlag(false, { vendor: null });
+      }
       if (frame.type === "asr.closed") {
         AppState.asrSid = null;
         awaitingAsrClosedAck = false;
@@ -686,7 +707,6 @@ export function createTurnRuntime(config = {}) {
         AppState.asrSid = frame.sid;
       }
       const readyFrame = handleAsrReadyFrame(frame) || frame;
-      AppState.asrReady = true;
       setAsrArmInFlight(false);
       setWsConnected(true);
       setWsPhase("ready");
@@ -739,9 +759,8 @@ export function createTurnRuntime(config = {}) {
         ? frame.details
         : (typeof frame?.detail === "string" ? frame.detail : "");
       console.warn("asr.unavailable", reason, details);
-      AppState.asrReady = false;
       AppState.asrVendor = null;
-      updateState({ asrReady: false, asrVendor: null });
+      setAsrReadyFlag(false, { vendor: null });
       updatePcmSenderState();
       await stopRecorder("asr_unavailable");
       resetAudioHeaderSent();

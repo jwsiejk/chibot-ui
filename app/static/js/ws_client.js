@@ -62,6 +62,7 @@ function setPhase(nextPhase, options = {}) {
   const force = options && options.force === true;
   if (!AppState || typeof AppState !== "object") return;
   if (!force && AppState.phase === nextPhase) return;
+  const prev = AppState.phase;
   AppState.phase = nextPhase;
   // Phase is a semantic flag, and updatePcmSenderState will gate sends based on
   // phaseAllowsSend; other pause logic is handled by canCaptureNow(),
@@ -70,7 +71,10 @@ function setPhase(nextPhase, options = {}) {
     updatePcmSenderState?.("phase_change");
   } catch (_) {}
   try {
-    logStage("client.phase.change", { phase: nextPhase });
+    logStage("client.phase.change", { prev, next: nextPhase });
+  } catch (_) {}
+  try {
+    console.log("client.phase.change", { prev, next: nextPhase });
   } catch (_) {}
 }
 const missingAudioExports = [];
@@ -158,7 +162,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
   const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
   const DEFAULT_ASR_VENDOR = 'gcp';
-  const WS_READY_PHASES = new Set(['connected', 'ready', 'arming', 'resuming']);
+const WS_READY_PHASES = new Set(['connected', 'ready']);
   let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
 
   function getNegotiatedControlCodec() {
@@ -452,7 +456,18 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       }
     } catch (_) {}
     try {
-      logStage("client.conversation.begin", { source });
+      logStage("client.conversation.begin", {
+        source,
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        asrReady: Boolean(AppState?.asrReady),
+      });
+      console.log("client.conversation.begin", {
+        source,
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        asrReady: Boolean(AppState?.asrReady),
+      });
     } catch (_) {}
     if (!hasOpenedAsrForConversation) {
       hasOpenedAsrForConversation = true;

@@ -9,7 +9,7 @@ const JSON_SUBPROTOCOL = "chat.v2";
 const MSGPACK_SUBPROTOCOL = "chip-msgpack";
 const INFO_DEADLINE_MS = 20000;
 const TOKEN_EXPIRY_MS = 60 * 1000;
-const WS_READY_PHASES = new Set(["connected", "ready", "arming", "resuming"]);
+const WS_READY_PHASES = new Set(["connected", "ready"]);
 
 function detectControlFramesCodec() {
   const normalize = (value) => {
@@ -120,6 +120,7 @@ export function createWsConnection({
   const connectionQueue = [];
   let socket = null;
   let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
+  let wsPhase = "disconnected";
   let heartbeatTimerId = null;
   let infoWatchdogTimerId = null;
   let expectInfoFrame = true;
@@ -188,13 +189,8 @@ export function createWsConnection({
       if (typeof phase === "string" && phase) {
         return phase;
       }
-      const fallback = snapshot && typeof snapshot.connectionState === "string"
-        ? snapshot.connectionState
-        : AppState?.connectionState;
-      return typeof fallback === "string" && fallback ? fallback : null;
-    } catch {
-      return null;
-    }
+    } catch {}
+    return typeof wsPhase === "string" && wsPhase ? wsPhase : null;
   }
 
   function setWsConnected(connected) {
@@ -205,19 +201,30 @@ export function createWsConnection({
     if (!connectionQueue.length) {
       return;
     }
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    const live = socket;
+    const phase = getAppStatePhase();
+    if (!live || live.readyState !== WebSocket.OPEN) {
       return;
     }
-    const phase = getAppStatePhase();
     if (phase && !WS_READY_PHASES.has(phase)) {
       return;
     }
+    const flushed = [];
+    try {
+      console.log("client.ws_send.flush_start", {
+        queueLength: connectionQueue.length,
+        phase,
+        readyState: live?.readyState,
+      });
+    } catch {}
     while (connectionQueue.length) {
       const entry = connectionQueue.shift();
       if (!entry || typeof entry !== "object") {
         continue;
       }
       const { data, isBinary, options } = entry;
+      const payloadType = typeof options?.type === "string" ? options.type : (typeof data?.type === "string" ? data.type : "unknown");
+      flushed.push(payloadType);
       if (isBinary) {
         const result = sendBinary(data, options || {});
         if (result && typeof result.then === "function") {
@@ -227,13 +234,29 @@ export function createWsConnection({
       }
       send(data, { binary: false, skipPhaseCheck: true });
     }
+    try {
+      console.log("client.ws_send.flush_done", {
+        count: flushed.length,
+        payloadTypes: flushed,
+        phase,
+        readyState: live?.readyState,
+      });
+    } catch {}
   }
 
   function setWsPhase(phase) {
     if (typeof phase !== "string" || !phase) {
       return;
     }
+    const prev = wsPhase;
+    wsPhase = phase;
     setAppStateValue("wsPhase", phase);
+    try {
+      console.log("client.wsPhase.change", { prev, next: phase });
+      if (typeof hubLog === "function") {
+        hubLog("client.wsPhase.change", { prev, next: phase });
+      }
+    } catch {}
     if (WS_READY_PHASES.has(phase)) {
       flushQueuedFrames();
     }
