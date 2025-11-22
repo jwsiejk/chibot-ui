@@ -1,557 +1,104 @@
-info
+NFO:app.auth.http_handlers:evt=ws_token_mint sid=413b9f0d8c80466096977dfee8be4e3f ttl=60
 71.224.106.24:0 - "POST /api/v1/auth/ws-token HTTP/1.1" 200
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] = connection is CONNECTING
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < GET /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImUyZDE0ZmYzZWI4MDRjYjg4NmVmMDg0YjE0OGJiYjU3IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgxMjEzNCwiZXhwIjoxNzYzODEyMTk0LCJqdGkiOiIzMWYyZjBjMi00OTRlLTQzNWEtYmI5Yy1iOWI1ZmIzMGVhNmYiLCJpc19hZG1pbiI6dHJ1ZX0.J7BjlEmtb9ps5cRbON-LaPsN2tqoH79pYz3Ec5Vu4Qg HTTP/1.1
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < host: chibot-ui.onrender.com
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < accept-encoding: gzip, br
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < accept-language: en-US,en;q=0.9
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < cache-control: no-cache
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < cdn-loop: cloudflare; loops=1
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < cf-connecting-ip: 71.224.106.24
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < cf-ipcountry: US
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < cf-ray: 9a2833516a8015cb-EWR
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < cf-visitor: {"scheme":"https"}
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < connection: Upgrade
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < cookie: askchip_session=jwsiejk@purestorage.com|qwlEWYW3Exk0EptuOu3i2Ux8Kf9GEVfKRnspFLGkocY; askchip_csrf=KBHWiScop-OWBaKXjFuiUXNejZPH6bBz_Rva3MOCNLM
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < origin: https://chibot-ui.onrender.com
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < pragma: no-cache
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < render-cf-start-time-msec: 630
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < render-cf-start-time-sec: 1763812134
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < render-proxy-ttl: 4
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < rndr-id: 532f7282-74f9-4b15
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < sec-websocket-key: eInLc1pAm5sanq2ssGBWqg==
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < sec-websocket-protocol: chat.v2, jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImUyZDE0ZmYzZWI4MDRjYjg4NmVmMDg0YjE0OGJiYjU3IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgxMjEzNCwiZXhwIjoxNzYzODEyMTk0LCJqdGkiOiIzMWYyZjBjMi00OTRlLTQzNWEtYmI5Yy1iOWI1ZmIzMGVhNmYiLCJpc19hZG1pbiI6dHJ1ZX0.J7BjlEmtb9ps5cRbON-LaPsN2tqoH79pYz3Ec5Vu4Qg
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < sec-websocket-version: 13
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < true-client-ip: 71.224.106.24
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < upgrade: websocket
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < x-forwarded-for: 71.224.106.24
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < x-forwarded-proto: https
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < x-render-as-num: 7922
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] < x-render-threat-score: 0
-INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImUyZDE0ZmYzZWI4MDRjYjg4NmVmMDg0YjE0OGJiYjU3IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgxMjEzNCwiZXhwIjoxNzYzODEyMTk0LCJqdGkiOiIzMWYyZjBjMi00OTRlLTQzNWEtYmI5Yy1iOWI1ZmIzMGVhNmYiLCJpc19hZG1pbiI6dHJ1ZX0.J7BjlEmtb9ps5cRbON-LaPsN2tqoH79pYz3Ec5Vu4Qg'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImUyZDE0ZmYzZWI4MDRjYjg4NmVmMDg0YjE0OGJiYjU3IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgxMjEzNCwiZXhwIjoxNzYzODEyMTk0LCJqdGkiOiIzMWYyZjBjMi00OTRlLTQzNWEtYmI5Yy1iOWI1ZmIzMGVhNmYiLCJpc19hZG1pbiI6dHJ1ZX0.J7BjlEmtb9ps5cRbON-LaPsN2tqoH79pYz3Ec5Vu4Qg' root_path=
-INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImUyZDE0ZmYzZWI4MDRjYjg4NmVmMDg0YjE0OGJiYjU3IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgxMjEzNCwiZXhwIjoxNzYzODEyMTk0LCJqdGkiOiIzMWYyZjBjMi00OTRlLTQzNWEtYmI5Yy1iOWI1ZmIzMGVhNmYiLCJpc19hZG1pbiI6dHJ1ZX0.J7BjlEmtb9ps5cRbON-LaPsN2tqoH79pYz3Ec5Vu4Qg'] need_any={'chip-msgpack', 'chat.v2'}
-INFO:app.ws.adapter:evt=ws_accept_token_ok sid=e2d14ff3eb804cb886ef084b148bbb57
+INFO:app.asgi_gateway:evt=ws_entry path=/ws/v2/chat type=websocket subs=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjQxM2I5ZjBkOGM4MDQ2NjA5Njk3N2RmZWU4YmU0ZTNmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgzNzQzNiwiZXhwIjoxNzYzODM3NDk2LCJqdGkiOiJjMjljNjMwNi1jNDM5LTQyODktOGZmNC0zMjZkYzAzMjQxYWIiLCJpc19hZG1pbiI6dHJ1ZX0.tlx89LxxczD4_CSYd-sOboTHdeswwQOXXhiR4H2wTVk'] query=b'access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjQxM2I5ZjBkOGM4MDQ2NjA5Njk3N2RmZWU4YmU0ZTNmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgzNzQzNiwiZXhwIjoxNzYzODM3NDk2LCJqdGkiOiJjMjljNjMwNi1jNDM5LTQyODktOGZmNC0zMjZkYzAzMjQxYWIiLCJpc19hZG1pbiI6dHJ1ZX0.tlx89LxxczD4_CSYd-sOboTHdeswwQOXXhiR4H2wTVk' root_path=
+INFO:app.voice_v2.tts_runtime:evt=tts_provider_ready provider=elevenlabs
+INFO:app.ws.adapter:evt=ws_subs subprotocols=['chat.v2', 'jwt.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjQxM2I5ZjBkOGM4MDQ2NjA5Njk3N2RmZWU4YmU0ZTNmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgzNzQzNiwiZXhwIjoxNzYzODM3NDk2LCJqdGkiOiJjMjljNjMwNi1jNDM5LTQyODktOGZmNC0zMjZkYzAzMjQxYWIiLCJpc19hZG1pbiI6dHJ1ZX0.tlx89LxxczD4_CSYd-sOboTHdeswwQOXXhiR4H2wTVk'] need_any={'chip-msgpack', 'chat.v2'}
+INFO:app.ws.adapter:evt=ws_accept_token_ok sid=413b9f0d8c80466096977dfee8be4e3f
 INFO:app.ws.adapter:evt=ws_accept subprotocol='chat.v2' codec=json
-[2025-11-22 11:48:54 +0000] [58] [INFO] 71.224.106.24:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImUyZDE0ZmYzZWI4MDRjYjg4NmVmMDg0YjE0OGJiYjU3IiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgxMjEzNCwiZXhwIjoxNzYzODEyMTk0LCJqdGkiOiIzMWYyZjBjMi00OTRlLTQzNWEtYmI5Yy1iOWI1ZmIzMGVhNmYiLCJpc19hZG1pbiI6dHJ1ZX0.J7BjlEmtb9ps5cRbON-LaPsN2tqoH79pYz3Ec5Vu4Qg" [accepted]
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > HTTP/1.1 101 Switching Protocols
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > Upgrade: websocket
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > Connection: Upgrade
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > Sec-WebSocket-Accept: fJmVtiznqbCehOkHsGhnVvFbHcQ=
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > Sec-WebSocket-Protocol: chat.v2
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > date: Sat, 22 Nov 2025 11:48:54 GMT
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > server: uvicorn
-[2025-11-22 11:48:54 +0000] [58] [INFO] connection open
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] = connection is OPEN
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > TEXT '{"type":"server.banner","build_id":"6300549.e72...pp/voice_v2/engine.py"}' [827 bytes]
-INFO:app.ws.adapter:evt=server_banner build_id=6300549.e723001d2c364550 host=srv-d26hqi3e5dus73b43g10-6db97896c9-h5q64 pid=58 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > TEXT '{"type":"info","protocol":"chat.v2","control_co...ask_during_tts":true}}}' [1399 bytes]
-INFO:app.ws.adapter:evt=ws_info_sent sid=e2d14ff3eb804cb886ef084b148bbb57
+[2025-11-22 18:50:36 +0000] [60] [INFO] 71.224.106.24:0 - "WebSocket /ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjQxM2I5ZjBkOGM4MDQ2NjA5Njk3N2RmZWU4YmU0ZTNmIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2MzgzNzQzNiwiZXhwIjoxNzYzODM3NDk2LCJqdGkiOiJjMjljNjMwNi1jNDM5LTQyODktOGZmNC0zMjZkYzAzMjQxYWIiLCJpc19hZG1pbiI6dHJ1ZX0.tlx89LxxczD4_CSYd-sOboTHdeswwQOXXhiR4H2wTVk" [accepted]
+[2025-11-22 18:50:36 +0000] [60] [INFO] connection open
+INFO:app.ws.adapter:evt=server_banner build_id=44bceb2.861afe536bdef7a3 host=srv-d26hqi3e5dus73b43g10-865dcc59d5-kk5xk pid=60 path=/ws/v2/chat subproto=chat.v2 adapter=/opt/render/project/src/app/ws/adapter.py engine=/opt/render/project/src/app/voice_v2/engine.py
+INFO:app.ws.adapter:evt=ws_info_sent sid=413b9f0d8c80466096977dfee8be4e3f
 INFO:app.ws.adapter:asr_vendor_selected primary=gcp allowed=gcp reason=pcm16_only
-INFO:app.ws.adapter:evt=ws_open sid=e2d14ff3eb804cb886ef084b148bbb57
-INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=e2d14ff3eb804cb886ef084b148bbb57
-INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=e2d14ff3eb804cb886ef084b148bbb57
-[2025-11-22 11:48:54 +0000] [58] [DEBUG] > TEXT '{"type":"server.ping","ts":1763812134699}' [41 bytes]
-DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=e2d14ff3eb804cb886ef084b148bbb57 purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
+INFO:app.ws.adapter:evt=ws_open sid=413b9f0d8c80466096977dfee8be4e3f
+INFO:app.ws.adapter:evt=asr_ready_tracker_start sid=413b9f0d8c80466096977dfee8be4e3f
+INFO:app.ws.adapter:evt=ws_open_and_greet_start sid=413b9f0d8c80466096977dfee8be4e3f
+DEBUG:app.voice_v2.engine:evt=greet_llm_request sid=413b9f0d8c80466096977dfee8be4e3f purpose=greet model=gpt-4o-mini temp=0.4 max_tokens=30 msg_counts={'system': 1, 'developer': 1, 'user': 1}
 DEBUG:asyncio:Using selector: EpollSelector
 INFO:app.services.llm.openai_client:evt=llm_request sid=None model=gpt-4o-mini
-DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-820d7560-7b15-4aaf-b12d-264d34966763', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.For all conversational turns, keep your spoken answer to a maximum of twelve words.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'stream': True, 'temperature': 0.4}}
+10.225.23.248:42734 - "GET /api/v1/live HTTP/1.1" 200
+DEBUG:openai._base_client:Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'idempotency_key': 'stainless-python-retry-6c5f49d9-bb29-4840-aa7a-92e36d057617', 'json_data': {'messages': [{'role': 'system', 'content': 'You are Chip, your Pure Storage partner guide, the Virtual Partner Technical Manager for Pure Storage partners; respond with a mentor tone, stay focused on Pure Storage data platforms, partner enablement, and customer outcomes, and teach through conversation.For all conversational turns, keep your spoken answer to a maximum of twelve words.'}, {'role': 'developer', 'content': 'Generate ONLY a first-time greeting for a new session. ≤ 8 words total. Friendly, concise, Pure Storage context implied. No lists, no summaries, no steps.'}, {'role': 'user', 'content': ''}], 'model': 'gpt-4o-mini', 'max_tokens': 30, 'stream': True, 'temperature': 0.4}}
 DEBUG:openai._base_client:Sending HTTP Request: POST https://api.openai.com/v1/chat/completions
 DEBUG:httpcore.connection:connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=5.0 socket_options=None
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7808afddf4d0>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7808bf520290> server_hostname='api.openai.com' timeout=5.0
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7808afbba520>
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7a66af787620>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7a66af524320> server_hostname='api.openai.com' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x7a66ac2ba850>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Sat, 22 Nov 2025 11:48:55 GMT'), (b'Content-Type', b'text/event-stream; charset=utf-8'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'158'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'312'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199871'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'38ms'), (b'x-request-id', b'req_d9525b3001574c8c87b3052047467e86'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=Aj_v_To2s4riphOliuAbthr6G3riOM38x1jJsjun7oo-1763812135-1.0.1.1-eTSGeVFhAjnn39i7sRxNaN8SMFEMeLjPEErFpc0R2nM.Ai.V0pXmzb3nvJizqWGQ004bHKGNfZYy6iramXjbTclDVssNco4vH617mXU7oSE; path=/; expires=Sat, 22-Nov-25 12:18:55 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9a283351fdb7e5f4-IAD'), (b'alt-svc', b'h3=":443"; ma=86400')])
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Sat, 22 Nov 2025 18:50:38 GMT'), (b'Content-Type', b'text/event-stream; charset=utf-8'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-expose-headers', b'X-Request-ID'), (b'openai-organization', b'user-e0uazp84dxwznca9mgbvta53'), (b'openai-processing-ms', b'234'), (b'openai-project', b'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), (b'openai-version', b'2020-10-01'), (b'x-envoy-upstream-service-time', b'381'), (b'x-ratelimit-limit-requests', b'10000'), (b'x-ratelimit-limit-tokens', b'200000'), (b'x-ratelimit-remaining-requests', b'9999'), (b'x-ratelimit-remaining-tokens', b'199871'), (b'x-ratelimit-reset-requests', b'8.64s'), (b'x-ratelimit-reset-tokens', b'38ms'), (b'x-request-id', b'req_9e715d8f3c854877b2988ba718fdc114'), (b'x-openai-proxy-wasm', b'v0.1'), (b'cf-cache-status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=h4GHUhMPvm9XC_zwdDvvkHmej4.j1ShwNMFt0sdEy8M-1763837438-1.0.1.1-YhRIy2Dzy.WtlcF8x4zk0ffI0NR4IHz2sXdLgdno7R6ltOR6nRj.74WiyH_J3iSAQ7isoSHJUnEzzNWHTXftk5BshwmGaTc3rq7cbDDjLeo; path=/; expires=Sat, 22-Nov-25 19:20:38 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'Set-Cookie', b'_cfuvid=4aPlHd15pQEHwMsGVNXQrUyO8GCwZzC0VfJKWHG0e9I-1763837438772-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'9a2a9d124dbe9c8b-IAD'), (b'alt-svc', b'h3=":443"; ma=86400')])
 INFO:httpx:HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
-DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers({'date': 'Sat, 22 Nov 2025 11:48:55 GMT', 'content-type': 'text/event-stream; charset=utf-8', 'transfer-encoding': 'chunked', 'connection': 'keep-alive', 'access-control-expose-headers': 'X-Request-ID', 'openai-organization': 'user-e0uazp84dxwznca9mgbvta53', 'openai-processing-ms': '158', 'openai-project': 'proj_M1Sc50SAoXNxy2SfkuHvvrH1', 'openai-version': '2020-10-01', 'x-envoy-upstream-service-time': '312', 'x-ratelimit-limit-requests': '10000', 'x-ratelimit-limit-tokens': '200000', 'x-ratelimit-remaining-requests': '9999', 'x-ratelimit-remaining-tokens': '199871', 'x-ratelimit-reset-requests': '8.64s', 'x-ratelimit-reset-tokens': '38ms', 'x-request-id': 'req_d9525b3001574c8c87b3052047467e86', 'x-openai-proxy-wasm': 'v0.1', 'cf-cache-status': 'DYNAMIC', 'set-cookie': '__cf_bm=Aj_v_To2s4riphOliuAbthr6G3riOM38x1jJsjun7oo-1763812135-1.0.1.1-eTSGeVFhAjnn39i7sRxNaN8SMFEMeLjPEErFpc0R2nM.Ai.V0pXmzb3nvJizqWGQ004bHKGNfZYy6iramXjbTclDVssNco4vH617mXU7oSE; path=/; expires=Sat, 22-Nov-25 12:18:55 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None', 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload', 'x-content-type-options': 'nosniff', 'server': 'cloudflare', 'cf-ray': '9a283351fdb7e5f4-IAD', 'alt-svc': 'h3=":443"; ma=86400'})
-DEBUG:openai._base_client:request_id: req_d9525b3001574c8c87b3052047467e86
+DEBUG:openai._base_client:HTTP Response: POST https://api.openai.com/v1/chat/completions "200 OK" Headers([('date', 'Sat, 22 Nov 2025 18:50:38 GMT'), ('content-type', 'text/event-stream; charset=utf-8'), ('transfer-encoding', 'chunked'), ('connection', 'keep-alive'), ('access-control-expose-headers', 'X-Request-ID'), ('openai-organization', 'user-e0uazp84dxwznca9mgbvta53'), ('openai-processing-ms', '234'), ('openai-project', 'proj_M1Sc50SAoXNxy2SfkuHvvrH1'), ('openai-version', '2020-10-01'), ('x-envoy-upstream-service-time', '381'), ('x-ratelimit-limit-requests', '10000'), ('x-ratelimit-limit-tokens', '200000'), ('x-ratelimit-remaining-requests', '9999'), ('x-ratelimit-remaining-tokens', '199871'), ('x-ratelimit-reset-requests', '8.64s'), ('x-ratelimit-reset-tokens', '38ms'), ('x-request-id', 'req_9e715d8f3c854877b2988ba718fdc114'), ('x-openai-proxy-wasm', 'v0.1'), ('cf-cache-status', 'DYNAMIC'), ('set-cookie', '__cf_bm=h4GHUhMPvm9XC_zwdDvvkHmej4.j1ShwNMFt0sdEy8M-1763837438-1.0.1.1-YhRIy2Dzy.WtlcF8x4zk0ffI0NR4IHz2sXdLgdno7R6ltOR6nRj.74WiyH_J3iSAQ7isoSHJUnEzzNWHTXftk5BshwmGaTc3rq7cbDDjLeo; path=/; expires=Sat, 22-Nov-25 19:20:38 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('strict-transport-security', 'max-age=31536000; includeSubDomains; preload'), ('x-content-type-options', 'nosniff'), ('set-cookie', '_cfuvid=4aPlHd15pQEHwMsGVNXQrUyO8GCwZzC0VfJKWHG0e9I-1763837438772-0.0.1.1-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), ('server', 'cloudflare'), ('cf-ray', '9a2a9d124dbe9c8b-IAD'), ('alt-svc', 'h3=":443"; ma=86400')])
+DEBUG:openai._base_client:request_id: req_9e715d8f3c854877b2988ba718fdc114
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:response_closed.started
 DEBUG:httpcore.http11:response_closed.complete
 DEBUG:httpcore.http11:receive_response_body.failed exception=GeneratorExit()
 INFO:app.services.llm.openai_client:evt=llm_response sid=None model=gpt-4o-mini
-DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=e2d14ff3eb804cb886ef084b148bbb57 purpose=greet latency_ms=1023 model=gpt-4o-mini
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] > TEXT '{"type":"policy.interaction","actions":["assist...:{"ws_version":"v2"}}}}' [1561 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] > TEXT '{"type":"info","audio":{"codec":"pcm_s16le","ra...":16000,"channels":1}}}' [359 bytes]
-DEBUG:httpcore.connection:close.started
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.ping","ts":1763812135641}' [41 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...I6IkpXVCJ9.eyJzdW…"]}}}' [1025 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...jBjMi00OTRlLTQzNW…"]}}}' [1396 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M..."protocol":"chat.v2"}}}' [825 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_modu...eWsAudioRuntime":true}}' [209 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...audio_modules_loaded"}}' [236 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.phase.chan...:null,"phase":"greet"}}' [113 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":..."client.phase.change"}}' [140 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.vad.state"...b":-120,"noiseDb":-72}}' [148 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...l":"client.vad.state"}}' [175 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.vad.state"...b":-64,"speech":false}}' [157 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...l":"client.vad.state"}}' [184 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.appstate.d...-120,"vadNoiseDb":-72}}' [417 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...lient.appstate.delta"}}' [444 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws","ts":1...ubprotocol":"chat.v2"}}' [133 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...ge_label":"client.ws"}}' [160 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...":{"has_policy":true}}}' [815 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws","ts":1...l,"outcome":"auth_ok"}}' [107 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...ge_label":"client.ws"}}' [134 bytes]
-DEBUG:httpcore.connection:close.complete
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] > TEXT '{"type":"chat.message","id":"38c1aef7-cfec-4865...,"ts_ms":1763812135729}' [286 bytes]
+DEBUG:app.voice_v2.engine:evt=greet_llm_complete sid=413b9f0d8c80466096977dfee8be4e3f purpose=greet latency_ms=2358 model=gpt-4o-mini
 DEBUG:httpcore.connection:connect_tcp.started host='api.elevenlabs.io' port=443 local_address=None timeout=5.0 socket_options=None
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] > TEXT '{"type":"server.pong","ts":1763812135745,"echo":1763812135641}' [62 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.pong","ts":1763812136690,"echo":1763812134699}' [62 bytes]
-DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7808afddf890>
-DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7808bf649f40> server_hostname='api.elevenlabs.io' timeout=5.0
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...:{"has_policy":false}}}' [815 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws","ts":1...l,"outcome":"auth_ok"}}' [107 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...ge_label":"client.ws"}}' [134 bytes]
-DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7808afbba3f0>
+DEBUG:httpcore.connection:connect_tcp.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7a66af787380>
+DEBUG:httpcore.connection:start_tls.started ssl_context=<ssl.SSLContext object at 0x7a66af525eb0> server_hostname='api.elevenlabs.io' timeout=5.0
+DEBUG:httpcore.connection:start_tls.complete return_value=<httpcore._backends.anyio.AnyIOStream object at 0x7a66af98d950>
 DEBUG:httpcore.http11:send_request_headers.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_headers.complete
 DEBUG:httpcore.http11:send_request_body.started request=<Request [b'POST']>
 DEBUG:httpcore.http11:send_request_body.complete
 DEBUG:httpcore.http11:receive_response_headers.started request=<Request [b'POST']>
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws","ts":1...:"pong","rtt_ms":1085}}' [118 bytes]
-[2025-11-22 11:48:55 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...ge_label":"client.ws"}}' [145 bytes]
-DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Sat, 22 Nov 2025 11:48:55 GMT'), (b'server', b'uvicorn'), (b'request-id', b'aHHpHJ2lHipQP308cgZ7'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'cR0nvh5xevg15AwP6rd5'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'54'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'05afde702229228b43fab7160084b356'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
+DEBUG:httpcore.http11:receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Sat, 22 Nov 2025 18:50:38 GMT'), (b'server', b'uvicorn'), (b'request-id', b'ynX2gq4BbqN4gSOO7Gdz'), (b'access-control-expose-headers', b'request-id, history-item-id, character-cost, regeneration-count, generation-info, current-concurrent-requests, maximum-concurrent-requests'), (b'history-item-id', b'wSRdADk31PFu5m1xzIX4'), (b'current-concurrent-requests', b'1'), (b'maximum-concurrent-requests', b'10'), (b'character-cost', b'45'), (b'content-type', b'audio/pcm'), (b'access-control-allow-origin', b'*'), (b'access-control-allow-headers', b'*'), (b'access-control-allow-methods', b'POST, PATCH, OPTIONS, DELETE, GET, PUT'), (b'access-control-max-age', b'600'), (b'strict-transport-security', b'max-age=31536000; includeSubDomains'), (b'x-trace-id', b'60597fc849404fd61aef918264ea3d1d'), (b'x-region', b'us-central1'), (b'content-encoding', b'gzip'), (b'vary', b'Accept-Encoding'), (b'Via', b'1.1 google, 1.1 google'), (b'Alt-Svc', b'h3=":443"; ma=2592000,h3-29=":443"; ma=2592000'), (b'Transfer-Encoding', b'chunked')])
 INFO:httpx:HTTP Request: POST https://api.elevenlabs.io/v1/text-to-speech/MIAWBMadvHL0ek6oJEXD/stream?optimize_streaming_latency=4&output_format=pcm_16000 "HTTP/1.1 200 OK"
 INFO:app.services.tts.elevenlabs_client:evt=tts_provider_stream_opened provider=elevenlabs content_type=audio/pcm url_qs=optimize_streaming_latency=4&output_format=pcm_16000
-INFO:app.voice_v2.engine:TURN_METRICS stage=tts_start sid=e2d14ff3eb804cb886ef084b148bbb57
-INFO:app.voice_v2.tts_runtime:evt=tts_start sid=e2d14ff3eb804cb886ef084b148bbb57 provider=elevenlabs chars=54
-DEBUG:app.voice_v2.tts_runtime:evt=tts_start_details sid=e2d14ff3eb804cb886ef084b148bbb57 utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=54
+INFO:app.voice_v2.engine:TURN_METRICS stage=tts_start sid=413b9f0d8c80466096977dfee8be4e3f
+INFO:app.voice_v2.tts_runtime:evt=tts_start sid=413b9f0d8c80466096977dfee8be4e3f provider=elevenlabs chars=45
+DEBUG:app.voice_v2.tts_runtime:evt=tts_start_details sid=413b9f0d8c80466096977dfee8be4e3f utt_id=utt-00001 voice_id=MIAWBMadvHL0ek6oJEXD text_chars=45
 DEBUG:httpcore.http11:receive_response_body.started request=<Request [b'POST']>
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"turn.state","state":"Responding","reas...,"reason":"tts_start"}}' [114 bytes]
-INFO:app.voice_v2.engine:TURN_METRICS stage=tts_first_chunk sid=e2d14ff3eb804cb886ef084b148bbb57 tts_first_chunk_ms=13
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=e2d14ff3eb804cb886ef084b148bbb57 utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
+INFO:app.voice_v2.engine:TURN_METRICS stage=tts_first_chunk sid=413b9f0d8c80466096977dfee8be4e3f tts_first_chunk_ms=18
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=413b9f0d8c80466096977dfee8be4e3f utt_id=utt-00001 chunks=1 bytes=1280 total_bytes=1280
 DEBUG:httpcore.http11:receive_response_body.complete
 DEBUG:httpcore.http11:response_closed.started
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 0b 00 0b 00 05 00 02 00 00 00 fe ff 01 00 ff ff ... fa ff f8 ff fd ff 06 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 0e 00 0f 00 0e 00 0b 00 05 00 00 00 fe ff 00 00 ... f4 ff f4 ff f3 ff f5 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY fa ff fd ff ff ff fc ff f9 ff f9 ff fb ff fd ff ... fc ff fc ff fa ff fc ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY fb ff fa ff fc ff fc ff fb ff fc ff fa ff fc ff ... 18 00 18 00 1a 00 1a 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 1c 00 20 00 1f 00 19 00 17 00 1d 00 1c 00 18 00 ... e3 1b db 26 70 2c ec 2b [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 75 27 13 21 46 19 96 0f e3 04 04 fa fd ef 55 e8 ... 43 f6 07 e2 aa d6 6d cf [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 1b cf 25 d7 27 e6 b4 f6 14 04 16 0e 71 13 ae 10 ... 4b 21 9a 18 d5 0d 90 06 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 1b 01 a3 f9 90 f2 12 eb c6 e3 a6 df a4 e2 25 f0 ... 1a 20 70 08 98 f1 a9 dc [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 4b cd b8 c9 48 d2 73 e4 e8 fc d1 17 f8 2e d6 3b ... 8c ff 48 ff 1e ff 18 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 32 ff 64 ff a5 ff ed ff 26 00 44 00 41 00 1e 00 ... 02 00 02 00 02 00 01 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 01 00 00 00 00 00 ff ff ff ff fd ff fc ff fb ff ... fe fe 8b 03 ba 06 54 08 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY ad 08 5a 07 58 04 67 00 7e fc 9b f9 a1 f8 d0 f9 ... e2 15 f9 14 82 0d ef 02 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY f8 f8 85 f0 53 e9 15 e4 d3 e4 6a ed 47 fa 20 08 ... a6 03 26 05 cc 05 1e 06 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 41 06 d3 05 9b 04 95 02 6d 00 e6 fe 2e fe 45 fe ... 32 fc 02 fd 9b fe e6 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 73 00 66 00 a1 ff af fe 55 fe 9e fe 0a ff 36 ff ... d9 06 61 02 c3 f9 30 f1 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 52 f0 ae f9 58 05 d7 0a 53 09 19 05 de 01 1b ff ... b2 f7 4e f9 6f fb 29 fd [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 52 00 18 04 42 05 0b 03 50 00 ee fe 05 ff 16 01 ... 4f 00 43 00 36 00 28 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 1d 00 0b 00 e5 ff b7 ff 95 ff 84 ff 77 ff 68 ff ... bc 01 41 02 f9 00 b6 fd [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 35 f8 ad f9 c8 00 44 04 54 03 a4 01 77 02 41 02 ... 05 ff c5 ff 2c 01 88 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 97 fe f2 ff 21 00 bd 00 98 00 7f 00 52 ff 94 ff ... 62 00 0c fd 70 00 5e 02 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY ee ff bd ff 27 fe 7c 00 48 00 78 00 87 fe 2b ff ... 26 fa 29 ee 56 e8 4a ea [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY e3 f0 bc f6 8c f9 bc fb 5b 00 5f 05 ce 04 87 fc ... 21 11 97 0f 1c 09 88 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 88 f8 f0 f2 95 f1 96 f5 6a fc 8b 00 7f fe 77 f7 ... 8c 04 11 02 4d ff e4 fe [1280 bytes]
-DEBUG:httpcore.http11:response_closed.complete
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY cc 01 64 05 3e 06 9e 03 4d ff 6b fb 8d f8 26 f7 ... 2b 01 2b 02 2e 02 be 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY bc fe 0f fe 17 00 f9 03 bf 06 fd 05 3e 02 57 fe ... 9f f8 27 ff 44 03 d8 02 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY bc fe 8d fa 50 f9 8e f9 7f f8 6c f7 5f f9 c7 fd ... dc 00 8a 01 a1 00 f1 fe [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 5a fe 47 ff 06 00 96 ff d9 fe cf fe 8b ff 86 00 ... f2 ff ee ff ef ff f4 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 00 00 0a 00 0f 00 10 00 11 00 15 00 1a 00 20 00 ... 26 00 24 00 23 00 21 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 20 00 1e 00 1c 00 1a 00 18 00 16 00 13 00 10 00 ... 00 00 81 fe de fd e3 fd [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY fe fd 8a fe d8 fe b7 fe f6 fe 63 fe 96 fd 31 fc ... 18 ff 27 fe 84 fd bf fd [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 5c fe 60 ff 79 ff 0b ff aa fe cb fe 5e ff 05 00 ... 19 00 8c 00 64 fe 13 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 13 ff 01 00 45 00 7b ff 24 fe 95 ff 5d 01 0c fe ... 02 ff 0f ff a7 00 31 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 65 00 5d ff 49 ff 00 00 88 00 da 00 67 ff b6 fe ... d3 00 36 01 88 00 19 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY b4 00 58 01 7e 00 5a 00 ba 00 93 00 70 00 55 00 ... 1f fc 3c fd e5 fe 11 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY bd 01 fa 04 43 09 7c 0c c4 0c b3 09 50 04 f5 fd ... 9c 00 ac 00 b7 00 bf 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY c5 00 c7 00 c6 00 bf 00 b8 00 ac 00 a0 00 92 00 ... 02 00 02 00 02 00 03 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 02 00 01 00 01 00 01 00 01 00 02 00 02 00 02 00 ... 08 00 05 00 02 00 04 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 0b 00 08 00 08 00 01 00 06 00 fe ff 09 00 10 00 ... b5 0a 64 0b 58 0b be 0a [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 93 09 ac 07 4e 05 ae 02 e7 ff 41 fd f4 fa 44 f9 ... 2a 0f d3 0c 74 0a 81 07 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY ab 03 f9 fe 85 f9 40 f4 8c f0 61 ef ef f0 6a f4 ... e9 e0 6c e4 fe eb 16 f7 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 85 03 93 0f 09 19 01 1e 42 1d 05 17 04 0d 77 01 ... ef 03 90 fd 6e f6 77 f2 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 87 f4 31 fc 4b 06 e8 0e 6e 13 33 10 e1 05 48 f7 ... c9 00 e3 00 8a 00 e4 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 43 ff f2 fe 11 ff 86 ff 0d 00 5f 00 4d 00 dd ff ... 92 fe 16 fe 7d fe 06 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY b6 01 3b 02 15 01 10 ff 62 fd c9 fc 8e fd 8e ff ... a6 06 d9 02 5b fe 7a fb [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY e6 fb 70 ff fe 03 57 07 33 08 a9 06 a0 03 50 00 ... 60 ff 5e ff 5f ff 70 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 8d ff ac ff c7 ff e1 ff f8 ff 06 00 0b 00 06 00 ... f9 ff f9 ff fa ff fa ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY fd ff ff ff 00 00 01 00 02 00 03 00 04 00 05 00 ... 02 00 02 00 02 00 02 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 01 00 00 00 ff ff ff ff ff ff ff ff fe ff fe ff ... 32 01 83 01 38 01 8d 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY ba ff 3d ff 20 ff 66 ff be ff 07 00 22 00 d3 ff ... f4 f6 18 f8 c7 f8 a0 f8 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 3d f7 a7 f5 97 f6 5c fc 06 06 7c 0d 2e 0e b0 07 ... cd 15 fe 1f 0f 21 3c 17 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY d0 04 7c f3 f4 e8 95 e8 42 f0 15 fd 4f 0b 82 14 ... 73 e1 42 d6 1f d8 04 e7 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 77 fc 68 0f 51 1a 22 1a e0 10 0b 02 e8 f2 49 e9 ... 4f 11 a5 18 b3 18 8b 10 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 63 03 a2 f5 b7 ec 03 ec 28 f3 31 ff ef 0a b6 11 ... bd fe d4 ff 88 00 ed ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY d5 ff cb fe 74 ff 3e ff fd ff a4 ff 38 ff 89 fe ... 28 ff c2 ff 89 00 33 01 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY f2 fe cf ff 9c ff 8a 00 26 01 7f ff a8 fe 60 ff ... 1f 00 0b 00 07 00 e1 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY d9 ff fc ff 31 00 0d 00 df ff c1 ff 12 00 40 00 ... 05 00 03 00 00 00 ff ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY ff ff fd ff ff ff 02 00 01 00 02 00 06 00 09 00 ... 2a fa 98 fd bf 03 a9 09 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY ae 0b 25 08 09 01 fe f9 da f5 6a f5 6b f7 24 fa ... e1 ee 3b ee 60 ef 42 f4 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY e4 fd 4f 09 5a 13 ff 19 96 1c 09 1b 43 15 7d 0d ... 32 e4 8b e2 ee e5 ed eb [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 2f f3 46 fb 4b 03 6f 09 8f 0c 93 0d 26 0e 05 0e ... 92 01 38 fb 72 f5 2f f2 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY e9 f1 ee f4 96 fb 99 04 b7 0d fa 14 f6 18 08 19 ... 4f 14 63 04 56 f3 3c e5 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 74 dc 29 df 16 eb a1 fb ae 0b 22 15 6b 16 15 0f ... b2 fe 89 fd 64 ff 4f 03 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 69 07 6a 09 f7 07 43 03 f4 fc ac f7 2b f5 23 f6 ... 70 05 a8 05 24 02 02 fe [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY cc fb 61 fc 5b ff c3 01 f8 02 1f 03 9b 02 68 01 ... 38 00 0a 00 0e 00 44 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 92 00 c3 00 c7 00 a0 00 67 00 59 00 72 00 ad 00 ... e8 ff f5 ff f3 ff e1 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY c3 ff a9 ff 98 ff 97 ff a6 ff b8 ff b8 ff a9 ff ... 84 00 76 00 46 00 e6 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY f7 ff d6 ff bc ff 41 00 cf 00 17 00 1b 00 79 ff ... 8c 00 df ff 3e fe 87 fb [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY c1 f9 b6 f8 64 fc 22 05 24 0e 11 0d 97 03 b4 fa ... 99 fa e7 fa 4e fd 59 ff [1280 bytes]
-DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=e2d14ff3eb804cb886ef084b148bbb57 utt_id=utt-00001 chunks=81 bytes=102746 total_bytes=104026
-INFO:app.voice_v2.engine:TURN_METRICS stage=tts_end sid=e2d14ff3eb804cb886ef084b148bbb57 tts_first_chunk_ms=13 tts_total_ms=99
-INFO:app.voice_v2.tts_runtime:evt=tts_end sid=e2d14ff3eb804cb886ef084b148bbb57 ms_elapsed=97
-DEBUG:app.voice_v2.tts_runtime:evt=tts_end_stats sid=e2d14ff3eb804cb886ef084b148bbb57 utt_id=utt-00001 total_bytes=104026 ms_elapsed=97
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 3f 00 bd ff ac fd ec f9 6f f6 98 f8 15 03 17 12 ... f3 fb 18 fc 70 fc 97 fc [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 4c fd ff fd 77 fe 55 fd 3f fb 4c f9 3f f8 30 f8 ... ff 07 e3 03 62 fe 4d fa [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY b2 f8 7b f9 e3 fb 46 ff 38 02 ec 03 29 03 38 00 ... 7a 06 82 0d 7e 10 c5 0c [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 49 03 26 f9 6e f3 65 f4 7f fa 8f 02 b6 09 ee 0d ... 77 ff 0e ff 94 fe 32 fe [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY fa fd f1 fd 09 fe 66 fe 52 ff db 00 6e 02 0e 03 ... ed fd 64 ff f7 01 37 03 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY f5 01 3d ff 45 fd 77 fd 43 ff e9 00 17 01 e6 ff ... 71 ff e2 ff 83 00 9b 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 21 00 6d ff 01 ff 20 ff 7f ff d0 ff a3 ff 1f ff ... f4 ff f7 ff fa ff 09 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 11 00 0e 00 0c 00 0b 00 11 00 10 00 10 00 0a 00 ... cc ff cf ff d2 ff d0 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY cf ff cb ff cb ff ce ff d3 ff d5 ff d6 ff d4 ff ... f9 ff f9 ff f8 ff f8 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY f9 ff f9 ff f9 ff f9 ff f9 ff f9 ff f8 ff f8 ff ... 01 00 01 00 01 00 01 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 01 00 01 00 01 00 01 00 01 00 01 00 02 00 03 00 ... e2 ff e4 ff e5 ff e7 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY e9 ff ea ff eb ff eb ff ec ff ee ff f0 ff f1 ff ... 1a 00 18 00 15 00 13 00 [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY 12 00 13 00 14 00 14 00 13 00 11 00 0f 00 0e 00 ... fc ff fb ff fa ff f8 ff [1280 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > BINARY f8 ff f9 ff fa ff fb ff fb ff fb ff fb ff fa ff ... fa ff fb ff fb ff fc ff [346 bytes]
-INFO:app.ws.adapter:evt=tts_timeline sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=None provider=elevenlabs
-INFO:app.ws.adapter:evt=turn_lifecycle sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=1 phase=turn_start
-INFO:app.ws.adapter:evt=tts_timeline sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=1 provider=elevenlabs
-INFO:app.ws.adapter:evt=turn_lifecycle sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=1 phase=turn_start
-INFO:app.ws.adapter:evt=asr_open_begin sid=e2d14ff3eb804cb886ef084b148bbb57 vendor=gcp sample_rate=16000 language=en-US
-INFO:app.services.asr.gcp_engine:evt=asr_open vendor=gcp sid=e2d14ff3eb804cb886ef084b148bbb57 sample_rate=16000 language=en-US
-INFO:app.ws.adapter:evt=turn_lifecycle sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=1 phase=asr_final_from_timeout
-WARNING:app.voice_v2.engine:evt=asr_final_ignored state=Responding
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"asr.ready","ts_ms":1763812136654,"vend...ne":{"mode":"pcm16"}}}}' [466 bytes]
-INFO:app.services.asr.gcp_engine:evt=asr_stream_wait_start vendor=gcp
-INFO:app.ws.adapter:evt=asr_ready_bundle_sent sid=e2d14ff3eb804cb886ef084b148bbb57 input.mode=pcm16 input.mime=audio/raw;rate=16000;channels=1;format=s16le capture.timeslice_ms=200 vendor=gcp
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"input.start","capture":{"mode":"pcm16"...ne":{"mode":"pcm16"}}}}' [412 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"start_listening","policy":{"media":{"a...ne":{"mode":"pcm16"}}}}' [229 bytes]
-INFO:app.ws.adapter:evt=ws_mic_guard_arm sid=e2d14ff3eb804cb886ef084b148bbb57 timeout_s=2.50
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"asr.turn","state":"begin"}' [35 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"turn.begin"}' [21 bytes]
-INFO:app.ws.adapter:evt=asr_ready_emit sid=e2d14ff3eb804cb886ef084b148bbb57 where=tts_end
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"asr.ready","sid":"e2d14ff3eb804cb886ef...8bbb57","vendor":"gcp"}' [76 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"input.stop","reason":"no_speech"}' [42 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_HUD_S...":"asr_ready_signal"}}}' [220 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_ASR_R...asr_ready","data":null}' [146 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_ASR_R...":16000,"channels":1}}}' [364 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"audio.header","format":"pcm16","sample_rate":16000,"channels":1}' [73 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...timeslice_ms=unknown"}}' [116 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...false,"phase":"greet"}}' [330 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr","ts":...":16000,"channels":1}}}' [265 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws_ready_c...false,"phase":"ready"}}' [134 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"diag","ts":176381...l,"label":"asr.ready"}}' [102 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr_arm_cl...":null,"vendor":"gcp"}}' [113 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_head...},"codec":"pcm_s16le"}}' [292 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.stream.on"...reason":"input.start"}}' [117 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.reques...rue}},"phase":"greet"}}' [308 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.gum_re...toGainControl":true}}}}' [249 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_ASR_R...asr_ready","data":null}' [146 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_ASR_R...4cb886ef084b148bbb57"}}' [218 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.start_...16"}},"phase":"greet"}}' [199 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.reques...rue}},"phase":"greet"}}' [326 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.stream...:null,"phase":"greet"}}' [234 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.opened...rue}},"phase":"greet"}}' [321 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...false,"phase":"greet"}}' [327 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.start_...alse","phase":"greet"}}' [201 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...false,"phase":"greet"}}' [327 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...timeslice_ms=unknown"}}' [116 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...false,"phase":"greet"}}' [327 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr","ts":...r":"gcp","input":null}}' [132 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws_ready_c...false,"phase":"ready"}}' [134 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"diag","ts":176381...l,"label":"asr.ready"}}' [102 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr_arm_cl...":null,"vendor":"gcp"}}' [113 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.stream.off...,"reason":"no_speech"}}' [116 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...false,"phase":"greet"}}' [330 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.turn.inten...,"reason":"no_speech"}}' [134 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.auto_s..."reason":"input.stop"}}' [147 bytes]
-INFO:app.ws.adapter:evt=mic_gate_open sid=e2d14ff3eb804cb886ef084b148bbb57 reason=audio_header
-71.224.106.24:0 - "GET /static/js/audio/pcm-worklet-processor.js?v=6300549.e723001d2c364550 HTTP/1.1" 200
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.gum_su...as_audio_tracks":true}}' [124 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.stream...nt":1,"phase":"greet"}}' [276 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic.opened...rue}},"phase":"greet"}}' [303 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...timeslice_ms=unknown"}}' [116 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...":null,"stage":"init"}}' [125 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...it","state":"running"}}' [138 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...false,"phase":"greet"}}' [339 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...g","sampleRate":48000}}' [181 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [329 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [299 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.vad.state"...b":-120,"noiseDb":-72}}' [148 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.vad.state"...b":-64,"speech":false}}' [157 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...null,"stage":"resume"}}' [127 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...me","state":"running"}}' [140 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [329 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [329 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm.captur...auto","phase":"greet"}}' [161 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm.captur...:"auto","policy":true}}' [132 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"turn.state","state":"Ready","reason":"...y","reason":"tts_end"}}' [100 bytes]
-INFO:app.services.asr.gcp_engine:evt=asr_stream_summary vendor=gcp sid=e2d14ff3eb804cb886ef084b148bbb57 outcome=final
-WARNING:app.services.asr.gcp_engine:evt=asr_no_audio_before_timeout vendor=gcp
-INFO:app.services.asr.gcp_engine:evt=asr_close vendor=gcp sid=e2d14ff3eb804cb886ef084b148bbb57 sample_rate=16000 language=en-US
-INFO:app.ws.adapter:evt=turn_lifecycle sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=2 phase=turn_start
-INFO:app.ws.adapter:evt=turn_timeline sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=2 outcome=final
-INFO:app.ws.adapter:evt=turn_lifecycle sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=2 phase=turn_complete
-INFO:app.ws.adapter:evt=asr_close_ack sid=e2d14ff3eb804cb886ef084b148bbb57 seq=bcdc0a5d8edd4d5d85519e7c26cc0a8d status=server_closed final_emitted=False bytes=0
-INFO:app.ws.adapter:evt=turn_lifecycle sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=2 phase=turn_start
-INFO:app.ws.adapter:evt=asr_open_begin sid=e2d14ff3eb804cb886ef084b148bbb57 vendor=gcp sample_rate=16000 language=en-US
-INFO:app.services.asr.gcp_engine:evt=asr_open vendor=gcp sid=e2d14ff3eb804cb886ef084b148bbb57 sample_rate=16000 language=en-US
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm.first_...00,"sampleRate":16000}}' [133 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm.first_...00,"sampleRate":16000}}' [141 bytes]
-INFO:app.ws.adapter:evt=tts_timeline sid=e2d14ff3eb804cb886ef084b148bbb57 turn_index=2 provider=elevenlabs
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"turn.begin"}' [21 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"turn.end"}' [19 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"asr.turn","state":"end"}' [33 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"asr.closed","seq":"bcdc0a5d8edd4d5d855...ted":0,"ms_ingested":0}' [210 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"asr.ready","sid":"e2d14ff3eb804cb886ef...8bbb57","vendor":"gcp"}' [76 bytes]
-INFO:app.services.asr.gcp_engine:evt=asr_stream_wait_start vendor=gcp
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [329 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.turn.summa...tate":1,"reason":null}}' [211 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"asr.open","reason":"server_closed"}' [44 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [329 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_ASR_R...asr_ready","data":null}' [146 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_ASR_R...4cb886ef084b148bbb57"}}' [218 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr_rearm_...ason":"server_closed"}}' [127 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr_open_r...ason":"server_closed"}}' [126 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [329 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...timeslice_ms=unknown"}}' [116 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.audio_stre...:true,"phase":"greet"}}' [329 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr","ts":...r":"gcp","input":null}}' [132 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws_ready_c...false,"phase":"ready"}}' [134 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"diag","ts":176381...l,"label":"asr.ready"}}' [102 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.asr_arm_cl...":null,"vendor":"gcp"}}' [113 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] > TEXT '{"type":"asr.error","code":"already_open"}' [42 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:56 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
 71.224.106.24:0 - "GET /api/v1/admin/flow/sessions?open=1 HTTP/1.1" 200
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-10.225.22.79:35074 - "GET /api/v1/live HTTP/1.1" 200
-[2025-11-22 11:48:57 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-71.224.106.24:0 - "GET /api/v1/admin/flow/trace?sid=e2d14ff3eb804cb886ef084b148bbb57&offset=0&limit=50 HTTP/1.1" 200
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:58 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-WARNING:app.ws.adapter:evt=ws_mic_open_timeout sid=e2d14ff3eb804cb886ef084b148bbb57 timeout_s=2.50 mic_open=False nudged=True
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] > TEXT '{"type":"hud.nudge","code":"mic_permissions","reason":"mic_open_timeout"}' [73 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.diag","event":"EVT_CLIENT_MIC_P...n":"mic_open_timeout"}}' [207 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:48:59 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:00 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:01 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.appstate.h...-120,"vadNoiseDb":-72}}' [313 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...t.appstate.heartbeat"}}' [340 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.ws","ts":1...rce":"hub.bindSocket"}}' [115 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.mic","ts":...ge_label":"client.ws"}}' [142 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.appstate.d...-120,"vadNoiseDb":-72}}' [500 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.appstate.h...-120,"vadNoiseDb":-72}}' [307 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-10.225.22.79:35080 - "GET /api/v1/live HTTP/1.1" 200
-[2025-11-22 11:49:02 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:03 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] > TEXT '{"type":"server.ping","ts":1763812144701}' [41 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.pong","ts":1763812145658,"echo":1763812144701}' [62 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:04 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:05 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.log","label":"client.pcm_sender...00,"timestampMs":null}}' [161 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < TEXT '{"type":"client.banner","info":{"user_agent":"M...n":"client_shutdown"}}}' [833 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] < CLOSE 1000 (OK) client_shutdown [17 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] = connection is CLOSING
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] > CLOSE 1000 (OK) client_shutdown [17 bytes]
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] x half-closing TCP connection
-[2025-11-22 11:49:06 +0000] [58] [DEBUG] = connection is CLOSED
-[2025-11-22 11:49:06 +0000] [58] [INFO] connection closed
-INFO:app.services.asr.gcp_engine:evt=asr_stream_summary vendor=gcp sid=e2d14ff3eb804cb886ef084b148bbb57 outcome=final
-WARNING:app.services.asr.gcp_engine:evt=asr_no_audio_before_timeout vendor=gcp
-INFO:app.services.asr.gcp_engine:evt=asr_close vendor=gcp sid=e2d14ff3eb804cb886ef084b148bbb57 sample_rate=16000 language=en-US
-INFO:app.ws.adapter:evt=audio_task_shutdown_drain sid=e2d14ff3eb804cb886ef084b148bbb57 completed=0 remaining=0
-10.225.22.79:37178 - "GET /api/v1/live HTTP/1.1" 200
-10.225.22.79:37182 - "GET /api/v1/live HTTP/1.1" 200
-10.225.22.79:56512 - "GET /api/v1/live HTTP/1.1" 200
-71.224.106.24:0 - "GET /api/v1/admin/flow/zip?sid=e2d14ff3eb804cb886ef084b148bbb57 HTTP/1.1" 200
+DEBUG:httpcore.http11:response_closed.complete
+DEBUG:app.voice_v2.tts_runtime:evt=tts_chunk sid=413b9f0d8c80466096977dfee8be4e3f utt_id=utt-00001 chunks=67 bytes=84912 total_bytes=86192
+INFO:app.voice_v2.engine:TURN_METRICS stage=tts_end sid=413b9f0d8c80466096977dfee8be4e3f tts_first_chunk_ms=18 tts_total_ms=81
+INFO:app.voice_v2.tts_runtime:evt=tts_end sid=413b9f0d8c80466096977dfee8be4e3f ms_elapsed=77
+DEBUG:app.voice_v2.tts_runtime:evt=tts_end_stats sid=413b9f0d8c80466096977dfee8be4e3f utt_id=utt-00001 total_bytes=86192 ms_elapsed=77
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+71.224.106.24:0 - "GET /api/v1/admin/flow/trace?sid=413b9f0d8c80466096977dfee8be4e3f&offset=0&limit=50 HTTP/1.1" 200
+10.225.23.248:42740 - "GET /api/v1/live HTTP/1.1" 200
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+10.225.23.248:38546 - "GET /api/v1/live HTTP/1.1" 200
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+10.225.23.248:38550 - "GET /api/v1/live HTTP/1.1" 200
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+[2025-11-22 18:50:56 +0000] [60] [DEBUG] % sending keepalive ping
+[2025-11-22 18:50:56 +0000] [60] [DEBUG] % received keepalive pong
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+10.225.23.248:58922 - "GET /api/v1/live HTTP/1.1" 200
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+INFO:app.ws.adapter:evt=tts_timeline sid=413b9f0d8c80466096977dfee8be4e3f turn_index=None provider=elevenlabs
+71.224.106.24:0 - "GET /static/js/audio/pcm-worklet-processor.js?v=44bceb2.861afe536bdef7a3 HTTP/1.1" 200
+[2025-11-22 18:51:01 +0000] [60] [DEBUG] = connection is CLOSED
+[2025-11-22 18:51:01 +0000] [60] [INFO] connection closed
+INFO:app.ws.adapter:evt=asr_close_ack sid=413b9f0d8c80466096977dfee8be4e3f seq=e9fd7b3d95f645db964325c587e6f178 status=server_closed final_emitted=False bytes=0
+INFO:app.ws.adapter:evt=audio_task_shutdown_drain sid=413b9f0d8c80466096977dfee8be4e3f completed=0 remaining=0
+10.225.23.248:58934 - "GET /api/v1/live HTTP/1.1" 200
+10.225.23.248:58936 - "GET /api/v1/live HTTP/1.1" 200
+10.225.23.248:43280 - "GET /api/v1/live HTTP/1.1" 200
+10.225.23.248:43282 - "GET /api/v1/live HTTP/1.1" 200
