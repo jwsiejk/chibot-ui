@@ -792,7 +792,15 @@
     const needsWsClient = !window.WSClient
       || typeof window.WSClient.open !== "function";
     if (needsWsClient) {
-      await loadScript("ws_client.js");
+      const wsClientSrc = resolveScriptSrc("ws_client.js");
+      try {
+        await import(/* @vite-ignore */ wsClientSrc);
+      } catch (err) {
+        try {
+          console.warn("WSClient dynamic import failed; retrying via script", err);
+        } catch (_) {}
+        await loadScript("ws_client.js");
+      }
     }
     if (!window.WSClient || typeof window.WSClient.open !== "function") {
       console.error("WSClient runtime missing open() API", window.WSClient);
