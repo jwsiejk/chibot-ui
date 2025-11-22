@@ -591,6 +591,30 @@ export function createWsConnection({
 
     if (!skipPhaseCheck && !binary && !isControl) {
       if (phase && !WS_READY_PHASES.has(phase)) {
+        const queueLength = connectionQueue.length;
+        const phaseReady = WS_READY_PHASES.has(phase);
+        const channel = typeof data?.channel === "string" ? data.channel : null;
+        const eventType = payloadType;
+        let appPhase = null;
+        try {
+          const snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
+          appPhase = snapshot && typeof snapshot.phase === "string" ? snapshot.phase : AppState?.phase || null;
+        } catch {}
+        try {
+          console.log("DIAG: ws_send_blocked", {
+            reason: "phase_not_ready",
+            channel,
+            eventType,
+            phase,
+            appPhase,
+            phaseReady,
+            readyState,
+            audioStreaming: audioRuntime?.isAudioStreaming?.(),
+            canSend: skipPhaseCheck || phaseReady,
+            queueLength: queueLength + 1,
+            ts: Date.now(),
+          });
+        } catch {}
         console.warn("client.ws.send_queued", {
           payloadType,
           phase,
