@@ -532,6 +532,7 @@ class AdapterContext:
     last_tts_end_req_id: Optional[str] = None
     await_user_cue_emitted: bool = False
     await_user_vad_check_pending: bool = False
+    greet_utt_id: Optional[str] = None
     listen_handoff_done: set[str] = field(default_factory=set)
     listen_handoff_task: asyncio.Task[None] | None = None
     listen_handoff_task_key: Optional[str] = None
@@ -1049,6 +1050,10 @@ class ChatV2Adapter:
             meta={"provider": provider_name, "utt_id": utt_id},
             source="tts",
         )
+        if not ctx.greet_completed:
+            greet_utt_id = self._extract_tts_utt_id(frame) or utt_id
+            if greet_utt_id and self._frame_signals_greet(frame):
+                ctx.greet_utt_id = greet_utt_id
         try:
             self._bus(
                 "tts.start",
@@ -1131,6 +1136,12 @@ class ChatV2Adapter:
             source="tts",
         )
 
+        greet_utt_id = ctx.greet_utt_id
+        frame_utt_id = self._extract_tts_utt_id(frame) or utt_id_value
+        is_greet_tts = self._frame_signals_greet(frame) or (
+            greet_utt_id is not None and frame_utt_id == greet_utt_id
+        )
+
         tts_started_at = metrics.get("tts_started_at")
         tts_completed_at = metrics.get("tts_completed_at")
         tts_ms = (
@@ -1154,7 +1165,7 @@ class ChatV2Adapter:
                     }
                 },
             )
-        if not ctx.greet_completed:
+        if not ctx.greet_completed and is_greet_tts:
             ctx.greet_completed = True
             self._emit_session_step(
                 ctx.sid,
@@ -1162,7 +1173,7 @@ class ChatV2Adapter:
                 summary="Greet TTS completed",
                 source="tts",
             )
-        if not ctx.asr_ready_bundle_sent_ms:
+        if ctx.greet_completed and not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
 
         self._schedule_no_audio_watchdog_rearm(ctx)
@@ -7564,11 +7575,55 @@ class ChatV2Adapter:
                             "evt=turn_begin_send_failed sid=%s reason=ready_bundle",
                             ctx.sid,
                             exc_info=True,
-                        )
-                    else:
-                        ctx.turn_active = True
+                )
+            else:
+                ctx.turn_active = True
 
-        self._schedule_no_audio_watchdog_rearm(ctx)
+    @staticmethod
+    def _extract_tts_utt_id(frame: Mapping[str, Any] | None) -> Optional[str]:
+        if not isinstance(frame, Mapping):
+            return None
+
+        meta = frame.get("meta") if isinstance(frame, Mapping) else None
+        tts_meta = meta.get("tts") if isinstance(meta, Mapping) else None
+        for mapping in (frame, meta, tts_meta):
+            if not isinstance(mapping, Mapping):
+                continue
+            candidate = mapping.get("utt_id")
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        return None
+
+    @staticmethod
+    def _frame_signals_greet(frame: Mapping[str, Any] | None) -> bool:
+        if not isinstance(frame, Mapping):
+            return False
+
+        frame_type = frame.get("type")
+        if frame_type in {"greet.end", "greet.complete"}:
+            return True
+
+        meta = frame.get("meta") if isinstance(frame, Mapping) else None
+        return Adapter._meta_signals_greet(meta)
+
+    @staticmethod
+    def _meta_signals_greet(meta: Mapping[str, Any] | None) -> bool:
+        if not isinstance(meta, Mapping):
+            return False
+
+        for key in ("is_greet", "greet"):
+            if meta.get(key) is True:
+                return True
+
+        reason = meta.get("reason")
+        if isinstance(reason, str) and reason.lower() == "greet":
+            return True
+
+        nested = meta.get("tts") if isinstance(meta, Mapping) else None
+        if isinstance(nested, Mapping) and Adapter._meta_signals_greet(nested):
+            return True
+
+        return False
         
 
     @staticmethod
