@@ -38,6 +38,47 @@ const { createCaptureRuntime } = captureRuntimeExports;
 const { initPcmSender } = pcmSenderModule ?? {};
 const { createWsAudioRuntime } = wsAudioRuntimeModule ?? {};
 
+try {
+  logStage("client.audio_modules_loaded", {
+    hasInitVAD: typeof initVAD === "function",
+    hasCreateCaptureRuntime: typeof createCaptureRuntime === "function",
+    hasInitPcmSender: typeof initPcmSender === "function",
+    hasCreateWsAudioRuntime: typeof createWsAudioRuntime === "function",
+  });
+} catch (_) {}
+
+(() => {
+  const missingAudioExports = [];
+  if (typeof createCaptureRuntime !== "function") {
+    missingAudioExports.push("createCaptureRuntime");
+  }
+  if (typeof initVAD !== "function") {
+    missingAudioExports.push("initVAD");
+  }
+  if (typeof initPcmSender !== "function") {
+    missingAudioExports.push("initPcmSender");
+  }
+  if (typeof createWsAudioRuntime !== "function") {
+    missingAudioExports.push("createWsAudioRuntime");
+  }
+  if (missingAudioExports.length > 0) {
+    const detail = {
+      missing: missingAudioExports,
+      vadModuleLoaded: Boolean(vadModule),
+      captureRuntimeModuleLoaded: Boolean(captureRuntimeModule),
+      pcmSenderModuleLoaded: Boolean(pcmSenderModule),
+      wsAudioRuntimeModuleLoaded: Boolean(wsAudioRuntimeModule),
+    };
+    try {
+      logStage("client.audio.init_error", detail);
+    } catch (_) {}
+    console.error("Audio runtime modules missing exports", detail);
+    throw new Error(
+      `Audio runtime initialization failed; missing exports: ${missingAudioExports.join(", ")}`
+    );
+  }
+})();
+
 const AUDIO_KEEPALIVE_MS = 1000;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 
@@ -79,10 +120,6 @@ const fallbackReasonLooksUserInitiated = (value) => {
 const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserInitiated === "function"
   ? captureRuntimeExports.reasonLooksUserInitiated
   : fallbackReasonLooksUserInitiated;
-
-if (typeof createCaptureRuntime !== "function") {
-  throw new Error("capture_runtime exports missing createCaptureRuntime()");
-}
 (() => {
   // ===== Shared constants, policy defaults, tiny helpers =====
   const DEFAULT_CLOSE_REASON = "client_shutdown";
