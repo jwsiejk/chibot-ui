@@ -61,12 +61,10 @@ function setPhase(nextPhase, options = {}) {
   if (!AppState || typeof AppState !== "object") return;
   if (!force && AppState.phase === nextPhase) return;
   AppState.phase = nextPhase;
+  // Phase is now a semantic flag only; we no longer use it to pause the PCM
+  // sender (that is handled by canCaptureNow() via ttsActive, listening, etc.).
   try {
-    if (typeof setSenderPauseReason === "function") {
-      setSenderPauseReason("phase_greet", nextPhase === PHASE.Greet);
-      applySenderPausedState?.();
-      updatePcmSenderState?.();
-    }
+    updatePcmSenderState?.("phase_change");
   } catch (_) {}
   try {
     logStage("client.phase.change", { phase: nextPhase });
