@@ -7632,7 +7632,7 @@ class ChatV2Adapter:
             return True
 
         meta = frame.get("meta") if isinstance(frame, Mapping) else None
-        return Adapter._meta_signals_greet(meta)
+        return ChatV2Adapter._meta_signals_greet(meta)
 
     @staticmethod
     def _meta_signals_greet(meta: Mapping[str, Any] | None) -> bool:
@@ -7648,7 +7648,7 @@ class ChatV2Adapter:
             return True
 
         nested = meta.get("tts") if isinstance(meta, Mapping) else None
-        if isinstance(nested, Mapping) and Adapter._meta_signals_greet(nested):
+        if isinstance(nested, Mapping) and ChatV2Adapter._meta_signals_greet(nested):
             return True
 
         return False
