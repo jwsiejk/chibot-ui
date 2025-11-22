@@ -1,6 +1,13 @@
 /* eslint-disable no-console */
 
-import { emitClientLog, logStage } from "../ws/telemetry.js";
+import * as telemetry from "../ws/telemetry.js";
+
+const emitClientLog = typeof telemetry.emitClientLog === "function"
+  ? telemetry.emitClientLog
+  : () => {};
+const logStage = typeof telemetry.logStage === "function"
+  ? telemetry.logStage
+  : () => {};
 
 const DEFAULT_CHUNK_MS = 60;
 const DEFAULT_FLUSH_MS = 50;
