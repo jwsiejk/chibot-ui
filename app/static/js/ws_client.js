@@ -52,6 +52,8 @@ const PHASE = {
   Conversation: "conversation",
 };
 
+const CONVERSATION_START_DELAY_MS = 350;
+
 function getPhase() {
   return AppState?.phase || PHASE.Greet;
 }
@@ -267,6 +269,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let __secondGreetingTraceCompleted = false;
   let __secondGreetingTraceStartMs = 0;
   let __secondGreetingStartChunkCount = 0;
+  let conversationStartTimer = null;
+  let hasOpenedAsrForConversation = false;
 
   let _audioStreaming = false;
   let awaitingAsrClosedAck = false;
@@ -325,12 +329,37 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     if (greetCompleted) {
       return;
     }
+    hasOpenedAsrForConversation = false;
+    if (conversationStartTimer) {
+      clearTimeout(conversationStartTimer);
+      conversationStartTimer = null;
+    }
     greetCandidateSeen = true;
     greetActive = true;
     if (typeof frame?.utt_id === "string" && frame.utt_id) {
       greetUtteranceId = frame.utt_id;
     }
-    setPhase(PHASE.Greet);
+    setPhase(PHASE.Greet, { force: true });
+    try {
+      setSenderPauseReason("greet", true);
+      applySenderPausedState();
+      updatePcmSenderState("greet_start");
+    } catch (_) {}
+    try {
+      setAppStateValue?.("barge_in_enabled", false);
+      if (AppState && typeof AppState === "object") {
+        AppState.barge_in_enabled = false;
+      }
+    } catch (_) {}
+    try {
+      if (typeof WSClient?.stopRecorderStreaming === "function") {
+        WSClient.stopRecorderStreaming("greet_start");
+      } else if (typeof stopRecorderStreaming === "function") {
+        stopRecorderStreaming("greet_start");
+      } else {
+        autoStopRecorder("greet_start", { force: true, allowVadStop: true });
+      }
+    } catch (_) {}
   }
 
   function markGreetEnd() {
@@ -339,11 +368,77 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     }
     greetActive = false;
     greetCompleted = true;
-    setPhase(PHASE.Conversation);
   }
 
   function canBargeIn() {
     return getPhase() === PHASE.Conversation;
+  }
+
+  function safeRequestAsrOpen(reason) {
+    if (getPhase() !== PHASE.Conversation) {
+      try {
+        logStage("client.asr_open.skipped", {
+          reason: "not_conversation_phase",
+          phase: getPhase(),
+          requested_reason: reason || null,
+        });
+      } catch (_) {}
+      return;
+    }
+    if (typeof requestAsrArm === "function") {
+      return requestAsrArm(reason);
+    }
+    return undefined;
+  }
+
+  function safeStartRecorderStreaming(policy, source) {
+    if (getPhase() !== PHASE.Conversation) {
+      try {
+        logStage("client.mic.start_skipped", {
+          reason: "not_conversation_phase",
+          phase: getPhase(),
+          source: source || "unknown",
+        });
+      } catch (_) {}
+      return false;
+    }
+    if (typeof WSClient?.startRecorderStreaming === "function") {
+      return WSClient.startRecorderStreaming(policy, source);
+    }
+    if (typeof startRecorderStreaming === "function") {
+      return startRecorderStreaming(policy, source);
+    }
+    return false;
+  }
+
+  function enterConversationAfterGreet(source = "greet_tts_end") {
+    if (conversationStartTimer) {
+      clearTimeout(conversationStartTimer);
+      conversationStartTimer = null;
+    }
+    if (getPhase() === PHASE.Conversation) {
+      return;
+    }
+    setPhase(PHASE.Conversation);
+    try {
+      setSenderPauseReason("greet", false);
+      applySenderPausedState();
+      updatePcmSenderState("post_greet_phase_change");
+    } catch (_) {}
+    try {
+      setAppStateValue?.("barge_in_enabled", true);
+      if (AppState && typeof AppState === "object") {
+        AppState.barge_in_enabled = true;
+      }
+    } catch (_) {}
+    try {
+      logStage("client.conversation.begin", { source });
+    } catch (_) {}
+    if (!hasOpenedAsrForConversation) {
+      hasOpenedAsrForConversation = true;
+      safeRequestAsrOpen(source);
+    }
+    safeStartRecorderStreaming(AppState?.policy || {}, "post_greet");
   }
 
   function maybeSendTurnStop(reason = "vad_silence") {
@@ -790,7 +885,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     setSenderPauseReason("legacy", value);
   }
 
-  setPhase(getPhase(), { force: true });
+  setPhase(PHASE.Greet, { force: true });
   function captureSecondGreetingMicSnapshot() {
     const listening = Boolean(AppState?.listening);
     const audioStreaming = Boolean(_audioStreaming);
@@ -1124,6 +1219,15 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     return captureStopRecorder(normalized, opts);
   }
 
+  WSClient.stopRecorderStreaming = function wsClientStopRecorderStreaming(reason = "manual_stop") {
+    try {
+      return stopRecorder(reason, { force: true });
+    } catch (err) {
+      console.warn("WSClient.stopRecorderStreaming failed", err);
+      return false;
+    }
+  };
+
   function autoStopRecorder(reason, options = {}) {
     const opts = options && typeof options === "object" ? { ...options, auto: true } : { auto: true };
     const phase = getPhase();
@@ -1164,6 +1268,16 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         phase: getPhase(),
       });
     } catch (_) {}
+    if (getPhase() !== PHASE.Conversation) {
+      try {
+        logStage("client.mic.start_skipped", {
+          source: source || "unknown",
+          reason: "not_conversation_phase",
+          phase: getPhase(),
+        });
+      } catch (_) {}
+      return false;
+    }
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
       try {
@@ -1394,6 +1508,16 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   }
 
   function openAsr(opts = {}) {
+    if (getPhase() !== PHASE.Conversation) {
+      try {
+        logStage("client.asr_open.skipped", {
+          reason: "not_conversation_phase",
+          phase: getPhase(),
+          requested_reason: opts?.reason || null,
+        });
+      } catch (_) {}
+      return undefined;
+    }
     try {
       logStage("client.asr", {
         stage: "open_request",
@@ -1407,6 +1531,16 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   }
 
   function requestAsrArm(reason) {
+    if (getPhase() !== PHASE.Conversation) {
+      try {
+        logStage("client.asr_open.skipped", {
+          reason: "not_conversation_phase",
+          phase: getPhase(),
+          requested_reason: reason || null,
+        });
+      } catch (_) {}
+      return undefined;
+    }
     if (__secondGreetingTraceActive && !__secondGreetingTraceCompleted) {
       logSecondGreetingTrace("request_asr_arm", {
         reason: typeof reason === "string" ? reason : null,
@@ -1616,7 +1750,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       return handler.call(context, { trigger });
     }
     if (typeof startRecorderStreaming === "function") {
-      return startRecorderStreaming(AppState?.policy || {}, trigger || "invoke");
+      return safeStartRecorderStreaming(AppState?.policy || {}, trigger || "invoke");
     }
     throw new Error("startRecording_unavailable");
   }
@@ -1706,6 +1840,12 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     }
     if (frameSignalsGreetEnd(frame)) {
       markGreetEnd();
+      const scheduleConversation = () => enterConversationAfterGreet("greet_tts_end");
+      if (typeof setTimeout === "function") {
+        conversationStartTimer = setTimeout(scheduleConversation, CONVERSATION_START_DELAY_MS);
+      } else {
+        scheduleConversation();
+      }
     }
 
     if (typeof WSClient?.emit === "function") {
@@ -1789,6 +1929,19 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
             vendor: AppState.asrVendor || null,
           });
         } catch (_) {}
+        break;
+
+      case "asr.error":
+        if (frame?.code === "already_open") {
+          try {
+            logStage("client.asr.error.already_open", {
+              phase: getPhase(),
+              code: frame?.code || null,
+              detail: frame?.detail || null,
+            });
+          } catch (_) {}
+          return;
+        }
         break;
 
       case "asr.close":
@@ -1975,8 +2128,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
       // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
       // We rely on the server to send asr.ready back when it processes this.
-      if (AppState?.policy?.auto_record_after_greet !== false && getPhase() === PHASE.Conversation) {
-        requestAsrArm('tts_end');
+      if (AppState?.policy?.auto_record_after_greet !== false) {
+        safeRequestAsrOpen('tts_end');
       }
       // *** END NEW LOGIC ***
     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
@@ -1992,16 +2145,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: `tts_${reason}` });
     } else if (frame.type === "start_listening") {
       const policy = frame?.policy || {};
-      // As soon as the server explicitly asks us to start listening,
-      // we consider the greet phase complete and move into conversation.
-      // This guarantees we clear the "phase_greet" sender pause and allow
-      // PCM to flow for the user's response.
-      try {
-        if (getPhase() === PHASE.Greet) {
-          setPhase(PHASE.Conversation);
-        }
-      } catch (_) {}
-
       if (!AppState?.asrReady) {
         console.warn(
           "Received start_listening before ASR ready; ignoring until asr.ready arrives.",
@@ -2016,7 +2159,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       // BUG FIX: actually start the mic when the server sends start_listening
       try {
         // Reuse the existing mic start pipeline so telemetry and state stay consistent
-        const started = await WSClient.startRecorderStreaming(
+        const started = await safeStartRecorderStreaming(
           policy,
           "server.start_listening"
         );
@@ -2269,13 +2412,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       logStage("client.input.capture", { source, hasPolicy });
     } catch {}
 
-    if (typeof startRecorderStreaming !== "function") {
-      console.warn("startInputCapture unavailable: capture runtime not ready");
-      return;
-    }
-
     try {
-      const result = startRecorderStreaming(policy, source);
+      const result = safeStartRecorderStreaming(policy, source);
       if (result && typeof result.catch === "function") {
         result.catch((err) => console.warn("startInputCapture failed", err));
       }
@@ -2316,7 +2454,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     const policy = frame?.policy || AppState?.policy || {};
     const reason = "input.start";
     try {
-      const started = await startRecorderStreaming(policy, reason);
+      const started = await safeStartRecorderStreaming(policy, reason);
       if (!started) {
         console.warn("handleInputStartFrame: startRecorderStreaming returned false");
         try {
@@ -2526,7 +2664,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
           outcome: MIC_OUTCOME.ARMED,
           message: "asr.ready → WSClient.startRecorderStreaming",
         });
-        const result = WSClient.startRecorderStreaming(policy, "asr.ready");
+        const result = safeStartRecorderStreaming(policy, "asr.ready");
         if (result && typeof result.catch === "function") {
           result.catch((err) => {
             console.warn("asr.ready mic start failed", err);
@@ -3054,7 +3192,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   WSClient.sendBinary = (payload, opts = {}) => connection.sendBinary(payload, opts);
   WSClient.getBufferedAmount = () => connection.getBufferedAmount();
   WSClient.requestAsrArm = function wsClientRequestAsrArm(reason) {
-    return requestAsrArm(reason);
+    return safeRequestAsrOpen(reason);
   };
   WSClient.openAsr = function wsClientOpenAsr(opts = {}) {
     return openAsr(opts);
@@ -3073,7 +3211,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         console.warn("[selfTestAudio] FAIL: turn not open");
         return;
       }
-      const started = await startRecorderStreaming(AppState?.policy || {}, "self_test");
+      const started = await safeStartRecorderStreaming(AppState?.policy || {}, "self_test");
       if (!started) {
         console.warn("[selfTestAudio] FAIL: recorder did not start");
         return;
