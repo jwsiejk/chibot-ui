@@ -385,6 +385,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       } else {
         autoStopRecorder("greet_start", { force: true, allowVadStop: true });
       }
+      try {
+        logStage("client.greet.mic_stop", { phase: getPhase() });
+      } catch (_) {}
     } catch (_) {}
   }
 
