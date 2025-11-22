@@ -1,9 +1,6 @@
 // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
 /* __BUILD_MARKER__: FULL_DUPLEX_01 */
-import { initVAD } from "./audio/vad_client.js";
-import * as captureRuntimeModule from "./audio/capture_runtime.js";
-import { initPcmSender } from "./audio/pcm_sender.js";
-import { createWsAudioRuntime } from "./audio/ws_audio_runtime.js";
+import { importV } from "./version.js";
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
 import { createWsConnection } from "./ws/connection.js";
 import { createTurnRuntime } from "./ws/turns.js";
@@ -23,8 +20,23 @@ import {
   logStage,
 } from "./ws/telemetry.js";
 
+const [
+  vadModule,
+  captureRuntimeModule,
+  pcmSenderModule,
+  wsAudioRuntimeModule,
+] = await Promise.all([
+  importV("/static/js/audio/vad_client.js"),
+  importV("/static/js/audio/capture_runtime.js"),
+  importV("/static/js/audio/pcm_sender.js"),
+  importV("/static/js/audio/ws_audio_runtime.js"),
+]);
+
+const { initVAD } = vadModule ?? {};
 const captureRuntimeExports = captureRuntimeModule ?? {};
 const { createCaptureRuntime } = captureRuntimeExports;
+const { initPcmSender } = pcmSenderModule ?? {};
+const { createWsAudioRuntime } = wsAudioRuntimeModule ?? {};
 
 const AUDIO_KEEPALIVE_MS = 1000;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
