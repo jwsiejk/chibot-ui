@@ -1082,6 +1082,7 @@ export function createWsAudioRuntime(options = {}) {
         asrReady,
         turnActive,
         hasPcmSender: !!pcmSender,
+        phase: typeof AppState?.phase === "string" ? AppState.phase : null,
       });
     } catch (_) {}
     try {
@@ -1115,6 +1116,7 @@ export function createWsAudioRuntime(options = {}) {
           canCaptureNow: captureAllowed,
           asrReady,
           turnActive,
+          phase: typeof AppState?.phase === "string" ? AppState.phase : null,
         });
       } catch (_) {}
       try {

@@ -48,6 +48,31 @@ try {
 } catch (_) {}
 
 (() => {
+  const PHASE = {
+    Greet: "greet",
+    Conversation: "conversation",
+  };
+
+  function getPhase() {
+    return AppState?.phase || PHASE.Greet;
+  }
+
+  function setPhase(nextPhase, options = {}) {
+    const force = options && options.force === true;
+    if (!AppState || typeof AppState !== "object") return;
+    if (!force && AppState.phase === nextPhase) return;
+    AppState.phase = nextPhase;
+    try {
+      if (typeof setSenderPauseReason === "function") {
+        setSenderPauseReason("phase_greet", nextPhase === PHASE.Greet);
+        applySenderPausedState?.();
+        updatePcmSenderState?.();
+      }
+    } catch (_) {}
+    try {
+      logStage("client.phase.change", { phase: nextPhase });
+    } catch (_) {}
+  }
   const missingAudioExports = [];
   if (typeof createCaptureRuntime !== "function") {
     missingAudioExports.push("createCaptureRuntime");
@@ -259,6 +284,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let partialWatchdogFirstTurn = true;
   let turnStopSent = false;
   let speechSeenThisTurn = false;
+  let greetActive = false;
+  let greetCompleted = false;
+  let greetUtteranceId = null;
+  let greetCandidateSeen = false;
 
   function resetTurnStopFlag() {
     // Start each user turn fresh: allow exactly one client-side input.stop
@@ -268,6 +297,57 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function resetSpeechFlag() {
     speechSeenThisTurn = false;
+  }
+
+  function frameSignalsGreetStart(frame) {
+    if (!frame || typeof frame !== "object") return false;
+    if (frame.type === "greet" || frame.type === "greet.start" || frame.type === "greet.begin") {
+      return true;
+    }
+    if (frame.type === "tts.start") {
+      if (frame?.meta?.is_greet || frame?.meta?.greet === true) return true;
+      return greetCandidateSeen === false;
+    }
+    return false;
+  }
+
+  function frameSignalsGreetEnd(frame) {
+    if (!frame || typeof frame !== "object") return false;
+    if (frame.type === "greet.end" || frame.type === "greet.complete") {
+      return true;
+    }
+    if (frame.type === "tts.end") {
+      if (frame?.meta?.is_greet || frame?.meta?.greet === true) return true;
+      if (greetActive && (!greetUtteranceId || frame?.utt_id === greetUtteranceId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function markGreetStart(frame) {
+    if (greetCompleted) {
+      return;
+    }
+    greetCandidateSeen = true;
+    greetActive = true;
+    if (typeof frame?.utt_id === "string" && frame.utt_id) {
+      greetUtteranceId = frame.utt_id;
+    }
+    setPhase(PHASE.Greet);
+  }
+
+  function markGreetEnd() {
+    if (greetCompleted) {
+      return;
+    }
+    greetActive = false;
+    greetCompleted = true;
+    setPhase(PHASE.Conversation);
+  }
+
+  function canBargeIn() {
+    return getPhase() === PHASE.Conversation;
   }
 
   function maybeSendTurnStop(reason = "vad_silence") {
@@ -282,6 +362,11 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   async function handleVadSilenceStop(reason = "vad_silence") {
     const normalized = fallbackToReasonKey(reason) || "vad_silence";
+
+    if (getPhase() === PHASE.Greet) {
+      try { logStage("client.mic.auto_stop_suppressed", { phase: PHASE.Greet, reason: normalized }); } catch {}
+      return;
+    }
 
     // Only end the turn if we’ve actually heard speech this turn.
     if (!speechSeenThisTurn) {
@@ -708,6 +793,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   function syncSenderPaused(value) {
     setSenderPauseReason("legacy", value);
   }
+
+  setPhase(getPhase(), { force: true });
   function captureSecondGreetingMicSnapshot() {
     const listening = Boolean(AppState?.listening);
     const audioStreaming = Boolean(_audioStreaming);
@@ -1000,6 +1087,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   function handleVadGateChangeWrapped(next) {
     try {
       if (next && (next.vadSpeech === true || next.speech === true)) {
+        if (!canBargeIn()) {
+          return;
+        }
         speechSeenThisTurn = true;
         setSenderPauseReason("turn_completed", false);
         applySenderPausedState();
@@ -1016,6 +1106,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       fallbackToReasonKey(reason) ||
       fallbackToReasonKey(opts.fallbackReason) ||
       "unspecified";
+    const autoStop = opts.auto === true || opts.autoStop === true || opts.isAutoStop === true;
 
     // Only send a client-side input.stop when explicitly allowed by caller
     // (e.g., VAD silence, manual stop). Do NOT use this to decide whether to
@@ -1028,6 +1119,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       logStage("client.mic", {
         outcome: MIC_OUTCOME.STOPPED,
         reason: normalized || "unknown",
+        phase: getPhase(),
+        auto: autoStop,
       });
     } catch (_) {}
 
@@ -1035,11 +1128,25 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     return captureStopRecorder(normalized, opts);
   }
 
+  function autoStopRecorder(reason, options = {}) {
+    const opts = options && typeof options === "object" ? { ...options, auto: true } : { auto: true };
+    const phase = getPhase();
+    const normalizedReason = fallbackToReasonKey(reason) || "unspecified";
+    if (phase === PHASE.Greet && opts.force !== true) {
+      try {
+        logStage("client.mic.auto_stop_suppressed", { phase, reason: normalizedReason });
+      } catch (_) {}
+      return false;
+    }
+    return stopRecorder(reason, opts);
+  }
+
   WSClient.startRecorderStreaming = async function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
     // Expose stopRecorder and input.stop helpers publicly so UI can pause mic on text input
     WSClient.stopRecorder = function wsClientStopRecorder(reason = "text_input", options = {}) {
       try {
-        return captureStopRecorder(reason, options);
+        const opts = options && typeof options === "object" ? { ...options, force: true } : { force: true };
+        return autoStopRecorder(reason, opts);
       } catch (err) {
         console.warn("WSClient.stopRecorder failed", err);
       }
@@ -1058,12 +1165,13 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       logStage("client.mic.start_requested", {
         source: source || "unknown",
         policy_audio: policy?.audio || null,
+        phase: getPhase(),
       });
     } catch (_) {}
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
       try {
-        logStage("client.mic.start_failed", { source: source || "unknown", reason: "no_capture_runtime" });
+        logStage("client.mic.start_failed", { source: source || "unknown", reason: "no_capture_runtime", phase: getPhase() });
       } catch (_) {}
       return false;
     }
@@ -1078,6 +1186,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
           logStage("client.mic.start_skipped", {
             source: source || "unknown",
             reason: "startRecorderStreaming_returned_false",
+            phase: getPhase(),
           });
         } catch (_) {}
         return false;
@@ -1093,6 +1202,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         logStage("client.mic.start_failed", {
           source: source || "unknown",
           message: err?.message || "mic_start_failed",
+          phase: getPhase(),
         });
       } catch (_) {}
     }
@@ -1595,6 +1705,13 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       return;
     }
 
+    if (frameSignalsGreetStart(frame)) {
+      markGreetStart(frame);
+    }
+    if (frameSignalsGreetEnd(frame)) {
+      markGreetEnd();
+    }
+
     if (typeof WSClient?.emit === "function") {
       try {
         WSClient.emit("frame", frame);
@@ -1862,7 +1979,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
       // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
       // We rely on the server to send asr.ready back when it processes this.
-      if (AppState?.policy?.auto_record_after_greet !== false) {
+      if (AppState?.policy?.auto_record_after_greet !== false && getPhase() === PHASE.Conversation) {
         requestAsrArm('tts_end');
       }
       // *** END NEW LOGIC ***
@@ -1918,9 +2035,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         logStage("client.stream.off", { reason: rawStopReason });
       }
       _audioStreaming = false;
-      await stopRecorder({ reason: rawStopReason }, {
+      await autoStopRecorder({ reason: rawStopReason }, {
         fallbackReason: "server_requested",
         source: "server.stop_listening",
+        isAutoStop: true,
       });
       setAsrArmInFlight(false);
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: "server_requested" });
@@ -2171,7 +2289,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       : "stop_input_capture";
 
     try {
-      const result = stopRecorder(rawReason, { fallbackReason, source });
+      const result = autoStopRecorder(rawReason, { fallbackReason, source, isAutoStop: true });
       if (result && typeof result.catch === "function") {
         result.catch((err) => console.warn("stopInputCapture failed", err));
       }
