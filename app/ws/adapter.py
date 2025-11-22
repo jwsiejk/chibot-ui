@@ -200,6 +200,54 @@ _POLICY_STABLE_KEYS = (
 
 _log = logging.getLogger(__name__)
 
+
+# Reduce noisy tts_timeline logs by emitting at most once per window while counting
+# suppressed events. This prevents firehose configurations from flooding INFO logs.
+_TTS_TIMELINE_LOG_WINDOW_S = 1.0
+_tts_timeline_last_log: float | None = None
+_tts_timeline_suppressed = 0
+
+
+def _log_tts_timeline_event(
+    sid: str,
+    turn_index: Any,
+    provider_name: str,
+    tts_ms: int | None,
+    total_bytes: int | None,
+) -> None:
+    """Log tts_timeline events at a limited rate with suppression counts."""
+
+    global _tts_timeline_last_log, _tts_timeline_suppressed
+
+    now = time.monotonic()
+    should_emit = _tts_timeline_last_log is None or (
+        now - _tts_timeline_last_log >= _TTS_TIMELINE_LOG_WINDOW_S
+    )
+
+    if not should_emit:
+        _tts_timeline_suppressed += 1
+        return
+
+    meta: Dict[str, Any] = {
+        "tts_ms": tts_ms,
+        "bytes_out": total_bytes,
+    }
+
+    if _tts_timeline_suppressed:
+        meta["suppressed"] = _tts_timeline_suppressed
+
+    log_fn = _log.info if is_firehose_enabled() else _log.debug
+    log_fn(
+        "evt=tts_timeline sid=%s turn_index=%s provider=%s",
+        sid,
+        turn_index,
+        provider_name,
+        extra={"meta": meta},
+    )
+
+    _tts_timeline_last_log = now
+    _tts_timeline_suppressed = 0
+
 _ALLOWED_TEXT_FRAME_TYPES = {
     "client.ready",
     "audio.header",
@@ -1166,18 +1214,12 @@ class ChatV2Adapter:
 
         if should_log_timeline and not metrics.get("tts_timeline_logged"):
             metrics["tts_timeline_logged"] = True
-            log_fn = _log.info if is_firehose_enabled() else _log.debug
-            log_fn(
-                "evt=tts_timeline sid=%s turn_index=%s provider=%s",
+            _log_tts_timeline_event(
                 ctx.sid,
                 metrics.get("turn_index"),
                 provider_name,
-                extra={
-                    "meta": {
-                        "tts_ms": tts_ms,
-                        "bytes_out": int(total_bytes) if total_bytes is not None else None,
-                    }
-                },
+                tts_ms,
+                int(total_bytes) if total_bytes is not None else None,
             )
         if not ctx.greet_completed and is_greet_tts:
             ctx.greet_completed = True
