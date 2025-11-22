@@ -1056,6 +1056,18 @@ export function createWsAudioRuntime(options = {}) {
     scheduleAudioKeepalive();
   }
 
+  function setBaseEnabled(enabled, reason = "manual") {
+    baseEnabled = Boolean(enabled);
+    baseEnabledReason = reason || baseEnabledReason || "manual";
+    try {
+      console.log("[ws_audio_runtime] base_enabled_update", {
+        enabled: baseEnabled,
+        reason: baseEnabledReason,
+      });
+    } catch (_) {}
+    updatePcmSenderState(`set_base_enabled:${reason}`);
+  }
+
   function updatePcmSenderState(reason = "unknown") {
     const asrReady = Boolean(AppState?.asrReady);
     const turnActive = Object.prototype.hasOwnProperty.call(AppState || {}, "turnActive")
@@ -1233,6 +1245,7 @@ export function createWsAudioRuntime(options = {}) {
     const stream = captureStreamProvider ? await captureStreamProvider() : null;
     if (stream) {
       captureStreamResolved = stream;
+      updatePcmSenderState("ensure_sender_stream_resolved");
     }
     pcmSenderInitPromise = initPcmSender(stream, {
       onSampleRate: handleSampleRate,
