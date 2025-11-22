@@ -1,6 +1,7 @@
-BUILD_ID e4d4482.9e5c59cf3ba3c916
+BUILD_ID ee14333.b129617827a29958
 app.js:55 AskChip build: (no v param on app.js)
 app.js:566 client turn summary logging enabled
+ws_client.js?v=ee14333.b129617827a29958:77 client.phase.change Object
 app.js:824 client firehose logging enabled: no rate limit; large deferred buffer
 app.js:826 AskChip client starting with firehose-style logging (no client rate limit).
 app.js:975 client.audio_modules_loaded
@@ -14,51 +15,54 @@ connection.js:862 evt=ws_connection_open_params Object
 app.js:975 client.ws
 app.js:975 client.appstate.heartbeat
 app.js:975 client.ws
-ws_client.js?v=e4d4482.9e5c59cf3ba3c916:2636 WS server banner Object
+ws_client.js?v=ee14333.b129617827a29958:2683 WS server banner Object
 3app.js:975 client.ws
+app.js:975 client.appstate.delta
 app.js:975 client.mic
 app.js:975 client.mic.stopped
 app.js:975 client.mic.gum_request
 app.js:975 client.mic
 app.js:975 client.mic.gum_success
-pcm_sender.js?v=e4d4482.9e5c59cf3ba3c916:229 client.mic_stream_acquired_ok Object
-pcm_sender.js?v=e4d4482.9e5c59cf3ba3c916:261 [pcm_sender] audioCtx.sampleRate 48000
+pcm_sender.js?v=ee14333.b129617827a29958:229 client.mic_stream_acquired_ok Object
+pcm_sender.js?v=ee14333.b129617827a29958:261 [pcm_sender] audioCtx.sampleRate 48000
 app.js:975 client.pcm_sender.resume_attempt
 app.js:975 client.pcm_sender.resume_ok
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:787 client.pcm.hardware_sample_rate 48000
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:795 client.pcm.target_sample_rate 16000
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:796 client.pcm.sample_rate 16000
+ws_audio_runtime.js?v=ee14333.b129617827a29958:787 client.pcm.hardware_sample_rate 48000
+ws_audio_runtime.js?v=ee14333.b129617827a29958:795 client.pcm.target_sample_rate 16000
+ws_audio_runtime.js?v=ee14333.b129617827a29958:796 client.pcm.sample_rate 16000
 app.js:975 client.audio_stream_state_inputs
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1099 [ws_audio_runtime] updatePcmSenderState.inputs Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1101 [ws_audio_runtime] updatePcmSenderState.inputs Object
 app.js:975 client.audio_stream_state_summary
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1134 [ws_audio_runtime] pcm_sender_state_summary Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1138 [ws_audio_runtime] pcm_sender_state_summary Object
 app.js:975 client.pcm_sender.node_connect_success
 app.js:975 client.audio_stream_state_inputs
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1099 [ws_audio_runtime] updatePcmSenderState.inputs Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1101 [ws_audio_runtime] updatePcmSenderState.inputs Object
 app.js:975 client.audio_stream_state_summary
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1134 [ws_audio_runtime] pcm_sender_state_summary Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1138 [ws_audio_runtime] pcm_sender_state_summary Object
 app.js:975 client.audio_stream_state
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1160 [ws_audio_runtime] updatePcmSenderState Object
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1177 client.pcm_sender.state Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1165 [ws_audio_runtime] updatePcmSenderState Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1183 client.pcm_sender.state Object
+app.js:975 client.pcm_sender.state
 2app.js:975 client.vad.state
 app.js:975 client.audio_stream_state_inputs
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1099 [ws_audio_runtime] updatePcmSenderState.inputs Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1101 [ws_audio_runtime] updatePcmSenderState.inputs Object
 app.js:975 client.audio_stream_state_summary
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1134 [ws_audio_runtime] pcm_sender_state_summary Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1138 [ws_audio_runtime] pcm_sender_state_summary Object
 app.js:975 client.audio_stream_state_inputs
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1099 [ws_audio_runtime] updatePcmSenderState.inputs Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1101 [ws_audio_runtime] updatePcmSenderState.inputs Object
 app.js:975 client.audio_stream_state_summary
-ws_audio_runtime.js?v=e4d4482.9e5c59cf3ba3c916:1134 [ws_audio_runtime] pcm_sender_state_summary Object
+ws_audio_runtime.js?v=ee14333.b129617827a29958:1138 [ws_audio_runtime] pcm_sender_state_summary Object
 2app.js:975 client.pcm.capture_stop
 connection.js:515 ws.connection.send queued (phase not ready) Object
 send @ connection.js:515Understand this warning
 connection.js:515 ws.connection.send queued (phase not ready) Object
 send @ connection.js:515Understand this warning
 app.js:975 client.ws
-ws_client.js?v=e4d4482.9e5c59cf3ba3c916:3126 client.ws outcome: close Object
-(anonymous) @ ws_client.js?v=e4d4482.9e5c59cf3ba3c916:3126Understand this warning
+app.js:975 client.appstate.delta
+ws_client.js?v=ee14333.b129617827a29958:3173 client.ws outcome: close Object
+(anonymous) @ ws_client.js?v=ee14333.b129617827a29958:3173Understand this warning
 app.js:975 client.pcm_sender.frame_received
 app.js:975 client.pcm.first_frame
 app.js:975 client.pcm.first_frame_runtime
-224app.js:975 client.pcm_sender.frame_received
-141app.js:975 client.pcm_sender.frame_received
+884app.js:975 client.pcm_sender.frame_received
+33app.js:975 client.pcm_sender.frame_received
