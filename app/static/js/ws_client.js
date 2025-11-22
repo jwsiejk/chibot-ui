@@ -525,6 +525,28 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     safeStartRecorderStreaming(AppState?.policy || {}, "post_greet");
   }
 
+  function scheduleConversationStartAfterGreet(source = "greet_tts_end") {
+    if (getPhase() === PHASE.Conversation) {
+      return;
+    }
+    if (conversationStartTimer) {
+      clearTimeout(conversationStartTimer);
+      conversationStartTimer = null;
+    }
+    const delayMs = Math.max(0, Number(CONVERSATION_START_DELAY_MS) || 0);
+    conversationStartTimer = setTimeout(() => {
+      conversationStartTimer = null;
+      enterConversationAfterGreet(source);
+    }, delayMs);
+    try {
+      logStage("client.conversation.begin.scheduled", {
+        source,
+        delay_ms: delayMs,
+        phase: getPhase(),
+      });
+    } catch (_) {}
+  }
+
   function maybeSendTurnStop(reason = "vad_silence") {
     if (turnStopSent) {
       return false;
@@ -1938,7 +1960,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     if (frameSignalsGreetEnd(frame)) {
       markGreetEnd();
-      enterConversationAfterGreet("greet_complete_frame");
+      scheduleConversationStartAfterGreet("greet_complete_frame");
     }
 
     if (typeof WSClient?.emit === "function") {
@@ -2220,7 +2242,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       }
       if (!greetCompleted && greetCandidateSeen) {
         markGreetEnd();
-        enterConversationAfterGreet("greet_tts_end_handler");
+        scheduleConversationStartAfterGreet("greet_tts_end_handler");
       }
       const uttIdEnd = frame?.utt_id || 'utt-00001';
       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
