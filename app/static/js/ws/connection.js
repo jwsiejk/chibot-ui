@@ -1071,5 +1071,7 @@ export function createWsConnection({
     handleParsedFrame: processIncomingFrame,
     setRawMessageHandler,
     getNegotiatedControlCodec,
+    setWsPhase,
+    flushQueuedFrames,
   };
 }
