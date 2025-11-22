@@ -2469,7 +2469,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     },
     hubLog: logStage,
     helpers: {
-      startRecorderStreaming,
+      startRecorderStreaming: safeStartRecorderStreaming,
       stopRecorder: performStopRecorder,
       stopInputCapture,
       handleInputStartFrame,
@@ -2807,7 +2807,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       const policy = AppState?.policy || {};
       const autoAfterGreet = policy?.auto_record_after_greet !== false;
 
-      if (typeof WSClient?.startRecorderStreaming === "function" && !_audioStreaming && autoAfterGreet) {
+      if (typeof safeStartRecorderStreaming === "function" && !_audioStreaming && autoAfterGreet) {
         logStage("client.mic", {
           outcome: MIC_OUTCOME.ARMED,
           message: "asr.ready → WSClient.startRecorderStreaming",
@@ -3339,6 +3339,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   })();
   WSClient.sendBinary = (payload, opts = {}) => connection.sendBinary(payload, opts);
   WSClient.getBufferedAmount = () => connection.getBufferedAmount();
+  WSClient.safeStartRecorderStreaming = function wsClientSafeStartRecorderStreaming(policy = {}, source = "manual") {
+    return safeStartRecorderStreaming(policy, source);
+  };
+  WSClient.safeRequestAsrOpen = function wsClientSafeRequestAsrOpen(reason) {
+    return safeRequestAsrOpen(reason);
+  };
   WSClient.requestAsrArm = function wsClientRequestAsrArm(reason) {
     return requestAsrArm(reason);
   };
