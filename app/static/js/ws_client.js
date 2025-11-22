@@ -2231,12 +2231,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         startSecondGreetingTrace(frame);
       }
 
-      // *** NEW STABLE LOGIC: Arm ASR immediately after TTS ends (zero delay) ***
-      // We rely on the server to send asr.ready back when it processes this.
-      if (AppState?.policy?.auto_record_after_greet !== false) {
-        safeRequestAsrOpen('tts_end');
-      }
-      // *** END NEW LOGIC ***
     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {
       const uttId = frame?.utt_id || 'utt-00001';
       const reason = frame.type === "tts.cancel" ? 'cancel' : 'error';
