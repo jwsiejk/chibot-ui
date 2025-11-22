@@ -544,6 +544,13 @@ export function createWsConnection({
           binary: !!binary,
           queueLength: connectionQueue.length + 1,
         });
+        console.log("client.ws_send.audio_queued_phase_not_ready", {
+          payloadType,
+          reason: "ws_connecting",
+          phase,
+          readyState,
+          queueLength: connectionQueue.length + 1,
+        });
       } catch {}
       queueFrame(data, !!binary);
       return true;
@@ -575,6 +582,13 @@ export function createWsConnection({
             phase,
             readyState,
             binary: !!binary,
+            queueLength: connectionQueue.length + 1,
+          });
+          console.log("client.ws_send.audio_queued_phase_not_ready", {
+            payloadType,
+            reason: "phase_gate",
+            phase,
+            readyState,
             queueLength: connectionQueue.length + 1,
           });
         } catch {}
@@ -617,6 +631,14 @@ export function createWsConnection({
           bytes: encoded.payload?.byteLength || null,
           reason: "control_frame",
         });
+        if (payloadType === "audio.header") {
+          console.log("client.ws_send.audio_header_sent", {
+            payloadType,
+            phase,
+            readyState,
+            bytes: encoded.payload?.byteLength || null,
+          });
+        }
       } catch {}
       try {
         live.send(encoded.payload);
@@ -706,6 +728,13 @@ export function createWsConnection({
           binary: true,
           queueLength: connectionQueue.length + 1,
         });
+        console.log("client.ws_send.audio_queued_phase_not_ready", {
+          payloadType: typeof opts?.type === "string" ? opts.type : "binary",
+          reason: "ws_not_open",
+          phase: getAppStatePhase(),
+          readyState: socket?.readyState,
+          queueLength: connectionQueue.length + 1,
+        });
       } catch {}
       queueFrame(payload, true, opts && typeof opts === "object" ? { ...opts } : undefined);
       return false;
@@ -737,6 +766,16 @@ export function createWsConnection({
     }
     try {
       socket.send(payload);
+      try {
+        const payloadType = typeof opts?.type === "string" ? opts.type : (typeof opts?.lane === "string" ? `audio.${opts.lane}` : "binary");
+        console.log("client.ws_send.audio_chunk_sent", {
+          payloadType,
+          lane: opts?.lane || null,
+          phase: getAppStatePhase(),
+          readyState: socket?.readyState,
+          bytes: payload?.byteLength || null,
+        });
+      } catch {}
     } catch (err) {
       console.warn("ws.connection binary send failed", err);
       return false;
