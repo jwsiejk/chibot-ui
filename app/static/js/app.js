@@ -2450,14 +2450,14 @@ window.addEventListener('ws.open', async () => {
       console.warn('ws.open warmup failed', err);
     }
 
-    // Legacy AudioRecorder path removed; rely on WSClient.startRecorderStreaming +
+    // Legacy AudioRecorder path removed; rely on WSClient.safeStartRecorderStreaming +
     // capture_runtime/asr.ready/input.start to manage mic lifecycle.
     try {
-      if (WSClient && typeof WSClient.startRecorderStreaming === 'function') {
-        WSClient.startRecorderStreaming(pol, 'ws_open');
+      if (WSClient && typeof WSClient.safeStartRecorderStreaming === 'function') {
+        WSClient.safeStartRecorderStreaming(pol, 'ws_open');
       }
     } catch (err) {
-      console.warn('WSClient.startRecorderStreaming on ws.open failed', err);
+      console.warn('WSClient.safeStartRecorderStreaming on ws.open failed', err);
     }
   }
   const allowBanner = window.AppState?.debug?.allow_client_banner === true;
