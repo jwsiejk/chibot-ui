@@ -346,7 +346,27 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     setPhase(PHASE.Greet, { force: true });
     try {
+      logStage("client.greet_start", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        utt_id: greetUtteranceId,
+      });
+      console.log("client.greet_start", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        utt_id: greetUtteranceId,
+      });
+    } catch (_) {}
+    try {
       setBaseEnabled?.(false, "greet_start");
+      logStage("client.greet_start.set_base_enabled", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+      });
+      console.log("client.greet_start.set_base_enabled", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+      });
       setSenderPauseReason("greet", true);
       applySenderPausedState();
       updatePcmSenderState("greet_start");
@@ -398,6 +418,19 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (err) {
       console.warn("safeRequestAsrOpen: requestAsrArm failed", err);
     }
+
+    try {
+      logStage("client.asr_open.request", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        source: reason || null,
+      });
+      console.log("client.asr_open.request", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        source: reason || null,
+      });
+    } catch (_) {}
 
     try {
       if (typeof openAsr === "function") {
@@ -452,6 +485,18 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
     try {
       setBaseEnabled?.(true, "post_greet");
+      logStage("client.conversation.begin.set_base_enabled", {
+        source,
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        asrReady: Boolean(AppState?.asrReady),
+      });
+      console.log("client.conversation.begin.set_base_enabled", {
+        source,
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        asrReady: Boolean(AppState?.asrReady),
+      });
     } catch (_) {}
     try {
       setAppStateValue?.("barge_in_enabled", true);
@@ -1087,6 +1132,19 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     clearAudioKeepaliveTimer: runtimeClearAudioKeepalive,
     sendAudioKeepaliveNow: runtimeSendAudioKeepaliveNow,
   } = audioRuntime;
+
+  try {
+    logStage("client.audio_runtime.wired", {
+      hasSetBaseEnabled: typeof setBaseEnabled === "function",
+      hasUpdatePcmSenderState: typeof updatePcmSenderState === "function",
+      hasEnsurePcmSender: typeof ensurePcmSender === "function",
+    });
+    console.log("client.audio_runtime.wired", {
+      hasSetBaseEnabled: typeof setBaseEnabled === "function",
+      hasUpdatePcmSenderState: typeof updatePcmSenderState === "function",
+      hasEnsurePcmSender: typeof ensurePcmSender === "function",
+    });
+  } catch (_) {}
 
   scheduleAudioKeepaliveImpl = typeof runtimeScheduleAudioKeepalive === "function"
     ? runtimeScheduleAudioKeepalive
