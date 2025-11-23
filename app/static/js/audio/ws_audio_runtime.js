@@ -2,6 +2,7 @@
 // Encapsulates PCM ring buffer, PCM sender, and ASR priming helpers.
 
 import { isTypedArray, toArrayBuffer } from "../utils/binary.js";
+import { recordClientBannerEvent } from "../ws/telemetry.js";
 import { PHASE as VOICE_PHASE } from "../voice/phase_controller.js";
 
 const PCM_TARGET_SAMPLE_RATE = 16000;
@@ -1371,6 +1372,28 @@ export function createWsAudioRuntime(options = {}) {
           senderPaused,
           canCaptureNow: captureAllowed,
           asrReady,
+          turnActive,
+          phase: phaseValue,
+          phase_allows_send: phaseAllowsSend,
+          wsPhase,
+          wsPhaseKnown,
+          ws_ready: wsReadyForAudio,
+        });
+      } catch (_) {}
+      try {
+        recordClientBannerEvent("pcm_sender_state_summary", {
+          reason,
+          enabled: shouldSend,
+          base_enabled: shouldSendBase,
+          force_pcm_send: FORCE_PCM_SEND,
+          gates: {
+            asrReady: gates.asrReady,
+            ttsActive: gates.ttsActive,
+            micPerm: gates.micPerm,
+            senderPaused: gates.senderPaused,
+            canCapture: gates.canCapture,
+          },
+          hasStream,
           turnActive,
           phase: phaseValue,
           phase_allows_send: phaseAllowsSend,
