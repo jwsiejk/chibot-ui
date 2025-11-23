@@ -2090,6 +2090,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         } catch (_) {}
       }
       await handleAsrStateFrame(frame);
+      if (frame.type === "turn.end") {
+        try {
+          voicePhaseController.endUserTurn("turn_end");
+          syncAppStatePhase();
+        } catch (_) {}
+      }
       const dispatchable = frame.type === "asr.ready"
         ? sanitizeAsrReadyFrame(frame)
         : frame;
