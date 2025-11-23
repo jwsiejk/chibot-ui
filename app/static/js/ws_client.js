@@ -269,8 +269,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let __secondGreetingTraceCompleted = false;
   let __secondGreetingTraceStartMs = 0;
   let __secondGreetingStartChunkCount = 0;
-  let conversationStartTimeoutId = null;
+  let conversationStartTimer = null;
   let hasOpenedAsrForConversation = false;
+  let pendingCloseReason = null;
 
   let _audioStreaming = false;
   let awaitingAsrClosedAck = false;
@@ -323,7 +324,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       return;
     }
     hasOpenedAsrForConversation = false;
-    clearConversationStartTimeout();
+    clearConversationStartTimer();
     if (typeof frame?.utt_id === "string" && frame.utt_id) {
       greetUtteranceId = frame.utt_id;
     }
@@ -383,10 +384,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     syncAppStatePhase({ force: true });
   }
 
-  function clearConversationStartTimeout() {
-    if (conversationStartTimeoutId) {
-      clearTimeout(conversationStartTimeoutId);
-      conversationStartTimeoutId = null;
+  function clearConversationStartTimer() {
+    if (conversationStartTimer) {
+      clearTimeout(conversationStartTimer);
+      conversationStartTimer = null;
     }
   }
 
@@ -400,13 +401,11 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeRequestAsrOpen(reason) {
-    if (!isConversationReadyPhase()) {
+    const phase = voicePhaseController.getPhase();
+    const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+    if (!allowed) {
       try {
-        logStage("client.asr_open.skipped", {
-          reason: "not_conversation_phase",
-          phase: getPhase(),
-          requested_reason: reason || null,
-        });
+        logStage("client.asr_open.skipped", { reason, phase });
       } catch (_) {}
       return;
     }
@@ -441,13 +440,11 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeStartRecorderStreaming(policy, source) {
-    if (!isConversationReadyPhase()) {
+    const phase = voicePhaseController.getPhase();
+    const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+    if (!allowed) {
       try {
-        logStage("client.mic.start_skipped", {
-          reason: "not_conversation_phase",
-          phase: getPhase(),
-          source: source || "unknown",
-        });
+        logStage("client.mic.start_skipped", { source, phase });
       } catch (_) {}
       return false;
     }
@@ -461,12 +458,20 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
-    clearConversationStartTimeout();
+    if (conversationStartTimer) {
+      clearTimeout(conversationStartTimer);
+      conversationStartTimer = null;
+    }
     if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
       return;
     }
     voicePhaseController.enterConversation(source);
     syncAppStatePhase({ force: true });
+    if (!hasOpenedAsrForConversation) {
+      hasOpenedAsrForConversation = true;
+      safeRequestAsrOpen(source);
+    }
+    safeStartRecorderStreaming(AppState?.policy || {}, "post_greet");
     try {
       if (connection && typeof connection.setWsPhase === "function") {
         connection.setWsPhase("ready");
@@ -515,21 +520,16 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         asrReady: Boolean(AppState?.asrReady),
       });
     } catch (_) {}
-    if (!hasOpenedAsrForConversation) {
-      hasOpenedAsrForConversation = true;
-      safeRequestAsrOpen(source);
-    }
-    safeStartRecorderStreaming(AppState?.policy || {}, "post_greet");
   }
 
   function scheduleConversationStartAfterGreet(source = "greet_tts_end") {
     if (hasOpenedAsrForConversation) {
       return;
     }
-    clearConversationStartTimeout();
+    clearConversationStartTimer();
     const delayMs = Math.max(0, Number(CONVERSATION_START_DELAY_MS) || 0);
-    conversationStartTimeoutId = setTimeout(() => {
-      conversationStartTimeoutId = null;
+    conversationStartTimer = setTimeout(() => {
+      conversationStartTimer = null;
       enterConversationAfterGreet(source);
     }, delayMs);
     try {
@@ -1347,7 +1347,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
   function autoStopRecorder(reason, options = {}) {
     const opts = options && typeof options === "object" ? { ...options, auto: true } : { auto: true };
-    const phase = getPhase();
+    const phase = voicePhaseController.getPhase();
     const normalizedReason = fallbackToReasonKey(reason) || "unspecified";
     if (phase === PHASE.Greet && opts.force !== true) {
       try {
@@ -2180,7 +2180,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         return;
       } else if (frame.type !== "info") {
         console.error("Expected info frame first, received", frame.type);
-        await sessionClose("bad_info_sequence");
+        await requestSessionShutdown("bad_info_sequence");
         return;
       }
       if (frame.type === "info") {
@@ -2453,6 +2453,29 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     endSession: sessionEnd,
   } = sessionManager;
 
+  function requestSessionShutdown(reason = DEFAULT_CLOSE_REASON) {
+    const normalizedReason = typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON;
+    pendingCloseReason = normalizedReason;
+    try {
+      voicePhaseController.beginClosing(normalizedReason);
+      syncAppStatePhase({ force: true });
+    } catch (_) {}
+    const closer = normalizedReason === DEFAULT_CLOSE_REASON ? sessionEnd : sessionClose;
+    const result = closer(normalizedReason);
+    const finalize = () => {
+      socket = null;
+      try { WSClient._ws = null; WSClient.ws = null; } catch {}
+    };
+    if (result && typeof result.then === "function") {
+      return result.then((value) => {
+        finalize();
+        return value;
+      });
+    }
+    finalize();
+    return result;
+  }
+
   // Coordinates turn state and ASR lifecycle (open/arm/close/recover decisions).
   const turnRuntime = createTurnRuntime({
     AppState,
@@ -2524,6 +2547,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       was_clean: Boolean(event?.wasClean),
       ready_state: typeof event?.target?.readyState === "number" ? event.target.readyState : undefined,
     });
+    try {
+      const shutdownReason = pendingCloseReason || detailReason || closeCode || "ws_close";
+      voicePhaseController.markClosed(shutdownReason);
+      pendingCloseReason = null;
+      syncAppStatePhase({ force: true });
+    } catch (_) {
+      pendingCloseReason = null;
+    }
     if (detailReason) {
       logMic({ outcome: MIC_OUTCOME.STOPPED, reason: detailReason });
     }
@@ -2842,7 +2873,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const meta = frame && frame.meta;
     if (!meta || typeof meta.sid !== "string") {
       console.error("Invalid info frame", frame);
-      await sessionClose("bad_info_frame");
+      await requestSessionShutdown("bad_info_frame");
       return;
     }
     expectInfoFrame = false;
@@ -2955,7 +2986,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       });
     } catch {}
     if (isResumeInvalid) {
-      await sessionClose("resume_invalid");
+      await requestSessionShutdown("resume_invalid");
     }
   }
 
@@ -3262,21 +3293,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     return ws;
   };
   WSClient.close = function wsClientClose(reason) {
-    const normalizedReason = typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON;
-    const closer = normalizedReason === DEFAULT_CLOSE_REASON ? sessionEnd : sessionClose;
-    const result = closer(normalizedReason);
-    const finalize = () => {
-      socket = null;
-      try { WSClient._ws = null; } catch {}
-    };
-    if (result && typeof result.then === "function") {
-      return result.then((value) => {
-        finalize();
-        return value;
-      });
-    }
-    finalize();
-    return result;
+    return requestSessionShutdown(reason);
   };
 
   WSClient.endSession = function wsClientEndSession(reason) {
