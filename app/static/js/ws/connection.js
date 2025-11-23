@@ -3,6 +3,21 @@
 
 import { encodeMessagePack } from "../utils/msgpack.mjs";
 
+// ---------------------------------------------------------------------------
+// Gating debug helpers
+// ---------------------------------------------------------------------------
+
+// Temporary flag: when true, we'll log phase gate decisions and
+// bypass the WS phase gate for audio payloads only (header + PCM).
+const GATING_DEBUG_MODE = true;
+
+function isAudioPayloadForBypass(payload, options) {
+  const type = payload && payload.type;
+  const isHeader = type === "audio.header" || type === "asr.header.request";
+  const isBinary = !!(options && options.binary);
+  return isHeader || isBinary;
+}
+
 const HEARTBEAT_INTERVAL_MS = 10000;
 const DEFAULT_CLOSE_REASON = "client_shutdown";
 const JSON_SUBPROTOCOL = "chat.v2";
@@ -143,6 +158,28 @@ export function createWsConnection({
     } catch (err) {
       console.warn("ws.connection.emit failed", err);
     }
+  }
+
+  function safeGetAppStateSnapshot() {
+    try {
+      if (typeof AppState?.getState === "function") {
+        return AppState.getState();
+      }
+      if (typeof AppState === "object" && AppState !== null) {
+        return AppState;
+      }
+    } catch (_) {}
+    return {};
+  }
+
+  function safeGetAppStatePhase() {
+    const snapshot = safeGetAppStateSnapshot();
+    return (
+      snapshot.wsPhase ||
+      snapshot.connectionState ||
+      snapshot.phase ||
+      (typeof wsPhase === "string" && wsPhase ? wsPhase : null)
+    );
   }
 
   function updateState(patch) {
@@ -536,7 +573,7 @@ export function createWsConnection({
 
     const ws = socket;
     const readyState = typeof ws?.readyState === "number" ? ws.readyState : -1;
-    const phase = getAppStatePhase();
+    const phase = safeGetAppStatePhase();
     const payloadType = typeof data?.type === "string" ? data.type : "unknown";
     const isControl = !binary && isControlFrame(data);
 
@@ -590,15 +627,29 @@ export function createWsConnection({
     }
 
     if (!skipPhaseCheck && !binary && !isControl) {
-      if (phase && !WS_READY_PHASES.has(phase)) {
+      const phaseReady = !phase || WS_READY_PHASES.has(phase);
+      if (!phaseReady) {
         const queueLength = connectionQueue.length;
-        const phaseReady = WS_READY_PHASES.has(phase);
+        const snapshot = safeGetAppStateSnapshot();
+        const isAudio = isAudioPayloadForBypass(data, { binary });
+        const type = payloadType || (binary ? "binary" : "unknown");
         const channel = typeof data?.channel === "string" ? data.channel : null;
         const eventType = payloadType;
         let appPhase = null;
         try {
-          const snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
-          appPhase = snapshot && typeof snapshot.phase === "string" ? snapshot.phase : AppState?.phase || null;
+          const appSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
+          appPhase = appSnapshot && typeof appSnapshot.phase === "string" ? appSnapshot.phase : AppState?.phase || null;
+        } catch {}
+        try {
+          if (typeof logStage === "function") {
+            logStage("client.ws_send.phase_not_ready", {
+              phase,
+              wsPhase: snapshot.wsPhase || null,
+              type,
+              isAudioPayload: isAudio,
+              reason: "ws_phase_blocked",
+            });
+          }
         } catch {}
         try {
           console.log("DIAG: ws_send_blocked", {
@@ -639,8 +690,17 @@ export function createWsConnection({
             queueLength: connectionQueue.length + 1,
           });
         } catch {}
-        queueFrame(data, false);
-        return true;
+        if (GATING_DEBUG_MODE && isAudio) {
+          try {
+            console.warn("CLIENT DEBUG BYPASS: WS phase gate bypassed for audio payload", {
+              phase,
+              type,
+            });
+          } catch {}
+        } else {
+          queueFrame(data, false);
+          return true;
+        }
       }
     }
 
