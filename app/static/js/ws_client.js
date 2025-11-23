@@ -310,12 +310,24 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
   function frameSignalsGreetEnd(frame) {
     if (!frame || typeof frame !== "object") return false;
+
+    // Trust explicit server signals
     if (frame.type === "greet.end" || frame.type === "greet.complete") {
       return true;
     }
-    if (frame.type === "tts.end" && frame?.meta?.is_greet === true) {
-      return true;
+
+    if (frame.type === "tts.end") {
+      // Accept tts.end if we are currently in the Greet phase
+      if (getPhase() === PHASE.Greet) {
+        return true;
+      }
+
+      // Fallback to explicit metadata if provided
+      if (frame?.meta?.is_greet === true) {
+        return true;
+      }
     }
+
     return false;
   }
 
@@ -2090,7 +2102,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (delegateToTurnRuntime) {
       if (frame.type === "asr.ready") {
         try {
-          enterConversationAfterGreet("asr.ready");
+          scheduleConversationStartAfterGreet("asr.ready_frame");
         } catch (_) {}
       }
       await handleAsrStateFrame(frame);
