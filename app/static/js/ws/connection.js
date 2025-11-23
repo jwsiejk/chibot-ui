@@ -660,6 +660,7 @@ export function createWsConnection({
       const audioPhaseReady = !phase || WS_AUDIO_READY_PHASES.has(phase);
       const isAudio = isAudioPayloadForBypass(data, { binary });
       const audioPhaseOk = isAudio && readyState === WebSocket.OPEN && audioPhaseReady;
+
       if (!phaseReady && !audioPhaseOk) {
         const queueLength = connectionQueue.length;
         const snapshot = safeGetAppStateSnapshot();
@@ -678,6 +679,7 @@ export function createWsConnection({
               wsPhase: snapshot.wsPhase || null,
               type,
               isAudioPayload: isAudio,
+              audioPhaseOk,
               reason: "ws_phase_blocked",
             });
           }
@@ -690,6 +692,7 @@ export function createWsConnection({
             phase,
             appPhase,
             phaseReady,
+            audioPhaseOk,
             readyState,
             audioStreaming: audioRuntime?.isAudioStreaming?.(),
             canSend: skipPhaseCheck || phaseReady,
@@ -710,6 +713,8 @@ export function createWsConnection({
             frameType: payloadType,
             wsReadyState: readyState,
             queueLength: connectionQueue.length + 1,
+            phaseReady,
+            audioPhaseOk,
           });
         } catch {}
         try {
@@ -720,6 +725,8 @@ export function createWsConnection({
             readyState,
             binary: !!binary,
             queueLength: connectionQueue.length + 1,
+            phaseReady,
+            audioPhaseOk,
           });
           console.log("client.ws_send.audio_queued_phase_not_ready", {
             payloadType,
@@ -727,18 +734,17 @@ export function createWsConnection({
             phase,
             readyState,
             queueLength: connectionQueue.length + 1,
+            phaseReady,
+            audioPhaseOk,
           });
         } catch {}
+
         if (GATING_DEBUG_MODE && isAudio) {
           try {
             console.warn("CLIENT DEBUG BYPASS: WS phase gate bypassed for audio payload", {
               phase,
               type,
             });
-          } catch {}
-        } else if (audioPhaseOk) {
-          try {
-            console.log("ws.connection.send immediate", { phase, frameType: payloadType });
           } catch {}
         } else {
           queueFrame(data, false);
