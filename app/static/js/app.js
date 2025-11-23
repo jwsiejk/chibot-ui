@@ -956,7 +956,36 @@ import "./state.js";
       };
 
       let boundSocket = null;
-      
+      let __bindSocketFlushInFlight = false;
+
+      const maybeFlushDeferredLogsOnBind = (socketCandidate) => {
+        if (__bindSocketFlushInFlight) {
+          return;
+        }
+        const isOpen = Boolean(
+          socketCandidate &&
+            typeof socketCandidate.readyState === "number" &&
+            socketCandidate.readyState === (typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1)
+        );
+        if (!isOpen) {
+          return;
+        }
+        const wsClient = getWsClient();
+        if (!wsClientIsConnected(wsClient)) {
+          return;
+        }
+        __bindSocketFlushInFlight = true;
+        try {
+          flushDeferredClientLogs();
+        } catch (err) {
+          try {
+            console.warn("Deferred client log flush on bind failed", err);
+          } catch (_) {}
+        } finally {
+          __bindSocketFlushInFlight = false;
+        }
+      };
+
       const hubImpl = {
         log(label, detail) {
           if (__hubImplLogInFlight) {
@@ -1004,6 +1033,7 @@ import "./state.js";
           const outcome = next ? "bound" : "cleared";
           // This call triggers the log path:
           hubImpl.log("client.ws", { outcome, source: "hub.bindSocket" });
+          maybeFlushDeferredLogsOnBind(next);
         },
         startListening(policy) {
           // Legacy AudioRecorder path removed; capture_runtime handles start.
