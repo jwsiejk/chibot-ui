@@ -25,6 +25,7 @@ const MSGPACK_SUBPROTOCOL = "chip-msgpack";
 const INFO_DEADLINE_MS = 20000;
 const TOKEN_EXPIRY_MS = 60 * 1000;
 const WS_READY_PHASES = new Set(["connected", "ready"]);
+const WS_AUDIO_READY_PHASES = new Set(["connected", "ready", "streaming"]);
 
 function detectControlFramesCodec() {
   const normalize = (value) => {
@@ -243,10 +244,13 @@ export function createWsConnection({
     if (!live || live.readyState !== WebSocket.OPEN) {
       return;
     }
-    if (phase && !WS_READY_PHASES.has(phase)) {
+    const phaseReady = !phase || WS_READY_PHASES.has(phase);
+    const audioPhaseReady = !phase || WS_AUDIO_READY_PHASES.has(phase);
+    if (!phaseReady && !audioPhaseReady) {
       return;
     }
     const flushed = [];
+    const remaining = [];
     try {
       console.log("client.ws_send.flush_start", {
         queueLength: connectionQueue.length,
@@ -261,6 +265,12 @@ export function createWsConnection({
       }
       const { data, isBinary, options } = entry;
       const payloadType = typeof options?.type === "string" ? options.type : (typeof data?.type === "string" ? data.type : "unknown");
+      const isAudio = isAudioPayloadForBypass(data, { binary: isBinary });
+      const canSend = phaseReady || (audioPhaseReady && isAudio);
+      if (!canSend) {
+        remaining.push(entry);
+        continue;
+      }
       flushed.push(payloadType);
       if (isBinary) {
         const result = sendBinary(data, options || {});
@@ -271,6 +281,9 @@ export function createWsConnection({
       }
       send(data, { binary: false, skipPhaseCheck: true });
     }
+    if (remaining.length) {
+      connectionQueue.unshift(...remaining);
+    }
     try {
       console.log("client.ws_send.flush_done", {
         count: flushed.length,
@@ -279,6 +292,11 @@ export function createWsConnection({
         readyState: live?.readyState,
       });
     } catch {}
+    if (flushed.length) {
+      try {
+        console.log("ws.connection.send flushed", { phase, queuedCount: flushed.length });
+      } catch {}
+    }
   }
 
   function setWsPhase(phase) {
@@ -294,7 +312,7 @@ export function createWsConnection({
         hubLog("client.wsPhase.change", { prev, next: phase });
       }
     } catch {}
-    if (WS_READY_PHASES.has(phase)) {
+    if (WS_READY_PHASES.has(phase) || WS_AUDIO_READY_PHASES.has(phase)) {
       flushQueuedFrames();
     }
   }
@@ -639,10 +657,12 @@ export function createWsConnection({
 
     if (!skipPhaseCheck && !binary && !isControl) {
       const phaseReady = !phase || WS_READY_PHASES.has(phase);
-      if (!phaseReady) {
+      const audioPhaseReady = !phase || WS_AUDIO_READY_PHASES.has(phase);
+      const isAudio = isAudioPayloadForBypass(data, { binary });
+      const audioPhaseOk = isAudio && readyState === WebSocket.OPEN && audioPhaseReady;
+      if (!phaseReady && !audioPhaseOk) {
         const queueLength = connectionQueue.length;
         const snapshot = safeGetAppStateSnapshot();
-        const isAudio = isAudioPayloadForBypass(data, { binary });
         const type = payloadType || (binary ? "binary" : "unknown");
         const channel = typeof data?.channel === "string" ? data.channel : null;
         const eventType = payloadType;
@@ -685,6 +705,14 @@ export function createWsConnection({
           queueLength: connectionQueue.length,
         });
         try {
+          console.warn("ws.connection.send queued (phase not ready)", {
+            phase,
+            frameType: payloadType,
+            wsReadyState: readyState,
+            queueLength: connectionQueue.length + 1,
+          });
+        } catch {}
+        try {
           console.log("ws.connection.send.queue", {
             payloadType,
             reason: "phase_gate",
@@ -708,10 +736,18 @@ export function createWsConnection({
               type,
             });
           } catch {}
+        } else if (audioPhaseOk) {
+          try {
+            console.log("ws.connection.send immediate", { phase, frameType: payloadType });
+          } catch {}
         } else {
           queueFrame(data, false);
           return true;
         }
+      } else if (isAudio) {
+        try {
+          console.log("ws.connection.send immediate", { phase, frameType: payloadType });
+        } catch {}
       }
     }
 
