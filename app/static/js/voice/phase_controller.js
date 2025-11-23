@@ -39,7 +39,7 @@ export function createVoicePhaseController({ log } = {}) {
     },
 
     enterConversation(reason) {
-      phase = PHASE.ConversationReady;
+      phase = PHASE.UserTurn;
       logEvent("enter_conversation", reason);
     },
 
