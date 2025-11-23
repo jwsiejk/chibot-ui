@@ -25,6 +25,14 @@ const WS_READY_PHASES = new Set(["connected", "ready"]);
 
 const primedSessionIds = new Set();
 
+function resolveAppState(provided) {
+  if (provided) return provided;
+  if (typeof window !== "undefined") {
+    return window.AppState;
+  }
+  return undefined;
+}
+
 class PcmRingBuffer {
   constructor({ millis, sampleRate, channels = DEFAULT_PCM_CHANNELS }) {
     this.sampleRate = sampleRate;
@@ -93,7 +101,7 @@ function getWindowPcmRing(sampleRate) {
 
 export function createWsAudioRuntime(options = {}) {
   const {
-    AppState = {},
+    AppState: providedAppState = undefined,
     initPcmSender,
     updateState = () => {},
     logStage = () => {},
@@ -123,7 +131,16 @@ export function createWsAudioRuntime(options = {}) {
     getCurrentTurnReqId = () => null,
   } = options;
 
+  const getAppState = () => resolveAppState(providedAppState);
+
   __firstPcmFrameLogged = false;
+
+  try {
+    console.log("AskChip ws_audio_runtime loaded", {
+      hasSendAudioChunk: typeof sendAudioChunk === "function",
+      hasIsAudioStreaming: typeof isAudioStreaming === "function",
+    });
+  } catch (_) {}
 
   // Diagnostic: when true, we bypass the normal PCM sender gate and always
   // enable the PCM sender while ASR is ready. This should only be used for
@@ -373,8 +390,11 @@ export function createWsAudioRuntime(options = {}) {
       } catch (err) {
         console.warn("updateMicRms failed", err);
       }
-    } else if (AppState && typeof AppState === "object") {
-      AppState.micRms = rms;
+    } else {
+      const AppState = getAppState();
+      if (AppState && typeof AppState === "object") {
+        AppState.micRms = rms;
+      }
     }
     if (typeof window !== "undefined") {
       try {
@@ -423,8 +443,9 @@ export function createWsAudioRuntime(options = {}) {
     console.warn("initial getMicRecordingStartAt failed", err);
   }
 
-  const asrRate = Number.isFinite(AppState?.targetSampleRate)
-    ? Number(AppState.targetSampleRate)
+  const initialAppState = getAppState();
+  const asrRate = Number.isFinite(initialAppState?.targetSampleRate)
+    ? Number(initialAppState.targetSampleRate)
     : PCM_TARGET_SAMPLE_RATE;
 
   let pcmRing = getWindowPcmRing(asrRate);
@@ -509,6 +530,7 @@ export function createWsAudioRuntime(options = {}) {
     if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
       return result;
     }
+    const AppState = getAppState();
     const listening = Boolean(AppState?.listening);
     const streaming = typeof isAudioStreaming === "function" ? isAudioStreaming() : true;
     if (!(listening && streaming)) {
@@ -576,6 +598,7 @@ export function createWsAudioRuntime(options = {}) {
 
   function recordRecorderChunk(timestampMs) {
     const now = Number.isFinite(timestampMs) ? timestampMs : Date.now();
+    const AppState = getAppState();
     const currentCount = typeof AppState?.chunkCount === "number"
       ? AppState.chunkCount
       : (typeof AppState?.getState === "function" ? (AppState.getState().chunkCount || 0) : 0);
@@ -811,6 +834,7 @@ export function createWsAudioRuntime(options = {}) {
     }
     console.log("client.pcm.target_sample_rate", pcmSampleRate);
     console.log("client.pcm.sample_rate", pcmSampleRate);
+    const AppState = getAppState();
     if (AppState && typeof AppState === "object") {
       const audioState = AppState.audio && typeof AppState.audio === "object"
         ? { ...AppState.audio }
@@ -990,6 +1014,7 @@ export function createWsAudioRuntime(options = {}) {
     if (!(chunk instanceof Int16Array) || !chunk.length) {
       return;
     }
+    const AppState = getAppState();
     const ws = resolveSocket();
     const wsReadyState = ws?.readyState ?? null;
     const wsPhase = typeof AppState?.wsPhase === "string" ? AppState.wsPhase : null;
@@ -1146,17 +1171,23 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function updatePcmSenderState(reason = "unknown") {
-    const asrReady = Boolean(AppState?.asrReady);
-    const turnActive = Object.prototype.hasOwnProperty.call(AppState || {}, "turnActive")
-      ? Boolean(AppState.turnActive)
+    const AppState = getAppState();
+    const stateSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
+    const asrReady = Boolean(stateSnapshot?.asrReady);
+    const ttsActive = Boolean(stateSnapshot?.ttsActive);
+    const micPerm = stateSnapshot && typeof stateSnapshot.micPermissionGranted === "boolean"
+      ? stateSnapshot.micPermissionGranted
       : true;
-    const phaseValue = typeof AppState?.phase === "string" ? AppState.phase : null;
+    const turnActive = Object.prototype.hasOwnProperty.call(stateSnapshot || {}, "turnActive")
+      ? Boolean(stateSnapshot.turnActive)
+      : true;
+    const phaseValue = typeof stateSnapshot?.phase === "string" ? stateSnapshot.phase : null;
     const phaseAllowsSend = phaseValue
       ? phaseValue === "conversation" ||
         phaseValue === VOICE_PHASE.ConversationReady ||
         phaseValue === VOICE_PHASE.UserTurn
       : true;
-    const wsPhase = typeof AppState?.wsPhase === "string" ? AppState.wsPhase : null;
+    const wsPhase = typeof stateSnapshot?.wsPhase === "string" ? stateSnapshot.wsPhase : null;
     const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
     const wsReadyForAudio = wsPhaseKnown ? WS_READY_PHASES.has(wsPhase) : true;
     const audioStreaming = Boolean(isAudioStreaming());
@@ -1168,17 +1199,28 @@ export function createWsAudioRuntime(options = {}) {
       (pcmSender && typeof pcmSender.getStateSnapshot === "function" && pcmSender.getStateSnapshot()?.mediaStreamActive)
     );
     const baseGate = baseEnabled && hasStream;
+    const gates = {
+      asrReady,
+      ttsActive,
+      micPerm,
+      senderPaused,
+      canCapture: captureAllowed,
+    };
     const shouldSendBase = Boolean(
       baseGate &&
       audioStreaming &&
-      !senderPaused &&
-      captureAllowed &&
-      asrReady &&
+      !gates.senderPaused &&
+      gates.canCapture &&
+      gates.asrReady &&
+      !gates.ttsActive &&
+      gates.micPerm &&
       turnActive &&
       phaseAllowsSend &&
       wsReadyForAudio
     );
-    const shouldSend = FORCE_PCM_SEND ? asrReady : shouldSendBase;
+    const shouldSend = FORCE_PCM_SEND
+      ? gates.asrReady && !gates.ttsActive && gates.micPerm
+      : shouldSendBase;
     const previousState = pcmSenderStateLast;
 
     let decisionReason = "ok";
@@ -1188,12 +1230,16 @@ export function createWsAudioRuntime(options = {}) {
       decisionReason = "no_stream";
     } else if (!audioStreaming) {
       decisionReason = "not_streaming";
-    } else if (senderPaused) {
+    } else if (gates.senderPaused) {
       decisionReason = "sender_paused";
-    } else if (!captureAllowed) {
+    } else if (!gates.canCapture) {
       decisionReason = "cannot_capture";
-    } else if (!asrReady) {
+    } else if (!gates.asrReady) {
       decisionReason = "asr_not_ready";
+    } else if (gates.ttsActive) {
+      decisionReason = "tts_active";
+    } else if (!gates.micPerm) {
+      decisionReason = "mic_perm";
     } else if (!turnActive) {
       decisionReason = "turn_inactive";
     } else if (!phaseAllowsSend) {
@@ -1204,6 +1250,10 @@ export function createWsAudioRuntime(options = {}) {
       decisionReason = "forced";
     }
 
+    try {
+      console.log("AskChip pcm_sender.gates", { reason, ...gates });
+    } catch (_) {}
+
     // Always log the raw inputs on every call
     try {
       logStage("client.audio_stream_state_inputs", {
@@ -1213,9 +1263,11 @@ export function createWsAudioRuntime(options = {}) {
         hasStream,
         force_pcm_send: FORCE_PCM_SEND,
         isAudioStreaming: audioStreaming,
-        senderPaused,
-        canCaptureNow: captureAllowed,
-        asrReady,
+        senderPaused: gates.senderPaused,
+        canCaptureNow: gates.canCapture,
+        asrReady: gates.asrReady,
+        ttsActive: gates.ttsActive,
+        micPerm: gates.micPerm,
         turnActive,
         hasPcmSender: !!pcmSender,
         baseEnabledReason,
@@ -1234,9 +1286,11 @@ export function createWsAudioRuntime(options = {}) {
         hasStream,
         force_pcm_send: FORCE_PCM_SEND,
         isAudioStreaming: audioStreaming,
-        senderPaused,
-        canCaptureNow: captureAllowed,
-        asrReady,
+        senderPaused: gates.senderPaused,
+        canCaptureNow: gates.canCapture,
+        asrReady: gates.asrReady,
+        ttsActive: gates.ttsActive,
+        micPerm: gates.micPerm,
         turnActive,
         hasPcmSender: !!pcmSender,
         baseEnabledReason,
@@ -1318,7 +1372,7 @@ export function createWsAudioRuntime(options = {}) {
           canCaptureNow: captureAllowed,
           asrReady,
           turnActive,
-          phase: typeof AppState?.phase === "string" ? AppState.phase : null,
+          phase: phaseValue,
           phase_allows_send: phaseAllowsSend,
           wsPhase,
           wsPhaseKnown,

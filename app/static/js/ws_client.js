@@ -24,6 +24,12 @@ import {
   logStage,
 } from "./ws/telemetry.js";
 
+function getAppState() {
+  return typeof window !== "undefined" ? window.AppState : undefined;
+}
+
+const AppState = getAppState();
+
 const [
   vadModule,
   captureRuntimeModule,
