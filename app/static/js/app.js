@@ -907,6 +907,7 @@ import "./state.js";
     let __hubImplLogInFlight = false;
 
     function installHubInterface() {
+      const AppState = typeof window !== "undefined" ? window.AppState : undefined;
       const hub = AppState && AppState.hub;
       if (!hub || typeof hub._install !== "function") {
         return;
