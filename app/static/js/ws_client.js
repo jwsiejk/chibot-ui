@@ -10,6 +10,7 @@ import { createSessionManager } from "./ws/session_manager.js";
 import { createFrameParser } from "./ws/frame_parser.js";
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import { isTypedArray, toArrayBuffer } from "./utils/binary.js";
+import { createVoicePhaseController, PHASE } from "./voice/phase_controller.js";
 import {
   MIC_OUTCOME,
   logMic,
@@ -47,26 +48,20 @@ try {
   });
 } catch (_) {}
 
-const PHASE = {
-  Greet: "greet",
-  Conversation: "conversation",
-};
-
 const CONVERSATION_START_DELAY_MS = 350;
+const voicePhaseController = createVoicePhaseController({ log: logStage });
 
 function getPhase() {
-  return AppState?.phase || PHASE.Greet;
+  return voicePhaseController.getPhase();
 }
 
-function setPhase(nextPhase, options = {}) {
+function syncAppStatePhase(options = {}) {
   const force = options && options.force === true;
   if (!AppState || typeof AppState !== "object") return;
-  if (!force && AppState.phase === nextPhase) return;
+  if (!force && AppState.phase === getPhase()) return;
   const prev = AppState.phase;
+  const nextPhase = getPhase();
   AppState.phase = nextPhase;
-  // Phase is a semantic flag, and updatePcmSenderState will gate sends based on
-  // phaseAllowsSend; other pause logic is handled by canCaptureNow(),
-  // ttsActive, listening, etc.
   try {
     updatePcmSenderState?.("phase_change");
   } catch (_) {}
@@ -274,7 +269,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let __secondGreetingTraceCompleted = false;
   let __secondGreetingTraceStartMs = 0;
   let __secondGreetingStartChunkCount = 0;
-  let conversationStartTimer = null;
+  let conversationStartTimeoutId = null;
   let hasOpenedAsrForConversation = false;
 
   let _audioStreaming = false;
@@ -289,10 +284,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let partialWatchdogFirstTurn = true;
   let turnStopSent = false;
   let speechSeenThisTurn = false;
-  let greetActive = false;
-  let greetCompleted = false;
   let greetUtteranceId = null;
-  let greetCandidateSeen = false;
 
   function resetTurnStopFlag() {
     // Start each user turn fresh: allow exactly one client-side input.stop
@@ -309,9 +301,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (frame.type === "greet" || frame.type === "greet.start" || frame.type === "greet.begin") {
       return true;
     }
-    if (frame.type === "tts.start") {
-      if (frame?.meta?.is_greet || frame?.meta?.greet === true) return true;
-      return greetCandidateSeen === false;
+    if (frame.type === "tts.start" && frame?.meta?.is_greet === true) {
+      return true;
     }
     return false;
   }
@@ -321,30 +312,23 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (frame.type === "greet.end" || frame.type === "greet.complete") {
       return true;
     }
-    if (frame.type === "tts.end") {
-      if (frame?.meta?.is_greet || frame?.meta?.greet === true) return true;
-      if (greetActive && (!greetUtteranceId || frame?.utt_id === greetUtteranceId)) {
-        return true;
-      }
+    if (frame.type === "tts.end" && frame?.meta?.is_greet === true) {
+      return true;
     }
     return false;
   }
 
   function markGreetStart(frame) {
-    if (greetCompleted) {
+    if (getPhase() === PHASE.Greet) {
       return;
     }
     hasOpenedAsrForConversation = false;
-    if (conversationStartTimer) {
-      clearTimeout(conversationStartTimer);
-      conversationStartTimer = null;
-    }
-    greetCandidateSeen = true;
-    greetActive = true;
+    clearConversationStartTimeout();
     if (typeof frame?.utt_id === "string" && frame.utt_id) {
       greetUtteranceId = frame.utt_id;
     }
-    setPhase(PHASE.Greet, { force: true });
+    voicePhaseController.markGreetStart(frame?.utt_id);
+    syncAppStatePhase({ force: true });
     try {
       logStage("client.greet_start", {
         phase: getPhase(),
@@ -391,20 +375,32 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
   }
 
-  function markGreetEnd() {
-    if (greetCompleted) {
+  function markGreetEnd(frame) {
+    if (getPhase() !== PHASE.Greet) {
       return;
     }
-    greetActive = false;
-    greetCompleted = true;
+    voicePhaseController.markGreetEnd(frame?.utt_id);
+    syncAppStatePhase({ force: true });
+  }
+
+  function clearConversationStartTimeout() {
+    if (conversationStartTimeoutId) {
+      clearTimeout(conversationStartTimeoutId);
+      conversationStartTimeoutId = null;
+    }
+  }
+
+  function isConversationReadyPhase() {
+    const phase = getPhase();
+    return phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
   }
 
   function canBargeIn() {
-    return getPhase() === PHASE.Conversation;
+    return isConversationReadyPhase();
   }
 
   function safeRequestAsrOpen(reason) {
-    if (getPhase() !== PHASE.Conversation) {
+    if (!isConversationReadyPhase()) {
       try {
         logStage("client.asr_open.skipped", {
           reason: "not_conversation_phase",
@@ -445,7 +441,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeStartRecorderStreaming(policy, source) {
-    if (getPhase() !== PHASE.Conversation) {
+    if (!isConversationReadyPhase()) {
       try {
         logStage("client.mic.start_skipped", {
           reason: "not_conversation_phase",
@@ -465,14 +461,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
-    if (conversationStartTimer) {
-      clearTimeout(conversationStartTimer);
-      conversationStartTimer = null;
-    }
-    if (getPhase() === PHASE.Conversation) {
+    clearConversationStartTimeout();
+    if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
       return;
     }
-    setPhase(PHASE.Conversation);
+    voicePhaseController.enterConversation(source);
+    syncAppStatePhase({ force: true });
     try {
       if (connection && typeof connection.setWsPhase === "function") {
         connection.setWsPhase("ready");
@@ -529,16 +523,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function scheduleConversationStartAfterGreet(source = "greet_tts_end") {
-    if (getPhase() === PHASE.Conversation) {
+    if (hasOpenedAsrForConversation) {
       return;
     }
-    if (conversationStartTimer) {
-      clearTimeout(conversationStartTimer);
-      conversationStartTimer = null;
-    }
+    clearConversationStartTimeout();
     const delayMs = Math.max(0, Number(CONVERSATION_START_DELAY_MS) || 0);
-    conversationStartTimer = setTimeout(() => {
-      conversationStartTimer = null;
+    conversationStartTimeoutId = setTimeout(() => {
+      conversationStartTimeoutId = null;
       enterConversationAfterGreet(source);
     }, delayMs);
     try {
@@ -994,7 +985,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     setSenderPauseReason("legacy", value);
   }
 
-  setPhase(PHASE.Greet, { force: true });
+  syncAppStatePhase({ force: true });
   function captureSecondGreetingMicSnapshot() {
     const listening = Boolean(AppState?.listening);
     const audioStreaming = Boolean(_audioStreaming);
@@ -1391,7 +1382,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         phase: getPhase(),
       });
     } catch (_) {}
-    if (getPhase() !== PHASE.Conversation) {
+    if (!isConversationReadyPhase()) {
       try {
         logStage("client.mic.start_skipped", {
           source: source || "unknown",
@@ -1631,7 +1622,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function openAsr(opts = {}) {
-    if (getPhase() !== PHASE.Conversation) {
+    if (!isConversationReadyPhase()) {
       try {
         logStage("client.asr_open.skipped", {
           reason: "not_conversation_phase",
@@ -1654,7 +1645,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function requestAsrArm(reason) {
-    if (getPhase() !== PHASE.Conversation) {
+    if (!isConversationReadyPhase()) {
       try {
         logStage("client.asr_open.skipped", {
           reason: "not_conversation_phase",
@@ -1962,8 +1953,11 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       markGreetStart(frame);
     }
     if (frameSignalsGreetEnd(frame)) {
-      markGreetEnd();
-      scheduleConversationStartAfterGreet("greet_complete_frame");
+      const wasGreetPhase = getPhase() === PHASE.Greet;
+      markGreetEnd(frame);
+      if (wasGreetPhase) {
+        scheduleConversationStartAfterGreet("greet_complete_frame");
+      }
     }
 
     if (typeof WSClient?.emit === "function") {
@@ -2192,9 +2186,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } else if (frame.type === "error") {
       await handleErrorFrame(frame);
     } else if (frame.type === "tts.start") {
-      if (!greetCandidateSeen) {
-        markGreetStart(frame);
-      }
       const shouldMuteDuringTts = Boolean(AppState?.policy?.recorder?.mute_send_during_tts);
       if (shouldMuteDuringTts) {
         try {
@@ -2242,10 +2233,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsEnd === "function") {
         audioPlayer.handleTtsEnd(frame);
-      }
-      if (!greetCompleted && greetCandidateSeen) {
-        markGreetEnd();
-        scheduleConversationStartAfterGreet("greet_tts_end_handler");
       }
       const uttIdEnd = frame?.utt_id || 'utt-00001';
       logStage('client.tts_end', { utt_id: uttIdEnd, dur_ms: frame?.dur_ms });
