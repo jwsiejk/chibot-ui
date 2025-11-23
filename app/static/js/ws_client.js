@@ -1,6 +1,9 @@
 // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram; no wake word.
 /* __BUILD_MARKER__: FULL_DUPLEX_01 */
-import { importV } from "./version.js";
+import * as versionModule from "./version.js";
+const importV = typeof versionModule.importV === "function"
+  ? versionModule.importV
+  : async (path) => import(/* @vite-ignore */ path);
 import { createPolicyRuntime } from "./ws/policy_runtime.js";
 import { createWsConnection } from "./ws/connection.js";
 import { createTurnRuntime } from "./ws/turns.js";

@@ -1,6 +1,6 @@
 import "./state.js";
 import { logStage } from "./ws/telemetry.js";
-import { getBuildId, importV, withVersion } from "./version.js";
+import * as versionModule from "./version.js";
 
 // AskChip frontend base module
 //
@@ -9,6 +9,16 @@ import { getBuildId, importV, withVersion } from "./version.js";
 // state.js, audio_player.js, audio/vad_client.js, ws_client.js,
 // transcript_view.js, and errors.js - is loaded dynamically via loadScript()
 // below so they share the same versioned ?v= query parameters.
+
+const getBuildId = typeof versionModule.getBuildId === "function"
+  ? versionModule.getBuildId
+  : () => null;
+const withVersion = typeof versionModule.withVersion === "function"
+  ? versionModule.withVersion
+  : (url) => url;
+const importV = typeof versionModule.importV === "function"
+  ? versionModule.importV
+  : async (path) => import(/* @vite-ignore */ path);
 
 (() => {
   function getMainScriptElement() {

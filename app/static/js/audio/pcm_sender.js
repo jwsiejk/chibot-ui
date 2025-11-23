@@ -1,5 +1,5 @@
 import * as telemetry from "../ws/telemetry.js";
-import { withVersion } from "../version.js";
+import * as versionModule from "../version.js";
 
 const emitClientLog = typeof telemetry.emitClientLog === "function"
   ? telemetry.emitClientLog
@@ -16,7 +16,10 @@ function withCacheBuster(path) {
   if (!path || typeof path !== "string") {
     return path;
   }
-  return withVersion(path);
+  const withVersionFn = typeof versionModule.withVersion === "function"
+    ? versionModule.withVersion
+    : (value) => value;
+  return withVersionFn(path);
 }
 
 const WORKLET_PATH = withCacheBuster("/static/js/audio/pcm-worklet-processor.js");
