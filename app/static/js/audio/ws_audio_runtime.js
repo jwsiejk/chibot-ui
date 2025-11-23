@@ -146,7 +146,9 @@ export function createWsAudioRuntime(options = {}) {
     }
     try {
       logStage("client.pcm_sender.decision", detail);
-    } catch (_) {}
+    } catch (_) {
+      // Do not let logging break the audio path
+    }
   }
 
   function logAudioGate(label, detail = {}) {
@@ -155,7 +157,9 @@ export function createWsAudioRuntime(options = {}) {
     }
     try {
       logStage(label, detail);
-    } catch (_) {}
+    } catch (_) {
+      // Do not let logging break the audio path
+    }
   }
 
   const resolveWsClient = () => {
