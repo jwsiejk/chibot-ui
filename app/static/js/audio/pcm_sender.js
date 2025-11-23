@@ -135,6 +135,15 @@ export async function initPcmSender(mediaStream = null, {
   const maxFrameSamples = Math.max(minFrameSamples, Math.round((chunkDurationMs / 1000) * targetSampleRate));
 
   try {
+    console.log("AskChip pcm_sender initialized", {
+      sampleRate: targetSampleRate,
+      encoding: "pcm16", // implicit from AudioWorklet
+      chunkMs: chunkDurationMs,
+      flushIntervalMs: flushMs,
+    });
+  } catch (_) {}
+
+  try {
     emitClientLog("client.pcm_sender.init", {
       targetSampleRate,
       chunkMs: chunkDurationMs,

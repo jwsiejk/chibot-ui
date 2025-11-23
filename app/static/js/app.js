@@ -71,6 +71,20 @@ const importV = typeof versionModule.importV === "function"
     }
   } catch {}
 
+  const AppState = typeof window !== "undefined" ? window.AppState : undefined;
+
+  function getAppState() {
+    return typeof window !== "undefined" ? window.AppState : undefined;
+  }
+
+  try {
+    console.log("AskChip AppState debug:", {
+      hasGetState: typeof getAppState()?.getState === "function",
+      hasSetState: typeof getAppState()?.setState === "function",
+      phase: getAppState()?.phase,
+    });
+  } catch (_) {}
+
   function hubLog(label, detail) {
     try { window.AppState?.hub?.log?.(label, detail); } catch {}
   }

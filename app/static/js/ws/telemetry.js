@@ -37,6 +37,10 @@ let clientBannerQueue = [];
 let toastRoot = null;
 let __hubLoggingInFlight = false;
 
+function getAppState() {
+  return typeof window !== "undefined" ? window.AppState : undefined;
+}
+
 function getTelemetrySocket() {
   if (typeof window !== "undefined") {
     if (window.__wsTelemetrySocket && typeof window.__wsTelemetrySocket.readyState === "number") {
@@ -66,6 +70,7 @@ function getTelemetrySendJson() {
 }
 
 function getGateSnapshot() {
+  const AppState = getAppState();
   let snapshot = null;
   try {
     snapshot = typeof AppState?.getState === "function" ? AppState.getState() : null;
@@ -103,6 +108,7 @@ export function emitMicBreadcrumb(detail = {}) {
 
 export function logMic(detail = {}) {
   try {
+    const AppState = getAppState();
     const holdFlags = {
       ttsActive: !!AppState?.ttsActive,
       systemHold: !!AppState?.systemHold,
@@ -262,6 +268,7 @@ export function recordClientBannerEvent(label, meta) {
 }
 
 function ensureClientBannerState() {
+  const AppState = getAppState();
   const state = typeof AppState?.getState === "function" ? AppState.getState() : null;
   const existing = state && state.clientBanner && typeof state.clientBanner === "object" ? state.clientBanner : null;
   if (existing && existing.info) {
@@ -618,7 +625,7 @@ function hubLog(label, detail) {
   if (__hubLoggingInFlight) {
     return false;
   }
-  const state = typeof window !== "undefined" ? window.AppState : null;
+  const state = getAppState();
   const hub = state && state.hub;
   if (hub && typeof hub.log === "function") {
     __hubLoggingInFlight = true;
@@ -648,6 +655,7 @@ function hubLog(label, detail) {
 
 function updateState(patch) {
   try {
+    const AppState = getAppState();
     if (typeof AppState?.setState === "function") {
       AppState.setState(patch);
     } else {
@@ -661,6 +669,7 @@ function setAppStateValue(key, value) {
     return;
   }
   try {
+    const AppState = getAppState();
     const state = typeof AppState?.getState === "function" ? AppState.getState() : null;
     const hasKey = state && Object.prototype.hasOwnProperty.call(state, key);
     const current = hasKey ? state[key] : AppState[key];
