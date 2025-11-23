@@ -446,6 +446,7 @@ export function createWsAudioRuntime(options = {}) {
   let pcmSender = null;
   let pcmSenderInitPromise = null;
   let pcmLastSeq = 0;
+  let pcmLastBytes = null;
   let pcmSampleRate = asrRate;
   let pcmHardwareSampleRate = null;
   let baseEnabled = false;
@@ -1102,6 +1103,7 @@ export function createWsAudioRuntime(options = {}) {
     }
 
     const bytes = chunk.byteLength;
+    pcmLastBytes = bytes;
 
     // Existing metrics + telemetry
     try {
@@ -1254,11 +1256,17 @@ export function createWsAudioRuntime(options = {}) {
     } catch (_) {}
 
     const socket = resolveSocket();
+    const socketReady = socket
+      ? (typeof WebSocket !== "undefined"
+        ? socket.readyState === WebSocket.OPEN
+        : socket.readyState === 1)
+      : false;
+
     const summary = {
       reason,
       phase: phaseValue,
       hasStream,
-      wsConnected: socket ? socket.readyState === WebSocket.OPEN : false,
+      wsConnected: socketReady,
       senderPaused,
       vadGateOpen: captureAllowed,
       wsPhase,
@@ -1296,7 +1304,7 @@ export function createWsAudioRuntime(options = {}) {
         hasCaptureStream: Boolean(captureStreamResolved || captureStreamProvider),
         vadState: typeof getVadController === "function" ? getVadController()?.getState?.() || null : null,
         chunkIndex: Number.isFinite(pcmLastSeq) ? pcmLastSeq : null,
-        chunkBytes: null,
+        chunkBytes: Number.isFinite(pcmLastBytes) ? pcmLastBytes : null,
         ts_ms: Date.now(),
         ts_ms_monotonic: typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
@@ -1381,7 +1389,7 @@ export function createWsAudioRuntime(options = {}) {
       hasCaptureStream: Boolean(captureStreamResolved || captureStreamProvider),
       vadState: typeof getVadController === "function" ? getVadController()?.getState?.() || null : null,
       chunkIndex: Number.isFinite(pcmLastSeq) ? pcmLastSeq : null,
-      chunkBytes: null,
+      chunkBytes: Number.isFinite(pcmLastBytes) ? pcmLastBytes : null,
       ts_ms: Date.now(),
       ts_ms_monotonic: typeof performance !== "undefined" && typeof performance.now === "function"
         ? performance.now()
@@ -1465,6 +1473,7 @@ export function createWsAudioRuntime(options = {}) {
     pcmSender = null;
     pcmSenderInitPromise = null;
     pcmLastSeq = 0;
+    pcmLastBytes = null;
     pcmSampleRate = asrRate;
     pcmHardwareSampleRate = null;
     baseEnabled = false;
