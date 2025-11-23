@@ -50,6 +50,8 @@ try {
 
 const CONVERSATION_START_DELAY_MS = 350;
 const voicePhaseController = createVoicePhaseController({ log: logStage });
+let updatePcmSenderState = null;
+const markTurnAudioChunk = null;
 
 function getPhase() {
   return voicePhaseController.getPhase();
@@ -384,8 +386,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     try {
       if (typeof WSClient?.stopRecorderStreaming === "function") {
         WSClient.stopRecorderStreaming("greet_start");
-      } else if (typeof stopRecorderStreaming === "function") {
-        stopRecorderStreaming("greet_start");
       } else {
         autoStopRecorder("greet_start", { force: true, allowVadStop: true });
       }
@@ -1226,11 +1226,15 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     getPcmSenderSnapshot,
     setBaseEnabled,
     resetSilenceSuppression,
-    updatePcmSenderState,
+    updatePcmSenderState: runtimeUpdatePcmSenderState,
     scheduleAudioKeepalive: runtimeScheduleAudioKeepalive,
     clearAudioKeepaliveTimer: runtimeClearAudioKeepalive,
     sendAudioKeepaliveNow: runtimeSendAudioKeepaliveNow,
   } = audioRuntime;
+
+  updatePcmSenderState = typeof runtimeUpdatePcmSenderState === "function"
+    ? runtimeUpdatePcmSenderState
+    : null;
 
   try {
     logStage("client.audio_runtime.wired", {
@@ -1947,8 +1951,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     let handler = null;
     if (typeof window !== "undefined" && typeof window.startRecording === "function") {
       handler = window.startRecording;
-    } else if (typeof startRecording === "function") {
-      handler = startRecording;
+    } else if (typeof globalThis?.startRecording === "function") {
+      handler = globalThis.startRecording;
     }
     if (handler) {
       const context = typeof window !== "undefined" ? window : null;
@@ -3419,10 +3423,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       try {
         const ws = socket || window.ws;
         const open = ws && ws.readyState === WebSocket.OPEN;
-        const isControl = isControlFrame(frame);
+        const isControl = typeof connection?.isControlFrame === "function"
+          ? connection.isControlFrame(frame)
+          : false;
         if (open && isControl) {
           const codec = getNegotiatedControlCodec();
-          const encoded = encodeControlFramePayload(frame, codec);
+          const encoded = typeof connection?.encodeControlFramePayload === "function"
+            ? connection.encodeControlFramePayload(frame, codec)
+            : null;
           if (!encoded) {
             return false;
           }

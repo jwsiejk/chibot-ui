@@ -270,17 +270,6 @@ export function createWsAudioRuntime(options = {}) {
     return localMicRecordingStartAt;
   };
 
-  const writeMicRecordingStartAt = (value) => {
-    if (typeof setMicRecordingStartAt === "function") {
-      try {
-        setMicRecordingStartAt(value);
-      } catch (err) {
-        console.warn("setMicRecordingStartAt failed", err);
-      }
-    }
-    localMicRecordingStartAt = value;
-  };
-
   const safeSendAudioChunk = (payload, meta = {}) => {
     const currentReqId = typeof getCurrentTurnReqId === "function"
       ? (getCurrentTurnReqId() || null)

@@ -1,5 +1,3 @@
-/* eslint-disable no-console */
-
 import * as telemetry from "../ws/telemetry.js";
 
 const emitClientLog = typeof telemetry.emitClientLog === "function"
