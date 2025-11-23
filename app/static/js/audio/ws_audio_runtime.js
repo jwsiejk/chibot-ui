@@ -19,6 +19,7 @@ const AUDIO_KEEPALIVE_CHUNK_MS = 20;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
+const PCM_SENDER_DEBUG = true;
 let __firstPcmFrameLogged = false;
 const WS_READY_PHASES = new Set(["connected", "ready"]);
 
@@ -138,6 +139,24 @@ export function createWsAudioRuntime(options = {}) {
   let firstRuntimeFrameLogged = false;
   let captureStreamProvider = typeof getCaptureStream === "function" ? getCaptureStream : null;
   let captureStreamResolved = null;
+
+  function logSenderDecision(detail = {}) {
+    if (!PCM_SENDER_DEBUG) {
+      return;
+    }
+    try {
+      logStage("client.pcm_sender.decision", detail);
+    } catch (_) {}
+  }
+
+  function logAudioGate(label, detail = {}) {
+    if (!PCM_SENDER_DEBUG) {
+      return;
+    }
+    try {
+      logStage(label, detail);
+    } catch (_) {}
+  }
 
   const resolveWsClient = () => {
     if (typeof getWsClient === "function") {
@@ -977,6 +996,68 @@ export function createWsAudioRuntime(options = {}) {
     if (!(chunk instanceof Int16Array) || !chunk.length) {
       return;
     }
+    const ws = resolveSocket();
+    const wsReadyState = ws?.readyState ?? null;
+    const wsPhase = typeof AppState?.wsPhase === "string" ? AppState.wsPhase : null;
+    const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
+    const wsReadyPhase = wsPhaseKnown ? WS_READY_PHASES.has(wsPhase) : true;
+    const phaseValue = typeof AppState?.phase === "string" ? AppState.phase : null;
+    const senderPaused = Boolean(isSenderPaused());
+    const captureAllowed = Boolean(canCaptureNow());
+
+    if (wsPhaseKnown && !wsReadyPhase) {
+      logAudioGate("client.audio.gate", {
+        action: "send_chunk",
+        blocked: true,
+        reason: "ws_phase_not_ready",
+        phase: phaseValue,
+        wsPhase,
+        readyPhases: Array.from(WS_READY_PHASES),
+        wsReadyState,
+        senderPaused,
+        canCaptureNow: captureAllowed,
+      });
+      return;
+    }
+
+    if (typeof WebSocket !== "undefined" && ws && ws.readyState !== WebSocket.OPEN) {
+      logAudioGate("client.audio.gate", {
+        action: "send_chunk",
+        blocked: true,
+        reason: "ws_closed",
+        phase: phaseValue,
+        wsPhase,
+        readyPhases: Array.from(WS_READY_PHASES),
+        wsReadyState,
+        senderPaused,
+        canCaptureNow: captureAllowed,
+      });
+      return;
+    }
+
+    if (!isAudioStreaming()) {
+      logAudioGate("client.audio.gate", {
+        action: "send_chunk",
+        blocked: true,
+        reason: "not_streaming",
+        phase: phaseValue,
+        wsPhase,
+        readyPhases: Array.from(WS_READY_PHASES),
+        wsReadyState,
+        senderPaused,
+        canCaptureNow: captureAllowed,
+      });
+      return;
+    }
+
+    logAudioGate("client.audio.gate", {
+      action: "send_chunk",
+      blocked: false,
+      reason: "ok",
+      phase: phaseValue,
+      wsPhase,
+      wsReadyState,
+    });
     const sr = meta?.sampleRate || meta?.sampleRateHz || null;
     const sampledBytes = chunk.byteLength || 0;
     if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
@@ -1103,6 +1184,30 @@ export function createWsAudioRuntime(options = {}) {
       wsReadyForAudio
     );
     const shouldSend = FORCE_PCM_SEND ? asrReady : shouldSendBase;
+    const previousState = pcmSenderStateLast;
+
+    let decisionReason = "ok";
+    if (!baseEnabled) {
+      decisionReason = "base_disabled";
+    } else if (!hasStream) {
+      decisionReason = "no_stream";
+    } else if (!audioStreaming) {
+      decisionReason = "not_streaming";
+    } else if (senderPaused) {
+      decisionReason = "sender_paused";
+    } else if (!captureAllowed) {
+      decisionReason = "cannot_capture";
+    } else if (!asrReady) {
+      decisionReason = "asr_not_ready";
+    } else if (!turnActive) {
+      decisionReason = "turn_inactive";
+    } else if (!phaseAllowsSend) {
+      decisionReason = "phase_not_ready";
+    } else if (!wsReadyForAudio) {
+      decisionReason = "ws_not_ready";
+    } else if (FORCE_PCM_SEND && !shouldSendBase) {
+      decisionReason = "forced";
+    }
 
     // Always log the raw inputs on every call
     try {
@@ -1174,10 +1279,33 @@ export function createWsAudioRuntime(options = {}) {
     } catch (_) {}
 
     if (!pcmSender || typeof pcmSender.setEnabled !== "function") {
+      logSenderDecision({
+        reason,
+        decisionReason,
+        shouldSend,
+        previous_state: previousState,
+        next_state: previousState,
+        phase: phaseValue,
+        wsPhase,
+        ws_ready: wsReadyForAudio,
+        ws_ready_state: socket?.readyState ?? null,
+        isAudioStreaming: audioStreaming,
+        senderPaused,
+        canCaptureNow: captureAllowed,
+        firstChunkSeen: readFirstChunkSeen(),
+        hasCaptureStream: Boolean(captureStreamResolved || captureStreamProvider),
+        vadState: typeof getVadController === "function" ? getVadController()?.getState?.() || null : null,
+        chunkIndex: Number.isFinite(pcmLastSeq) ? pcmLastSeq : null,
+        chunkBytes: null,
+        ts_ms: Date.now(),
+        ts_ms_monotonic: typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : null,
+      });
       return;
     }
 
-    if (pcmSenderStateLast !== shouldSend) {
+    if (previousState !== shouldSend) {
       try {
         logStage("client.audio_stream_state", {
           reason,
@@ -1235,6 +1363,30 @@ export function createWsAudioRuntime(options = {}) {
         });
       } catch (_) {}
     }
+
+    logSenderDecision({
+      reason,
+      decisionReason,
+      shouldSend,
+      previous_state: previousState,
+      next_state: shouldSend,
+      phase: phaseValue,
+      wsPhase,
+      ws_ready: wsReadyForAudio,
+      ws_ready_state: socket?.readyState ?? null,
+      isAudioStreaming: audioStreaming,
+      senderPaused,
+      canCaptureNow: captureAllowed,
+      firstChunkSeen: readFirstChunkSeen(),
+      hasCaptureStream: Boolean(captureStreamResolved || captureStreamProvider),
+      vadState: typeof getVadController === "function" ? getVadController()?.getState?.() || null : null,
+      chunkIndex: Number.isFinite(pcmLastSeq) ? pcmLastSeq : null,
+      chunkBytes: null,
+      ts_ms: Date.now(),
+      ts_ms_monotonic: typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : null,
+    });
 
     pcmSender.setEnabled(shouldSend);
   }
