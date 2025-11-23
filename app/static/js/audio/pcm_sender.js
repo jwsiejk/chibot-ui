@@ -1,4 +1,5 @@
 import * as telemetry from "../ws/telemetry.js";
+import { withVersion } from "../version.js";
 
 const emitClientLog = typeof telemetry.emitClientLog === "function"
   ? telemetry.emitClientLog
@@ -11,39 +12,11 @@ const DEFAULT_CHUNK_MS = 60;
 const DEFAULT_FLUSH_MS = 50;
 const TARGET_SAMPLE_RATE = 16000;
 
-const BUILD_ID = typeof window !== "undefined" && typeof window.BUILD_ID === "string"
-  ? window.BUILD_ID
-  : null;
-
-const CACHE_STAMP = (() => {
-  if (typeof BUILD_ID === "string" && BUILD_ID) {
-    return BUILD_ID;
-  }
-  if (typeof window !== "undefined") {
-    const existing = window.__PCM_WORKLET_STAMP__;
-    if (typeof existing === "string" && existing) {
-      return existing;
-    }
-    const generated = Date.now().toString();
-    try {
-      window.__PCM_WORKLET_STAMP__ = generated;
-    } catch (err) {
-      /* ignore assignment errors */
-    }
-    return generated;
-  }
-  return Date.now().toString();
-})();
-
 function withCacheBuster(path) {
   if (!path || typeof path !== "string") {
     return path;
   }
-  const hashIndex = path.indexOf("#");
-  const base = hashIndex === -1 ? path : path.slice(0, hashIndex);
-  const hash = hashIndex === -1 ? "" : path.slice(hashIndex);
-  const sep = base.includes("?") ? "&" : "?";
-  return `${base}${sep}v=${encodeURIComponent(CACHE_STAMP)}${hash}`;
+  return withVersion(path);
 }
 
 const WORKLET_PATH = withCacheBuster("/static/js/audio/pcm-worklet-processor.js");
