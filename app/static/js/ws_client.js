@@ -405,7 +405,11 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     if (!allowed) {
       try {
-        logStage("client.asr_open.skipped", { reason, phase });
+        logStage("client.asr_open.skipped", {
+          reason: "not_conversation_phase",
+          phase,
+          requested_reason: reason || null,
+        });
       } catch (_) {}
       return;
     }
@@ -458,10 +462,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
-    if (conversationStartTimer) {
-      clearTimeout(conversationStartTimer);
-      conversationStartTimer = null;
-    }
+    clearConversationStartTimer();
     if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
       return;
     }
