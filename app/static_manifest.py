@@ -92,12 +92,19 @@ def get_main_js_filename() -> Optional[str]:
     return main_js
 
 
+def _append_build_id(src: str, build_id: Optional[str]) -> str:
+    if not build_id:
+        return src
+    separator = "&" if "?" in src else "?"
+    return f"{src}{separator}v={build_id}"
+
+
 def get_main_script_src(build_id: Optional[str] = None) -> str:
     """Return the script src for the main client bundle or legacy app.js."""
 
+    build_id = build_id or get_build_id()
     filename = get_main_js_filename()
     if filename:
-        return f"/static/dist/{filename}"
+        return _append_build_id(f"/static/dist/{filename}", build_id)
 
-    build_id = build_id or get_build_id()
-    return f"/static/js/app.js?v={build_id}"
+    return _append_build_id("/static/js/app.js", build_id)

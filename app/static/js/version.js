@@ -1,23 +1,28 @@
-export const BUILD_ID =
-  (typeof window !== 'undefined' && window.BUILD_ID) ||
-  (typeof document !== 'undefined'
-    ? document
-        .querySelector('script')
-        ?.textContent?.match(/BUILD_ID.+?["'](.+?)["']/)?.[1] || null
-    : null);
+export function getBuildId() {
+  if (typeof window !== "undefined" && typeof window.BUILD_ID === "string" && window.BUILD_ID) {
+    return window.BUILD_ID;
+  }
+  return null;
+}
 
-export function withV(url) {
-  if (!url) return url;
+export function withVersion(url) {
+  const buildId = getBuildId();
+  if (!buildId) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}v=${encodeURIComponent(buildId)}`;
+}
+
+export async function importV(path, attempt = 1) {
+  const url = withVersion(path);
   try {
-    const u = new URL(url, typeof window !== 'undefined' ? window.location.origin : undefined);
-    u.searchParams.set('v', BUILD_ID || Date.now().toString());
-    return u.toString();
+    return await import(/* @vite-ignore */ url);
   } catch (err) {
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}v=${encodeURIComponent(BUILD_ID || Date.now().toString())}`;
+    if (attempt >= 2) throw err;
+    try {
+      console.warn("importV failed, retrying once", { url, attempt, err });
+    } catch (_) {}
+    return importV(path, attempt + 1);
   }
 }
 
-export async function importV(url) {
-  return import(/* @vite-ignore */ withV(url));
-}
+export const BUILD_ID = getBuildId();

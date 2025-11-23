@@ -1,5 +1,6 @@
 import "./state.js";
 import { logStage } from "./ws/telemetry.js";
+import { getBuildId, importV, withVersion } from "./version.js";
 
 // AskChip frontend base module
 //
@@ -28,6 +29,23 @@ import { logStage } from "./ws/telemetry.js";
     }
     return document.querySelector?.('script[src*="/static/js/app.js"]') || null;
   }
+
+  try {
+    const globalBuild = getBuildId();
+    let scriptBuild = null;
+    try {
+      const el = getMainScriptElement();
+      scriptBuild = el && el.src ? new URL(el.src, window.location.href).searchParams.get("v") : null;
+    } catch (_) {}
+
+    if (globalBuild && scriptBuild && globalBuild !== scriptBuild) {
+      console.warn("AskChip build mismatch detected; forcing reload", {
+        globalBuild,
+        scriptBuild,
+      });
+      window.location.reload(true);
+    }
+  } catch (_) {}
 
   // Ensure single-store shape (idempotent)
   try {
@@ -219,44 +237,6 @@ import { logStage } from "./ws/telemetry.js";
     return "/static/js/";
   })();
 
-  const VERSION_STAMP = (() => {
-    if (typeof window !== "undefined" && typeof window.BUILD_ID === "string" && window.BUILD_ID) {
-      return window.BUILD_ID;
-    }
-    if (typeof window !== "undefined") {
-      const existing = window.__APP_VERSION_STAMP__;
-      if (typeof existing === "string" && existing) {
-        return existing;
-      }
-      const generated = Date.now().toString();
-      try {
-        window.__APP_VERSION_STAMP__ = generated;
-      } catch (err) {
-        // ignore inability to persist stamp on window
-      }
-      return generated;
-    }
-    return Date.now().toString();
-  })();
-
-  const VERSION_QUERY = (() => {
-    const suffix = `?v=${encodeURIComponent(VERSION_STAMP)}`;
-    if (typeof document === "undefined") {
-      return suffix;
-    }
-    try {
-      const current = getMainScriptElement();
-      if (!current || !current.src) {
-        return suffix;
-      }
-      const url = new URL(current.src, window.location.href);
-      return url.search || suffix;
-    } catch (err) {
-      console.warn("Failed to derive version query", err);
-      return suffix;
-    }
-  })();
-
   function isSameOrigin(url) {
     try {
       if (!/^(?:[a-z]+:)?\/\//i.test(url)) {
@@ -273,17 +253,6 @@ import { logStage } from "./ws/telemetry.js";
     return /^(data:|blob:)/i.test(url);
   }
 
-  function appendVersionQuery(url) {
-    if (!VERSION_QUERY || typeof url !== "string" || url.includes("?")) {
-      return url;
-    }
-    const hashIndex = url.indexOf("#");
-    if (hashIndex === -1) {
-      return `${url}${VERSION_QUERY}`;
-    }
-    return `${url.slice(0, hashIndex)}${VERSION_QUERY}${url.slice(hashIndex)}`;
-  }
-
   function resolveScriptSrc(src) {
     if (!src || typeof src !== "string") {
       return src;
@@ -297,14 +266,14 @@ import { logStage } from "./ws/telemetry.js";
       if (!isSameOrigin(src)) {
         return src;
       }
-      return appendVersionQuery(src);
+      return withVersion(src);
     }
 
     const normalized = src.replace(/^\.\//, "");
     const base = STATIC_JS_BASE.replace(/\/?$/, "/");
     const joined = `${base}${normalized}`;
 
-    return appendVersionQuery(joined);
+    return withVersion(joined);
   }
 
   function renderStatusBarFromState() {
@@ -795,9 +764,9 @@ import { logStage } from "./ws/telemetry.js";
     const needsWsClient = !window.WSClient
       || typeof window.WSClient.open !== "function";
     if (needsWsClient) {
-      const wsClientSrc = resolveScriptSrc("ws_client.js");
+      const wsClientSrc = `${STATIC_JS_BASE.replace(/\/?$/, "/")}ws_client.js`;
       try {
-        await import(/* @vite-ignore */ wsClientSrc);
+        await importV(wsClientSrc);
       } catch (err) {
         try {
           console.warn("WSClient dynamic import failed; retrying via script", err);
