@@ -319,6 +319,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (frame.type === "tts.end") {
       // Accept tts.end if we are currently in the Greet phase
       if (getPhase() === PHASE.Greet) {
+        try {
+          logStage("client.greet_end_detected_tts", {
+            phase: getPhase(),
+            type: frame.type,
+            utt_id: frame?.utt_id || null,
+          });
+        } catch (_) {}
         return true;
       }
 
