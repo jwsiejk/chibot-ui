@@ -4817,8 +4817,18 @@ class ChatV2Adapter:
                 return
 
             def _on_loop() -> None:
+                _log.debug(
+                    "evt=asr_closed_event_state sid=%s greet_completed=%s asr_opened_ms=%s asr_ready_bundle_sent_ms=%s asr_open=%s asr_bytes_sent=%s",
+                    ctx.sid,
+                    ctx.greet_completed,
+                    ctx.asr_opened_ms,
+                    ctx.asr_ready_bundle_sent_ms,
+                    ctx.asr_open,
+                    ctx.asr_bytes_sent,
+                )
+
                 if (
-                    ctx.greet_completed
+                    ctx.asr_bytes_sent == 0
                     and ctx.asr_opened_ms is None
                     and not ctx.asr_ready_bundle_sent_ms
                     and not ctx.asr_open
