@@ -2,6 +2,7 @@
 // Encapsulates PCM ring buffer, PCM sender, and ASR priming helpers.
 
 import { isTypedArray, toArrayBuffer } from "../utils/binary.js";
+import { PHASE as VOICE_PHASE } from "../voice/phase_controller.js";
 
 const PCM_TARGET_SAMPLE_RATE = 16000;
 const DEFAULT_RING_CAPACITY_MS = 1500;
@@ -1074,7 +1075,11 @@ export function createWsAudioRuntime(options = {}) {
       ? Boolean(AppState.turnActive)
       : true;
     const phaseValue = typeof AppState?.phase === "string" ? AppState.phase : null;
-    const phaseAllowsSend = phaseValue ? phaseValue === "conversation" : true;
+    const phaseAllowsSend = phaseValue
+      ? phaseValue === "conversation" ||
+        phaseValue === VOICE_PHASE.ConversationReady ||
+        phaseValue === VOICE_PHASE.UserTurn
+      : true;
     const wsPhase = typeof AppState?.wsPhase === "string" ? AppState.wsPhase : null;
     const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
     const wsReadyForAudio = wsPhaseKnown ? WS_READY_PHASES.has(wsPhase) : true;
