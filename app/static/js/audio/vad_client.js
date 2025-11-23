@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 import { logStage } from "../ws/telemetry.js";
 const DB_FLOOR = -120;
 const SAMPLE_MAX = 32768;
