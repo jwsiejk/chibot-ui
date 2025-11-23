@@ -577,6 +577,17 @@ export function createWsConnection({
     const payloadType = typeof data?.type === "string" ? data.type : "unknown";
     const isControl = !binary && isControlFrame(data);
 
+    if (payloadType === "audio.header") {
+      try {
+        logStage("client.audio_header.send_intent", {
+          type: data?.type || "unknown",
+          format: data?.format || null,
+          sample_rate: data?.sample_rate || null,
+          channels: data?.channels || null,
+        });
+      } catch (_) {}
+    }
+
     if (!ws) {
       console.warn("client.ws_send_dropped", {
         payloadType,

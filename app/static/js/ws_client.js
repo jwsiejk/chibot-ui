@@ -420,14 +420,22 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeRequestAsrOpen(reason) {
+    try {
+      logStage("client.asr_open.intent", {
+        reason,
+        phase: voicePhaseController?.getPhase?.() || null,
+        wsPhase: AppState?.wsPhase || null,
+      });
+    } catch (_) {}
     const phase = voicePhaseController.getPhase();
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     if (!allowed) {
       try {
         logStage("client.asr_open.skipped", {
-          reason: "not_conversation_phase",
+          reason,
           phase,
-          requested_reason: reason || null,
+          wsPhase: AppState?.wsPhase || null,
+          skipReason: "phase_not_allowed",
         });
       } catch (_) {}
       return;
@@ -454,6 +462,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
 
     try {
+      logStage("client.asr_open.proceed", {
+        reason,
+        phase: voicePhaseController?.getPhase?.() || null,
+        wsPhase: AppState?.wsPhase || null,
+      });
+    } catch (_) {}
+
+    try {
       if (typeof openAsr === "function") {
         openAsr({ reason });
       }
@@ -465,12 +481,32 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   function safeStartRecorderStreaming(policy, source) {
     const phase = voicePhaseController.getPhase();
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+    try {
+      logStage("client.mic.start_intent", {
+        source,
+        phase,
+        wsPhase: AppState?.wsPhase || null,
+        allowed,
+      });
+    } catch (_) {}
     if (!allowed) {
       try {
-        logStage("client.mic.start_skipped", { source, phase });
+        logStage("client.mic.start_skipped", {
+          source,
+          phase,
+          wsPhase: AppState?.wsPhase || null,
+          reason: "phase_not_allowed",
+        });
       } catch (_) {}
       return false;
     }
+    try {
+      logStage("client.mic.start_proceed", {
+        source,
+        phase,
+        wsPhase: AppState?.wsPhase || null,
+      });
+    } catch (_) {}
     if (typeof WSClient?.startRecorderStreaming === "function") {
       return WSClient.startRecorderStreaming(policy, source);
     }
@@ -481,17 +517,41 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
+    try {
+      logStage("client.enter_conversation_after_greet.intent", {
+        source,
+        phase: voicePhaseController?.getPhase?.() || null,
+        wsPhase: AppState?.wsPhase || null,
+        hasOpenedAsrForConversation,
+      });
+    } catch (_) {}
     clearConversationStartTimer();
     if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
       return;
     }
     voicePhaseController.enterConversation(source);
     syncAppStatePhase({ force: true });
+    try {
+      logStage("client.enter_conversation_after_greet.post_phase", {
+        source,
+        phase: voicePhaseController?.getPhase?.() || null,
+        wsPhase: AppState?.wsPhase || null,
+        hasOpenedAsrForConversation,
+      });
+    } catch (_) {}
     if (!hasOpenedAsrForConversation) {
       hasOpenedAsrForConversation = true;
       safeRequestAsrOpen(source);
     }
     safeStartRecorderStreaming(AppState?.policy || {}, "post_greet");
+    try {
+      logStage("client.enter_conversation_after_greet.asr_and_mic_called", {
+        source,
+        phase: voicePhaseController?.getPhase?.() || null,
+        wsPhase: AppState?.wsPhase || null,
+        hasOpenedAsrForConversation,
+      });
+    } catch (_) {}
     try {
       if (connection && typeof connection.setWsPhase === "function") {
         connection.setWsPhase("ready");
@@ -1578,6 +1638,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     };
 
     try {
+      try {
+        logStage("client.audio_header.send_intent", {
+          type: header?.type || "unknown",
+          format: header?.format || null,
+          sample_rate: header?.sample_rate || null,
+          channels: header?.channels || null,
+        });
+      } catch (_) {}
       const result = sendJSON(header);
       if (result && typeof result.then === "function") {
         return result.then((ok) => {
