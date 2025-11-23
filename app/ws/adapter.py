@@ -1050,6 +1050,8 @@ class ChatV2Adapter:
                 meta={"reason": "greet_not_completed", "where": label},
             )
             return
+        if not ctx.asr_ready_bundle_sent_ms:
+            self._log_event("info", "asr_ready_arm_post_greet", ctx.sid, where=label)
         if ctx.asr_ready_bundle_sent_ms:
             return
         if send is None:
@@ -1142,6 +1144,15 @@ class ChatV2Adapter:
                         )
                     except Exception:
                         _log.exception("evt=greet_start_emit_failed sid=%s", ctx.sid)
+            elif greet_utt_id and ctx.greet_utt_id is None:
+                # Fallback for vendors that omit greet markers: track the first
+                # utterance ID observed before greet completes so we can detect
+                # completion on `tts.end`. See ASR_GREET_ROOT_CAUSE.md for the
+                # greet_not_completed → asr_closed_pre_open failure mode.
+                ctx.greet_utt_id = greet_utt_id
+                _log.info(
+                    "evt=greet_utt_tracked_fallback sid=%s utt_id=%s", ctx.sid, greet_utt_id
+                )
         try:
             self._bus(
                 "tts.start",
@@ -1226,9 +1237,33 @@ class ChatV2Adapter:
 
         greet_utt_id = ctx.greet_utt_id
         frame_utt_id = self._extract_tts_utt_id(frame) or utt_id_value
+        greet_completion_reason: Optional[str] = None
         is_greet_tts = self._frame_signals_greet(frame) or (
             greet_utt_id is not None and frame_utt_id == greet_utt_id
         )
+
+        if is_greet_tts:
+            greet_completion_reason = "marker_match"
+        elif not ctx.greet_completed:
+            # Some TTS vendors omit greet markers. Use the tracked greet
+            # utt_id from `_handle_tts_start` as a fallback so we still mark
+            # greet completion when that utterance ends. This avoids the
+            # greet_not_completed → asr_closed_pre_open failure described in
+            # ASR_GREET_ROOT_CAUSE.md when greet is audible but never marked.
+            active_utt = metrics.get("tts_active_utt_id")
+            if greet_utt_id and active_utt and active_utt == greet_utt_id:
+                is_greet_tts = True
+                greet_completion_reason = "tracked_utt_active"
+            elif greet_utt_id and frame_utt_id is None:
+                frame_utt_id = greet_utt_id
+                is_greet_tts = True
+                greet_completion_reason = "tracked_utt_no_frame_id"
+            elif greet_utt_id is None and active_utt:
+                ctx.greet_utt_id = active_utt
+                greet_utt_id = active_utt
+                frame_utt_id = frame_utt_id or active_utt
+                is_greet_tts = True
+                greet_completion_reason = "fallback_first_tts_end"
 
         tts_started_at = metrics.get("tts_started_at")
         tts_completed_at = metrics.get("tts_completed_at")
@@ -1249,6 +1284,14 @@ class ChatV2Adapter:
             )
         if not ctx.greet_completed and is_greet_tts:
             ctx.greet_completed = True
+            _log.info(
+                "evt=greet_completed sid=%s utt_id=%s reason=%s frame_type=%s has_greet_meta=%s",
+                ctx.sid,
+                frame_utt_id or greet_utt_id,
+                greet_completion_reason or "marker_match",
+                frame.get("type") if isinstance(frame, Mapping) else None,
+                self._frame_signals_greet(frame),
+            )
             self._emit_session_step(
                 ctx.sid,
                 "greet.completed",
