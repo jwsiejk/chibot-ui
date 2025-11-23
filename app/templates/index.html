@@ -7,11 +7,12 @@
     <title>AskChip UI</title>
     <link rel="icon" href="/favicon.ico?v={{ BUILD_ID }}" />
     <link rel="stylesheet" href="/static/css/styles.css?v={{ BUILD_ID }}" />
-    <link rel="preload" href="{{ MAIN_BUNDLE_SRC }}" as="script" />
+    <link rel="preload" href="{{ MAIN_BUNDLE_SRC }}" as="script" crossorigin="anonymous" />
     <link
       rel="preload"
       href="/static/js/audio/ws_audio_runtime.js?v={{ BUILD_ID }}"
       as="script"
+      crossorigin="anonymous"
     />
     <script>
       window.BUILD_ID = "{{ BUILD_ID }}";
@@ -196,6 +197,7 @@
       data-static-base="/static/js/"
       type="module"
       src="{{ MAIN_BUNDLE_SRC }}"
+      crossorigin="anonymous"
     ></script>
     <script>
       if ('serviceWorker' in navigator) {
