@@ -3,9 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:js": "node tools/build_js.mjs"
+    "build:js": "node tools/build_js.mjs",
+    "lint": "eslint app/static/js",
+    "build:checked": "npm run lint && npm run build:js"
   },
   "devDependencies": {
-    "esbuild": "^0.27.0"
+    "esbuild": "^0.27.0",
+    "eslint": "^9.0.0"
   }
 }
