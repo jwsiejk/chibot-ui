@@ -1,4 +1,5 @@
 import "./state.js";
+import { logStage } from "./ws/telemetry.js";
 
 // AskChip frontend base module
 //
@@ -906,10 +907,36 @@ import "./state.js";
     // --- CRITICAL RECURSION GUARD: Defined in the outer scope of installHubInterface ---
     let __hubImplLogInFlight = false;
 
+    let hubInstalled = false;
+
     function installHubInterface() {
       const AppState = typeof window !== "undefined" ? window.AppState : undefined;
       const hub = AppState && AppState.hub;
+
+      try {
+        logStage("client.hub.install_attempt", {
+          hasAppState: !!AppState,
+          hasHub: !!hub,
+          hasInstall: !!(hub && typeof hub._install === "function"),
+        });
+      } catch (_) {}
+
       if (!hub || typeof hub._install !== "function") {
+        try {
+          console.warn("installHubInterface skipped: missing AppState.hub or _install()");
+        } catch (_) {}
+        try {
+          logStage("client.hub.install_skipped", {
+            reason: "hub_or_install_missing",
+            hasAppState: !!AppState,
+            hasHub: !!hub,
+            hasInstall: !!(hub && typeof hub._install === "function"),
+          });
+        } catch (_) {}
+        return;
+      }
+
+      if (hubInstalled) {
         return;
       }
 
@@ -1044,7 +1071,21 @@ import "./state.js";
         },
       };
 
-      hub._install(hubImpl);
+      try {
+        hub._install(hubImpl);
+        hubInstalled = true;
+        try { logStage("client.hub.installed", { ok: true }); } catch (_) {}
+      } catch (err) {
+        try { console.warn("installHubInterface _install failed", err); } catch (_) {}
+        try {
+          logStage("client.hub.install_skipped", {
+            reason: err?.message || "install_failed",
+            hasAppState: !!AppState,
+            hasHub: !!hub,
+            hasInstall: !!(hub && typeof hub._install === "function"),
+          });
+        } catch (_) {}
+      }
     }
 
     installHubInterface();

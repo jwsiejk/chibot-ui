@@ -169,16 +169,34 @@ export function emitClientLog(label, detail = {}) {
     return;
   }
   const payload = detail && typeof detail === "object" ? { ...detail } : {};
+
+  // Always try the hub bridge first so logs can flow over WS when installed.
   try {
     hubLog(label, payload);
   } catch {}
+
+  // Mirror to console as a last-resort breadcrumb.
   try {
     console.log(label, payload);
   } catch {}
 }
 
 export function logStage(label, detail = {}) {
-  emitClientLog(label, { trace_id: __turnTraceId || null, ...detail });
+  const payload = { trace_id: __turnTraceId || null, ...detail };
+
+  // Preserve existing console/bus behaviour while guaranteeing emitClientLog runs
+  // for client.* labels so they can be bridged over the hub/WebSocket path.
+  try {
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new CustomEvent("client.log", { detail: { label, detail: payload } }));
+    }
+  } catch (_) {}
+
+  try {
+    emitClientLog(label, payload);
+  } catch (_) {
+    // never let logging break the main execution path
+  }
 }
 
 export function normalizeErrorDetail(detail) {
