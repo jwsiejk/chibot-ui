@@ -285,6 +285,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let pendingCloseReason = null;
 
   let _audioStreaming = false;
+  let __micBaseEnabled = false;
   let awaitingAsrClosedAck = false;
   let pendingAsrClosedSeq = null;
   let awaitingTurnEndForRearm = false;
@@ -1206,6 +1207,21 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     getCurrentTurnReqId: () => getCurrentTurnReqIdValue(),
   });
 
+  function updateMicBaseEnabled(enabled, reason) {
+    if (!audioRuntime || typeof audioRuntime.setBaseEnabled !== "function") {
+      return;
+    }
+    const normalized = Boolean(enabled);
+    if (__micBaseEnabled === normalized) {
+      return;
+    }
+    __micBaseEnabled = normalized;
+    try {
+      console.log(`[ws_client] baseEnabled set ${normalized ? "true" : "false"} from ${reason || "manual"}`);
+    } catch (_) {}
+    audioRuntime.setBaseEnabled(normalized, reason || "manual");
+  }
+
   function applyAudioPolicy(policy) {
     const audio = policy && typeof policy === "object" && policy.audio && typeof policy.audio === "object"
       ? policy.audio
@@ -1426,7 +1442,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
 
     // Always pass a normalized string reason into the capture runtime.
-    return captureStopRecorder(normalized, opts);
+    const result = captureStopRecorder(normalized, opts);
+    updateMicBaseEnabled(false, "mic_stop");
+    return result;
   }
 
   WSClient.stopRecorderStreaming = function wsClientStopRecorderStreaming(reason = "manual_stop") {
@@ -1515,6 +1533,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       setSenderPauseReason("server", false);
       setSenderPauseReason("tts", false);
       updatePcmSenderState();
+      updateMicBaseEnabled(true, "mic_start");
       return started;
     } catch (err) {
       console.warn("WSClient.startRecorderStreaming failed", err);
@@ -2557,6 +2576,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   function requestSessionShutdown(reason = DEFAULT_CLOSE_REASON) {
     const normalizedReason = typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON;
     pendingCloseReason = normalizedReason;
+    updateMicBaseEnabled(false, "mic_stop");
     try {
       voicePhaseController.beginClosing(normalizedReason);
       syncAppStatePhase({ force: true });
