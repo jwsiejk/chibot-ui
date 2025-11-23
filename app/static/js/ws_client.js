@@ -2141,40 +2141,46 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
 
     if (expectInfoFrame) {
-      try { logStage("phase.greet.expectInfo", { frame }); } catch {}
-      if (frame.type === "info") {
-        expectInfoFrame = false;
-        try { logStage("phase.greet.receivedInfo", { frame }); } catch {}
-        await handleInfoFrame(frame);
-        promoteReadyPhase("info_frame");
-        await flushPendingInfoGateFrames();
-        if (typeof WSClient?.emit === "function") {
-          try {
-            WSClient.emit("frame", frame);
-          } catch (err) {
-            console.warn("WSClient frame emit failed", err);
+      // Allow certain frames to bypass the info gate and be handled
+      // by the existing handlers further down, just like before.
+      if (frame.type === "server.banner" || frame.type === "policy.interaction") {
+        // fall through; do NOT treat as bad_info_sequence
+      } else {
+        try { logStage("phase.greet.expectInfo", { frame }); } catch {}
+        if (frame.type === "info") {
+          expectInfoFrame = false;
+          try { logStage("phase.greet.receivedInfo", { frame }); } catch {}
+          await handleInfoFrame(frame);
+          promoteReadyPhase("info_frame");
+          await flushPendingInfoGateFrames();
+          if (typeof WSClient?.emit === "function") {
+            try {
+              WSClient.emit("frame", frame);
+            } catch (err) {
+              console.warn("WSClient frame emit failed", err);
+            }
           }
+          return;
         }
-        return;
-      }
-      if (frame.type === "error") {
-        await handleErrorFrame(frame);
-        if (typeof WSClient?.emit === "function") {
-          try {
-            WSClient.emit("frame", frame);
-          } catch (err) {
-            console.warn("WSClient frame emit failed", err);
+        if (frame.type === "error") {
+          await handleErrorFrame(frame);
+          if (typeof WSClient?.emit === "function") {
+            try {
+              WSClient.emit("frame", frame);
+            } catch (err) {
+              console.warn("WSClient frame emit failed", err);
+            }
           }
+          return;
         }
+        if (shouldQueueDuringInfoGate(frame)) {
+          queueFrameUntilInfo(frame);
+          return;
+        }
+        console.error("Expected info frame first, received", frame.type);
+        await requestSessionShutdown("bad_info_sequence");
         return;
       }
-      if (shouldQueueDuringInfoGate(frame)) {
-        queueFrameUntilInfo(frame);
-        return;
-      }
-      console.error("Expected info frame first, received", frame.type);
-      await requestSessionShutdown("bad_info_sequence");
-      return;
     }
 
     if (typeof WSClient?.emit === "function") {
