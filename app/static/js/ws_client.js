@@ -299,6 +299,62 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let speechSeenThisTurn = false;
   let greetUtteranceId = null;
 
+  function queueFrameUntilInfo(frame) {
+    pendingInfoGateFrames.push(frame);
+  }
+
+  async function flushPendingInfoGateFrames() {
+    if (!pendingInfoGateFrames.length) {
+      return;
+    }
+    const queued = pendingInfoGateFrames.splice(0);
+    for (const queuedFrame of queued) {
+      // eslint-disable-next-line no-await-in-loop
+      await handleMessageFrame(queuedFrame);
+    }
+  }
+
+  function logPhaseTransition(from, to, reason) {
+    if (from === to) return;
+    try {
+      logStage("phase.transition", { from, to, reason: reason || null });
+    } catch {}
+  }
+
+  function promoteReadyPhase(reason = "info_frame") {
+    const prev = typeof AppState?.wsPhase === "string" && AppState.wsPhase ? AppState.wsPhase : null;
+    logPhaseTransition(prev, "ready", reason);
+    try { connection?.setWsPhase?.("ready"); } catch {}
+    try { setWsPhase?.("ready"); } catch {}
+    try { updateState({ wsPhase: "ready", connectionState: "connected" }); } catch {}
+  }
+
+  function shouldQueueDuringInfoGate(frame) {
+    const type = typeof frame?.type === "string" ? frame.type : "";
+    if (!expectInfoFrame) {
+      return false;
+    }
+    if (type === "policy.update") return true;
+    if (type === "chat.history" || type === "history") return true;
+    if (type === "asr.ready") return true;
+    if (type.startsWith("meta.")) return true;
+    return false;
+  }
+
+  function maybePromoteReadyAfterMicAudio(reason = "mic_audio_post_greet") {
+    const phase = getPhase();
+    const ttsActive = Boolean(AppState?.ttsActive);
+    if (phase !== PHASE.Greet || ttsActive) {
+      return;
+    }
+    try { logStage("phase.greet.receivedInfo", { frame: { type: reason } }); } catch {}
+    voicePhaseController.markGreetEnd();
+    syncAppStatePhase({ force: true });
+    expectInfoFrame = false;
+    promoteReadyPhase(reason);
+    try { scheduleConversationStartAfterGreet(reason); } catch {}
+  }
+
   function resetTurnStopFlag() {
     // Start each user turn fresh: allow exactly one client-side input.stop
     // signal per turn and never block audio based on this flag.
@@ -949,6 +1005,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
   let expectInfoFrame = true;
   let infoWatchdogTimerId = null;
+  const pendingInfoGateFrames = [];
 
   // ---- Turn opener (idempotent + retry) ----
   let __turnOpen = false, __turnOpenAt = 0;
@@ -2083,6 +2140,43 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       }
     }
 
+    if (expectInfoFrame) {
+      try { logStage("phase.greet.expectInfo", { frame }); } catch {}
+      if (frame.type === "info") {
+        expectInfoFrame = false;
+        try { logStage("phase.greet.receivedInfo", { frame }); } catch {}
+        await handleInfoFrame(frame);
+        promoteReadyPhase("info_frame");
+        await flushPendingInfoGateFrames();
+        if (typeof WSClient?.emit === "function") {
+          try {
+            WSClient.emit("frame", frame);
+          } catch (err) {
+            console.warn("WSClient frame emit failed", err);
+          }
+        }
+        return;
+      }
+      if (frame.type === "error") {
+        await handleErrorFrame(frame);
+        if (typeof WSClient?.emit === "function") {
+          try {
+            WSClient.emit("frame", frame);
+          } catch (err) {
+            console.warn("WSClient frame emit failed", err);
+          }
+        }
+        return;
+      }
+      if (shouldQueueDuringInfoGate(frame)) {
+        queueFrameUntilInfo(frame);
+        return;
+      }
+      console.error("Expected info frame first, received", frame.type);
+      await requestSessionShutdown("bad_info_sequence");
+      return;
+    }
+
     if (typeof WSClient?.emit === "function") {
       try {
         WSClient.emit("frame", frame);
@@ -2292,21 +2386,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       return;
     }
 
-    if (expectInfoFrame) {
-      if (frame.type === "chat.history") {
-        handleChatHistoryFrame(frame);
-      } else if (frame.type === "error") {
-        await handleErrorFrame(frame);
-        return;
-      } else if (frame.type !== "info") {
-        console.error("Expected info frame first, received", frame.type);
-        await requestSessionShutdown("bad_info_sequence");
-        return;
-      }
-      if (frame.type === "info") {
-        await handleInfoFrame(frame);
-      }
-    } else if (frame.type === "info") {
+    if (frame.type === "info") {
       await handleInfoFrame(frame);
     } else if (frame.type === "server.pong") {
       handlePongFrame(frame);
@@ -3350,6 +3430,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     const lane = typeof options.lane === "string" ? options.lane : "mic";
     if (lane === "mic") {
+      maybePromoteReadyAfterMicAudio("mic_audio_frame");
       const now = Date.now();
       if (now < __pauseSendUntil) {
         const pauseMs = __pauseSendUntil - now;
