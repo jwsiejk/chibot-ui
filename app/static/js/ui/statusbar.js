@@ -6,34 +6,127 @@
       const host = document.getElementById(this.mountId);
       if (!host) return;
 
+      // Optional high-level phase from the voicePhaseController, if available.
+      // Expected values (if present): "boot", "greet", "conversation_ready",
+      // "user_turn", "closing", "closed".
+      const phase = ui.phase || null;
+
       const f = {
         connected:    !!(ui.wsConn || ui.wsConning),
         asrReady:     !!ui.asrReady,
-        // *** CLEANUP: Rely only on the unified 'listening' flag ***
-        micOpen:      !!ui.listening, 
-        // *******************************************************
+        // Unified mic/listening flag from the new audio runtime
+        micOpen:      !!ui.listening,
         ttsActive:    !!ui.tts,
         senderPaused: !!ui.senderPaused,
         processing:   !!ui.processing,
       };
+
       const canCapture = f.asrReady && f.micOpen && !f.ttsActive;
 
       let st;
-      if (f.ttsActive) {
-        st = { label: "Speaking…", sub: "Say “Hold on” to interrupt.", tone: "blue" };
+
+      // --- Highest-level: session lifecycle / connection ---
+
+      if (!f.connected) {
+        // No live WS connection yet
+        st = {
+          label: "Ready",
+          sub: "Press Start to begin.",
+          tone: "gray",
+        };
+
+      } else if (phase === "closing" || phase === "closed") {
+        st = {
+          label: "Session ended",
+          sub: "Press Start to begin a new session.",
+          tone: "gray",
+        };
+
+      // --- Greet & TTS states ---
+
+      } else if (phase === "greet" && f.ttsActive) {
+        st = {
+          label: "Greeting…",
+          sub: "Chip is introducing himself. Say “Hold on” to interrupt.",
+          tone: "blue",
+        };
+
+      } else if (f.ttsActive) {
+        st = {
+          label: "Speaking…",
+          sub: "Say “Hold on” to interrupt.",
+          tone: "blue",
+        };
+
+      // --- LLM processing (no TTS yet) ---
+
       } else if (f.processing) {
-        st = { label: "Thinking…", sub: "Waiting for Chip’s response.", tone: "purple" };
-      } else if (!f.connected) {
-        st = { label: "Ready", sub: "Press Start to begin.", tone: "gray" };
+        const thinkingSub =
+          phase === "user_turn"
+            ? "Chip is working on your answer."
+            : "Waiting for Chip’s response.";
+        st = {
+          label: "Thinking…",
+          sub: thinkingSub,
+          tone: "purple",
+        };
+
+      // --- Conversation-ready & listening states ---
+
+      } else if (phase === "conversation_ready" && canCapture) {
+        // This is the ideal “full-duplex ready” state after greet
+        const hint = f.senderPaused
+          ? "Listening (auto-paused on silence)."
+          : "You can speak now.";
+        st = {
+          label: "Listening",
+          sub: hint,
+          tone: "green",
+        };
+
+      } else if (phase === "conversation_ready" && !f.micOpen) {
+        // Connected, greet done, but mic has been explicitly paused
+        st = {
+          label: "Mic paused",
+          sub: "Press Start to resume listening.",
+          tone: "amber",
+        };
+
+      // --- Mic / ASR bootstrapping (no explicit phase info) ---
+
       } else if (!f.micOpen) {
-        st = { label: "Stand by", sub: "Press Start to open the mic.", tone: "amber" };
+        // Connected but not listening yet
+        st = {
+          label: "Stand by",
+          sub: "Press Start to open the mic.",
+          tone: "amber",
+        };
+
       } else if (!f.asrReady) {
-        st = { label: "Preparing mic…", sub: "Getting ready to listen.", tone: "amber" };
+        st = {
+          label: "Preparing mic…",
+          sub: "Getting ready to listen.",
+          tone: "amber",
+        };
+
       } else if (canCapture) {
-        const hint = f.senderPaused ? "quiet (VAD)" : "You can speak now.";
-        st = { label: "Listening", sub: hint, tone: "green" };
+        // Fallback listening state when phase is unknown
+        const hint = f.senderPaused
+          ? "Listening (auto-pause on silence)."
+          : "You can speak now.";
+        st = {
+          label: "Listening",
+          sub: hint,
+          tone: "green",
+        };
+
       } else {
-        st = { label: "Ready", sub: "", tone: "gray" };
+        // Generic safe fallback
+        st = {
+          label: "Ready",
+          sub: "",
+          tone: "gray",
+        };
       }
 
       host.innerHTML = `
