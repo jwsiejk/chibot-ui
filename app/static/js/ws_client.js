@@ -986,6 +986,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   syncAppStatePhase({ force: true });
+  try {
+    logStage("client.phase.init", { phase: getPhase() });
+  } catch (_) {}
   function captureSecondGreetingMicSnapshot() {
     const listening = Boolean(AppState?.listening);
     const audioStreaming = Boolean(_audioStreaming);
