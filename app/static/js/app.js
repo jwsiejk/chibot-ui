@@ -1,3 +1,5 @@
+import "./state.js";
+
 // AskChip frontend base module
 //
 // index.html includes only this script (app.js) alongside the standalone
