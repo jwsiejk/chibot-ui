@@ -886,6 +886,30 @@ class ChatV2Adapter:
 
     async def _ensure_previous_turn_closed(self, ctx: AdapterContext, reason: str) -> None:
         if ctx.active_req_id and not ctx.asr_final_emitted:
+            metrics_turn_index = None
+            metrics = getattr(ctx, "metrics", None)
+            if isinstance(metrics, Mapping):
+                metrics_turn_index = metrics.get("turn_index")
+
+            turn_index = (
+                metrics_turn_index
+                if isinstance(metrics_turn_index, int)
+                else getattr(ctx, "turn_index", None)
+            )
+
+            if (
+                turn_index == 1
+                and ctx.greet_completed
+                and not getattr(ctx.session, "first_chunk_sent", False)
+            ):
+                self._log_event(
+                    "info",
+                    "skip_asr_timeout_first_turn",
+                    ctx.sid,
+                    reason=reason,
+                )
+                return
+
             await self._handle_asr_timeout(ctx, reason)
 
     def _next_turn_index(self, ctx: AdapterContext) -> int:
