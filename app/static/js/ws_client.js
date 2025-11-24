@@ -410,6 +410,17 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (getPhase() === PHASE.Greet) {
       return;
     }
+    try {
+      const audioCtx = getAudioCtx();
+      if (audioCtx) {
+        // pre-warm the graph
+        const node = audioCtx.createBufferSource();
+        node.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+        node.connect(audioCtx.destination);
+        node.start(0);
+        logStage("client.audio_context.pre_warm_for_greet", {});
+      }
+    } catch (_) {}
     hasOpenedAsrForConversation = false;
     clearConversationStartTimer();
     try {
@@ -621,11 +632,23 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         hasOpenedAsrForConversation,
       });
     } catch (_) {}
+    // New gating: ensure greet finished + audioCtx ready + PCM hot
+    if (!arePreconditionsForConversationMet()) {
+      logStage("client.conversation.delayed_until_ready", {
+        audioCtx_state: getAudioCtx()?.state,
+        pcmWarm: audioRuntime?.getPcmWarm?.() || false,
+      });
+      // Poll every 50ms until ready
+      setTimeout(() => enterConversationAfterGreet("wait_ready"), 50);
+      return;
+    }
+
     if (!hasOpenedAsrForConversation) {
       hasOpenedAsrForConversation = true;
       safeRequestAsrOpen(source);
     }
-    safeStartRecorderStreaming(AppState?.policy || {}, "post_greet");
+
+    safeStartRecorderStreaming(AppState?.policy || {}, "post_greet_ready");
     try {
       logStage("client.enter_conversation_after_greet.asr_and_mic_called", {
         source,
@@ -685,6 +708,15 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function scheduleConversationStartAfterGreet(source = "greet_tts_end") {
+    // Hard gate: ensure greet ended + mic active + PCM hot
+    if (!arePreconditionsForConversationMet()) {
+      logStage("client.schedule_conversation_blocked_until_ready", {
+        audioCtx_state: getAudioCtx()?.state,
+        pcmWarm: audioRuntime?.getPcmWarm?.() || false,
+      });
+      setTimeout(() => scheduleConversationStartAfterGreet("wait_ready"), 50);
+      return;
+    }
     if (window.__gumFailed) {
       try {
         logStage("client.blocking_conversation_due_to_gum_failure", {});
@@ -1285,6 +1317,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     audioKeepaliveMs: AUDIO_KEEPALIVE_MS,
     getCurrentTurnReqId: () => getCurrentTurnReqIdValue(),
   });
+
+  function arePreconditionsForConversationMet() {
+    const audioCtx = getAudioCtx?.();
+    const pcmWarm = audioRuntime?.getPcmWarm?.() || false;
+    const audioReady = audioCtx && audioCtx.state === "running";
+    return audioReady && pcmWarm;
+  }
 
   function getAudioCtx() {
     const ctx =
@@ -2526,6 +2565,26 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       __ttsEndCount += 1;
       if (__ttsEndCount === 2) {
         startSecondGreetingTrace(frame);
+      }
+
+      if (AppState?.policy?.auto_record_after_greet !== false) {
+        logStage("client.asr_arm_queued_greet_end", {});
+        // Delay actual ASR arm until we verify audioCtx + PCM readiness
+        const tryArm = () => {
+          const audioCtx = getAudioCtx();
+          const pcmWarm = audioRuntime?.getPcmWarm?.() || false;
+          const audioReady = audioCtx && audioCtx.state === "running";
+          if (!audioReady || !pcmWarm) {
+            setTimeout(tryArm, 50);
+            return;
+          }
+          logStage("client.asr_arm_after_greet_ready", {
+            audioCtx_state: audioCtx?.state,
+            pcmWarm,
+          });
+          requestAsrArm("tts_end_ready");
+        };
+        tryArm();
       }
 
     } else if (frame.type === "tts.cancel" || frame.type === "tts.error") {

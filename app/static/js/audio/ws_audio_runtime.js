@@ -5,6 +5,12 @@ import { isTypedArray, toArrayBuffer } from "../utils/binary.js";
 import { recordClientBannerEvent } from "../ws/telemetry.js";
 import { PHASE as VOICE_PHASE } from "../voice/phase_controller.js";
 
+let pcmWarm = false;
+function markPcmWarm() {
+  pcmWarm = true;
+  try { logStage("client.pcm.warm"); } catch (_) {}
+}
+
 const PCM_TARGET_SAMPLE_RATE = 16000;
 const DEFAULT_RING_CAPACITY_MS = 1500;
 const DEFAULT_PCM_CHANNELS = 1;
@@ -1049,6 +1055,10 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
     }
 
+    if (!pcmWarm && wire.length) {
+      markPcmWarm();
+    }
+
     try {
       if (typeof pcmRing?.push === "function") {
         pcmRing.push(wire);
@@ -1756,5 +1766,6 @@ export function createWsAudioRuntime(options = {}) {
     setAudioKeepaliveMs,
     setAudioKeepaliveIdleMs,
     getAudioContext: () => audioCtx,
+    getPcmWarm: () => pcmWarm,
   };
 }
