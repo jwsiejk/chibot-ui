@@ -177,9 +177,24 @@ export function emitClientLog(label, detail = {}) {
   const payload = detail && typeof detail === "object" ? { ...detail } : {};
 
   // Always try the hub bridge first so logs can flow over WS when installed.
+  let delivered = false;
   try {
-    hubLog(label, payload);
+    delivered = hubLog(label, payload) === true;
   } catch {}
+
+  // If the hub bridge is unavailable, attempt a direct WS send using the
+  // telemetry socket/sendJson helpers. This allows firehose logging to keep
+  // working even when AppState.hub is not yet installed.
+  if (!delivered) {
+    try {
+      const socket = getTelemetrySocket();
+      const sendJson = getTelemetrySendJson();
+      const openState = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
+      if (socket && sendJson && socket.readyState === openState) {
+        sendJson({ type: "client.log", label, ts: Date.now(), detail: payload });
+      }
+    } catch {}
+  }
 
   // Mirror to console as a last-resort breadcrumb.
   try {
