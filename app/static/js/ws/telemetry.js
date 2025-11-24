@@ -69,6 +69,52 @@ function getTelemetrySendJson() {
   return null;
 }
 
+function getWsClientSocket() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  if (window.WSClient?.socket) {
+    return window.WSClient.socket;
+  }
+  if (window.WSClient?._ws) {
+    return window.WSClient._ws;
+  }
+  if (window.WSClient?.ws) {
+    return window.WSClient.ws;
+  }
+  if (window.ws) {
+    return window.ws;
+  }
+  return null;
+}
+
+function wsClientIsChatSocket(socket) {
+  if (!socket) return false;
+  const url = typeof socket.url === "string" ? socket.url : "";
+  return url.includes("/ws/v2/chat");
+}
+
+function sendClientLogViaWsClient(frame) {
+  try {
+    const wsClient = typeof window !== "undefined" ? window.WSClient : null;
+    if (!wsClient || typeof wsClient.sendJSON !== "function") {
+      return false;
+    }
+    const socket = getWsClientSocket();
+    const openState = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
+    if (!socket || socket.readyState !== openState || !wsClientIsChatSocket(socket)) {
+      return false;
+    }
+    wsClient.sendJSON(frame);
+    try {
+      wsClient.log?.info?.("client.ws", { evt: "send", type: "client.log", url: socket.url || null });
+    } catch {}
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function getGateSnapshot() {
   const AppState = getAppState();
   let snapshot = null;
@@ -175,6 +221,9 @@ export function emitClientLog(label, detail = {}) {
     return;
   }
   const payload = detail && typeof detail === "object" ? { ...detail } : {};
+  const frame = { type: "client.log", label, ts: Date.now(), detail: payload };
+
+  const wsClientSent = sendClientLogViaWsClient(frame);
 
   // Always try the hub bridge first so logs can flow over WS when installed.
   let delivered = false;
@@ -186,13 +235,13 @@ export function emitClientLog(label, detail = {}) {
   // If the hub bridge is unavailable, attempt a direct WS send using the
   // telemetry socket/sendJson helpers. This allows firehose logging to keep
   // working even when AppState.hub is not yet installed.
-  if (!delivered) {
+  if (!delivered && !wsClientSent) {
     try {
       const socket = getTelemetrySocket();
       const sendJson = getTelemetrySendJson();
       const openState = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
       if (socket && sendJson && socket.readyState === openState) {
-        sendJson({ type: "client.log", label, ts: Date.now(), detail: payload });
+        sendJson(frame);
       }
     } catch {}
   }
