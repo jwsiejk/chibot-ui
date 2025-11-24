@@ -1,5 +1,5 @@
 import "./state.js";
-import { emitClientLog, logStage } from "./ws/telemetry.js";
+import { emitClientLog, getWsClientSocket, logStage } from "./ws/telemetry.js";
 import * as versionModule from "./version.js";
 
 // AskChip frontend base module
@@ -2301,16 +2301,21 @@ const importV = typeof versionModule.importV === "function"
 
       if (becameConnected) {
         Waveform.start();
-        if (getLiveSocket()) {
-          try {
-            flushDeferredClientLogs();
-          } catch {}
-        }
-
+        // --- ROOT-CAUSE FIX: bind hub to the ACTUAL ws/v2/chat socket ---
         try {
-          AppState?.hub?.bindSocket?.(getLiveSocket());
+          const realSocket = getWsClientSocket();   // from telemetry.js
+          console.log("[firehose] getWsClientSocket() →", realSocket);
+
+          if (realSocket) {
+            AppState?.hub?.bindSocket?.(realSocket);
+            console.log("[firehose] hub bound to socket:", realSocket.url);
+          } else {
+            console.warn("[firehose] NO REAL WS SOCKET FOUND. HUB NOT BOUND.");
+          }
+
+          try { flushDeferredClientLogs(); } catch {}
         } catch (err) {
-          console.warn('AppState.hub.bindSocket connect failed', err);
+          console.warn("[firehose] hub.bindSocket FAILED", err);
         }
 
         if (!firehoseMarkerSent) {
