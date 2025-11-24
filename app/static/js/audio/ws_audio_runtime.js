@@ -1565,7 +1565,7 @@ export function createWsAudioRuntime(options = {}) {
       flushIntervalMs: PCM_FLUSH_TIMER_MS,
     }).then(async (sender) => {
       pcmSender = sender;
-      audioCtx = sender?.audioContext || audioCtx;
+      audioCtx = sender?.ctx || audioCtx;
       try {
         if (audioCtx?.state === "suspended") {
           logStage("client.audio_context.resume_attempt", {});
