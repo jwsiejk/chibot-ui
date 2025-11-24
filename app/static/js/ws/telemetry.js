@@ -223,9 +223,8 @@ export function emitClientLog(label, detail = {}) {
   const payload = detail && typeof detail === "object" ? { ...detail } : {};
   const frame = { type: "client.log", label, ts: Date.now(), detail: payload };
 
-  const wsClientSent = sendClientLogViaWsClient(frame);
-
-  // Always try the hub bridge first so logs can flow over WS when installed.
+  // Always try the hub bridge first so logs can flow over WS when installed
+  // without risking a duplicate send if the hub also uses the chat socket.
   let delivered = false;
   try {
     const hubResult = hubLog(label, payload);
@@ -233,8 +232,14 @@ export function emitClientLog(label, detail = {}) {
   } catch {}
 
   // If the hub bridge is unavailable, attempt a direct WS send using the
-  // telemetry socket/sendJson helpers. This allows firehose logging to keep
-  // working even when AppState.hub is not yet installed.
+  // chat client; fall back to the telemetry socket/sendJson helpers if the
+  // chat socket is also unavailable. This preserves the primary ws/v2/chat
+  // lane while avoiding duplicate sends when the hub is already wiring logs
+  // into the same socket.
+  let wsClientSent = false;
+  if (!delivered) {
+    wsClientSent = sendClientLogViaWsClient(frame);
+  }
   if (!delivered && !wsClientSent) {
     try {
       const socket = getTelemetrySocket();
