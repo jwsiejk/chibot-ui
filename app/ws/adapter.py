@@ -3873,6 +3873,16 @@ class ChatV2Adapter:
                 "ws": {"dir": "in", "size": byte_count},
                 "violations": ctx.audio_violation_count,
             }
+            _log.debug(
+                "evt=audio_not_expected sid=%s asr_state=%s asr_open=%s "
+                "asr_bytes_sent=%s turn_index=%s asr_final_emitted=%s",
+                ctx.sid,
+                getattr(ctx.session, "asr_state", None),
+                getattr(ctx, "asr_open", None),
+                getattr(ctx, "asr_bytes_sent", None),
+                getattr(ctx, "turn_index", None),
+                getattr(ctx, "asr_final_emitted", None),
+            )
             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
             await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
             if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
