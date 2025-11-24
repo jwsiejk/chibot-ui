@@ -2688,6 +2688,7 @@ class ChatV2Adapter:
                 while True:
                     message = await receive()
                     msg_type = message.get("type")
+                    self._log(ctx, "server.ws_event", {"event": msg_type})
 
                     if msg_type == "websocket.receive":
                         if message.get("text") is not None:
@@ -7658,6 +7659,8 @@ class ChatV2Adapter:
         ctx.session.queued_arm = False
         ctx.asr_ready = False
         if reason:
+            if reason == "transport_closed":
+                self._log(ctx, "server.ws_transport_closed", {"hint": "client WS dropped"})
             ctx.asr_close_reason = reason
         ctx.session.eot_armed = False
         ctx.session.server_vad_speech = False

@@ -6,6 +6,15 @@ import { recordClientBannerEvent } from "../ws/telemetry.js";
 import { logStage } from "../ws/telemetry.js";
 import { PHASE as VOICE_PHASE } from "../voice/phase_controller.js";
 
+function wsDiag(tag, detail = {}) {
+  try {
+    console.debug("[WS-DIAG]", tag, detail);
+    if (typeof window !== "undefined" && window.emitClientLog) {
+      window.emitClientLog("ws_diag", { tag, ...detail });
+    }
+  } catch (_) {}
+}
+
 const PCM_TARGET_SAMPLE_RATE = 16000;
 const DEFAULT_RING_CAPACITY_MS = 1500;
 const DEFAULT_PCM_CHANNELS = 1;
@@ -202,6 +211,7 @@ export function createWsAudioRuntime(options = {}) {
     try {
       if (audioCtx?.state === "suspended" || audioCtx?.state === "closed") {
         logStage("client.mic.reacquire.recreate_audioctx", { prev: audioCtx?.state });
+        wsDiag("audio_warmup", { state: audioCtx?.state });
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: PCM_TARGET_SAMPLE_RATE });
         setGlobalAudioContext(audioCtx);
       }
@@ -1135,6 +1145,11 @@ export function createWsAudioRuntime(options = {}) {
     if (!(chunk instanceof Int16Array) || !chunk.length) {
       return;
     }
+    wsDiag("pcm_send_attempt", {
+      bytes: chunk?.byteLength,
+      gumFailed,
+      audioCtxState: audioCtx?.state,
+    });
     try {
       logStage("client.audio_chunk", {
         bytes: chunk?.byteLength || 0,
@@ -1649,6 +1664,7 @@ export function createWsAudioRuntime(options = {}) {
       try {
         if (audioCtx?.state === "suspended") {
           logStage("client.audio_context.resume_attempt", {});
+          wsDiag("audio_warmup", { state: audioCtx?.state });
           await audioCtx.resume();
           logStage("client.audio_context.resumed", {});
         }

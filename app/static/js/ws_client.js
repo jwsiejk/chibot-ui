@@ -24,6 +24,25 @@ import {
   logStage,
 } from "./ws/telemetry.js";
 
+// Global uncaught error diagnostics
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (e) => {
+    try { window.emitClientLog("js_error", { msg: e.message, stack: e.error?.stack || null }); } catch (_) {}
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    try { window.emitClientLog("unhandled_promise", { reason: String(e.reason) }); } catch (_) {}
+  });
+}
+
+function wsDiag(tag, detail = {}) {
+  try {
+    console.debug("[WS-DIAG]", tag, detail);
+    if (typeof window !== "undefined" && window.emitClientLog) {
+      window.emitClientLog("ws_diag", { tag, ...detail });
+    }
+  } catch (_) {}
+}
+
 function getAppState() {
   return typeof window !== "undefined" ? window.AppState : undefined;
 }
@@ -72,6 +91,7 @@ function syncAppStatePhase(options = {}) {
   if (!force && AppState.phase === getPhase()) return;
   const prev = AppState.phase;
   const nextPhase = getPhase();
+  wsDiag("ws_phase_set", { phase: nextPhase });
   AppState.phase = nextPhase;
   try {
     updatePcmSenderState?.("phase_change");
@@ -324,8 +344,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   function promoteReadyPhase(reason = "info_frame") {
     const prev = typeof AppState?.wsPhase === "string" && AppState.wsPhase ? AppState.wsPhase : null;
     logPhaseTransition(prev, "ready", reason);
-    try { connection?.setWsPhase?.("ready"); } catch {}
-    try { setWsPhase?.("ready"); } catch {}
+    const nextPhase = "ready";
+    wsDiag("ws_phase_set", { phase: nextPhase });
+    try { connection?.setWsPhase?.(nextPhase); } catch {}
+    try { setWsPhase?.(nextPhase); } catch {}
     try { updateState({ wsPhase: "ready", connectionState: "connected" }); } catch {}
   }
 
@@ -410,6 +432,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (getPhase() === PHASE.Greet) {
       return;
     }
+    wsDiag("greet_start", { utt_id: frame?.utt_id });
     hasOpenedAsrForConversation = false;
     clearConversationStartTimer();
     try {
@@ -503,6 +526,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeRequestAsrOpen(reason) {
+    wsDiag("asr_open_request", { reason });
     try {
       logStage("client.asr_open.intent", {
         reason,
@@ -600,6 +624,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
+    wsDiag("conversation_attempt", { source });
     try {
       logStage("client.enter_conversation_after_greet.intent", {
         source,
@@ -666,9 +691,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
     try {
       if (connection && typeof connection.setWsPhase === "function") {
-        connection.setWsPhase("ready");
+        const nextPhase = "ready";
+        wsDiag("ws_phase_set", { phase: nextPhase });
+        connection.setWsPhase(nextPhase);
       }
       if (connection && typeof connection.flushQueuedFrames === "function") {
+        wsDiag("ws_flush_queue");
         connection.flushQueuedFrames();
       }
     } catch (_) {}
@@ -1634,6 +1662,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   WSClient.startRecorderStreaming = async function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
+    wsDiag("start_recorder_streaming", { source });
     // Expose stopRecorder and input.stop helpers publicly so UI can pause mic on text input
     WSClient.stopRecorder = function wsClientStopRecorder(reason = "text_input", options = {}) {
       try {
