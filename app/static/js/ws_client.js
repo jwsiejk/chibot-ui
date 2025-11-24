@@ -412,6 +412,16 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     hasOpenedAsrForConversation = false;
     clearConversationStartTimer();
+    try {
+      const audioCtx = getAudioCtx();
+      if (window.AC_PREPARED !== true) {
+        window.AC_PREPARED = true;
+        if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
+          audioCtx.resume().catch(() => {});
+        }
+        logStage("client.audio_context.prepared_before_greet", { state: audioCtx?.state });
+      }
+    } catch (_) {}
     if (typeof frame?.utt_id === "string" && frame.utt_id) {
       greetUtteranceId = frame.utt_id;
     }
@@ -1276,6 +1286,30 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     getCurrentTurnReqId: () => getCurrentTurnReqIdValue(),
   });
 
+  function getAudioCtx() {
+    const ctx =
+      (audioRuntime && typeof audioRuntime.getAudioContext === "function" && audioRuntime.getAudioContext()) ||
+      (typeof window !== "undefined" ? window.__audioCtx || window.audioCtx : null) ||
+      (AppState && typeof AppState === "object" ? AppState.audioCtx || null : null);
+    if (ctx && typeof window !== "undefined") {
+      try { window.__audioCtx = ctx; } catch (_) {}
+    }
+    return ctx;
+  }
+
+  if (typeof window !== "undefined") {
+    try {
+      window.addEventListener("click", () => {
+        const audioCtx = getAudioCtx();
+        if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
+          audioCtx.resume().then(() => {
+            logStage("client.audio_context.user_unlocked", {});
+          }).catch(() => {});
+        }
+      });
+    } catch (_) {}
+  }
+
   function updateMicBaseEnabled(enabled, reason) {
     if (!audioRuntime || typeof audioRuntime.setBaseEnabled !== "function") {
       return;
@@ -2051,6 +2085,18 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } else if (typeof globalThis?.startRecording === "function") {
       handler = globalThis.startRecording;
     }
+    try {
+      const audioCtx = getAudioCtx();
+      if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
+        audioCtx.resume()
+          .then(() => {
+            logStage("client.audio_context.resume_on_gesture", {});
+          })
+          .catch((err) => {
+            logStage("client.audio_context.resume_on_gesture_failed", { err: String(err) });
+          });
+      }
+    } catch (_) {}
     if (handler) {
       const context = typeof window !== "undefined" ? window : null;
       return handler.call(context, { trigger });
@@ -2428,6 +2474,18 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       window.requestAnimationFrame(() => window.AppUI?.refresh?.());
       if (typeof AppState.emit === "function") {
         AppState.emit("ttsActive", { active: true });
+      }
+      if (frame?.meta?.is_greet === true) {
+        try {
+          const audioCtx = getAudioCtx();
+          if (audioCtx) {
+            const node = audioCtx.createBufferSource();
+            node.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+            node.connect(audioCtx.destination);
+            node.start(0);
+            logStage("client.audio_context.warmup_output_before_greet", {});
+          }
+        } catch (_) {}
       }
       const audioPlayer = getAudioPlayer();
       if (audioPlayer && typeof audioPlayer.handleTtsStart === "function") {
