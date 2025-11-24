@@ -69,7 +69,7 @@ function getTelemetrySendJson() {
   return null;
 }
 
-function getWsClientSocket() {
+export function getWsClientSocket() {
   if (typeof window === "undefined") {
     return null;
   }
