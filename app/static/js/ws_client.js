@@ -595,6 +595,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
       return;
     }
+    if (AppState?.policy?.auto_record_after_greet !== false) {
+      try {
+        logStage("client.asr_arm_requested", {});
+      } catch (_) {}
+      requestAsrArm("tts_end");
+    }
     voicePhaseController.enterConversation(source);
     syncAppStatePhase({ force: true });
     try {
@@ -669,6 +675,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function scheduleConversationStartAfterGreet(source = "greet_tts_end") {
+    if (window.__gumFailed) {
+      try {
+        logStage("client.blocking_conversation_due_to_gum_failure", {});
+      } catch (_) {}
+      return;
+    }
     if (hasOpenedAsrForConversation) {
       return;
     }
