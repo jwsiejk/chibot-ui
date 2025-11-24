@@ -1352,7 +1352,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function arePreconditionsForConversationMet() {
-    const audioCtx = getAudioCtx?.();
+    const audioCtx = getAudioCtx();
     const pcmWarm = audioRuntime?.getPcmWarm?.() || false;
     const audioReady = audioCtx && audioCtx.state === "running";
     return audioReady && pcmWarm;
