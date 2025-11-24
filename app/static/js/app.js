@@ -149,8 +149,9 @@ const importV = typeof versionModule.importV === "function"
       return { audio: audioSummary };
     };
 
+    let constraintsSummary = null;
     try {
-      const constraintsSummary = summarizeConstraints(constraints);
+      constraintsSummary = summarizeConstraints(constraints);
       safeLogStage("client.mic.gum_request", { constraints: constraintsSummary });
 
       if (!navigator?.mediaDevices?.getUserMedia) {
@@ -161,7 +162,12 @@ const importV = typeof versionModule.importV === "function"
           error_name: err.name,
           error_message: err.message,
         });
-        safeLogStage("client.mic.gum_error", { name: err.name, message: err.message });
+        const errorDetails = {
+          outcome: "ERROR_PERMISSIONS",
+          name: err.name,
+          message: err.message,
+        };
+        safeLogStage("client.mic.gum_error", errorDetails);
         throw err;
       }
 
@@ -183,13 +189,29 @@ const importV = typeof versionModule.importV === "function"
 
       return stream;
     } catch (err) {
+      const errorDetails = {
+        outcome: "ERROR_PERMISSIONS",
+        name: err?.name ?? null,
+        message: err?.message ?? null,
+        constraints: constraintsSummary,
+      };
       safeLogMic({
         outcome: "ERROR_PERMISSIONS",
         kind: "getMicOnce",
         error_name: err?.name,
         error_message: err?.message,
       });
-      safeLogStage("client.mic.gum_error", { name: err?.name, message: err?.message });
+      safeLogStage("client.mic.gum_error", errorDetails);
+      const wsClient = getWsClient();
+      if (wsClientIsConnected(wsClient)) {
+        try {
+          wsClient.send({ type: "input.stop", reason: "mic_gum_failure" }, { skipPhaseCheck: true });
+        } catch (sendErr) {
+          try {
+            console.warn("Failed to send mic gum failure input.stop", sendErr);
+          } catch (_) {}
+        }
+      }
       throw err;
     } finally {
       __gumInFlight = false;
