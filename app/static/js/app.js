@@ -1,5 +1,5 @@
 import "./state.js";
-import { logStage } from "./ws/telemetry.js";
+import { emitClientLog, logStage } from "./ws/telemetry.js";
 import * as versionModule from "./version.js";
 
 // AskChip frontend base module
@@ -39,6 +39,61 @@ const importV = typeof versionModule.importV === "function"
     }
     return document.querySelector?.('script[src*="/static/js/app.js"]') || null;
   }
+
+  function initConsoleBridge() {
+    try {
+      const c = typeof console === "object" ? console : null;
+      if (!c || c.__askchip_patched) {
+        return;
+      }
+      const levels = ["log", "info", "warn", "error", "debug"];
+
+      const formatArg = (value) => {
+        if (typeof value === "string") {
+          return value;
+        }
+        try {
+          const serialized = JSON.stringify(value);
+          if (typeof serialized === "string") {
+            return serialized;
+          }
+        } catch (_) {}
+        try {
+          return String(value);
+        } catch (_) {
+          return "[unprintable]";
+        }
+      };
+
+      const buildMessage = (...args) => args.map((arg) => formatArg(arg)).join(" ");
+
+      levels.forEach((level) => {
+        const original = typeof c[level] === "function" ? c[level].bind(c) : () => {};
+        c[level] = (...args) => {
+          if (c.__askchip_console_bridge_active) {
+            return original(...args);
+          }
+
+          const message = buildMessage(...args);
+          try {
+            c.__askchip_console_bridge_active = true;
+            if (typeof emitClientLog === "function") {
+              emitClientLog(`console.${level}`, { message });
+            }
+          } catch (_) {
+          } finally {
+            c.__askchip_console_bridge_active = false;
+          }
+
+          return original(...args);
+        };
+      });
+
+      c.__askchip_patched = true;
+    } catch (_) {}
+  }
+
+  initConsoleBridge();
 
   try {
     const globalBuild = getBuildId();
