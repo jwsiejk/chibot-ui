@@ -897,6 +897,10 @@ class ChatV2Adapter:
                 else getattr(ctx, "turn_index", None)
             )
 
+            # Special-case: first user turn after greet completed, but we never
+            # saw a first audio chunk arrive from the client.
+            # Treat this as a silent/no-op turn: close it cleanly without
+            # generating a timeout "final" for the model.
             if (
                 turn_index == 1
                 and ctx.greet_completed
@@ -908,6 +912,29 @@ class ChatV2Adapter:
                     ctx.sid,
                     reason=reason,
                 )
+
+                # Mark ASR as completed so later checks don't think the turn
+                # is still waiting on a final.
+                ctx.asr_final_emitted = True
+
+                # Clear stream identifiers to avoid leaking ASR state into
+                # subsequent turns.
+                ctx.asr_stream_id = None
+                ctx.asr_stream_req_id = None
+
+                # Clear the active request id; from the dialog engine's
+                # perspective, this turn is now fully closed.
+                ctx.active_req_id = None
+
+                try:
+                    self._end_user_turn(ctx)
+                except Exception:
+                    self._log_event(
+                        "error",
+                        "end_turn_failed_after_skip_timeout",
+                        ctx.sid,
+                        reason=reason,
+                    )
                 return
 
             await self._handle_asr_timeout(ctx, reason)
