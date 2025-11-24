@@ -137,6 +137,7 @@ export function createWsAudioRuntime(options = {}) {
   __firstPcmFrameLogged = false;
 
   let gumFailed = false;
+  let reacquireAttempted = false;
 
   if (typeof window !== "undefined") {
     try {
@@ -154,6 +155,55 @@ export function createWsAudioRuntime(options = {}) {
         window.__gumFailed = gumFailed;
       } catch (_) {}
     }
+    if (!reacquireAttempted) {
+      reacquireAttempted = true;
+      micReacquire(reason);
+    }
+  }
+
+  async function micReacquire(reason = "gum_failed") {
+    try {
+      logStage("client.mic.reacquire.start", { reason });
+    } catch (_) {}
+
+    gumFailed = false;
+
+    // Recreate MediaStream
+    let newStream = null;
+    try {
+      newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      markGumFailed("gum_retry_failed");
+      logStage("client.mic.reacquire.failed", { err: String(err) });
+      return null;
+    }
+
+    captureStreamResolved = newStream;
+    if (typeof window !== "undefined") window.__gumFailed = gumFailed;
+
+    // Replace PCM sender stream if exists
+    if (pcmSender && typeof pcmSender.replaceStream === "function") {
+      try {
+        pcmSender.replaceStream(newStream);
+        logStage("client.mic.reacquire.sender_replaced", {});
+      } catch (err) {
+        logStage("client.mic.reacquire.sender_replace_failed", { err: String(err) });
+      }
+    }
+
+    // Recreate AudioContext if suspended or closed
+    try {
+      if (audioCtx?.state === "suspended" || audioCtx?.state === "closed") {
+        logStage("client.mic.reacquire.recreate_audioctx", { prev: audioCtx?.state });
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: PCM_TARGET_SAMPLE_RATE });
+      }
+    } catch (err) {
+      logStage("client.mic.reacquire.audioctx_failed", { err: String(err) });
+    }
+
+    reacquireAttempted = false;
+
+    return newStream;
   }
 
   try {
