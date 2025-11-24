@@ -2824,9 +2824,20 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       : "stop_input_capture";
 
     // On microphone acquisition errors, avoid cascading into recorder teardown paths
-    // that might trigger a full websocket cleanup. Only send an input.stop signal.
+    // that might trigger a full websocket cleanup. Only send an input/turn stop signal.
     if (normalizedReasonKey.includes("gum") || normalizedReasonKey.includes("mic_gum_failure")) {
       try {
+        logStage("client.input.stop.mic_gum_failure", {
+          rawReason,
+          fallbackReason,
+          source,
+          phase: getPhase?.() || null,
+        });
+      } catch (_) {}
+      try {
+        // This should send a clean "turn stop" style signal without forcing
+        // a full session close. The server can decide whether to keep the
+        // session alive after the mic failure.
         maybeSendTurnStop("mic_gum_failure");
       } catch (_) {}
       return;
@@ -2874,8 +2885,31 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
   }
 
-  function handleInputStopFrame() {
-    stopInputCapture({ reason: 'input.stop' });
+  async function handleInputStopFrame(frame) {
+    const rawReason = frame?.reason || "server_input_stop";
+    const source = frame?.type || "input.stop";
+    const fallbackReason = rawReason;
+
+    try {
+      logStage("client.input.stop_frame", {
+        source,
+        rawReason,
+        fallbackReason,
+        phase: getPhase?.() || null,
+      });
+    } catch (_) {}
+
+    try {
+      // Propagate the server-provided reason through to stopInputCapture so that
+      // mic_gum_failure and similar cases can take the "no hard teardown" path.
+      stopInputCapture({
+        reason: rawReason,
+        fallbackReason,
+        source: "input.stop_frame",
+      });
+    } catch (err) {
+      console.warn("handleInputStopFrame failed", err);
+    }
   }
 
   function sanitizeServerBannerFrame(frame) {
