@@ -3,6 +3,16 @@
 
 import { encodeMessagePack } from "../utils/msgpack.mjs";
 
+// Global WS diagnostics
+function wsDiag(tag, detail = {}) {
+  try {
+    console.debug("[WS-DIAG]", tag, detail);
+    if (typeof window !== "undefined" && window.emitClientLog) {
+      window.emitClientLog("ws_diag", { tag, ...detail });
+    }
+  } catch (_) {}
+}
+
 // ---------------------------------------------------------------------------
 // Gating debug helpers
 // ---------------------------------------------------------------------------
@@ -815,7 +825,12 @@ export function createWsConnection({
         }
       } catch {}
       try {
-        live.send(encoded.payload);
+        const frame = encoded.payload;
+        wsDiag("ws_send", {
+          binary: frame instanceof ArrayBuffer,
+          size: frame?.byteLength || frame?.length || null,
+        });
+        live.send(frame);
         return true;
       } catch (err) {
         console.error("ws.connection send error", err);
@@ -837,6 +852,10 @@ export function createWsConnection({
                 reason: "blob_resolved",
               });
             } catch {}
+            wsDiag("ws_send", {
+              binary: true,
+              size: buf?.byteLength || buf?.length || null,
+            });
             live.send(buf);
             return true;
           } catch (err) {
@@ -860,6 +879,10 @@ export function createWsConnection({
               reason: "binary_buffer",
             });
           } catch {}
+          wsDiag("ws_send", {
+            binary: true,
+            size: buffer?.byteLength || buffer?.length || null,
+          });
           live.send(buffer);
           return true;
         } catch (err) {
@@ -883,6 +906,10 @@ export function createWsConnection({
           reason: "json_text",
         });
       } catch {}
+      wsDiag("ws_send", {
+        binary: false,
+        size: typeof text === "string" ? text.length : null,
+      });
       live.send(text);
       return true;
     } catch (err) {
@@ -923,6 +950,10 @@ export function createWsConnection({
           return send(jsonCandidate, { binary: false });
         }
         try {
+          wsDiag("ws_send", {
+            binary: true,
+            size: buf?.byteLength || buf?.length || null,
+          });
           socket.send(buf);
         } catch (err) {
           console.warn("ws.connection binary send failed", err);
@@ -939,6 +970,10 @@ export function createWsConnection({
       return send(jsonCandidate, { binary: false });
     }
     try {
+      wsDiag("ws_send", {
+        binary: payload instanceof ArrayBuffer,
+        size: payload?.byteLength || payload?.length || null,
+      });
       socket.send(payload);
       try {
         const payloadType = typeof opts?.type === "string" ? opts.type : (typeof opts?.lane === "string" ? `audio.${opts.lane}` : "binary");
@@ -1058,6 +1093,7 @@ export function createWsConnection({
     ws.__intentionalClose = false;
     const handlers = {
       open: () => {
+        wsDiag("ws_open", { protocol: ws.protocol, readyState: ws.readyState });
         console.log("client.ws_open", {
           url: ws.url,
           protocol: ws.protocol,
@@ -1078,6 +1114,10 @@ export function createWsConnection({
         logStage("client.ws", { outcome: "connected", subprotocol: ws?.protocol || null });
       },
       message: (event) => {
+        wsDiag("ws_message", {
+          size: event.data?.byteLength || event.data?.length || null,
+          binary: event.data instanceof ArrayBuffer,
+        });
         try {
           if (rawMessageHandler) {
             rawMessageHandler(event.data);
@@ -1085,11 +1125,13 @@ export function createWsConnection({
           }
           console.warn("ws.connection message handler missing parser; dropping frame");
         } catch (err) {
+          wsDiag("ws_message_handler_exception", { error: String(err) });
           console.error("WS message handler critical crash", err);
           hubLog?.("client.ws.crash", { error: err?.message, source: "onmessage" });
         }
       },
       error: (event) => {
+        wsDiag("ws_error", { error: event?.message || "unknown" });
         console.error("client.ws_error", {
           message: event?.message || null,
         });
@@ -1101,6 +1143,12 @@ export function createWsConnection({
         emit("error", event);
       },
       close: (event) => {
+        wsDiag("ws_close", {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+          readyState: ws.readyState,
+        });
         console.warn("client.ws_close", {
           code: event.code,
           reason: event.reason,
@@ -1219,6 +1267,7 @@ export function createWsConnection({
     recordLastError(null, null);
 
     const tokenInfo = trackTokenFromUrl(wsUrl);
+    wsDiag("ws_create", { url: wsUrl, subprotocol: protocols });
     const ws = new WebSocket(wsUrl, protocols);
     ws.__accessTokenInfo = tokenInfo;
     socket = ws;
