@@ -4872,6 +4872,13 @@ class ChatV2Adapter:
                 return
 
             event_type = event.get("type")
+            if not ctx.diag_audio_seen:
+                ctx.diag_audio_seen = True
+                self._log(
+                    ctx,
+                    "server.asr_first_audio_seen",
+                    {"bytes_received": ctx.asr_bytes_sent},
+                )
             if event_type in {EVT_ASR_PARTIAL, EVT_ASR_FINAL}:
                 event_req_id = self._normalize_req_id(event.get("req_id"))
                 active_req_id = self._normalize_req_id(ctx.active_req_id)
@@ -4974,6 +4981,14 @@ class ChatV2Adapter:
                     return
                 ack_seq = uuid.uuid4().hex
                 reason = ctx.asr_close_reason or "server_closed"
+                if reason == "mic_gum_failure":
+                    self._log(
+                        ctx,
+                        "server.asr_closed_mic_failure",
+                        {
+                            "hint": "Browser microphone stopped or track failed. Check client GUM logs.",
+                        },
+                    )
                 # Maintain ordering: final transcripts (if any) precede the closed ACK,
                 # which in turn precedes downstream turn / chat / TTS events.
                 ack_frame = self._build_asr_closed_ack(

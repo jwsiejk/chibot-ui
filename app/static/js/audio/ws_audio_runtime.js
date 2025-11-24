@@ -136,6 +136,26 @@ export function createWsAudioRuntime(options = {}) {
 
   __firstPcmFrameLogged = false;
 
+  let gumFailed = false;
+
+  if (typeof window !== "undefined") {
+    try {
+      window.__gumFailed = gumFailed;
+    } catch (_) {}
+  }
+
+  function markGumFailed(reason) {
+    gumFailed = true;
+    try {
+      logStage("client.mic.gum_failed", { reason });
+    } catch (_) {}
+    if (typeof window !== "undefined") {
+      try {
+        window.__gumFailed = gumFailed;
+      } catch (_) {}
+    }
+  }
+
   try {
     console.log("AskChip ws_audio_runtime loaded", {
       hasSendAudioChunk: typeof sendAudioChunk === "function",
@@ -464,6 +484,7 @@ export function createWsAudioRuntime(options = {}) {
   let pcmLastBytes = null;
   let pcmSampleRate = asrRate;
   let pcmHardwareSampleRate = null;
+  let audioCtx = null;
   let baseEnabled = false;
   let baseEnabledReason = "boot";
   let silenceConsecutiveFrames = 0;
@@ -477,6 +498,19 @@ export function createWsAudioRuntime(options = {}) {
   audioKeepaliveMs = Number.isFinite(initialAudioKeepaliveMs) && initialAudioKeepaliveMs > 0
     ? initialAudioKeepaliveMs
     : AUDIO_KEEPALIVE_MS;
+
+  setInterval(() => {
+    const track = getCaptureStream?.()?.getAudioTracks?.()[0];
+    try {
+      logStage("client.mic.heartbeat", {
+        trackReadyState: track?.readyState || "missing",
+        enabled: track?.enabled,
+        muted: track?.muted,
+        audioCtx: audioCtx?.state || "unknown",
+        gumFailed,
+      });
+    } catch (_) {}
+  }, 500);
 
   function clearAudioKeepaliveTimer() {
     if (micKeepaliveTimerId) {
@@ -912,6 +946,13 @@ export function createWsAudioRuntime(options = {}) {
     if (!(wire instanceof Int16Array) || !wire.length) {
       return;
     }
+
+    const stream = captureStreamResolved || pcmSender?.mediaStream || null;
+    const track = stream?.getAudioTracks?.()[0] || null;
+    if (track && track.readyState === "ended") {
+      markGumFailed("track_ended");
+      return;
+    }
     const metaSampleRate = Number(meta.sampleRate);
     if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
       pcmSampleRate = metaSampleRate;
@@ -1013,6 +1054,18 @@ export function createWsAudioRuntime(options = {}) {
 
   function handlePcmSend(chunk, meta = {}) {
     if (!(chunk instanceof Int16Array) || !chunk.length) {
+      return;
+    }
+    try {
+      logStage("client.audio_chunk", {
+        bytes: chunk?.byteLength || 0,
+        gumFailed,
+      });
+    } catch (_) {}
+    if (gumFailed) {
+      try {
+        logStage("client.mic.capture_aborted_due_to_gum_failure", {});
+      } catch (_) {}
       return;
     }
     const AppState = getAppState();
@@ -1194,11 +1247,21 @@ export function createWsAudioRuntime(options = {}) {
     const audioStreaming = Boolean(isAudioStreaming());
     const senderPaused = Boolean(isSenderPaused());
     const captureAllowed = Boolean(canCaptureNow());
+    const stream = captureStreamResolved || pcmSender?.mediaStream || null;
     const hasStream = Boolean(
-      captureStreamResolved ||
-      pcmSender?.mediaStream ||
+      stream ||
       (pcmSender && typeof pcmSender.getStateSnapshot === "function" && pcmSender.getStateSnapshot()?.mediaStreamActive)
     );
+    try {
+      logStage("client.pcm_sender_state.update", {
+        gumFailed,
+        isAudioStreaming: isAudioStreaming(),
+        canCaptureNow: canCaptureNow(),
+        senderPaused: isSenderPaused(),
+        trackReady: stream?.getAudioTracks?.()[0]?.readyState || "unknown",
+        ctxState: audioCtx?.state || "unknown",
+      });
+    } catch (_) {}
     const baseGate = baseEnabled && hasStream;
     const gates = {
       asrReady,
@@ -1479,8 +1542,17 @@ export function createWsAudioRuntime(options = {}) {
     if (typeof initPcmSender !== "function") {
       throw new Error("initPcmSender not provided");
     }
-    const stream = captureStreamProvider ? await captureStreamProvider() : null;
-    if (stream) {
+    let stream = null;
+    if (captureStreamProvider) {
+      stream = await captureStreamProvider();
+      if (!stream) {
+        markGumFailed("no_stream_returned");
+        return null;
+      }
+      if (!stream.getAudioTracks || stream.getAudioTracks().length === 0) {
+        markGumFailed("no_audio_tracks");
+        return null;
+      }
       captureStreamResolved = stream;
       updatePcmSenderState("ensure_sender_stream_resolved");
     }
@@ -1491,8 +1563,18 @@ export function createWsAudioRuntime(options = {}) {
       onError: handlePcmError,
       chunkMs: PCM_TARGET_BATCH_MS,
       flushIntervalMs: PCM_FLUSH_TIMER_MS,
-    }).then((sender) => {
+    }).then(async (sender) => {
       pcmSender = sender;
+      audioCtx = sender?.audioContext || audioCtx;
+      try {
+        if (audioCtx?.state === "suspended") {
+          logStage("client.audio_context.resume_attempt", {});
+          await audioCtx.resume();
+          logStage("client.audio_context.resumed", {});
+        }
+      } catch (err) {
+        logStage("client.audio_context.resume_failed", { err: String(err) });
+      }
       pcmSenderInitPromise = null;
       updatePcmSenderState();
       return sender;
