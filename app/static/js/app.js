@@ -77,8 +77,14 @@ const importV = typeof versionModule.importV === "function"
           const message = buildMessage(...args);
           try {
             c.__askchip_console_bridge_active = true;
-            if (typeof emitClientLog === "function") {
-              emitClientLog(`console.${level}`, { message });
+            let sent = false;
+            try {
+              if (typeof sendClientLog === "function" && wsClientIsConnected(getWsClient())) {
+                sent = sendClientLog(`console.${level}`, { message, level });
+              }
+            } catch (_) {}
+            if (!sent && typeof emitClientLog === "function") {
+              emitClientLog(`console.${level}`, { message, level });
             }
           } catch (_) {
           } finally {
@@ -545,6 +551,8 @@ const importV = typeof versionModule.importV === "function"
   const TurnStats = {
     active: null,
   };
+
+  let firehoseMarkerSent = false;
 
   function startTurnStats(sid) {
     TurnStats.active = {
@@ -2303,6 +2311,18 @@ const importV = typeof versionModule.importV === "function"
           AppState?.hub?.bindSocket?.(getLiveSocket());
         } catch (err) {
           console.warn('AppState.hub.bindSocket connect failed', err);
+        }
+
+        if (!firehoseMarkerSent) {
+          firehoseMarkerSent = true;
+          const markerDetail = {
+            build_id: typeof window !== 'undefined' ? (window.__BUILD_SHA__ || null) : null,
+            href: typeof window !== 'undefined' && window.location ? window.location.href : null,
+            user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+            sid: AppState?.sid || null,
+          };
+          try { emitClientLog('client.firehose.marker', markerDetail); } catch (_) {}
+          try { sendClientLog('client.firehose.marker', markerDetail); } catch (_) {}
         }
       } else if (becameDisconnected) {
         Waveform.stop();

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -17,6 +18,8 @@ _EVENTS_FILENAME = "events.ndjson"
 _ARCHIVE_FILENAME = "flow.zip"
 _CONTENT_TYPE_NDJSON = b"application/x-ndjson"
 _CONTENT_TYPE_ZIP = b"application/zip"
+
+_log = logging.getLogger(__name__)
 
 _TYPE_PREFIX_ALIASES: dict[str, tuple[str, ...]] = {
     "EVT_DIAG_HUD": ("EVT_HUD_", "EVT_CLIENT_"),
@@ -97,6 +100,30 @@ async def handle_flow_zip(
             archive_path = build_flow_zip(sid, root=EXPORT_ROOT)
         except FileNotFoundError:
             return json_response(status=404, error="not_found")
+
+    try:
+        client_log_path = session_dir / "logs" / "client.jsonl"
+        client_log_count = 0
+        if client_log_path.is_file():
+            with client_log_path.open("r", encoding="utf-8") as handle:
+                for raw in handle:
+                    if not raw.strip():
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except Exception:
+                        continue
+                    if event.get("type") == "EVT_CLIENT_LOG":
+                        client_log_count += 1
+        _log.info(
+            "evt=client_log_export_debug sid=%s client_jsonl_exists=%s evt_client_log_count=%s",
+            sid,
+            client_log_path.is_file(),
+            client_log_count,
+            extra={"sid": sid, "event": "client_log_export_debug"},
+        )
+    except Exception:
+        _log.exception("evt=client_log_export_debug_failed sid=%s", sid)
 
     archive_bytes = archive_path.read_bytes()
     headers = (

@@ -30,6 +30,7 @@ _LOGS_NAME = "logs.ndjson"
 _LOGS_ASR_NAME = "logs/asr.jsonl"
 _LOGS_WS_NAME = "logs/ws.jsonl"
 _LOGS_TTS_NAME = "logs/tts.jsonl"
+_LOGS_CLIENT_NAME = "logs/client.jsonl"
 
 _TIMELINE_TYPES = {
     "EVT_TURN_BEGIN",
@@ -92,6 +93,7 @@ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _
     logs_asr_path = logs_dir / "asr.jsonl"
     logs_ws_path = logs_dir / "ws.jsonl"
     logs_tts_path = logs_dir / "tts.jsonl"
+    logs_client_path = logs_dir / "client.jsonl"
 
     _assert_exists(manifest_path)
     _assert_exists(events_path)
@@ -116,6 +118,8 @@ def build_flow_zip(sid: str, root: Path = Path("exports"), *, cap_bytes: int = _
         logs_payloads[_LOGS_WS_NAME] = logs_ws_path.read_bytes()
     if logs_tts_path.is_file():
         logs_payloads[_LOGS_TTS_NAME] = logs_tts_path.read_bytes()
+    if logs_client_path.is_file():
+        logs_payloads[_LOGS_CLIENT_NAME] = logs_client_path.read_bytes()
 
     while True:
         payloads, manifest_bytes = _render_payloads(
