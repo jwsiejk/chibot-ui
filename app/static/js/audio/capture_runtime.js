@@ -755,6 +755,13 @@ export function createCaptureRuntime({
           phase: resolvePhase(),
         });
       } catch (_) {}
+      try {
+        // Gracefully request an input stop without tearing down the socket.
+        const maybeClient = typeof window !== "undefined" ? window.wsClient || window.WSClient || null : null;
+        if (maybeClient && typeof maybeClient.send === "function") {
+          maybeClient.send({ type: "input.stop", reason: "mic_gum_failure" }, { skipPhaseCheck: true });
+        }
+      } catch (_) {}
       return null;
     }
   }
