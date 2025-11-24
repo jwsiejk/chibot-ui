@@ -179,7 +179,8 @@ export function emitClientLog(label, detail = {}) {
   // Always try the hub bridge first so logs can flow over WS when installed.
   let delivered = false;
   try {
-    delivered = hubLog(label, payload) === true;
+    const hubResult = hubLog(label, payload);
+    delivered = hubResult !== false;
   } catch {}
 
   // If the hub bridge is unavailable, attempt a direct WS send using the
