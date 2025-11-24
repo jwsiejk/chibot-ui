@@ -414,6 +414,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     clearConversationStartTimer();
     try {
       const audioCtx = getAudioCtx();
+      if (audioCtx) {
+        const node = audioCtx.createBufferSource();
+        node.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+        node.connect(audioCtx.destination);
+        node.start(0);
+        logStage("client.audio_context.pre_warm_for_greet", {});
+      }
       if (window.AC_PREPARED !== true) {
         window.AC_PREPARED = true;
         if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
@@ -605,11 +612,34 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
       return;
     }
+    if (!arePreconditionsForConversationMet()) {
+      logStage("client.conversation.delayed_until_ready", {
+        audioCtx_state: getAudioCtx()?.state,
+        pcmWarm: audioRuntime?.getPcmWarm?.() || false,
+      });
+      setTimeout(() => enterConversationAfterGreet("wait_ready"), 50);
+      return;
+    }
     if (AppState?.policy?.auto_record_after_greet !== false) {
-      try {
-        logStage("client.asr_arm_requested", {});
-      } catch (_) {}
-      requestAsrArm("tts_end");
+      logStage("client.asr_arm_queued_greet_end", {});
+
+      const tryArm = () => {
+        const audioCtx = getAudioCtx();
+        const pcmWarm = audioRuntime?.getPcmWarm?.() || false;
+        const audioReady = audioCtx && audioCtx.state === "running";
+        if (!audioReady || !pcmWarm) {
+          setTimeout(tryArm, 50);
+          return;
+        }
+
+        logStage("client.asr_arm_after_greet_ready", {
+          audioCtx_state: audioCtx?.state,
+          pcmWarm,
+        });
+
+        requestAsrArm("tts_end_ready");
+      };
+      tryArm();
     }
     voicePhaseController.enterConversation(source);
     syncAppStatePhase({ force: true });
@@ -692,6 +722,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       return;
     }
     if (hasOpenedAsrForConversation) {
+      return;
+    }
+    if (!arePreconditionsForConversationMet()) {
+      logStage("client.schedule_conversation_blocked_until_ready", {
+        audioCtx_state: getAudioCtx()?.state,
+        pcmWarm: audioRuntime?.getPcmWarm?.() || false,
+      });
+      setTimeout(() => scheduleConversationStartAfterGreet("wait_ready"), 50);
       return;
     }
     clearConversationStartTimer();
@@ -1245,6 +1283,28 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     logSecondGreetingTrace("capture_stop", detail || {});
   }
 
+  const sendAudioChunk = (payload, meta) => {
+    if (WSClient && typeof WSClient.sendAudioChunk === "function") {
+      return WSClient.sendAudioChunk(payload, meta);
+    }
+    return false;
+  };
+
+  const sendJSON = (payload) => {
+    if (WSClient && typeof WSClient.sendJSON === "function") {
+      WSClient.sendJSON(payload);
+      return true;
+    }
+    return false;
+  };
+
+  const getCaptureStream = () => {
+    if (captureRuntime && typeof captureRuntime.getCaptureStream === "function") {
+      return captureRuntime.getCaptureStream();
+    }
+    return null;
+  };
+
   // Owns PCM ring buffer, PCM sender wiring, and ASR priming from recent audio.
   const audioRuntime = createWsAudioRuntime({
     AppState,
@@ -1256,24 +1316,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     getSocket: () => socket,
     WSClient,
     getWsClient: () => WSClient,
-    sendAudioChunk: (payload, meta) => {
-      if (WSClient && typeof WSClient.sendAudioChunk === "function") {
-        return WSClient.sendAudioChunk(payload, meta);
-      }
-      return false;
-    },
-    sendJSON: (payload) => {
-      if (WSClient && typeof WSClient.sendJSON === "function") {
-        WSClient.sendJSON(payload);
-        return true;
-      }
-      return false;
-    },
+    sendAudioChunk,
+    sendJSON,
     isAudioStreaming: () => _audioStreaming,
     canCaptureNow: () => canCaptureNow(),
     isSenderPaused: () => senderPaused,
     setSenderPauseReason,
-    getVadController: () => (captureRuntime ? captureRuntime.getVadController() : null),
+    getCaptureStream: () => getCaptureStream?.(),
+    getVadController: () => captureRuntime?.getVadController?.(),
     getFirstChunkSeen: () => __firstChunkSeen,
     setFirstChunkSeen: (value) => { __firstChunkSeen = Boolean(value); },
     getMicRecordingStartAt: () => __micRecordingStartAt,
@@ -1282,28 +1332,39 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     setMicChunks: (value) => { __micChunks = Number.isFinite(value) ? Number(value) : 0; },
     getMicBytes: () => __micBytes,
     setMicBytes: (value) => { __micBytes = Number.isFinite(value) ? Number(value) : 0; },
-    audioKeepaliveMs: AUDIO_KEEPALIVE_MS,
     getCurrentTurnReqId: () => getCurrentTurnReqIdValue(),
   });
+
+  if (typeof window !== "undefined") {
+    try { window.audioRuntime = audioRuntime; } catch (_) {}
+  }
 
   function getAudioCtx() {
     const ctx =
       (audioRuntime && typeof audioRuntime.getAudioContext === "function" && audioRuntime.getAudioContext()) ||
       (typeof window !== "undefined" ? window.__audioCtx || window.audioCtx : null) ||
       (AppState && typeof AppState === "object" ? AppState.audioCtx || null : null);
+
     if (ctx && typeof window !== "undefined") {
       try { window.__audioCtx = ctx; } catch (_) {}
     }
     return ctx;
   }
 
+  function arePreconditionsForConversationMet() {
+    const audioCtx = getAudioCtx?.();
+    const pcmWarm = audioRuntime?.getPcmWarm?.() || false;
+    const audioReady = audioCtx && audioCtx.state === "running";
+    return audioReady && pcmWarm;
+  }
+
   if (typeof window !== "undefined") {
     try {
       window.addEventListener("click", () => {
         const audioCtx = getAudioCtx();
-        if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
+        if (audioCtx?.state === "suspended") {
           audioCtx.resume().then(() => {
-            logStage("client.audio_context.user_unlocked", {});
+            logStage("client.audio_context.user_unlocked");
           }).catch(() => {});
         }
       });

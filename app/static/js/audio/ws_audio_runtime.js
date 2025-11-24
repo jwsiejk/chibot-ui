@@ -3,6 +3,7 @@
 
 import { isTypedArray, toArrayBuffer } from "../utils/binary.js";
 import { recordClientBannerEvent } from "../ws/telemetry.js";
+import { logStage } from "../ws/telemetry.js";
 import { PHASE as VOICE_PHASE } from "../voice/phase_controller.js";
 
 const PCM_TARGET_SAMPLE_RATE = 16000;
@@ -25,6 +26,12 @@ let __firstPcmFrameLogged = false;
 const WS_READY_PHASES = new Set(["connected", "ready"]);
 
 const primedSessionIds = new Set();
+
+let pcmWarm = false;
+function markPcmWarm() {
+  pcmWarm = true;
+  try { logStage("client.pcm.warm"); } catch (_) {}
+}
 
 function resolveAppState(provided) {
   if (provided) return provided;
@@ -173,7 +180,7 @@ export function createWsAudioRuntime(options = {}) {
     try {
       newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      markGumFailed("gum_retry_failed");
+      gumFailed = true;
       logStage("client.mic.reacquire.failed", { err: String(err) });
       return null;
     }
@@ -1015,6 +1022,10 @@ export function createWsAudioRuntime(options = {}) {
       return;
     }
 
+    if (!pcmWarm && wire.length) {
+      markPcmWarm();
+    }
+
     const stream = captureStreamResolved || pcmSender?.mediaStream || null;
     const track = stream?.getAudioTracks?.()[0] || null;
     if (track && track.readyState === "ended" && !gumFailed) {
@@ -1756,5 +1767,6 @@ export function createWsAudioRuntime(options = {}) {
     setAudioKeepaliveMs,
     setAudioKeepaliveIdleMs,
     getAudioContext: () => audioCtx,
+    getPcmWarm: () => pcmWarm,
   };
 }
