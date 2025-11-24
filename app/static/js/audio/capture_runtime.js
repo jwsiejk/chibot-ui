@@ -755,13 +755,41 @@ export function createCaptureRuntime({
           phase: resolvePhase(),
         });
       } catch (_) {}
+      // On a getUserMedia / mic acquisition failure, request a graceful
+      // input.stop from the server side without killing the websocket.
       try {
-        // Gracefully request an input stop without tearing down the socket.
-        const maybeClient = typeof window !== "undefined" ? window.wsClient || window.WSClient || null : null;
+        const maybeClient =
+          typeof window !== "undefined"
+            ? window.wsClient || window.WSClient || null
+            : null;
+
         if (maybeClient && typeof maybeClient.send === "function") {
-          maybeClient.send({ type: "input.stop", reason: "mic_gum_failure" }, { skipPhaseCheck: true });
+          try {
+            logStage("client.mic.gum_failure_input_stop", {
+              source: "capture_runtime",
+              phase: resolvePhase(),
+              hasClient: true,
+            });
+          } catch (_) {}
+
+          // We deliberately allow this even if the client thinks it is not
+          // yet in a "ready" phase; the server will decide how to react.
+          maybeClient.send(
+            { type: "input.stop", reason: "mic_gum_failure" },
+            { skipPhaseCheck: true }
+          );
+        } else {
+          try {
+            logStage("client.mic.gum_failure_input_stop_skipped", {
+              source: "capture_runtime",
+              phase: resolvePhase(),
+              hasClient: Boolean(maybeClient),
+            });
+          } catch (_) {}
         }
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort; do not rethrow
+      }
       return null;
     }
   }
