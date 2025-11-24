@@ -24,7 +24,7 @@ const JSON_SUBPROTOCOL = "chat.v2";
 const MSGPACK_SUBPROTOCOL = "chip-msgpack";
 const INFO_DEADLINE_MS = 20000;
 const TOKEN_EXPIRY_MS = 60 * 1000;
-const WS_READY_PHASES = new Set(["connected", "ready"]);
+const WS_READY_PHASES = new Set(["connected", "ready", "streaming"]);
 const WS_AUDIO_READY_PHASES = new Set(["connected", "ready", "streaming"]);
 
 function detectControlFramesCodec() {
@@ -451,7 +451,14 @@ export function createWsConnection({
   function isControlFrame(frame) {
     if (!frame || typeof frame !== "object") return false;
     const t = typeof frame.type === "string" ? frame.type : "";
-    return t === "input.start" || t === "input.stop" || t === "audio.header" || t === "ping" || t === "pong";
+    return (
+      t === "input.start" ||
+      t === "input.stop" ||
+      t === "audio.header" ||
+      t === "ping" ||
+      t === "pong" ||
+      t === "asr.header.request"
+    );
   }
 
   function encodeControlFramePayload(frame, codec) {
