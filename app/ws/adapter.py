@@ -3478,6 +3478,22 @@ class ChatV2Adapter:
         if frame_type == "client.log":
             sanitized_log = self._sanitize_client_log(frame)
             if sanitized_log:
+                client_log_meta: Dict[str, Any] = {
+                    "label": sanitized_log.get("label") or "client.log",
+                    "detail": sanitized_log.get("detail"),
+                }
+                for key in ("message", "client_ts_ms", "extra"):
+                    if key in sanitized_log:
+                        client_log_meta[key] = sanitized_log.get(key)
+                bus.publish(
+                    {
+                        "type": EVT_CLIENT_LOG,
+                        "sid": ctx.sid,
+                        "who": "client",
+                        "source": "ws.adapter",
+                        "meta": client_log_meta,
+                    }
+                )
                 meta["client_log"] = {
                     key: value
                     for key, value in sanitized_log.items()
