@@ -2810,6 +2810,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const rawReason = options && typeof options === "object" && typeof options.reason === "string" && options.reason
       ? options.reason
       : "legacy_input";
+    const normalizedReasonKey = String(rawReason || "").trim().toLowerCase();
     let fallbackReason = typeof options?.fallbackReason === "string" && options.fallbackReason
       ? options.fallbackReason
       : rawReason;
@@ -2821,6 +2822,15 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const source = typeof options?.source === "string" && options.source
       ? options.source
       : "stop_input_capture";
+
+    // On microphone acquisition errors, avoid cascading into recorder teardown paths
+    // that might trigger a full websocket cleanup. Only send an input.stop signal.
+    if (normalizedReasonKey.includes("gum") || normalizedReasonKey.includes("mic_gum_failure")) {
+      try {
+        maybeSendTurnStop("mic_gum_failure");
+      } catch (_) {}
+      return;
+    }
 
     try {
       const result = autoStopRecorder(rawReason, { fallbackReason, source, isAutoStop: true });
