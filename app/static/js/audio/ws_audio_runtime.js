@@ -196,6 +196,7 @@ export function createWsAudioRuntime(options = {}) {
       if (audioCtx?.state === "suspended" || audioCtx?.state === "closed") {
         logStage("client.mic.reacquire.recreate_audioctx", { prev: audioCtx?.state });
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: PCM_TARGET_SAMPLE_RATE });
+        setGlobalAudioContext(audioCtx);
       }
     } catch (err) {
       logStage("client.mic.reacquire.audioctx_failed", { err: String(err) });
@@ -549,6 +550,15 @@ export function createWsAudioRuntime(options = {}) {
     ? initialAudioKeepaliveMs
     : AUDIO_KEEPALIVE_MS;
 
+  function setGlobalAudioContext(ctx) {
+    if (!ctx || typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.__audioCtx = ctx;
+    } catch (_) {}
+  }
+
   setInterval(() => {
     const track = getCaptureStream?.()?.getAudioTracks?.()[0];
     try {
@@ -557,8 +567,16 @@ export function createWsAudioRuntime(options = {}) {
         enabled: track?.enabled,
         muted: track?.muted,
         audioCtx: audioCtx?.state || "unknown",
+        audioCtxState: audioCtx?.state || "unknown",
+        isInterrupted: audioCtx?.state === "interrupted",
         gumFailed,
       });
+      if (audioCtx?.state === "interrupted") {
+        try {
+          audioCtx.resume();
+          logStage("client.audio_context.recovered_from_interrupted", {});
+        } catch (_) {}
+      }
     } catch (_) {}
   }, 500);
 
@@ -999,8 +1017,8 @@ export function createWsAudioRuntime(options = {}) {
 
     const stream = captureStreamResolved || pcmSender?.mediaStream || null;
     const track = stream?.getAudioTracks?.()[0] || null;
-    if (track && track.readyState === "ended") {
-      markGumFailed("track_ended");
+    if (track && track.readyState === "ended" && !gumFailed) {
+      markGumFailed("track_ended_windows11_device_switch");
       return;
     }
     const metaSampleRate = Number(meta.sampleRate);
@@ -1616,6 +1634,7 @@ export function createWsAudioRuntime(options = {}) {
     }).then(async (sender) => {
       pcmSender = sender;
       audioCtx = sender?.ctx || audioCtx;
+      setGlobalAudioContext(audioCtx);
       try {
         if (audioCtx?.state === "suspended") {
           logStage("client.audio_context.resume_attempt", {});
@@ -1736,5 +1755,6 @@ export function createWsAudioRuntime(options = {}) {
     sendAudioKeepaliveNow,
     setAudioKeepaliveMs,
     setAudioKeepaliveIdleMs,
+    getAudioContext: () => audioCtx,
   };
 }
