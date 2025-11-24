@@ -7354,10 +7354,19 @@ class ChatV2Adapter:
             await self._invoke_engine("on_asr_partial", ctx.sid, req_id, 1.0, text)
             return
 
+        # Final result path:
+        # Defer lifecycle decisions (ASR close / turn end) to the policy engine.
         req_id_final = ctx.turn_req_id if isinstance(ctx.turn_req_id, str) else None
+        _log.info(
+            "evt=asr_final_deferred_to_policy sid=%s stream=%s state=%s",
+            ctx.sid,
+            ctx.asr_stream_id,
+            ctx.session.asr_state,
+        )
         await self._invoke_engine("on_asr_final", ctx.sid, text, req_id_final)
-        await self._close_asr(ctx, reason="final_transcript")
-        self._end_user_turn(ctx)
+        # NOTE: on_asr_final (or helpers it calls) is now responsible for:
+        # - deciding whether to keep listening vs close ASR, and
+        # - calling _close_asr(ctx, reason=...) and _end_user_turn(ctx) as appropriate.
 
     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
         if ctx.ws_send is None:
