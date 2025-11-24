@@ -3030,7 +3030,7 @@ class ChatV2Adapter:
         if frame_type == "input.stop":
             reason_value = frame.get("reason")
             reason = reason_value if isinstance(reason_value, str) and reason_value else "client_turn_stop"
-            await self._handle_client_turn_stop(ctx, reason=reason, frame=frame, meta=meta, send=send)
+            await self._handle_client_turn_stop(ctx, reason=reason, frame=frame, meta=meta)
             return self._HandleResult(True)
 
         if frame_type == "chat.user":
