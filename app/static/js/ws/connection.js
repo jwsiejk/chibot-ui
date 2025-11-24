@@ -9,7 +9,14 @@ import { encodeMessagePack } from "../utils/msgpack.mjs";
 
 // Temporary flag: when true, we'll log phase gate decisions and
 // bypass the WS phase gate for audio payloads only (header + PCM).
-const GATING_DEBUG_MODE = true;
+//
+// NOTE: This must stay false in production to avoid sending audio
+// frames (including greet TTS or PCM warm-up) before the WS control
+// channel finishes its ready/handshake sequence. Enabling the
+// bypass can flush queued audio while `wsPhase` is still
+// `connecting`, which can prompt the server to close the transport
+// during greet. Keep the bypass opt-in for local debugging only.
+const GATING_DEBUG_MODE = false;
 
 function isAudioPayloadForBypass(payload, options) {
   const type = payload && payload.type;
