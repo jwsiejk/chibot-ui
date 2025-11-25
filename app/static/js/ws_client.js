@@ -615,15 +615,18 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       });
     } catch (_) {}
     if (!allowed) {
+      // Allow mic warm-up even before the full conversation phase is reached.
+      // Actual PCM sending is still gated elsewhere (wsPhase, senderPaused, etc.).
       try {
-        logStage("client.mic.start_skipped", {
+        logStage("client.mic.start_out_of_phase", {
           source,
           phase,
           wsPhase: AppState?.wsPhase || null,
-          reason: "phase_not_allowed",
+          reason: "warming_up_before_conversation_phase",
         });
       } catch (_) {}
-      return false;
+      // Do NOT return early here: we want to give startRecorderStreaming a chance
+      // so that audio preconditions (audioCtx running, pcmWarm) can be satisfied.
     }
     try {
       logStage("client.mic.start_proceed", {
