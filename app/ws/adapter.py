@@ -4515,6 +4515,17 @@ class ChatV2Adapter:
                 ws_meta["preview"] = preview
             try:
                 await send({"type": "websocket.send", "bytes": payload_bytes})
+            except ClientDisconnected:
+                _log.info(
+                    "evt=ws_send_skipped sid=%s reason=client_disconnected type=%s",
+                    sid,
+                    payload.get("type"),
+                )
+                ws_meta["send_skipped"] = True
+                ws_meta["skipped_reason"] = "client_disconnected"
+                self._log_asr_control_summary(sid, payload)
+                await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
+                return
             except RuntimeError as e:
                 if "websocket.close" in str(e) or "response already completed" in str(e):
                     _log.warning(
@@ -4554,6 +4565,17 @@ class ChatV2Adapter:
             frame_payload = dict(parsed_frame)
         try:
             await send({"type": "websocket.send", "text": text_payload})
+        except ClientDisconnected:
+            _log.info(
+                "evt=ws_send_skipped sid=%s reason=client_disconnected type=%s",
+                sid,
+                payload.get("type"),
+            )
+            ws_meta["send_skipped"] = True
+            ws_meta["skipped_reason"] = "client_disconnected"
+            self._log_asr_control_summary(sid, payload)
+            await self._publish(EVT_WS_JSON_SEND, sid, meta, frame_payload)
+            return
         except RuntimeError as e:
             if "websocket.close" in str(e) or "response already completed" in str(e):
                 _log.warning(
