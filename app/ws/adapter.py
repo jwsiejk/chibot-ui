@@ -904,6 +904,11 @@ class ChatV2Adapter:
         )
 
     async def _handle_asr_timeout(self, ctx: AdapterContext, reason: str) -> None:
+        _log.warning(
+            "evt=asr.timeout sid=%s last_partial=%s promoted_final=False",
+            ctx.sid,
+            ctx.last_partial_for_turn,
+        )
         active_req_id = ctx.active_req_id
         if not active_req_id:
             return
@@ -922,6 +927,12 @@ class ChatV2Adapter:
         )
 
     async def _ensure_previous_turn_closed(self, ctx: AdapterContext, reason: str) -> None:
+        _log.debug(
+            "evt=turn.ensure_closed sid=%s active_req_id=%s asr_final_emitted=%s",
+            ctx.sid,
+            ctx.active_req_id,
+            ctx.asr_final_emitted,
+        )
         if ctx.active_req_id and not ctx.asr_final_emitted:
             metrics_turn_index = None
             metrics = getattr(ctx, "metrics", None)
@@ -5588,6 +5599,13 @@ class ChatV2Adapter:
         elif frame_type == "asr.final":
             ctx.last_asr_partial = None
 
+        _log.debug(
+            "evt=asr.frame_ingest sid=%s bytes=%s vad_speech=%s",
+            ctx.sid,
+            len(event.get("pcm_bytes", b"")),
+            event.get("speech", None),
+        )
+
         return frame
 
     def _current_asr_sid(self, ctx: AdapterContext) -> str:
@@ -5684,6 +5702,7 @@ class ChatV2Adapter:
             if ctx.asr_ready:
                 return
 
+            _log.debug("evt=asr.open sid=%s", ctx.sid)
             ctx.asr_ready = True
             if ctx.session.asr_state != "open":
                 mark(ctx.session, "open")
@@ -7355,6 +7374,14 @@ class ChatV2Adapter:
         promoted_final: bool = False,
         timeout: bool = False,
     ) -> None:
+        _log.debug(
+            "evt=asr.handle_result sid=%s final=%s promoted_final=%s timeout=%s transcript_len=%s",
+            ctx.sid,
+            is_final,
+            promoted_final,
+            timeout,
+            len(transcript or ""),
+        )
         if not ctx.asr_stream_id:
             _log.info("evt=asr_result_ignored sid=%s reason=no_stream_id", ctx.sid)
             return
@@ -7467,6 +7494,7 @@ class ChatV2Adapter:
             ctx.asr_stream_id,
             ctx.session.asr_state,
         )
+        _log.debug("evt=asr.to_user_turn sid=%s transcript=%s", ctx.sid, text)
         await self._invoke_engine("on_asr_final", ctx.sid, text, req_id_final)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
         # - deciding whether to keep listening vs close ASR, and
@@ -7730,6 +7758,13 @@ class ChatV2Adapter:
         ctx.last_asr_partial = None
         ctx.asr_stream_id = None
         ctx.asr_stream_req_id = None
+
+        _log.debug(
+            "evt=asr.close sid=%s final_emitted=%s bytes=%s",
+            ctx.sid,
+            ctx.asr_final_emitted,
+            ctx.asr_bytes_sent,
+        )
 
         await self._publish(
             ASR_SINGLE_STREAM_INVARIANT,

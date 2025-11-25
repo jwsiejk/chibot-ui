@@ -1,10 +1,15 @@
 """Dual-VAD aggregator with adaptive policy controls."""
 from __future__ import annotations
 
+import logging
 import math
 import time
 from array import array
 from typing import Callable, Dict, List, Mapping, MutableMapping, Optional
+from types import SimpleNamespace
+
+
+_log = logging.getLogger(__name__)
 
 
 def rms_dbfs_from_pcm16(samples: bytes) -> float:
@@ -93,6 +98,10 @@ class VADAggregator:
 
         self._refresh_policy()
 
+    @property
+    def sid(self) -> str:
+        return self._sid
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -110,6 +119,7 @@ class VADAggregator:
         self._last_threshold_dbfs = threshold
         self._last_energy_dbfs = dbfs
         self._update_rms(dbfs)
+        self._maybe_emit_vad_summary(self, self)
 
         suppressed = self._in_tts and now_ms < self._echo_suppressed_until_ms
 
@@ -208,6 +218,23 @@ class VADAggregator:
 
     def _dbfs_to_rms(self, dbfs: float) -> float:
         return max(0.0, min(1.0, 10 ** (dbfs / 20.0)))
+
+    def _maybe_emit_vad_summary(self, ctx, state) -> None:
+        now = int(time.monotonic() * 1000)
+        if not hasattr(ctx, "_last_vad_summary"):
+            ctx._last_vad_summary = now
+            return
+
+        if now - ctx._last_vad_summary >= 2000:
+            _log.debug(
+                "evt=vad.summary sid=%s short_rms=%s long_rms=%s threshold=%s speech=%s",
+                ctx.sid,
+                getattr(state, "short_rms", None),
+                getattr(state, "long_rms", None),
+                getattr(state, "speech_threshold", None),
+                getattr(state, "speech", None),
+            )
+            ctx._last_vad_summary = now
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -372,14 +399,21 @@ class VADAggregator:
             granted = False
 
         threshold_rms = self._dbfs_to_rms(self._last_threshold_dbfs)
+        state = SimpleNamespace(
+            short_rms=self._short_rms,
+            long_rms=self._long_rms,
+            energy=self._dbfs_to_rms(self._last_energy_dbfs),
+            speech_threshold=threshold_rms,
+        )
         decision_payload = {
             "type": "EVT_VAD_DECISION",
             "sid": self._sid,
             "mode": effective_mode,
             "granted": bool(granted),
-            "short_rms": float(self._short_rms),
-            "long_rms": float(self._long_rms),
-            "threshold": float(threshold_rms),
+            "short_rms": getattr(state, "short_rms", None),
+            "long_rms": getattr(state, "long_rms", None),
+            "energy": getattr(state, "energy", None),
+            "threshold": getattr(state, "speech_threshold", None),
             "energy_dbfs": float(self._last_energy_dbfs),
             "reasons": list(reasons),
             "nf_dbfs": float(self._nf_dbfs),
