@@ -1,40 +1,60 @@
-// Stable, guaranteed exports for dynamic module loader.
+// Version helper for static assets.
+// This MUST stay in sync with:
+// - window.BUILD_ID injected by the HTML template
+// - sw.js, which precaches /static/...js?v={{ BUILD_ID }}
 
-// Always export a getBuildId function
+// Return the current build id, or null if not set.
 export function getBuildId() {
   try {
-    return window?.ASKCHIP_BUILD_ID || null;
+    if (
+      typeof window !== "undefined" &&
+      typeof window.BUILD_ID === "string" &&
+      window.BUILD_ID
+    ) {
+      return window.BUILD_ID;
+    }
   } catch (_) {
-    return null;
+    // ignore
   }
+  return null;
 }
 
-// Always export withVersion — appends ?v=BUILD_ID or returns raw URL
+// Append ?v=<BUILD_ID> (or &v= if there is already a query string).
 export function withVersion(url) {
-  try {
-    const id = getBuildId();
-    if (!id) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}v=${id}`;
-  } catch (_) {
+  const buildId = getBuildId();
+  if (!buildId) {
     return url;
   }
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}v=${encodeURIComponent(buildId)}`;
 }
 
-// Always export importV — reliable dynamic import wrapper
-export async function importV(path) {
+// Dynamic import that prefers the versioned URL and retries once
+// on failure before giving up.
+export async function importV(path, attempt = 1) {
+  const url = withVersion(path);
   try {
-    const vpath = withVersion(path);
-    return await import(/* @vite-ignore */ vpath);
+    return await import(/* @vite-ignore */ url);
   } catch (err) {
-    console.warn("version.importV fallback", { path, err: String(err) });
-    return await import(/* @vite-ignore */ path);
+    if (attempt >= 2) {
+      throw err;
+    }
+    try {
+      console.warn("importV failed, retrying once", { url, attempt, err });
+    } catch (_) {
+      // ignore logging failures
+    }
+    return importV(path, attempt + 1);
   }
 }
 
-// Default export for compatibility
+// Expose the current BUILD_ID for any consumers that care.
+export const BUILD_ID = getBuildId();
+
+// Default export for compatibility with any existing default import usage.
 export default {
   getBuildId,
   withVersion,
-  importV
+  importV,
+  BUILD_ID,
 };
