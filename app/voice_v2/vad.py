@@ -83,6 +83,8 @@ class VADAggregator:
         self._asr_confidence = 0.0
         self._asr_last_update_ms = 0
 
+        self._full_duplex_enabled = False
+
         baseline = float(self.DEFAULTS["energy_threshold_dbfs"])
         self._margin_db = (self.MIN_MARGIN_DB + self.MAX_MARGIN_DB) / 2.0
         self._nf_dbfs = baseline - self._margin_db
@@ -108,6 +110,11 @@ class VADAggregator:
     def set_grant_handler(self, handler: Callable[[str, Dict[str, object]], None]) -> None:
         self._grant_handler = handler
 
+    def enable_full_duplex(self) -> None:
+        """Allow auto-VAD to run even while TTS is active (post-greet full-duplex)."""
+
+        self._full_duplex_enabled = True
+
     def feed_auto_energy(self, dbfs: float, frame_ms: int = 20) -> None:
         self._refresh_policy()
         now_ms = self._now_ms()
@@ -123,6 +130,18 @@ class VADAggregator:
 
         suppressed = self._in_tts and now_ms < self._echo_suppressed_until_ms
 
+        hard_suppress = suppressed and not self._full_duplex_enabled
+
+        _log.debug(
+            "evt=vad.tts_gate sid=%s in_tts=%s hard_suppress=%s full_duplex=%s energy_dbfs=%.2f threshold_dbfs=%.2f",
+            self._sid,
+            self._in_tts,
+            hard_suppress,
+            self._full_duplex_enabled,
+            self._last_energy_dbfs,
+            self._last_threshold_dbfs,
+        )
+
         if dbfs < threshold:
             self._update_noise_floor(dbfs)
 
@@ -132,7 +151,8 @@ class VADAggregator:
                 self._auto_active_duration_ms += frame_ms
                 if self._auto_inactive_ms >= self._policy_hold_ms():
                     self._set_auto_active(False, dbfs)
-            return
+            if hard_suppress:
+                return
 
         if dbfs >= threshold:
             self._auto_contiguous_ms += frame_ms

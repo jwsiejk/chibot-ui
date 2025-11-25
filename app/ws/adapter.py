@@ -1337,6 +1337,7 @@ class ChatV2Adapter:
         greet_utt_id = ctx.greet_utt_id
         frame_utt_id = self._extract_tts_utt_id(frame) or utt_id_value
         greet_completion_reason: Optional[str] = None
+        greet_just_completed = False
         is_greet_tts = self._frame_signals_greet(frame) or (
             greet_utt_id is not None and frame_utt_id == greet_utt_id
         )
@@ -1397,6 +1398,7 @@ class ChatV2Adapter:
                 summary="Greet TTS completed",
                 source="tts",
             )
+            greet_just_completed = True
             if send is not None:
                 try:
                     await self._send_json(
@@ -1413,6 +1415,8 @@ class ChatV2Adapter:
                     _log.exception("evt=greet_complete_emit_failed sid=%s", ctx.sid)
         if ctx.greet_completed and not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
+            if greet_just_completed:
+                await self._invoke_engine("enable_full_duplex", ctx.sid)
 
         self._schedule_no_audio_watchdog_rearm(ctx)
 

@@ -1334,6 +1334,13 @@ class EngineV2:
         )
         self._aggregators[sid] = aggregator
 
+    def enable_full_duplex(self, sid: str) -> None:
+        """Allow VAD to run during TTS playback after greet completion."""
+
+        aggregator = self._aggregators.get(sid)
+        if aggregator is not None:
+            aggregator.enable_full_duplex()
+
     def _handle_vad_grant(self, sid: str, source: str, info: Dict[str, Any]) -> None:
         reason = "vad_grant"
         mode = info.get("mode") if isinstance(info, Mapping) else None
