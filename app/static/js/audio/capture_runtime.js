@@ -917,7 +917,8 @@ export function createCaptureRuntime({
         audioStreaming = false;
         return false;
       }
-    } else {
+    }
+    if (stream) {
       ensureStreamProvider(stream);
     }
 
