@@ -70,7 +70,7 @@ class DualVADAggregatorTests(unittest.TestCase):
         def supplier() -> Dict[str, Any]:
             return snapshot
 
-        aggregator = VADAggregator(sid, self.bus, supplier)
+        aggregator = VADAggregator(self.bus, sid, supplier)
         aggregator._now_ms = lambda: int(self.current_time)  # type: ignore[attr-defined]
         return aggregator, snapshot
 
