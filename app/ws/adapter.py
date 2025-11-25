@@ -936,57 +936,6 @@ class ChatV2Adapter:
             ctx.asr_final_emitted,
         )
         if ctx.active_req_id and not ctx.asr_final_emitted:
-            metrics_turn_index = None
-            metrics = getattr(ctx, "metrics", None)
-            if isinstance(metrics, Mapping):
-                metrics_turn_index = metrics.get("turn_index")
-
-            turn_index = (
-                metrics_turn_index
-                if isinstance(metrics_turn_index, int)
-                else getattr(ctx, "turn_index", None)
-            )
-
-            # Special-case: first user turn after greet completed, but we never
-            # saw a first audio chunk arrive from the client.
-            # Treat this as a silent/no-op turn: close it cleanly without
-            # generating a timeout "final" for the model.
-            if (
-                turn_index == 1
-                and ctx.greet_completed
-                and not getattr(ctx.session, "first_chunk_sent", False)
-            ):
-                self._log_event(
-                    "info",
-                    "skip_asr_timeout_first_turn",
-                    ctx.sid,
-                    reason=reason,
-                )
-
-                # Mark ASR as completed so later checks don't think the turn
-                # is still waiting on a final.
-                ctx.asr_final_emitted = True
-
-                # Clear stream identifiers to avoid leaking ASR state into
-                # subsequent turns.
-                ctx.asr_stream_id = None
-                ctx.asr_stream_req_id = None
-
-                # Clear the active request id; from the dialog engine's
-                # perspective, this turn is now fully closed.
-                ctx.active_req_id = None
-
-                try:
-                    self._end_user_turn(ctx)
-                except Exception:
-                    self._log_event(
-                        "error",
-                        "end_turn_failed_after_skip_timeout",
-                        ctx.sid,
-                        reason=reason,
-                    )
-                return
-
             await self._handle_asr_timeout(ctx, reason)
 
     def _next_turn_index(self, ctx: AdapterContext) -> int:
@@ -7517,6 +7466,9 @@ class ChatV2Adapter:
     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
         if ctx.ws_send is None:
             raise RuntimeError("websocket send unavailable for asr.open")
+        # Reset per-stream flags before opening a new ASR stream
+        ctx.asr_final_emitted = False
+        ctx.asr_closed_ack_sent = False
         if not can_open(ctx.session):
             return
         if ctx.session.tts_active and not self._allow_capture_during_tts(ctx):
@@ -7530,8 +7482,6 @@ class ChatV2Adapter:
         ctx.asr_bytes_sent = 0
         ctx.asr_opened_ms = None
         ctx.asr_close_reason = None
-        ctx.asr_final_emitted = False
-        ctx.asr_closed_ack_sent = False
         ctx.session.first_chunk_sent = False
         ctx.session.queued_arm = False
         ctx.session.closed_at_ms = None
@@ -7619,14 +7569,30 @@ class ChatV2Adapter:
             turn_index=getattr(ctx, "turn_index", None),
         )
 
-        async def _on_result(transcript: str, is_final: bool, _sid=stream_id) -> None:
-            # Drop late or alien results
-            is_same_stream = _sid == ctx.asr_stream_id
+        async def _on_result(
+            transcript: str,
+            is_final: bool,
+            event: Mapping[str, Any] | None = None,
+            _sid=stream_id,
+        ) -> None:
+            event_stream = event.get("stream") if isinstance(event, Mapping) else None
+            if event_stream is None and isinstance(transcript, Mapping):
+                event_stream = transcript.get("stream")
+
+            if ctx.asr_stream_id is None and event_stream:
+                ctx.asr_stream_id = event_stream
+
+            effective_stream = event_stream if event_stream is not None else _sid
+            stream_mismatch = (
+                ctx.asr_stream_id is not None
+                and effective_stream is not None
+                and effective_stream != ctx.asr_stream_id
+            )
             is_open = ctx.session.asr_state == "open"
 
-            if (not is_same_stream) or (not is_open) or ctx.asr_final_emitted:
+            if stream_mismatch or (not is_open) or ctx.asr_final_emitted:
                 reasons: list[str] = []
-                if not is_same_stream:
+                if stream_mismatch:
                     reasons.append("stream_mismatch")
                 if not is_open:
                     reasons.append("state_not_open")
@@ -7637,7 +7603,7 @@ class ChatV2Adapter:
                     "evt=asr_result_dropped sid=%s reason=%s stream=%s current=%s asr_state=%s final_emitted=%s",
                     ctx.sid,
                     reason_label,
-                    _sid,
+                    effective_stream,
                     ctx.asr_stream_id,
                     ctx.session.asr_state,
                     ctx.asr_final_emitted,
