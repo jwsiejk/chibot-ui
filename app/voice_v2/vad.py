@@ -48,6 +48,8 @@ class VADAggregator:
     MIN_MARGIN_DB = 10.0
     MAX_MARGIN_DB = 18.0
     NOISE_ALPHA = 0.05
+    SHORT_RMS_ALPHA = 0.2
+    LONG_RMS_ALPHA = 0.05
 
     def __init__(
         self,
@@ -84,6 +86,11 @@ class VADAggregator:
 
         self._grant_handler: Optional[Callable[[str, Dict[str, object]], None]] = None
 
+        self._short_rms = 0.0
+        self._long_rms = 0.0
+        self._last_energy_dbfs = -96.0
+        self._last_threshold_dbfs = float(self.DEFAULTS["energy_threshold_dbfs"])
+
         self._refresh_policy()
 
     # ------------------------------------------------------------------
@@ -99,6 +106,10 @@ class VADAggregator:
 
         threshold = self.dynamic_threshold_dbfs()
         effective_mode, _, min_speech_ms = self._effective_settings()
+
+        self._last_threshold_dbfs = threshold
+        self._last_energy_dbfs = dbfs
+        self._update_rms(dbfs)
 
         suppressed = self._in_tts and now_ms < self._echo_suppressed_until_ms
 
@@ -182,6 +193,21 @@ class VADAggregator:
     def dynamic_threshold_dbfs(self) -> float:
         baseline = float(self._policy["energy_threshold_dbfs"])
         return max(baseline, self._nf_dbfs + self._margin_db)
+
+    def _update_rms(self, dbfs: float) -> None:
+        rms = self._dbfs_to_rms(dbfs)
+        if self._short_rms == 0.0:
+            self._short_rms = rms
+        else:
+            self._short_rms = self.SHORT_RMS_ALPHA * rms + (1.0 - self.SHORT_RMS_ALPHA) * self._short_rms
+
+        if self._long_rms == 0.0:
+            self._long_rms = rms
+        else:
+            self._long_rms = self.LONG_RMS_ALPHA * rms + (1.0 - self.LONG_RMS_ALPHA) * self._long_rms
+
+    def _dbfs_to_rms(self, dbfs: float) -> float:
+        return max(0.0, min(1.0, 10 ** (dbfs / 20.0)))
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -345,11 +371,16 @@ class VADAggregator:
         if granted and self._engine_mode not in allowed_modes:
             granted = False
 
+        threshold_rms = self._dbfs_to_rms(self._last_threshold_dbfs)
         decision_payload = {
             "type": "EVT_VAD_DECISION",
             "sid": self._sid,
             "mode": effective_mode,
             "granted": bool(granted),
+            "short_rms": float(self._short_rms),
+            "long_rms": float(self._long_rms),
+            "threshold": float(threshold_rms),
+            "energy_dbfs": float(self._last_energy_dbfs),
             "reasons": list(reasons),
             "nf_dbfs": float(self._nf_dbfs),
             "margin_db": float(self._margin_db),
