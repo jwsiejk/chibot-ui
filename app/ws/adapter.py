@@ -628,6 +628,8 @@ class AdapterContext:
     _logged_final_req_id_mismatch: bool = False
     _logged_header_req_id_mismatch: bool = False
     _logged_asr_timeout: bool = False
+    asr_result_seen: bool = False
+    asr_final_text: str | None = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -979,12 +981,25 @@ class ChatV2Adapter:
             and m.get("tts_completed_at") is not None
             else None
         )
+        asr_result_seen = getattr(ctx, "asr_result_seen", False)
+        asr_final_text = getattr(ctx, "asr_final_text", None)
+        asr_final_preview = None
+        if isinstance(asr_final_text, str) and asr_final_text:
+            asr_final_preview = asr_final_text[:120]
 
         _log.info(
-            "evt=turn_timeline sid=%s turn_index=%s outcome=%s",
+            "evt=turn_timeline sid=%s turn_index=%s outcome=%s asr_ms=%s llm_ms=%s tts_ms=%s "
+            "asr_result_seen=%s asr_final_present=%s asr_final_preview=%s bytes=%s",
             ctx.sid,
             m.get("turn_index"),
             outcome,
+            asr_ms,
+            llm_ms,
+            tts_ms,
+            bool(asr_result_seen),
+            bool(asr_final_text),
+            asr_final_preview,
+            m.get("asr_bytes_sent"),
             extra={
                 "meta": {
                     "asr_ms": asr_ms,
@@ -1021,10 +1036,11 @@ class ChatV2Adapter:
                 source="llm",
             )
             _log.info(
-                "evt=llm_request sid=%s turn_index=%s model=%s",
+                "evt=llm_request sid=%s turn_index=%s model=%s transcript_preview=%s",
                 ctx.sid,
                 metrics.get("turn_index"),
                 model_name,
+                transcript[:120],
             )
             response = await asyncio.to_thread(
                 client.chat.completions.create,
@@ -7359,6 +7375,12 @@ class ChatV2Adapter:
             )
             return
 
+        ctx.asr_result_seen = True
+        if transcript and isinstance(transcript, str):
+            ctx.last_asr_partial = transcript
+        if is_final and transcript and isinstance(transcript, str):
+            ctx.asr_final_text = transcript
+
         if is_final and not asr_path_open:
             _log.info(
                 "evt=asr_final_accepted_after_client_close sid=%s stream=%s state=%s ws_send=%s",
@@ -7445,12 +7467,26 @@ class ChatV2Adapter:
 
         if not is_final:
             req_id = ctx.turn_req_id if isinstance(ctx.turn_req_id, str) else ""
+            _log.debug(
+                "evt=asr_accepted_partial sid=%s stream=%s state=%s text=%s",
+                ctx.sid,
+                ctx.asr_stream_id,
+                getattr(ctx.session, "asr_state", None),
+                (text[:120] if isinstance(text, str) else None),
+            )
             await self._invoke_engine("on_asr_partial", ctx.sid, req_id, 1.0, text)
             return
 
         # Final result path:
         # Defer lifecycle decisions (ASR close / turn end) to the policy engine.
         req_id_final = ctx.turn_req_id if isinstance(ctx.turn_req_id, str) else None
+        _log.info(
+            "evt=asr_accepted_final sid=%s stream=%s state=%s text=%s",
+            ctx.sid,
+            ctx.asr_stream_id,
+            getattr(ctx.session, "asr_state", None),
+            (text[:120] if isinstance(text, str) else None),
+        )
         _log.info(
             "evt=asr_final_deferred_to_policy sid=%s stream=%s state=%s",
             ctx.sid,
@@ -7469,6 +7505,8 @@ class ChatV2Adapter:
         # Reset per-stream flags before opening a new ASR stream
         ctx.asr_final_emitted = False
         ctx.asr_closed_ack_sent = False
+        ctx.asr_result_seen = False
+        ctx.asr_final_text = None
         if not can_open(ctx.session):
             return
         if ctx.session.tts_active and not self._allow_capture_during_tts(ctx):
