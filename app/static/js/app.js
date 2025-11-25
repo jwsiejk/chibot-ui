@@ -25,20 +25,6 @@ let captureModule = null;
 let vadModule = null;
 let pcmSenderModule = null;
 
-(async () => {
-  audioRuntimeModule = await safeImport("./audio/ws_audio_runtime.js");
-  captureModule = await safeImport("./audio/capture_runtime.js");
-  vadModule = await safeImport("./audio/vad_client.js");
-  pcmSenderModule = await safeImport("./audio/pcm_sender.js");
-
-  if (!audioRuntimeModule || !captureModule) {
-    console.error("AUDIO INIT FAILED: Required modules missing", {
-      audioRuntimeModule,
-      captureModule,
-    });
-  }
-})();
-
 if (typeof window !== "undefined") {
   window.__askchipShowMicStatus = function () {
     const diag = window.__askchipAudioDiag || {};
@@ -383,6 +369,30 @@ if (typeof window !== "undefined") {
     }
 
     return "/static/js/";
+  })();
+
+  const STATIC_MODULE_BASE = STATIC_JS_BASE.replace(/\/?$/, "/");
+
+  function buildStaticModulePath(relativePath) {
+    if (!relativePath || typeof relativePath !== "string") {
+      return relativePath;
+    }
+    const normalized = relativePath.replace(/^\.\//, "");
+    return `${STATIC_MODULE_BASE}${normalized}`;
+  }
+
+  (async () => {
+    audioRuntimeModule = await safeImport(buildStaticModulePath("audio/ws_audio_runtime.js"));
+    captureModule = await safeImport(buildStaticModulePath("audio/capture_runtime.js"));
+    vadModule = await safeImport(buildStaticModulePath("audio/vad_client.js"));
+    pcmSenderModule = await safeImport(buildStaticModulePath("audio/pcm_sender.js"));
+
+    if (!audioRuntimeModule || !captureModule) {
+      console.error("AUDIO INIT FAILED: Required modules missing", {
+        audioRuntimeModule,
+        captureModule,
+      });
+    }
   })();
 
   function isSameOrigin(url) {
