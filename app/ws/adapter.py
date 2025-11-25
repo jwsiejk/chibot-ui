@@ -756,6 +756,17 @@ class ChatV2Adapter:
         metrics.setdefault("tts_timeline_logged", False)
         ctx.metrics = metrics
 
+    def _log(
+        self,
+        ctx: AdapterContext,
+        event: str,
+        meta: Mapping[str, Any] | None = None,
+        *,
+        level: str = "info",
+    ) -> None:
+        meta_payload = dict(meta) if isinstance(meta, Mapping) else {}
+        self._log_event(level, event, ctx.sid, **meta_payload)
+
     def _end_user_turn(self, ctx: AdapterContext) -> None:
         ctx.previous_turn_req_id = getattr(ctx, "turn_req_id", None)
         ctx.turn_req_id = None
