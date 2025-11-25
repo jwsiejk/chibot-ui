@@ -208,6 +208,33 @@ class DualVADAggregatorTests(unittest.TestCase):
         aggregator.feed_auto_energy(-60.0)
         self.assertEqual(grants, ["auto_vad"])
 
+    def test_full_duplex_allows_energy_during_tts(self) -> None:
+        aggregator, _ = self._create_aggregator()
+        aggregator.on_engine_mode_change(RESPONDING)
+        grants: List[str] = []
+        aggregator.set_grant_handler(lambda source, info: grants.append(source))
+
+        self.current_time = 0
+        aggregator.on_tts_start()
+        self.current_time = 100
+
+        for _ in range(10):
+            aggregator.feed_auto_energy(-20.0)
+            self._advance(20)
+
+        self.assertFalse(self._collect_events("EVT_VAD_DECISION"))
+
+        self.bus.events.clear()
+        aggregator.enable_full_duplex()
+
+        self.current_time = 200
+        for _ in range(12):
+            aggregator.feed_auto_energy(-20.0)
+            self._advance(20)
+
+        self.assertTrue(self._collect_events("EVT_VAD_DECISION"))
+        self.assertTrue(grants)
+
     def test_hysteresis_and_cooldown_behavior(self) -> None:
         aggregator, _ = self._create_aggregator()
         aggregator.on_engine_mode_change(RESPONDING)
