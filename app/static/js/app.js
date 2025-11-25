@@ -1,6 +1,36 @@
 import "./state.js";
 import { emitClientLog, getWsClientSocket, logStage } from "./ws/telemetry.js";
+// Robust version loader
 import * as versionModule from "./version.js";
+const { importV, withVersion, getBuildId } = versionModule;
+
+// Guaranteed loader fallback
+async function safeImport(path) {
+  try {
+    return await importV(path);
+  } catch (err1) {
+    console.warn("importV failed; retrying raw import", { path, err: String(err1) });
+    try {
+      return await import(/* @vite-ignore */ path);
+    } catch (err2) {
+      console.error("FATAL: dynamic import completely failed", { path, err2: String(err2) });
+      return null;
+    }
+  }
+}
+
+// Load audio modules before anything else
+const audioRuntimeModule = await safeImport("./audio/ws_audio_runtime.js");
+const captureModule = await safeImport("./audio/capture_runtime.js");
+const vadModule = await safeImport("./audio/vad_client.js");
+const pcmSenderModule = await safeImport("./audio/pcm_sender.js");
+
+if (!audioRuntimeModule || !captureModule) {
+  console.error("AUDIO INIT FAILED: Required modules missing", {
+    audioRuntimeModule,
+    captureModule,
+  });
+}
 
 if (typeof window !== "undefined") {
   window.__askchipShowMicStatus = function () {
@@ -23,16 +53,6 @@ if (typeof window !== "undefined") {
 // state.js, audio_player.js, audio/vad_client.js, ws_client.js,
 // transcript_view.js, and errors.js - is loaded dynamically via loadScript()
 // below so they share the same versioned ?v= query parameters.
-
-const getBuildId = typeof versionModule.getBuildId === "function"
-  ? versionModule.getBuildId
-  : () => null;
-const withVersion = typeof versionModule.withVersion === "function"
-  ? versionModule.withVersion
-  : (url) => url;
-const importV = typeof versionModule.importV === "function"
-  ? versionModule.importV
-  : async (path) => import(/* @vite-ignore */ path);
 
 (() => {
   function getMainScriptElement() {

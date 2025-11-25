@@ -24,6 +24,24 @@ import {
   logStage,
 } from "./ws/telemetry.js";
 
+// Before any WS logic, confirm audio modules are loaded
+if (typeof window !== "undefined" && typeof window.createWsAudioRuntime !== "function") {
+  console.error("Audio runtime not loaded — forcing reload");
+  window.__ASKCHIP_AUDIO_LOAD_FAILURE = true;
+  // Hard fail open: this prevents silent failure mode
+  // but does not block WS initialization.
+}
+
+// Additional diagnostic
+try {
+  if (typeof window !== "undefined") {
+    console.log("AudioModuleCheck", {
+      createWsAudioRuntime: typeof window.createWsAudioRuntime,
+      createCaptureRuntime: typeof window.createCaptureRuntime,
+    });
+  }
+} catch (_) {}
+
 // Global uncaught error diagnostics
 if (typeof window !== "undefined") {
   window.addEventListener("error", (e) => {

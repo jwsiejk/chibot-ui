@@ -1829,3 +1829,8 @@ export function createWsAudioRuntime(options = {}) {
     getPcmWarm: () => pcmWarm,
   };
 }
+
+// Ensure global exposure for loader checks
+if (typeof window !== "undefined") {
+  window.createWsAudioRuntime = createWsAudioRuntime;
+}

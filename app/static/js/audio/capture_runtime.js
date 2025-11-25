@@ -972,3 +972,7 @@ export function createCaptureRuntime({
     startRecorderStreaming,
   };
 }
+
+if (typeof window !== "undefined") {
+  window.createCaptureRuntime = createCaptureRuntime;
+}
