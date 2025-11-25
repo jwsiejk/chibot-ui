@@ -1667,6 +1667,11 @@ export function createWsAudioRuntime(options = {}) {
     if (pcmSender) {
       return pcmSender;
     }
+    try {
+      console.warn("DEBUG.ensurePcmSender.enter", {
+        hasCaptureStreamProvider: !!captureStreamProvider,
+      });
+    } catch (_) {}
     if (pcmSenderInitPromise) {
       return pcmSenderInitPromise;
     }
@@ -1675,6 +1680,10 @@ export function createWsAudioRuntime(options = {}) {
     }
     let stream = null;
     if (captureStreamProvider) {
+      try {
+        console.warn("DEBUG.ensurePcmSender.callCaptureStreamProvider");
+      } catch (_) {}
+
       stream = await captureStreamProvider();
       if (!stream) {
         markGumFailed("no_stream_returned");
@@ -1684,6 +1693,14 @@ export function createWsAudioRuntime(options = {}) {
         markGumFailed("no_audio_tracks");
         return null;
       }
+      try {
+        const track = stream.getAudioTracks && stream.getAudioTracks()[0];
+        console.warn("DEBUG.ensurePcmSender.streamResolved", {
+          hasStream: !!stream,
+          trackState: track?.readyState || null,
+        });
+      } catch (_) {}
+
       captureStreamResolved = stream;
       const track = stream.getAudioTracks()[0];
       lastTrackState = track?.readyState || lastTrackState;
@@ -1701,6 +1718,9 @@ export function createWsAudioRuntime(options = {}) {
       chunkMs: PCM_TARGET_BATCH_MS,
       flushIntervalMs: PCM_FLUSH_TIMER_MS,
     }).then(async (sender) => {
+      try {
+        console.warn("DEBUG.ensurePcmSender.senderInitDone");
+      } catch (_) {}
       pcmSender = sender;
       audioCtx = sender?.ctx || audioCtx;
       setGlobalAudioContext(audioCtx);

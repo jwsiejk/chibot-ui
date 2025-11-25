@@ -822,6 +822,21 @@ export function createCaptureRuntime({
   }
 
   async function startRecorderStreaming(opts = {}) {
+    // DEBUG: direct console instrumentation for recorder start
+    try {
+      const AppState = typeof window !== "undefined" ? window.AppState : undefined;
+      const phase = AppState?.phase || null;
+      const wsPhase = AppState?.wsPhase || null;
+      const stream = captureStream || null;
+      const track = stream && typeof stream.getAudioTracks === "function"
+        ? (stream.getAudioTracks()[0] || null)
+        : null;
+      const audioCtxState = typeof window !== "undefined" && window.__globalAudioCtx
+        ? window.__globalAudioCtx.state
+        : null;
+      console.warn("DEBUG.startRecorderStreaming.pre", { phase, wsPhase, hasStream: !!stream, trackState: track?.readyState || null, audioCtxState, opts });
+    } catch (_) {}
+
     const providedPolicy = opts && typeof opts === "object" && !Array.isArray(opts) && Object.prototype.hasOwnProperty.call(opts, "policy")
       ? opts.policy
       : opts;
@@ -922,6 +937,12 @@ export function createCaptureRuntime({
       ensureStreamProvider(stream);
     }
 
+    // At this point we *should* have a live stream and a usable AudioContext.
+    try {
+      const ctxState = typeof window !== "undefined" && window.__globalAudioCtx ? window.__globalAudioCtx.state : null;
+      console.warn("DEBUG.startRecorderStreaming.beforeEnsurePcmSender", { hasStream: !!captureStream, audioCtxState: ctxState });
+    } catch (_) {}
+
     try {
       let ctx = typeof window !== "undefined" ? window.__globalAudioCtx || null : null;
       const previousCtxState = ctx?.state || null;
@@ -983,6 +1004,10 @@ export function createCaptureRuntime({
         console.warn("PCM sender unavailable; cannot start streaming");
         return false;
       }
+      try {
+        const ctxState = typeof window !== "undefined" && window.__globalAudioCtx ? window.__globalAudioCtx.state : null;
+        console.warn("DEBUG.startRecorderStreaming.senderReady", { hasStream: !!captureStream, audioCtxState: ctxState });
+      } catch (_) {}
       if (!pcmSenderReady) {
         pcmSenderReady = true;
         if (!pcmSenderReadyLogged) {
@@ -1027,6 +1052,7 @@ export function createCaptureRuntime({
       } catch {}
       return true;
     } catch (err) {
+      console.warn("DEBUG.startRecorderStreaming.error", err);
       const meta = {
         name: err?.name || "Error",
         message: err?.message || "",
