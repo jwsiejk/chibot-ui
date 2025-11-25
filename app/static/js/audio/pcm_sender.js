@@ -158,6 +158,7 @@ export async function initPcmSender(mediaStream = null, {
   let workletPort = null;
   let usingWorklet = false;
   let processor = null;
+  let sinkNode = null;
   let workletCallbackSeen = false;
   let processorCallbackSeen = false;
 
@@ -528,7 +529,10 @@ export async function initPcmSender(mediaStream = null, {
   try {
     source.connect(processor);
     if (!usingWorklet && processor && typeof processor.connect === "function") {
-      processor.connect(audioCtx.destination);
+      sinkNode = audioCtx.createGain();
+      sinkNode.gain.value = 0;
+      processor.connect(sinkNode);
+      sinkNode.connect(audioCtx.destination);
     }
     try {
       logStage("client.pcm_sender.node_connect_success", {
@@ -553,6 +557,7 @@ export async function initPcmSender(mediaStream = null, {
       try { processor.onaudioprocess = null; } catch (_) {}
     }
     try { processor.disconnect(); } catch (_) {}
+    try { sinkNode?.disconnect?.(); } catch (_) {}
     try { source.disconnect(); } catch (_) {}
     try {
       mediaStream.getTracks().forEach((track) => {
@@ -619,6 +624,13 @@ export async function initPcmSender(mediaStream = null, {
           processor.disconnect();
         } catch (err) {
           console.warn("[pcm_sender] processor disconnect failed", err);
+        }
+      }
+      if (sinkNode && typeof sinkNode.disconnect === "function") {
+        try {
+          sinkNode.disconnect();
+        } catch (err) {
+          console.warn("[pcm_sender] sinkNode disconnect failed", err);
         }
       }
     } catch (err) {
