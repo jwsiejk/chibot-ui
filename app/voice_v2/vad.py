@@ -58,8 +58,8 @@ class VADAggregator:
 
     def __init__(
         self,
-        sid: str,
         bus,
+        sid: str,
         policy_supplier: Callable[[], MutableMapping[str, object] | Mapping[str, object] | None],
     ) -> None:
         self._sid = sid

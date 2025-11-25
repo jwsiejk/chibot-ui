@@ -1328,7 +1328,7 @@ class EngineV2:
             snapshot = self.policy_snapshot or {}
             return dict(snapshot)
 
-        aggregator = VADAggregator(sid, self._bus, _policy_supplier)
+        aggregator = VADAggregator(self._bus, sid, _policy_supplier)
         aggregator.set_grant_handler(
             lambda source, info, *, _sid=sid: self._handle_vad_grant(_sid, source, info)
         )
