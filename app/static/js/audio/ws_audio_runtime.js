@@ -200,12 +200,21 @@ export function createWsAudioRuntime(options = {}) {
     gumFailed = false;
     lastGumError = null;
     lastTrackState = null;
-    lastConstraints = { audio: true };
+    lastConstraints = {
+      audio: {
+        channelCount: { ideal: 1 },
+        sampleRate: { ideal: 48000 },
+        echoCancellation: { ideal: true },
+        noiseSuppression: { ideal: true },
+        autoGainControl: { ideal: true },
+      },
+      video: false,
+    };
 
     // Recreate MediaStream
     let newStream = null;
     try {
-      newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      newStream = await navigator.mediaDevices.getUserMedia(lastConstraints);
       const track = newStream?.getAudioTracks?.()[0] || null;
       lastTrackState = track?.readyState || lastTrackState;
       if (track?.readyState === "ended") {
