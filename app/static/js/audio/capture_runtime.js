@@ -822,6 +822,33 @@ export function createCaptureRuntime({
   }
 
   async function startRecorderStreaming(opts = {}) {
+    const providedPolicy = opts && typeof opts === "object" && !Array.isArray(opts) && Object.prototype.hasOwnProperty.call(opts, "policy")
+      ? opts.policy
+      : opts;
+    const providedReason = opts && typeof opts === "object" && !Array.isArray(opts) && Object.prototype.hasOwnProperty.call(opts, "reason")
+      ? opts.reason
+      : null;
+
+    try {
+      const track = (captureStream && typeof captureStream.getAudioTracks === "function"
+        ? captureStream.getAudioTracks()[0]
+        : null) || null;
+      const audioCtxState = typeof window !== "undefined"
+        ? window.__globalAudioCtx?.state || null
+        : null;
+      logStage("client.recorder.start_attempt", {
+        phase: typeof window !== "undefined" ? window.AppState?.phase || null : null,
+        wsPhase: typeof window !== "undefined" ? window.AppState?.wsPhase || null : null,
+        hasStream: Boolean(captureStream),
+        trackState: track?.readyState || null,
+        trackMuted: track?.muted || null,
+        trackEnabled: track?.enabled || null,
+        audioCtxState,
+        reason: providedReason || null,
+        policy_audio: providedPolicy && typeof providedPolicy === "object" ? providedPolicy.audio || null : null,
+      });
+    } catch (_) {}
+
     let policy = null;
     let reason = null;
 
@@ -854,13 +881,87 @@ export function createCaptureRuntime({
     firstChunkSeen = false;
     clearVadSilenceTimer();
     const captureReason = typeof reason === "string" && reason ? reason : "auto";
-    try {
-      const stream = await startCaptureFromPolicy(policy || {}, captureReason);
-      if (!stream) {
+    let stream = captureStream;
+    const tracks = typeof stream?.getAudioTracks === "function" ? stream.getAudioTracks() : [];
+    const track = Array.isArray(tracks) && tracks.length ? tracks[0] : null;
+    const trackState = track?.readyState || null;
+    const needsNewStream = !stream || !Array.isArray(tracks) || tracks.length === 0 || trackState !== "live";
+
+    if (needsNewStream) {
+      try {
+        logStage("client.recorder.capture_missing_or_dead", {
+          hadStream: Boolean(stream),
+          trackState,
+          reason: captureReason,
+        });
+      } catch (_) {}
+      try {
+        stream = await startCaptureFromPolicy(policy || {}, captureReason);
+        if (!stream) {
+          try {
+            logStage("client.recorder.capture_failed", { error_name: null, error_message: null });
+          } catch (_) {}
+          setListeningState(false);
+          audioStreaming = false;
+          return false;
+        }
+        captureStream = stream;
+      } catch (err) {
+        try {
+          logStage("client.recorder.capture_failed", {
+            error_name: err?.name || null,
+            error_message: err?.message || String(err) || null,
+          });
+        } catch (_) {}
         setListeningState(false);
         audioStreaming = false;
         return false;
       }
+    } else {
+      ensureStreamProvider(stream);
+    }
+
+    try {
+      let ctx = typeof window !== "undefined" ? window.__globalAudioCtx || null : null;
+      const previousCtxState = ctx?.state || null;
+      if (!ctx || ctx.state === "closed") {
+        try {
+          const AudioContextCtor = typeof window !== "undefined"
+            ? window.AudioContext || window.webkitAudioContext
+            : null;
+          if (typeof AudioContextCtor === "function") {
+            ctx = new AudioContextCtor();
+            if (typeof window !== "undefined") {
+              window.__globalAudioCtx = ctx;
+            }
+            logStage("client.audio_context.create_for_recorder", { previous_state: previousCtxState });
+          }
+        } catch (_) {}
+      }
+      if (ctx?.state === "suspended") {
+        try {
+          logStage("client.audio_context.resume_attempt_for_recorder", {});
+        } catch (_) {}
+        try {
+          await ctx.resume();
+          try {
+            logStage("client.audio_context.resumed_for_recorder", {});
+          } catch (_) {}
+        } catch (err) {
+          try {
+            logStage("client.audio_context.resume_failed_for_recorder", {
+              error_name: err?.name || null,
+              error_message: err?.message || String(err) || null,
+            });
+          } catch (_) {}
+          setListeningState(false);
+          audioStreaming = false;
+          return false;
+        }
+      }
+    } catch (_) {}
+
+    try {
       const sender = await ensurePcmSender();
       if (!sender) {
         try {

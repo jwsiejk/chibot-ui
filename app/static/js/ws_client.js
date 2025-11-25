@@ -1709,13 +1709,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
     if (!isConversationReadyPhase()) {
       try {
-        logStage("client.mic.start_skipped", {
+        logStage("client.mic.start_out_of_phase", {
           source: source || "unknown",
-          reason: "not_conversation_phase",
+          reason: "warming_up_before_conversation_phase",
           phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
         });
       } catch (_) {}
-      return false;
     }
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
@@ -1731,6 +1731,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       ensureTurnAudioReqId(policy || AppState?.policy || {});
       const started = await startRecorderStreaming({ policy, reason: source });
       if (!started) {
+        try {
+          logStage("client.recorder.start_failed", {
+            source: source || "unknown",
+            reason: "startRecorderStreaming_returned_false",
+            phase: getPhase(),
+            wsPhase: AppState?.wsPhase || null,
+          });
+        } catch (_) {}
         try {
           logStage("client.mic.start_skipped", {
             source: source || "unknown",
