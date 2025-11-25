@@ -136,12 +136,13 @@ export function createCaptureRuntime({
 
   const DEFAULT_CAPTURE_CONSTRAINTS = {
     audio: {
-      channelCount: 1,
-      sampleRate: 16000,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
+      echoCancellation: { ideal: true },
+      noiseSuppression: { ideal: true },
+      autoGainControl: { ideal: true },
     },
+    video: false,
   };
 
   const {

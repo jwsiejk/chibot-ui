@@ -187,23 +187,26 @@ export async function initPcmSender(mediaStream = null, {
       if (gum) {
         mediaStream = await gum({
           audio: {
-            channelCount: 1,
-            sampleRate: TARGET_SAMPLE_RATE,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
+            channelCount: { ideal: 1 },
+            sampleRate: { ideal: 48000 },
+            echoCancellation: { ideal: true },
+            noiseSuppression: { ideal: true },
+            autoGainControl: { ideal: true },
           },
+          video: false,
         });
       }
     }
     if (!mediaStream) {
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 48000 },
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
         },
+        video: false,
       });
     }
     const audioTracks = mediaStream?.getAudioTracks?.();
