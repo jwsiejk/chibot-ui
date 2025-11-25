@@ -152,19 +152,34 @@ export function createWsAudioRuntime(options = {}) {
 
   __firstPcmFrameLogged = false;
 
+  // gumFailed means the current captureRuntime session is invalid.
+  // It should NOT permanently poison the entire tab.
   let gumFailed = false;
+  let lastGumError = null;
+  let lastTrackState = null;
+  let lastConstraints = null;
   let reacquireAttempted = false;
 
+  // Global diagnostics for debugging
   if (typeof window !== "undefined") {
     try {
       window.__gumFailed = gumFailed;
+      window.__askchipAudioDiag = {
+        get gumFailed() { return gumFailed; },
+        get lastGumError() { return lastGumError; },
+        get lastTrackState() { return lastTrackState; },
+        get lastConstraints() { return lastConstraints; },
+      };
     } catch (_) {}
   }
 
-  function markGumFailed(reason) {
+  function markGumFailed(reason, detail = {}) {
     gumFailed = true;
+    lastGumError = detail?.error || detail?.message || null;
+    lastTrackState = detail?.trackState || lastTrackState;
+    lastConstraints = detail?.constraints || lastConstraints;
     try {
-      logStage("client.mic.gum_failed", { reason });
+      logStage("client.mic.gum_failed", { reason, ...detail });
     } catch (_) {}
     if (typeof window !== "undefined") {
       try {
@@ -183,13 +198,26 @@ export function createWsAudioRuntime(options = {}) {
     } catch (_) {}
 
     gumFailed = false;
+    lastGumError = null;
+    lastTrackState = null;
+    lastConstraints = { audio: true };
 
     // Recreate MediaStream
     let newStream = null;
     try {
       newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const track = newStream?.getAudioTracks?.()[0] || null;
+      lastTrackState = track?.readyState || lastTrackState;
+      if (track?.readyState === "ended") {
+        markGumFailed("track_ended_immediately_reacquire", {
+          trackState: track.readyState,
+          constraints: lastConstraints,
+        });
+        return null;
+      }
     } catch (err) {
       gumFailed = true;
+      lastGumError = err?.message || String(err);
       logStage("client.mic.reacquire.failed", { err: String(err) });
       return null;
     }
@@ -1039,7 +1067,7 @@ export function createWsAudioRuntime(options = {}) {
     const stream = captureStreamResolved || pcmSender?.mediaStream || null;
     const track = stream?.getAudioTracks?.()[0] || null;
     if (track && track.readyState === "ended" && !gumFailed) {
-      markGumFailed("track_ended_windows11_device_switch");
+      markGumFailed("track_ended_windows11_device_switch", { trackState: track.readyState });
       return;
     }
     const metaSampleRate = Number(meta.sampleRate);
@@ -1156,11 +1184,20 @@ export function createWsAudioRuntime(options = {}) {
         gumFailed,
       });
     } catch (_) {}
+    // Instead of hard abort, allow one retry per session.
     if (gumFailed) {
       try {
-        logStage("client.mic.capture_aborted_due_to_gum_failure", {});
+        logStage("client.mic.capture_retry_due_to_gum_failed", {
+          gumFailed,
+          lastGumError,
+          lastTrackState,
+          lastConstraints,
+        });
       } catch (_) {}
-      return;
+      gumFailed = false;
+      if (typeof window !== "undefined") {
+        try { window.__gumFailed = gumFailed; } catch (_) {}
+      }
     }
     const AppState = getAppState();
     const ws = resolveSocket();
@@ -1648,6 +1685,12 @@ export function createWsAudioRuntime(options = {}) {
         return null;
       }
       captureStreamResolved = stream;
+      const track = stream.getAudioTracks()[0];
+      lastTrackState = track?.readyState || lastTrackState;
+      if (track?.readyState === "ended") {
+        markGumFailed("track_ended_immediately", { trackState: track.readyState });
+        return null;
+      }
       updatePcmSenderState("ensure_sender_stream_resolved");
     }
     pcmSenderInitPromise = initPcmSender(stream, {

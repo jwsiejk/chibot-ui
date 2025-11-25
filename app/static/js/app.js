@@ -2,6 +2,20 @@ import "./state.js";
 import { emitClientLog, getWsClientSocket, logStage } from "./ws/telemetry.js";
 import * as versionModule from "./version.js";
 
+if (typeof window !== "undefined") {
+  window.__askchipShowMicStatus = function () {
+    const diag = window.__askchipAudioDiag || {};
+    console.log("AskChip Mic Diagnostic", diag);
+    alert(
+      "AskChip Mic Diagnostic:\n" +
+        "gumFailed=" + diag.gumFailed + "\n" +
+        "lastGumError=" + diag.lastGumError + "\n" +
+        "lastTrackState=" + diag.lastTrackState + "\n" +
+        "See console for full details."
+    );
+  };
+}
+
 // AskChip frontend base module
 //
 // index.html includes only this script (app.js) alongside the standalone

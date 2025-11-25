@@ -701,6 +701,11 @@ export function createCaptureRuntime({
     }
     const constraints = buildConstraintsFromPolicy(policy || {});
     const summary = summarizeConstraints(constraints);
+    if (typeof window !== "undefined") {
+      try {
+        window.__askchip_LastMicConstraints = constraints;
+      } catch (_) {}
+    }
     const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
       ? window.getMicOnce
       : null;
@@ -713,10 +718,23 @@ export function createCaptureRuntime({
           phase: resolvePhase(),
         });
       } catch (_) {}
+      try {
+        logStage("client.mic.gum_attempt", {
+          source: "capture_runtime",
+          reason,
+          constraints: summary,
+          phase: resolvePhase(),
+        });
+      } catch (_) {}
       const stream = gum
         ? await gum(constraints)
         : await navigator.mediaDevices.getUserMedia(constraints);
       captureStream = stream;
+      if (typeof window !== "undefined") {
+        try {
+          window.__askchip_MicStream = stream;
+        } catch (_) {}
+      }
       ensureStreamProvider(stream);
       try {
         const track = (stream && stream.getAudioTracks && stream.getAudioTracks()[0]) || null;
@@ -727,6 +745,15 @@ export function createCaptureRuntime({
           sampleRate: trackSettings.sampleRate || null,
           deviceId: trackSettings.deviceId || null,
           channelCount: trackSettings.channelCount || null,
+          trackState: track?.readyState || null,
+          phase: resolvePhase(),
+        });
+        logStage("client.mic.gum_success", {
+          source: "capture_runtime",
+          reason,
+          track: track?.label || null,
+          trackState: track?.readyState || null,
+          constraints: summary,
           phase: resolvePhase(),
         });
       } catch (_) {}
