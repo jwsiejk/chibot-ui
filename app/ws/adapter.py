@@ -2699,7 +2699,10 @@ class ChatV2Adapter:
                 while True:
                     message = await receive()
                     msg_type = message.get("type")
-                    self._log(ctx, "server.ws_event", {"event": msg_type})
+                    if msg_type == "websocket.receive":
+                        self._log(ctx, "server.ws_event", {"event": msg_type}, level="debug")
+                    else:
+                        self._log(ctx, "server.ws_event", {"event": msg_type})
 
                     if msg_type == "websocket.receive":
                         if message.get("text") is not None:
