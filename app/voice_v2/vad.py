@@ -84,6 +84,7 @@ class VADAggregator:
         self._asr_last_update_ms = 0
 
         self._full_duplex_enabled = False
+        self._last_tts_gate_state: tuple[bool, bool, bool] | None = None
 
         baseline = float(self.DEFAULTS["energy_threshold_dbfs"])
         self._margin_db = (self.MIN_MARGIN_DB + self.MAX_MARGIN_DB) / 2.0
@@ -132,15 +133,18 @@ class VADAggregator:
 
         hard_suppress = suppressed and not self._full_duplex_enabled
 
-        _log.debug(
-            "evt=vad.tts_gate sid=%s in_tts=%s hard_suppress=%s full_duplex=%s energy_dbfs=%.2f threshold_dbfs=%.2f",
-            self._sid,
-            self._in_tts,
-            hard_suppress,
-            self._full_duplex_enabled,
-            self._last_energy_dbfs,
-            self._last_threshold_dbfs,
-        )
+        gate_state = (bool(self._in_tts), bool(hard_suppress), bool(self._full_duplex_enabled))
+        if gate_state != self._last_tts_gate_state:
+            self._last_tts_gate_state = gate_state
+            _log.debug(
+                "evt=vad.tts_gate sid=%s in_tts=%s hard_suppress=%s full_duplex=%s energy_dbfs=%.2f threshold_dbfs=%.2f",
+                self._sid,
+                self._in_tts,
+                hard_suppress,
+                self._full_duplex_enabled,
+                self._last_energy_dbfs,
+                self._last_threshold_dbfs,
+            )
 
         if dbfs < threshold:
             self._update_noise_floor(dbfs)

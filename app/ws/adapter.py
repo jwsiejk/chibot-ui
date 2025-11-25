@@ -493,6 +493,8 @@ class AdapterContext:
     no_audio_watchdog_t0_ms: Optional[int] = None
     ws_recv_count: int = 0
     ws_recv_last_log_ms: int | None = None
+    # Debug log throttling for asr.frame_ingest
+    last_asr_frame_log_ms: int | None = None
     mic_armed_ms: Optional[int] = None
     asr_ready_bundle_sent_ms: Optional[int] = None
     last_pong_sent_ms: int = 0
@@ -5603,12 +5605,20 @@ class ChatV2Adapter:
         elif frame_type == "asr.final":
             ctx.last_asr_partial = None
 
-        _log.debug(
-            "evt=asr.frame_ingest sid=%s bytes=%s vad_speech=%s",
-            ctx.sid,
-            len(event.get("pcm_bytes", b"")),
-            event.get("speech", None),
-        )
+        pcm_bytes = event.get("pcm_bytes", b"")
+        vad_speech = event.get("speech", None)
+        now_ms = self._now_ms()
+        last_log_ms = ctx.last_asr_frame_log_ms or 0
+
+        # Log at most every 500ms, or always when VAD marks speech=True
+        if vad_speech or now_ms - last_log_ms >= 500:
+            ctx.last_asr_frame_log_ms = now_ms
+            _log.debug(
+                "evt=asr.frame_ingest sid=%s bytes=%s vad_speech=%s",
+                ctx.sid,
+                len(pcm_bytes) if isinstance(pcm_bytes, (bytes, bytearray)) else 0,
+                vad_speech,
+            )
 
         return frame
 
