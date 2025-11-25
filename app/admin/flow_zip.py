@@ -59,6 +59,19 @@ _VENDOR_DEBUG_TYPES = {"EVT_VENDOR_DEBUG", "EVT_WS_AUDIO_RECV", "EVT_WS_AUDIO_SE
 _PARTIAL_TYPES = {"EVT_ASR_PARTIAL"}
 
 _PRESERVE_META_TYPES = {"EVT_VAD", "EVT_VAD_DECISION", "EVT_CLIENT_LOG"}
+_PRESERVE_META_TYPES.update(
+    {
+        "EVT_VAD_DECISION",
+        "EVT_VAD_STATE",
+        "EVT_ASR_PARTIAL",
+        "EVT_ASR_FINAL",
+        "asr.frame_ingest",
+        "asr.handle_result",
+        "asr.to_user_turn",
+        "asr.timeout",
+        "asr.close",
+    }
+)
 
 _SESSION_STEP_ALLOWLIST = {
     "policy_defaults",
