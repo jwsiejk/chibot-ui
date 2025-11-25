@@ -491,6 +491,8 @@ class AdapterContext:
     ing_tick_task: asyncio.TimerHandle | None = None
     no_audio_timer: asyncio.TimerHandle | None = None
     no_audio_watchdog_t0_ms: Optional[int] = None
+    ws_recv_count: int = 0
+    ws_recv_last_log_ms: int | None = None
     mic_armed_ms: Optional[int] = None
     asr_ready_bundle_sent_ms: Optional[int] = None
     last_pong_sent_ms: int = 0
@@ -766,6 +768,30 @@ class ChatV2Adapter:
     ) -> None:
         meta_payload = dict(meta) if isinstance(meta, Mapping) else {}
         self._log_event(level, event, ctx.sid, **meta_payload)
+
+    def _rate_limited_ws_receive_log(self, ctx: AdapterContext) -> None:
+        now = int(time.monotonic() * 1000)
+
+        if ctx.ws_recv_last_log_ms is None:
+            ctx.ws_recv_last_log_ms = now
+            ctx.ws_recv_count = 0
+
+        ctx.ws_recv_count += 1
+
+        # Emit once per 1000ms
+        if now - ctx.ws_recv_last_log_ms >= 1000:
+            self._log(
+                ctx,
+                "server.ws_event",
+                {
+                    "event": "websocket.receive",
+                    "count": ctx.ws_recv_count,
+                    "window_ms": now - ctx.ws_recv_last_log_ms,
+                },
+                level="debug",
+            )
+            ctx.ws_recv_last_log_ms = now
+            ctx.ws_recv_count = 0
 
     def _end_user_turn(self, ctx: AdapterContext) -> None:
         ctx.previous_turn_req_id = getattr(ctx, "turn_req_id", None)
@@ -2700,7 +2726,7 @@ class ChatV2Adapter:
                     message = await receive()
                     msg_type = message.get("type")
                     if msg_type == "websocket.receive":
-                        self._log(ctx, "server.ws_event", {"event": msg_type}, level="debug")
+                        self._rate_limited_ws_receive_log(ctx)
                     else:
                         self._log(ctx, "server.ws_event", {"event": msg_type})
 
