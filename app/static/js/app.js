@@ -20,17 +20,24 @@ async function safeImport(path) {
 }
 
 // Load audio modules before anything else
-const audioRuntimeModule = await safeImport("./audio/ws_audio_runtime.js");
-const captureModule = await safeImport("./audio/capture_runtime.js");
-const vadModule = await safeImport("./audio/vad_client.js");
-const pcmSenderModule = await safeImport("./audio/pcm_sender.js");
+let audioRuntimeModule = null;
+let captureModule = null;
+let vadModule = null;
+let pcmSenderModule = null;
 
-if (!audioRuntimeModule || !captureModule) {
-  console.error("AUDIO INIT FAILED: Required modules missing", {
-    audioRuntimeModule,
-    captureModule,
-  });
-}
+(async () => {
+  audioRuntimeModule = await safeImport("./audio/ws_audio_runtime.js");
+  captureModule = await safeImport("./audio/capture_runtime.js");
+  vadModule = await safeImport("./audio/vad_client.js");
+  pcmSenderModule = await safeImport("./audio/pcm_sender.js");
+
+  if (!audioRuntimeModule || !captureModule) {
+    console.error("AUDIO INIT FAILED: Required modules missing", {
+      audioRuntimeModule,
+      captureModule,
+    });
+  }
+})();
 
 if (typeof window !== "undefined") {
   window.__askchipShowMicStatus = function () {
