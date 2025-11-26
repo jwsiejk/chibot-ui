@@ -2324,48 +2324,124 @@ if (typeof window !== "undefined") {
         throw new Error("MediaDevices.getUserMedia unavailable");
       }
 
+      let micWaitCleanup = null;
+      let currentSourceStream = null;
+
+      function clearMicWaiter() {
+        if (micWaitCleanup) {
+          try { micWaitCleanup(); } catch (_) {}
+          micWaitCleanup = null;
+        }
+      }
+
+      function teardownAudioGraph() {
+        if (source) {
+          try { source.disconnect(); } catch (_) {}
+          source = null;
+        }
+        if (audioCtx) {
+          try { audioCtx.close(); } catch (_) {}
+          audioCtx = null;
+        }
+        analyser = null;
+        dataArray = null;
+        currentSourceStream = null;
+      }
+
+      function useSynthMode(reason = "") {
+        if (reason) {
+          console.info("Waveform visualizer using synth mode", { reason });
+        }
+        synthMode = true;
+        prevAnalyserSnapshot = null;
+        teardownAudioGraph();
+      }
+
+      function attachAnalyserToStream(stream) {
+        if (!streamIsActive(stream)) {
+          return false;
+        }
+        if (!synthMode && analyser && currentSourceStream === stream) {
+          return true;
+        }
+
+        teardownAudioGraph();
+
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+        source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        // Prevent any possibility of the mic visualizer feeding the speakers.
+        const silentDestination = audioCtx.createMediaStreamDestination();
+        analyser.connect(silentDestination);
+
+        synthMode = false;
+        prevAnalyserSnapshot = null;
+        currentSourceStream = stream;
+        return true;
+      }
+
+      function ensureWaveformStream(reason = "auto") {
+        const primaryStream = getPrimaryMicStream();
+        if (primaryStream && attachAnalyserToStream(primaryStream)) {
+          clearMicWaiter();
+          return true;
+        }
+        return false;
+      }
+
+      function waitForPrimaryMicStream() {
+        if (micWaitCleanup || MIC_VISUALIZER_STANDALONE_DEBUG) {
+          return;
+        }
+
+        const handler = () => {
+          if (ensureWaveformStream("event")) {
+            return;
+          }
+        };
+
+        window.addEventListener(CLIENT_MIC_OPEN_EVENT, handler, { passive: true });
+        const pollTimer = setInterval(() => handler(), 500);
+        micWaitCleanup = () => {
+          window.removeEventListener(CLIENT_MIC_OPEN_EVENT, handler, { passive: true });
+          clearInterval(pollTimer);
+        };
+      }
+
       async function start(){
         if (raf) return;
         try{
           const primaryStream = getPrimaryMicStream();
 
           if (!primaryStream && !MIC_VISUALIZER_STANDALONE_DEBUG) {
-            console.info("Waveform visualizer using synth mode; mic stream unavailable.");
-            synthMode = true;
-            prevAnalyserSnapshot = null;
+            useSynthMode("waiting_for_primary_mic");
+            waitForPrimaryMicStream();
           } else {
             const stream = primaryStream || (await requestMicStreamForVisualizer());
-            if (!stream || !streamIsActive(stream)) {
+            if (!attachAnalyserToStream(stream)) {
               throw new Error("Mic stream unavailable for waveform visualizer");
             }
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
-            analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 2048;
-            dataArray = new Uint8Array(analyser.frequencyBinCount);
-            source = audioCtx.createMediaStreamSource(stream);
-            source.connect(analyser);
-
-            // Prevent any possibility of the mic visualizer feeding the speakers.
-            const silentDestination = audioCtx.createMediaStreamDestination();
-            analyser.connect(silentDestination);
-            synthMode = false;
-            prevAnalyserSnapshot = null;
+            clearMicWaiter();
           }
         }catch(err){
           console.warn("Mic not available; using synth waveform.", err);
-          synthMode = true;
-          prevAnalyserSnapshot = null;
+          useSynthMode("exception");
+          waitForPrimaryMicStream();
         }
         lastDrawTime = 0;
         loop();
       }
       function stop(){
         cancelAnimationFrame(raf); raf = 0;
+        clearMicWaiter();
         prevAnalyserSnapshot = null;
         lastDrawTime = 0;
         drawBackground(); drawSynth();
-        if (source){ try{ source.disconnect(); }catch{} source = null; }
-        if (audioCtx){ try{ audioCtx.close(); }catch{} audioCtx = null; }
+        teardownAudioGraph();
       }
       drawBackground(); drawSynth();
       return { start, stop };
