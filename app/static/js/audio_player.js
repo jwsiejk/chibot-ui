@@ -4,6 +4,11 @@
     throw new Error("AppState store is required before loading AudioPlayer");
   }
 
+  const emitClientLog = typeof window !== "undefined" ? window.emitClientLog : null;
+
+  const AUDIO_DEBUG_MAX_LOGS = 10;
+  let audioDebugLogCount = 0;
+
   const INT16_DIVISOR = 32768;
   const ACTIVE_SOURCES = new Set();
 
@@ -190,42 +195,76 @@
   }
 
   function enqueueChunk(chunk) {
-    if (!descriptor) {
-      console.warn("AudioPlayer received chunk without descriptor; dropping");
-      return;
-    }
-    const token = flushToken;
-    decodeChain = decodeChain
-      .then(async () => {
-        const ctx = ensureContext();
-        if (!ctx || flushToken !== token) return;
-        let arrayBuffer;
-        if (chunk instanceof ArrayBuffer) {
-          arrayBuffer = chunk;
-        } else if (chunk instanceof Blob) {
-          arrayBuffer = await chunk.arrayBuffer();
-        } else {
-          console.warn("AudioPlayer received unsupported chunk", chunk);
-          return;
-        }
-        if (!arrayBuffer || flushToken !== token) return;
-        const int16 = new Int16Array(arrayBuffer);
-        if (!int16.length) return;
-        const float32 = new Float32Array(int16.length);
-        for (let i = 0; i < int16.length; i += 1) {
-          float32[i] = Math.max(-1, Math.min(1, int16[i] / INT16_DIVISOR));
-        }
-        if (flushToken !== token) return;
+    try {
+      if (!descriptor) {
+        console.warn("AudioPlayer received chunk without descriptor; dropping");
+        return;
+      }
+      if (!chunk) {
+        return;
+      }
+
+      let normalizedChunk = chunk;
+      if (ArrayBuffer.isView?.(normalizedChunk)) {
+        normalizedChunk = normalizedChunk.buffer.slice(
+          normalizedChunk.byteOffset,
+          normalizedChunk.byteOffset + normalizedChunk.byteLength,
+        );
+      }
+
+      const byteLength = normalizedChunk instanceof Blob
+        ? normalizedChunk.size || 0
+        : normalizedChunk?.byteLength || 0;
+
+      if (audioDebugLogCount < AUDIO_DEBUG_MAX_LOGS) {
+        audioDebugLogCount += 1;
         try {
-          await ctx.resume();
-        } catch (err) {
-          // Some browsers throw if resume is called redundantly; ignore.
-        }
-        scheduleBuffer(float32, token);
-      })
-      .catch((err) => {
-        console.error("AudioPlayer chunk enqueue failed", err);
-      });
+          console.log("client.audio_player.enqueue_chunk", { size: byteLength, count: audioDebugLogCount });
+        } catch (_) {}
+        try {
+          if (audioDebugLogCount <= 3 && typeof emitClientLog === "function") {
+            emitClientLog("client.audio_player.enqueue_chunk", { size: byteLength });
+          }
+        } catch (_) {}
+      }
+
+      const token = flushToken;
+      decodeChain = decodeChain
+        .then(async () => {
+          const ctx = ensureContext();
+          if (!ctx || flushToken !== token) return;
+          let arrayBuffer;
+          if (normalizedChunk instanceof ArrayBuffer) {
+            arrayBuffer = normalizedChunk;
+          } else if (normalizedChunk instanceof Blob) {
+            arrayBuffer = await normalizedChunk.arrayBuffer();
+          } else {
+            console.warn("AudioPlayer received unsupported chunk", normalizedChunk);
+            return;
+          }
+          if (!arrayBuffer || flushToken !== token) return;
+          const int16 = new Int16Array(arrayBuffer);
+          if (!int16.length) return;
+          const float32 = new Float32Array(int16.length);
+          for (let i = 0; i < int16.length; i += 1) {
+            float32[i] = Math.max(-1, Math.min(1, int16[i] / INT16_DIVISOR));
+          }
+          if (flushToken !== token) return;
+          try {
+            await ctx.resume();
+          } catch (err) {
+            // Some browsers throw if resume is called redundantly; ignore.
+          }
+          scheduleBuffer(float32, token);
+        })
+        .catch((err) => {
+          console.error("AudioPlayer chunk enqueue failed", err);
+        });
+    } catch (err) {
+      try {
+        console.warn("AudioPlayer.enqueueChunk failed", err);
+      } catch (_) {}
+    }
   }
 
   function setDescriptor(meta) {
