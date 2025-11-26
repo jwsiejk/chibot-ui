@@ -42,6 +42,11 @@ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 
 configure_logging()
+logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(
+    logging.INFO
+)
+logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 install_bus_handler(
     telemetry_bus,
     level=logging.DEBUG if is_firehose_enabled() else logging.INFO,
