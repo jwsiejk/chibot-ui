@@ -29,6 +29,34 @@
     }
   };
 
+  function logMicBlock(source, dest, path, reason) {
+    try {
+      console.warn("mic_guard.block", {
+        sourceName: getNodeName(source),
+        destName: getNodeName(dest),
+        path,
+        reason,
+        stack: new Error().stack,
+      });
+    } catch (_) {
+      // best-effort logging only
+    }
+  }
+
+  function logMicAllow(source, dest, path, reason) {
+    try {
+      console.warn("mic_guard.allow", {
+        sourceName: getNodeName(source),
+        destName: getNodeName(dest),
+        path,
+        reason,
+        stack: new Error().stack,
+      });
+    } catch (_) {
+      // best-effort logging only
+    }
+  }
+
   const markMicFed = (node) => {
     try {
       if (node && typeof node === "object") {
@@ -158,6 +186,24 @@
     }
   };
 
+  const leadsToOutput = (node) => {
+    try {
+      if (!node || typeof node !== "object") {
+        return false;
+      }
+      if (isAudioDestination(node) || isMediaStreamDestination(node)) {
+        return true;
+      }
+      const name = node?.constructor?.name || "";
+      if (/Destination/i.test(name)) {
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  };
+
   AudioNode.prototype.connect = function guardedConnect(...args) {
     try {
       const destination = args[0];
@@ -174,11 +220,8 @@
         propagateMicPath(destination, destinationPath);
 
         if (isAudioDestination(destination)) {
+          logMicBlock(this, destination, destinationPath, "destination_node");
           try {
-            console.warn("Blocked microphone signal from reaching AudioDestinationNode", {
-              path: destinationPath.join(" -> "),
-              nodes: destinationPath,
-            });
             if (typeof window.emitClientLog === "function") {
               window.emitClientLog("client.mic_monitor_blocked", {
                 path: destinationPath,
@@ -196,32 +239,29 @@
         }
 
         if (isAudibleSink(destination)) {
+          const destinationPath = Array.isArray(sourcePath)
+            ? [...sourcePath, getNodeName(destination)]
+            : [getNodeName(this), getNodeName(destination)];
+          logMicBlock(this, destination, destinationPath, "upstream microphone input");
           try {
-            const directSource = isMediaStreamSource(this);
-            const detail = {
-              source: this?.constructor?.name || "AudioNode",
-              destination: destination?.constructor?.name || "AudioDestinationNode",
-            };
-            if (directSource) {
-              console.warn("Blocked microphone source from connecting to audible sink", detail);
-            } else {
-              console.warn("Blocked microphone-fed signal from reaching audible sink", {
-                ...detail,
-                reason: "upstream microphone input",
+            if (typeof window.emitClientLog === "function") {
+              window.emitClientLog("client.mic_monitor_blocked", {
+                source: this?.constructor?.name || "AudioNode",
+                destination: destination?.constructor?.name || "AudioDestinationNode",
+                reason: isMediaStreamSource(this) ? "direct_source" : "upstream_mic",
+                path: destinationPath,
               });
             }
-            try {
-              if (typeof window.emitClientLog === "function") {
-                window.emitClientLog("client.mic_monitor_blocked", {
-                  source: detail.source,
-                  destination: detail.destination,
-                  reason: directSource ? "direct_source" : "upstream_mic",
-                });
-              }
-            } catch (_) {}
           } catch (_) {}
           return destination;
         }
+      }
+
+      if (sourceFromMic && destination instanceof AudioNode && leadsToOutput(destination)) {
+        const destinationPath = Array.isArray(sourcePath)
+          ? [...sourcePath, getNodeName(destination)]
+          : [getNodeName(this), getNodeName(destination)];
+        logMicAllow(this, destination, destinationPath, "mic path to output (currently allowed)");
       }
     } catch (err) {
       try {

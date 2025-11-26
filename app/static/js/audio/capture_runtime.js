@@ -772,6 +772,13 @@ export function createCaptureRuntime({
       return captureStream;
     } catch (err) {
       try {
+        console.warn("client.mic.gum_error", {
+          name: err?.name,
+          message: err?.message,
+          constraints,
+        });
+      } catch (_) {}
+      try {
         logStage("client.mic.start_failed", { source: "capture_runtime", reason: err?.message || "gum_failed", phase: resolvePhase() });
       } catch (_) {}
       try {

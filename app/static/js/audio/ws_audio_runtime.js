@@ -227,6 +227,13 @@ export function createWsAudioRuntime(options = {}) {
     } catch (err) {
       gumFailed = true;
       lastGumError = err?.message || String(err);
+      try {
+        console.warn("client.mic.gum_error", {
+          name: err?.name,
+          message: err?.message,
+          constraints: lastConstraints,
+        });
+      } catch (_) {}
       logStage("client.mic.reacquire.failed", { err: String(err) });
       return null;
     }

@@ -180,35 +180,28 @@ export async function initPcmSender(mediaStream = null, {
     }
   }
 
+  const micConstraints = {
+    audio: {
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
+      echoCancellation: { ideal: true },
+      noiseSuppression: { ideal: true },
+      autoGainControl: { ideal: true },
+    },
+    video: false,
+  };
+
   try {
     if (!mediaStream) {
       const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
         ? window.getMicOnce
         : null;
       if (gum) {
-        mediaStream = await gum({
-          audio: {
-            channelCount: { ideal: 1 },
-            sampleRate: { ideal: 48000 },
-            echoCancellation: { ideal: true },
-            noiseSuppression: { ideal: true },
-            autoGainControl: { ideal: true },
-          },
-          video: false,
-        });
+        mediaStream = await gum(micConstraints);
       }
     }
     if (!mediaStream) {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: { ideal: 1 },
-          sampleRate: { ideal: 48000 },
-          echoCancellation: { ideal: true },
-          noiseSuppression: { ideal: true },
-          autoGainControl: { ideal: true },
-        },
-        video: false,
-      });
+      mediaStream = await navigator.mediaDevices.getUserMedia(micConstraints);
     }
     const audioTracks = mediaStream?.getAudioTracks?.();
     const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
@@ -225,6 +218,13 @@ export async function initPcmSender(mediaStream = null, {
       });
     } catch (_) {}
   } catch (err) {
+    try {
+      console.warn("client.mic.gum_error", {
+        name: err?.name,
+        message: err?.message,
+        constraints: micConstraints,
+      });
+    } catch (_) {}
     console.error('client.mic_permission_denied', {
       name: err?.name,
       message: err?.message,
@@ -536,6 +536,10 @@ export async function initPcmSender(mediaStream = null, {
       const monitorDestination = MIC_MONITOR_DEBUG
         ? audioCtx.destination
         : audioCtx.createMediaStreamDestination();
+      // MIC ECHO NOTE:
+      // This MediaStreamAudioDestinationNode is fed from the mic path for PCM capture.
+      // The mic guard will log mic_guard.block / mic_guard.allow if this chain tries
+      // to route toward an audible sink.
 
       processor.connect(sinkNode);
       sinkNode.connect(monitorDestination);
