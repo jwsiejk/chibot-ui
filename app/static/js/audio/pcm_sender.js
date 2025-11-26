@@ -531,8 +531,16 @@ export async function initPcmSender(mediaStream = null, {
     if (!usingWorklet && processor && typeof processor.connect === "function") {
       sinkNode = audioCtx.createGain();
       sinkNode.gain.value = 0;
-      processor.connect(sinkNode);
-      sinkNode.connect(audioCtx.destination);
+
+      const MIC_MONITOR_DEBUG = false;
+      if (MIC_MONITOR_DEBUG) {
+        processor.connect(sinkNode);
+        sinkNode.connect(audioCtx.destination);
+      } else {
+        const silentDestination = audioCtx.createMediaStreamDestination();
+        processor.connect(sinkNode);
+        sinkNode.connect(silentDestination);
+      }
     }
     try {
       logStage("client.pcm_sender.node_connect_success", {
