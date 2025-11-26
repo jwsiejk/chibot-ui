@@ -137,6 +137,7 @@ class TestAdapterLLMDecisions(unittest.TestCase):
         self.assertEqual(1, len(self.engine.asr_finals))
 
         decision_reasons = [d.get("reason") for d in decisions if d.get("decision") == "llm_turn"]
+        self.assertEqual(1, len(decisions))
         self.assertIn("non_empty_user_final", decision_reasons)
 
 

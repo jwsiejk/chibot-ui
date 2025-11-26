@@ -975,6 +975,8 @@ class EngineV2:
 
         # Greet follows the same policy -> LLM -> NLG -> chat frame pipeline used by
         # subsequent user turns, anchored here to the session_open.greet rule.
+        # TODO: Consider threading greet through a shared helper to avoid drift from
+        # the main _maybe_emit_policy_and_nlg path when future changes land.
 
         persona: Dict[str, Any] = {}
         try:
@@ -1838,6 +1840,22 @@ class EngineV2:
         session: _TurnSession,
         nlu_payload: Mapping[str, Any],
     ) -> None:
+        """Run the post-ASR policy decision and trigger the LLM/NLG pipeline.
+
+        Inputs:
+            * sid: Session identifier for telemetry correlation.
+            * session: The mutable per-session _TurnSession state.
+            * nlu_payload: NLU output for the current user turn (req_id, turn_id, intent, entities).
+
+        decision["action"] governs downstream behavior:
+            * "respond" → emit policy telemetry, invoke the LLM once, emit EVT_LLM_RESPONSE_START/END, then emit EVT_NLG and chat frames.
+            * "ignore"/"await_user"/other → log the policy decision but skip LLM/NLG emission.
+
+        Expected decisions:
+            * Greet: anchored to session_open.greet and emits a respond-like action via the greet path.
+            * Normal user chat turns: default to action="respond" so real user finals yield LLM + NLG.
+            * Diagnostic or system-hold scenarios: policy may return non-respond actions to explicitly suppress LLM.
+        """
         if session.policy_emitted:
             return
 
@@ -1855,7 +1873,9 @@ class EngineV2:
         # Policy drives the LLM (EVT_LLM_RESPONSE_START/END) and the synthesized
         # NLG/chat frames that ultimately reach the client for each ASR final.
 
-        if decision.get("action") != "respond" or session.nlg_emitted:
+        action = decision.get("action") or "respond"
+
+        if action != "respond" or session.nlg_emitted:
             return
 
         intent = nlu_payload.get("intent")
