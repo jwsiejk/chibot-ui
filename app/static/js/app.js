@@ -76,6 +76,31 @@ if (typeof window !== "undefined") {
       }
       const levels = ["log", "info", "warn", "error", "debug"];
 
+      const noisyConsoleLabels = new Set(["client.pcm_sender.frame_received"]);
+
+      const isNoisyConsoleMessage = (message, args) => {
+        if (noisyConsoleLabels.has(message)) {
+          return true;
+        }
+
+        for (const arg of args) {
+          if (typeof arg === "string" && noisyConsoleLabels.has(arg)) {
+            return true;
+          }
+
+          if (
+            arg &&
+            typeof arg === "object" &&
+            !Array.isArray(arg) &&
+            noisyConsoleLabels.has(arg.message)
+          ) {
+            return true;
+          }
+        }
+
+        return false;
+      };
+
       const formatArg = (value) => {
         if (typeof value === "string") {
           return value;
@@ -103,20 +128,27 @@ if (typeof window !== "undefined") {
           }
 
           const message = buildMessage(...args);
+          const isNoisy = isNoisyConsoleMessage(message, args);
           try {
             c.__askchip_console_bridge_active = true;
-            let sent = false;
-            try {
-              if (typeof sendClientLog === "function" && wsClientIsConnected(getWsClient())) {
-                sent = sendClientLog(`console.${level}`, { message, level });
+            if (!isNoisy) {
+              let sent = false;
+              try {
+                if (typeof sendClientLog === "function" && wsClientIsConnected(getWsClient())) {
+                  sent = sendClientLog(`console.${level}`, { message, level });
+                }
+              } catch (_) {}
+              if (!sent && typeof emitClientLog === "function") {
+                emitClientLog(`console.${level}`, { message, level });
               }
-            } catch (_) {}
-            if (!sent && typeof emitClientLog === "function") {
-              emitClientLog(`console.${level}`, { message, level });
             }
           } catch (_) {
           } finally {
             c.__askchip_console_bridge_active = false;
+          }
+
+          if (isNoisy) {
+            return;
           }
 
           return original(...args);
