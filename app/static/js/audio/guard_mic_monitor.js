@@ -179,6 +179,12 @@
               path: destinationPath.join(" -> "),
               nodes: destinationPath,
             });
+            if (typeof window.emitClientLog === "function") {
+              window.emitClientLog("client.mic_monitor_blocked", {
+                path: destinationPath,
+                reason: "destination_node",
+              });
+            }
           } catch (_) {}
           return destination;
         }
@@ -204,6 +210,15 @@
                 reason: "upstream microphone input",
               });
             }
+            try {
+              if (typeof window.emitClientLog === "function") {
+                window.emitClientLog("client.mic_monitor_blocked", {
+                  source: detail.source,
+                  destination: detail.destination,
+                  reason: directSource ? "direct_source" : "upstream_mic",
+                });
+              }
+            } catch (_) {}
           } catch (_) {}
           return destination;
         }
@@ -223,4 +238,71 @@
     writable: false,
     value: true,
   });
+})();
+
+// ---------------------------------------------------------------------------
+// HTMLMediaElement.srcObject guard: auto-mute mic streams
+// ---------------------------------------------------------------------------
+(function guardMediaElementSrcObject() {
+  try {
+    if (typeof window === "undefined") return;
+    const HME = window.HTMLMediaElement;
+    if (!HME || HME.prototype.__askchip_guarded_srcObject) {
+      return;
+    }
+
+    const proto = HME.prototype;
+
+    // Reuse the existing srcObject descriptor if present
+    const desc =
+      Object.getOwnPropertyDescriptor(proto, "srcObject") ||
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(proto) || {}, "srcObject");
+
+    if (!desc || typeof desc.set !== "function") {
+      return;
+    }
+
+    const originalSet = desc.set;
+    const originalGet = desc.get;
+
+    function looksLikeMicStream(stream) {
+      try {
+        return (
+          stream &&
+          typeof stream.getAudioTracks === "function" &&
+          stream.getAudioTracks().length > 0
+        );
+      } catch (_) {
+        return false;
+      }
+    }
+
+    Object.defineProperty(proto, "srcObject", {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: function () {
+        return originalGet ? originalGet.call(this) : undefined;
+      },
+      set: function (stream) {
+        try {
+          if (looksLikeMicStream(stream)) {
+            // Any media element fed a mic stream is forcibly silenced.
+            this.muted = true;
+            this.volume = 0;
+            try {
+              // eslint-disable-next-line no-console
+              console.warn("[guard_mic_monitor] muted media element assigned mic stream");
+            } catch (_) {}
+          }
+        } catch (_) {
+          // ignore guard errors and still call original setter
+        }
+        return originalSet.call(this, stream);
+      },
+    });
+
+    HME.prototype.__askchip_guarded_srcObject = true;
+  } catch (_) {
+    // Fail-closed: if we can't patch srcObject, just skip without breaking the app.
+  }
 })();
