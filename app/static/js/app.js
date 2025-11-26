@@ -1,5 +1,6 @@
 import "./state.js";
 import { emitClientLog, getWsClientSocket, logStage } from "./ws/telemetry.js";
+import "./audio/guard_mic_monitor.js";
 // Robust version loader
 import * as versionModule from "./version.js";
 const { importV, withVersion, getBuildId } = versionModule;
@@ -2268,30 +2269,88 @@ if (typeof window !== "undefined") {
         if (synthMode) drawSynth(); else drawAnalyser(currentData || prevAnalyserSnapshot);
       }
 
+      const MIC_VISUALIZER_STANDALONE_DEBUG =
+        typeof window !== "undefined" && window.__ASKCHIP_WAVEFORM_DEBUG === true;
+
+      const FALLBACK_MIC_CONSTRAINTS = {
+        audio: {
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 48000 },
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+        },
+        video: false,
+      };
+
+      function streamIsActive(stream) {
+        try {
+          const tracks = typeof stream?.getAudioTracks === "function" ? stream.getAudioTracks() : [];
+          return Array.isArray(tracks) && tracks.some((track) => track && track.readyState === "live");
+        } catch (_) {
+          return false;
+        }
+      }
+
+      function getPrimaryMicStream() {
+        try {
+          const stream = typeof window !== "undefined" ? window.__askchip_MicStream : null;
+          return streamIsActive(stream) ? stream : null;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      function getPreferredMicConstraints() {
+        try {
+          if (typeof window !== "undefined" && window.__askchip_LastMicConstraints) {
+            return window.__askchip_LastMicConstraints;
+          }
+        } catch (_) {}
+        return FALLBACK_MIC_CONSTRAINTS;
+      }
+
+      async function requestMicStreamForVisualizer() {
+        const constraints = getPreferredMicConstraints();
+        const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
+          ? window.getMicOnce
+          : null;
+        if (gum) {
+          return gum(constraints);
+        }
+        if (navigator?.mediaDevices?.getUserMedia) {
+          return navigator.mediaDevices.getUserMedia(constraints);
+        }
+        throw new Error("MediaDevices.getUserMedia unavailable");
+      }
+
       async function start(){
         if (raf) return;
         try{
-          const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
-          analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 2048;
-          dataArray = new Uint8Array(analyser.frequencyBinCount);
-          source = audioCtx.createMediaStreamSource(stream);
-          source.connect(analyser);
+          const primaryStream = getPrimaryMicStream();
 
-          // Prevent any possibility of the mic visualizer feeding the speakers.
-          const MIC_VISUALIZER_DEBUG = false;
-          if (MIC_VISUALIZER_DEBUG) {
-            const gain = audioCtx.createGain();
-            gain.gain.value = 0;
-            analyser.connect(gain);
-            gain.connect(audioCtx.destination);
+          if (!primaryStream && !MIC_VISUALIZER_STANDALONE_DEBUG) {
+            console.info("Waveform visualizer using synth mode; mic stream unavailable.");
+            synthMode = true;
+            prevAnalyserSnapshot = null;
           } else {
+            const stream = primaryStream || (await requestMicStreamForVisualizer());
+            if (!stream || !streamIsActive(stream)) {
+              throw new Error("Mic stream unavailable for waveform visualizer");
+            }
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            source = audioCtx.createMediaStreamSource(stream);
+            source.connect(analyser);
+
+            // Prevent any possibility of the mic visualizer feeding the speakers.
             const silentDestination = audioCtx.createMediaStreamDestination();
             analyser.connect(silentDestination);
+            synthMode = false;
+            prevAnalyserSnapshot = null;
           }
-          synthMode = false;
-          prevAnalyserSnapshot = null;
         }catch(err){
           console.warn("Mic not available; using synth waveform.", err);
           synthMode = true;
