@@ -7,6 +7,12 @@
 //  - frame_parser.js owns "data → JS frame" and light normalization.
 //  - ws_client.js owns policy/turn/mic behavior.
 //
+// NOTE:
+// Binary frames that fail msgpack decoding with known "non-control" errors
+// (e.g., trailing bytes, unsupported prefixes/ext, truncated buffers) are now
+// treated as raw binary (audio) payloads instead of hard parse errors.
+// Parse error logging is rate-limited to avoid console spam.
+//
 // Contract:
 //   createFrameParser({
 //     hubLog,                 // (label, detail) => void
@@ -14,7 +20,6 @@
 //     connection,             // createWsConnection(...) instance
 //     handleMessageFrame,     // (frame) => void
 //     handleErrorFrame,       // (frame) => void
-//     getNegotiatedControlCodec, // () => "json" | "msgpack"
 //     getAudioPlayer,         // () => window.AudioPlayer | null (optional)
 //     ignoredVendorMessages,  // Set<string> of vendor messageType values to drop
 //   }) -> {
@@ -31,42 +36,62 @@ const DEFAULT_IGNORED_VENDOR_MESSAGES = new Set([
   "AddTranscript",
 ]);
 
+const MSGPACK_PARSE_ERROR_LIMIT = 5;
+const MSGPACK_ERROR_COUNTS = Object.create(null);
+const KNOWN_BINARY_MSGPACK_ERRORS = [
+  "Trailing bytes after msgpack payload",
+  "Unsupported msgpack fixed ext format",
+  "Unsupported msgpack prefix",
+  "Unsupported msgpack ext format",
+  "Truncated msgpack buffer",
+];
+const AUDIO_FRAME_LOG_LIMIT = 3;
+
 export function createFrameParser({
   hubLog,
   logStage,
   connection,         // createWsConnection(...), if needed
   handleMessageFrame, // function(frame) from ws_client.js
   handleErrorFrame,
-  getNegotiatedControlCodec,
   getAudioPlayer = () =>
     (typeof window !== "undefined" ? window.AudioPlayer : null),
   ignoredVendorMessages = DEFAULT_IGNORED_VENDOR_MESSAGES,
 }) {
   // --- Codec negotiation ----------------------------------------------------
 
-  function resolveControlCodec() {
-    try {
-      if (typeof getNegotiatedControlCodec === "function") {
-        const codec = getNegotiatedControlCodec();
-        if (codec === "msgpack") return "msgpack";
-        if (codec === "json") return "json";
-      }
-    } catch (err) {
-      console.warn("frame_parser.getNegotiatedControlCodec failed", err);
-    }
-    // Default to JSON for control frames; msgpack is only used for
-    // binary/vendor payloads.
-    return "json";
-  }
-
   // --- Helpers --------------------------------------------------------------
 
-  function tryDecodeMsgpackFrame(buffer) {
+  function cloneArrayBuffer(view) {
+    if (view instanceof ArrayBuffer) {
+      return view.slice(0);
+    }
+    if (ArrayBuffer.isView?.(view)) {
+      try {
+        return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+      } catch (err) {
+        console.warn("frame_parser failed to slice ArrayBuffer view", err);
+      }
+    }
+    return null;
+  }
+
+  function logLimitedParseError(kind, message) {
+    if (!message) return;
+    const key = `${kind}:${message}`;
+    MSGPACK_ERROR_COUNTS[key] = (MSGPACK_ERROR_COUNTS[key] || 0) + 1;
+    if (MSGPACK_ERROR_COUNTS[key] > MSGPACK_PARSE_ERROR_LIMIT) {
+      return;
+    }
     try {
-      const view =
-        buffer instanceof ArrayBuffer
-          ? new Uint8Array(buffer)
-          : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      console.warn(`frame_parser ${kind} decode failed`, message);
+    } catch {}
+    try {
+      hubLog?.("client.ws.parse_error", { kind, error: message });
+    } catch {}
+  }
+
+  function tryDecodeMsgpackFrame(view) {
+    try {
       const decoded = decodeMessagePack(view);
       if (
         decoded &&
@@ -74,18 +99,14 @@ export function createFrameParser({
         !Array.isArray(decoded) &&
         typeof decoded.type === "string"
       ) {
-        return decoded;
+        return { frame: decoded };
       }
+      return { frame: null };
     } catch (err) {
-      console.warn("frame_parser msgpack decode failed", err);
-      try {
-        hubLog?.("client.ws.parse_error", {
-          kind: "msgpack",
-          error: err?.message,
-        });
-      } catch {}
+      const message = err?.message || String(err || "decode_error");
+      const treatAsRaw = KNOWN_BINARY_MSGPACK_ERRORS.some((prefix) => message.startsWith(prefix));
+      return { frame: null, error: message, treatAsRaw };
     }
-    return null;
   }
 
   function isVendorFrame(frame) {
@@ -176,18 +197,31 @@ export function createFrameParser({
       ArrayBuffer.isView?.(data)
     ) {
       binary = true;
-      const codec = resolveControlCodec();
-      if (codec === "msgpack") {
-        frame = tryDecodeMsgpackFrame(data);
-      } else {
-        // Even when controlFrames codec is json, vendor traffic is msgpack
-        // in practice; try to decode anyway.
-        frame = tryDecodeMsgpackFrame(data);
-      }
+      const view =
+        data instanceof Uint8Array
+          ? data
+          : new Uint8Array(
+            data instanceof ArrayBuffer
+              ? data
+              : data.buffer,
+            data.byteOffset || 0,
+            data.byteLength
+          );
+      const decodeResult = tryDecodeMsgpackFrame(view);
+      frame = decodeResult?.frame || null;
+
       if (!frame) {
+        if (decodeResult?.treatAsRaw) {
+          const bufferClone = cloneArrayBuffer(view);
+          if (bufferClone) {
+            return { kind: "binary", format: "raw", buffer: bufferClone };
+          }
+        } else if (decodeResult?.error && view.byteLength <= 256) {
+          logLimitedParseError("msgpack", decodeResult.error);
+        }
         // Not a structured control frame; let higher layers treat this as
         // pure binary (e.g. audio). That path does NOT go through frame_parser.
-        return null;
+        return { kind: "binary", format: "raw", buffer: cloneArrayBuffer(view) };
       }
     } else {
       console.warn("frame_parser unknown WS message type", {
@@ -201,7 +235,7 @@ export function createFrameParser({
       return null;
     }
 
-    return { frame, binary };
+    return { frame, binary, kind: "control", format: binary ? "msgpack" : "json" };
   }
 
   // --- Routing --------------------------------------------------------------
@@ -250,11 +284,42 @@ export function createFrameParser({
 
   // --- Raw entrypoint from connection.js -----------------------------------
 
+  let rawBinaryDropLogged = false;
+  let audioFrameLogCount = 0;
+
+  function handleRawBinaryFrame(buffer) {
+    const audioPlayer = getAudioPlayer?.();
+    if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
+      try {
+        audioPlayer.enqueueChunk(buffer);
+        if (audioFrameLogCount < AUDIO_FRAME_LOG_LIMIT) {
+          audioFrameLogCount += 1;
+          logStage?.("client.ws.frame", { kind: "binary", type: "audio" });
+        }
+      } catch (err) {
+        logLimitedParseError("binary", err?.message || "audio_enqueue_failed");
+      }
+      return;
+    }
+
+    if (!rawBinaryDropLogged) {
+      rawBinaryDropLogged = true;
+      console.warn("frame_parser received binary frame without audio handler; dropping");
+    }
+  }
+
   function handleRawMessageData(data) {
     try {
       const parsed = parseMessageData(data);
       if (!parsed) {
         // Unknown / unstructured frame; someone else (audio, etc.) may own it.
+        return;
+      }
+
+      if (parsed.kind === "binary" && parsed.format === "raw") {
+        if (parsed.buffer) {
+          handleRawBinaryFrame(parsed.buffer);
+        }
         return;
       }
 
