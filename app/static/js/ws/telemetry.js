@@ -1,5 +1,11 @@
 // Thin telemetry helpers used by ws_client.js
 
+// Labels that should avoid console fallback to prevent high-volume spam while
+// still allowing telemetry to be delivered over the hub/WebSocket path.
+const QUIET_CLIENT_LOG_LABELS = new Set([
+  "client.pcm_sender.frame_received",
+]);
+
 const TOAST_STYLE_ID = "wsclient-toast-styles";
 const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
@@ -251,10 +257,12 @@ export function emitClientLog(label, detail = {}) {
     } catch {}
   }
 
-  // Mirror to console as a last-resort breadcrumb.
-  try {
-    console.log(label, payload);
-  } catch {}
+  // Mirror to console as a last-resort breadcrumb unless the label is noisy.
+  if (!QUIET_CLIENT_LOG_LABELS.has(label)) {
+    try {
+      console.log(label, payload);
+    } catch {}
+  }
 }
 
 export function logStage(label, detail = {}) {
