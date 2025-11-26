@@ -286,11 +286,22 @@ export function createFrameParser({
 
   let rawBinaryDropLogged = false;
   let audioFrameLogCount = 0;
+  const AUDIO_WS_LOG_MAX = 5;
+  let audioWsLogCount = 0;
 
   function handleRawBinaryFrame(buffer) {
     const audioPlayer = getAudioPlayer?.();
     if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
       try {
+        if (audioWsLogCount < AUDIO_WS_LOG_MAX) {
+          audioWsLogCount += 1;
+          try {
+            console.log("client.ws.tts_audio_chunk_frame", {
+              type: "binary.raw", // binary audio frames are untyped
+              size: buffer?.byteLength || null,
+            });
+          } catch (_) {}
+        }
         audioPlayer.enqueueChunk(buffer);
         if (audioFrameLogCount < AUDIO_FRAME_LOG_LIMIT) {
           audioFrameLogCount += 1;

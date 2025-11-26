@@ -275,6 +275,21 @@
     }
     descriptor = normalized;
     ensureContext();
+
+    try {
+      console.log("client.audio_player.descriptor_set", {
+        sampleRate: normalized.sampleRate,
+        channels: normalized.channels,
+      });
+    } catch (_) {}
+    try {
+      if (typeof emitClientLog === "function") {
+        emitClientLog("client.audio_player.descriptor_set", {
+          sampleRate: normalized.sampleRate,
+          channels: normalized.channels,
+        });
+      }
+    } catch (_) {}
   }
 
   function handleTtsStart(frame) {
@@ -287,6 +302,12 @@
     } else {
       AppState.setState({ tAudioStartMs: null });
     }
+
+    try {
+      console.log("client.audio_player.tts_start", {
+        uttId: currentUtteranceId || null,
+      });
+    } catch (_) {}
   }
 
   function handleTtsEnd(frame) {
@@ -301,6 +322,12 @@
     if (ACTIVE_SOURCES.size === 0) {
       finalizeUtterance();
     }
+
+    try {
+      console.log("client.audio_player.tts_end", {
+        uttId: currentUtteranceId || null,
+      });
+    } catch (_) {}
   }
 
   window.AudioPlayer = {
