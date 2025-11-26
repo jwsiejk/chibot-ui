@@ -310,6 +310,13 @@ if (typeof window !== "undefined") {
 
       return stream;
     } catch (err) {
+      try {
+        console.warn("client.mic.gum_error", {
+          name: err?.name,
+          message: err?.message,
+          constraints,
+        });
+      } catch (_) {}
       const errorDetails = {
         outcome: "ERROR_PERMISSIONS",
         name: err?.name ?? null,
@@ -2340,6 +2347,7 @@ if (typeof window !== "undefined") {
           }
         } catch (_) {}
         return FALLBACK_MIC_CONSTRAINTS;
+
       }
 
       async function requestMicStreamForVisualizer() {
@@ -2347,13 +2355,24 @@ if (typeof window !== "undefined") {
         const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
           ? window.getMicOnce
           : null;
-        if (gum) {
-          return gum(constraints);
+        try {
+          if (gum) {
+            return await gum(constraints);
+          }
+          if (navigator?.mediaDevices?.getUserMedia) {
+            return await navigator.mediaDevices.getUserMedia(constraints);
+          }
+          throw new Error("MediaDevices.getUserMedia unavailable");
+        } catch (err) {
+          try {
+            console.warn("client.mic.gum_error", {
+              name: err?.name,
+              message: err?.message,
+              constraints,
+            });
+          } catch (_) {}
+          throw err;
         }
-        if (navigator?.mediaDevices?.getUserMedia) {
-          return navigator.mediaDevices.getUserMedia(constraints);
-        }
-        throw new Error("MediaDevices.getUserMedia unavailable");
       }
 
       let micWaitCleanup = null;
@@ -2401,6 +2420,9 @@ if (typeof window !== "undefined") {
 
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
         analyser = audioCtx.createAnalyser();
+        // MIC ECHO NOTE:
+        // This analyser is attached to the mic stream for visualization; mic guard logs
+        // will show connections if any part of this path approaches an output.
         analyser.fftSize = 2048;
         dataArray = new Uint8Array(analyser.frequencyBinCount);
         source = audioCtx.createMediaStreamSource(stream);
@@ -2408,6 +2430,9 @@ if (typeof window !== "undefined") {
 
         // Prevent any possibility of the mic visualizer feeding the speakers.
         const silentDestination = audioCtx.createMediaStreamDestination();
+        // MIC ECHO NOTE:
+        // This MediaStreamAudioDestinationNode is intentionally silent to sink the analyser
+        // output from the mic path. Guard logging will reflect any attempted audible routing.
         analyser.connect(silentDestination);
 
         synthMode = false;
