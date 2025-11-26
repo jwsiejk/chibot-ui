@@ -1120,6 +1120,9 @@ export function createWsConnection({
         });
         try {
           if (rawMessageHandler) {
+            // Binary frames may carry raw audio; frame_parser will bypass msgpack
+            // decoding for those buffers and hand them directly to the audio
+            // runtime when available.
             rawMessageHandler(event.data);
             return;
           }
