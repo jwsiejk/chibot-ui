@@ -973,6 +973,9 @@ class EngineV2:
         req_id = f"req-{uuid.uuid4().hex}"
         plan_payload: Dict[str, Any] = {"mode": "greet", "reason": "session_open"}
 
+        # Greet follows the same policy -> LLM -> NLG -> chat frame pipeline used by
+        # subsequent user turns, anchored here to the session_open.greet rule.
+
         persona: Dict[str, Any] = {}
         try:
             persona_candidate = load_persona()
@@ -1848,6 +1851,9 @@ class EngineV2:
         policy_event = self._envelope(sid, EVT_POLICY_DECISION, policy_payload)
         self._publish(policy_event)
         session.policy_emitted = True
+
+        # Policy drives the LLM (EVT_LLM_RESPONSE_START/END) and the synthesized
+        # NLG/chat frames that ultimately reach the client for each ASR final.
 
         if decision.get("action") != "respond" or session.nlg_emitted:
             return

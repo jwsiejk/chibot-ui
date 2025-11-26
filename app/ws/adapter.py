@@ -630,6 +630,8 @@ class AdapterContext:
     _logged_asr_timeout: bool = False
     asr_result_seen: bool = False
     asr_final_text: str | None = None
+    diag_mode: bool = False
+    system_hold: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -7361,7 +7363,33 @@ class ChatV2Adapter:
             timeout,
             len(transcript or ""),
         )
+        text_preview = (transcript or "")[:120] if transcript else ""
+        metrics_map = getattr(ctx, "metrics", {})
+        if not isinstance(metrics_map, Mapping):
+            metrics_map = {}
+
+        # ASR finals flow through the policy -> LLM -> NLG path via engine.on_asr_final.
+        def _log_llm_turn_decision(decision: str, reason: str) -> None:
+            payload = {
+                "sid": ctx.sid,
+                "req_id": ctx.active_req_id,
+                "turn_index": metrics_map.get("turn_index", getattr(ctx, "turn_index", None)),
+                "phase": getattr(ctx, "phase", None),
+                "text_preview": text_preview,
+                "is_final": bool(is_final),
+                "promoted_final": bool(promoted_final),
+                "timeout": bool(timeout),
+                "diag_mode": bool(getattr(ctx, "diag_mode", False)),
+                "system_hold": bool(getattr(ctx, "system_hold", False)),
+                "decision": decision,
+                "reason": reason,
+            }
+            sid_for_log = payload.pop("sid")
+            self._log_event("info", "EVT_LLM_TURN_DECISION", sid_for_log, **payload)
+
         if not ctx.asr_stream_id:
+            if is_final:
+                _log_llm_turn_decision("skip", "no_stream_id")
             _log.info("evt=asr_result_ignored sid=%s reason=no_stream_id", ctx.sid)
             return
 
@@ -7380,6 +7408,16 @@ class ChatV2Adapter:
             ctx.last_asr_partial = transcript
         if is_final and transcript and isinstance(transcript, str):
             ctx.asr_final_text = transcript
+
+        if is_final and ctx.asr_final_emitted:
+            _log_llm_turn_decision("skip", "duplicate_final")
+            _log.info(
+                "evt=asr_result_ignored sid=%s reason=duplicate_final stream=%s state=%s",
+                ctx.sid,
+                ctx.asr_stream_id,
+                ctx.session.asr_state,
+            )
+            return
 
         if is_final and not asr_path_open:
             _log.info(
@@ -7494,7 +7532,35 @@ class ChatV2Adapter:
             ctx.session.asr_state,
         )
         _log.debug("evt=asr.to_user_turn sid=%s transcript=%s", ctx.sid, text)
+        stripped_text = text.strip()
+        is_real_user_final = (
+            is_final
+            and bool(stripped_text)
+            and not timeout
+            and not getattr(ctx, "diag_mode", False)
+            and not getattr(ctx, "system_hold", False)
+        )
+
+        if not is_real_user_final:
+            if timeout and not stripped_text:
+                skip_reason = "timeout_no_text"
+            elif timeout:
+                skip_reason = "timeout_flagged"
+            elif getattr(ctx, "diag_mode", False):
+                skip_reason = "diag_mode_skip"
+            elif getattr(ctx, "system_hold", False):
+                skip_reason = "system_hold"
+            else:
+                skip_reason = "empty_transcript"
+
+            _log_llm_turn_decision("skip", skip_reason)
+            if not stripped_text:
+                self._end_user_turn(ctx)
+            return
+
+        _log_llm_turn_decision("llm_turn", "non_empty_user_final")
         await self._invoke_engine("on_asr_final", ctx.sid, text, req_id_final)
+        self._end_user_turn(ctx)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
         # - deciding whether to keep listening vs close ASR, and
         # - calling _close_asr(ctx, reason=...) and _end_user_turn(ctx) as appropriate.
