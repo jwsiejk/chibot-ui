@@ -3329,6 +3329,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
     const audioPlayer = getAudioPlayer();
     if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+      try {
+        console.log("client.ws.tts_descriptor_frame", {
+          type: frame.type,
+          sampleRate: descriptor.sample_rate || descriptor.sampleRate || descriptor.rate_hz || null,
+          channels: descriptor.channels || descriptor.channel_count || descriptor.num_channels || null,
+        });
+      } catch (_) {}
       audioPlayer.setDescriptor(descriptor);
     }
     updateState({
