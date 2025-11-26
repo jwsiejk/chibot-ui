@@ -2278,6 +2278,18 @@ if (typeof window !== "undefined") {
           dataArray = new Uint8Array(analyser.frequencyBinCount);
           source = audioCtx.createMediaStreamSource(stream);
           source.connect(analyser);
+
+          // Prevent any possibility of the mic visualizer feeding the speakers.
+          const MIC_VISUALIZER_DEBUG = false;
+          if (MIC_VISUALIZER_DEBUG) {
+            const gain = audioCtx.createGain();
+            gain.gain.value = 0;
+            analyser.connect(gain);
+            gain.connect(audioCtx.destination);
+          } else {
+            const silentDestination = audioCtx.createMediaStreamDestination();
+            analyser.connect(silentDestination);
+          }
           synthMode = false;
           prevAnalyserSnapshot = null;
         }catch(err){

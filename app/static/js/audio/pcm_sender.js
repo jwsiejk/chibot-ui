@@ -533,14 +533,12 @@ export async function initPcmSender(mediaStream = null, {
       sinkNode.gain.value = 0;
 
       const MIC_MONITOR_DEBUG = false;
-      if (MIC_MONITOR_DEBUG) {
-        processor.connect(sinkNode);
-        sinkNode.connect(audioCtx.destination);
-      } else {
-        const silentDestination = audioCtx.createMediaStreamDestination();
-        processor.connect(sinkNode);
-        sinkNode.connect(silentDestination);
-      }
+      const monitorDestination = MIC_MONITOR_DEBUG
+        ? audioCtx.destination
+        : audioCtx.createMediaStreamDestination();
+
+      processor.connect(sinkNode);
+      sinkNode.connect(monitorDestination);
     }
     try {
       logStage("client.pcm_sender.node_connect_success", {
