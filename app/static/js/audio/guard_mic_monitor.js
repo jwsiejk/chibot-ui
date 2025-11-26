@@ -19,6 +19,7 @@
 
   const micFedNodes = new WeakSet();
   const micPaths = new WeakMap();
+  const downstreamConnections = new WeakMap();
 
   const getNodeName = (node) => {
     try {
@@ -34,6 +35,23 @@
         micFedNodes.add(node);
       }
     } catch (_) {}
+  };
+
+  const addDownstream = (source, destination) => {
+    try {
+      if (!source || !destination) {
+        return;
+      }
+      if (!(source instanceof AudioNode) || !(destination instanceof AudioNode)) {
+        return;
+      }
+
+      const current = downstreamConnections.get(source) || new Set();
+      current.add(destination);
+      downstreamConnections.set(source, current);
+    } catch (_) {
+      /* no-op */
+    }
   };
 
   const setMicPath = (node, path) => {
@@ -69,6 +87,41 @@
       return Array.isArray(path) ? [...path] : null;
     } catch (_) {
       return null;
+    }
+  };
+
+  const propagateMicPath = (startNode, basePath) => {
+    try {
+      if (!startNode || !Array.isArray(basePath) || basePath.length === 0) {
+        return;
+      }
+
+      const queue = [{ node: startNode, path: basePath }];
+      const visited = new WeakSet();
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+        const node = current?.node;
+        const path = current?.path;
+
+        if (!node || visited.has(node)) {
+          continue;
+        }
+        visited.add(node);
+
+        markMicFed(node);
+        setMicPath(node, path);
+
+        const downstream = downstreamConnections.get(node);
+        if (downstream && downstream.size > 0) {
+          downstream.forEach((child) => {
+            const childPath = [...path, getNodeName(child)];
+            queue.push({ node: child, path: childPath });
+          });
+        }
+      }
+    } catch (_) {
+      /* no-op */
     }
   };
 
@@ -108,6 +161,9 @@
   AudioNode.prototype.connect = function guardedConnect(...args) {
     try {
       const destination = args[0];
+      if (destination instanceof AudioNode) {
+        addDownstream(this, destination);
+      }
       const sourcePath = getMicPath(this);
       const sourceFromMic = originatesFromMic(this);
 
@@ -115,8 +171,7 @@
         const destinationPath = Array.isArray(sourcePath)
           ? [...sourcePath, getNodeName(destination)]
           : [getNodeName(this), getNodeName(destination)];
-        markMicFed(destination);
-        setMicPath(destination, destinationPath);
+        propagateMicPath(destination, destinationPath);
 
         if (isAudioDestination(destination)) {
           try {
