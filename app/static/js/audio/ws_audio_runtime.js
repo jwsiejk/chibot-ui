@@ -425,6 +425,16 @@ export function createWsAudioRuntime(options = {}) {
   };
 
   const safeSendAudioChunk = (payload, meta = {}) => {
+    const phase = getAppState()?.phase || null;
+    if (phase === VOICE_PHASE.Greet) {
+      try {
+        logStage?.("client.mic.start_blocked", {
+          reason: "greet_phase",
+          source: "pcm_send",
+        });
+      } catch (_) {}
+      return false;
+    }
     const currentReqId = typeof getCurrentTurnReqId === "function"
       ? (getCurrentTurnReqId() || null)
       : null;
