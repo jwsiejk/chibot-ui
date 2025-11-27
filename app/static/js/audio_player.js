@@ -5,7 +5,7 @@
   }
 
   const emitClientLog = typeof window !== "undefined" ? window.emitClientLog : null;
-  const AUDIOPLAYER_DEBUG_HARD_MUTE = true; // set true to mute all playback
+  const AUDIOPLAYER_DEBUG_HARD_MUTE = false; // set true to mute all playback
 
   const AUDIO_DEBUG_MAX_LOGS = 10;
   let audioDebugLogCount = 0;
