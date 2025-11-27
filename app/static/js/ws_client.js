@@ -2960,6 +2960,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       || closeCode === 1001
       || closeCode === 1006;
 
+    if (frameParser && typeof frameParser.resetTtsGate === "function") {
+      try {
+        frameParser.resetTtsGate("ws.socket.close", { clearDescriptor: true });
+      } catch (_) {}
+    }
+
     if (transient) {
       setTimeout(() => {
         try {
@@ -3327,8 +3333,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       clearResumeState();
     }
     const descriptor = meta.tts_audio || frame.audio || (frame.meta && frame.meta.audio);
-    const audioPlayer = getAudioPlayer();
-    if (descriptor && audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+    if (descriptor) {
       try {
         console.log("client.ws.tts_descriptor_frame", {
           type: frame.type,
@@ -3336,7 +3341,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           channels: descriptor.channels || descriptor.channel_count || descriptor.num_channels || null,
         });
       } catch (_) {}
-      audioPlayer.setDescriptor(descriptor);
+      if (frameParser && typeof frameParser.setTtsAudioDescriptor === "function") {
+        frameParser.setTtsAudioDescriptor(descriptor);
+      } else {
+        const audioPlayer = getAudioPlayer();
+        if (audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+          audioPlayer.setDescriptor(descriptor);
+        }
+      }
     }
     updateState({
       connectionState: "connected",

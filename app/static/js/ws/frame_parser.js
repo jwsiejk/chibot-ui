@@ -288,11 +288,91 @@ export function createFrameParser({
   let audioFrameLogCount = 0;
   const AUDIO_WS_LOG_MAX = 5;
   let audioWsLogCount = 0;
+  let ttsPlaybackGateOpen = false;
+  let pendingAudioDescriptor = null;
+  const AUDIO_DROP_LOG_LIMIT = 5;
+  let audioDropLogCount = 0;
+
+  function logDroppedAudio(reason, meta = {}) {
+    audioDropLogCount += 1;
+    if (audioDropLogCount <= AUDIO_DROP_LOG_LIMIT) {
+      try {
+        console.warn("frame_parser dropping raw audio", { reason, ...meta });
+      } catch (_) {}
+    }
+    try {
+      logStage?.("client.ws.audio_drop", { reason, ...meta });
+    } catch (_) {}
+    try {
+      hubLog?.("client.ws.audio_drop", { reason, ...meta });
+    } catch (_) {}
+  }
+
+  function resetTtsGate(reason = "reset", { clearDescriptor = false } = {}) {
+    ttsPlaybackGateOpen = false;
+    audioDropLogCount = 0;
+    if (clearDescriptor) {
+      pendingAudioDescriptor = null;
+    }
+    try {
+      logStage?.("client.tts_gate", { state: "closed", reason });
+    } catch (_) {}
+  }
+
+  function applyPendingDescriptor(audioPlayer) {
+    if (!ttsPlaybackGateOpen || !pendingAudioDescriptor) return;
+    if (audioPlayer && typeof audioPlayer.setDescriptor === "function") {
+      audioPlayer.setDescriptor(pendingAudioDescriptor);
+      pendingAudioDescriptor = null;
+    }
+  }
+
+  function openTtsGate(reason = "tts.start") {
+    ttsPlaybackGateOpen = true;
+    audioDropLogCount = 0;
+    try {
+      logStage?.("client.tts_gate", { state: "open", reason });
+    } catch (_) {}
+    try {
+      const audioPlayer = getAudioPlayer?.();
+      applyPendingDescriptor(audioPlayer);
+    } catch (_) {}
+  }
+
+  function setTtsAudioDescriptor(descriptor) {
+    pendingAudioDescriptor = descriptor || null;
+    if (ttsPlaybackGateOpen) {
+      try {
+        const audioPlayer = getAudioPlayer?.();
+        applyPendingDescriptor(audioPlayer);
+      } catch (_) {}
+    }
+  }
+
+  function handleTtsGateFrame(frame) {
+    const type = typeof frame?.type === "string" ? frame.type : null;
+    if (type === "tts.start") {
+      openTtsGate("tts.start");
+    } else if (type === "tts.end" || type === "tts.cancel" || type === "tts.error") {
+      resetTtsGate(type);
+    }
+  }
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    try {
+      window.addEventListener("ws.close", () => resetTtsGate("ws.close", { clearDescriptor: true }));
+    } catch (_) {}
+  }
 
   function handleRawBinaryFrame(buffer) {
+    if (!ttsPlaybackGateOpen) {
+      logDroppedAudio("tts_gate_closed", { size: buffer?.byteLength || null });
+      return;
+    }
     const audioPlayer = getAudioPlayer?.();
     if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
       try {
+        applyPendingDescriptor(audioPlayer);
         if (audioWsLogCount < AUDIO_WS_LOG_MAX) {
           audioWsLogCount += 1;
           try {
@@ -342,6 +422,8 @@ export function createFrameParser({
         return;
       }
 
+      handleTtsGateFrame(frame);
+
       if (binary) {
         // In practice, if we successfully decoded msgpack into an object,
         // we can treat it like any other control/message frame.
@@ -373,5 +455,7 @@ export function createFrameParser({
     processControlFrameObject,
     parseMessageData,
     handleRawMessageData,
+    setTtsAudioDescriptor,
+    resetTtsGate,
   };
 }
