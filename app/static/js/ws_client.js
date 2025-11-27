@@ -1614,6 +1614,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     startRecorderStreaming,
   } = captureRuntime;
 
+  function resetClientTtsGate(reason = "client_stop") {
+    try {
+      if (frameParser && typeof frameParser.resetTtsGate === "function") {
+        frameParser.resetTtsGate(reason, { clearDescriptor: true });
+      }
+    } catch (_) {}
+  }
+
   function handleVadGateChangeWrapped(next) {
     try {
       if (next && (next.vadSpeech === true || next.speech === true)) {
@@ -1654,6 +1662,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       });
     } catch (_) {}
 
+    resetClientTtsGate("client_stop");
+
     // Always pass a normalized string reason into the capture runtime.
     const result = captureStopRecorder(normalized, opts);
     updateMicBaseEnabled(false, "mic_stop");
@@ -1662,6 +1672,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
   WSClient.stopRecorderStreaming = function wsClientStopRecorderStreaming(reason = "manual_stop") {
     try {
+      resetClientTtsGate("client_stop");
       return stopRecorder(reason, { force: true });
     } catch (err) {
       console.warn("WSClient.stopRecorderStreaming failed", err);
@@ -2852,6 +2863,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const normalizedReason = typeof reason === "string" && reason ? reason : DEFAULT_CLOSE_REASON;
     pendingCloseReason = normalizedReason;
     updateMicBaseEnabled(false, "mic_stop");
+    resetClientTtsGate("client_shutdown");
     try {
       voicePhaseController.beginClosing(normalizedReason);
       syncAppStatePhase({ force: true });
@@ -3738,6 +3750,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   };
 
   WSClient.open = function wsClientOpen(options = {}, protocolsOverride) {
+    resetClientTtsGate("session_restart");
     const ws = sessionOpen(options, protocolsOverride);
     socket = ws || null;
     if (!ws) {
