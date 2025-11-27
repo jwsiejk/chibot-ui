@@ -15,7 +15,7 @@ import platform
 import socket
 import sys
 import uuid
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -199,6 +199,105 @@ _POLICY_STABLE_KEYS = (
 )
 
 _log = logging.getLogger(__name__)
+logger = _log
+
+
+class ClientLogAggregator:
+    """
+    Coalesces high-frequency client.log events into a single summary
+    line per (sid, window_ms). This preserves useful shape information
+    without flooding stdout.
+    """
+
+    def __init__(self, window_ms: int = 1000):
+        self.window_ms = window_ms
+        # sid -> aggregation state
+        self._state: dict[str, dict] = {}
+
+    def _now_ms(self) -> int:
+        return int(time.time() * 1000)
+
+    def add(self, sid: str, label: str, frame: dict) -> None:
+        now = self._now_ms()
+        bucket = self._state.setdefault(
+            sid,
+            {
+                "window_start_ms": now,
+                "window_end_ms": now,
+                "counts": defaultdict(int),
+                "vad_short_rms": [],
+            },
+        )
+
+        bucket["window_end_ms"] = now
+        bucket["counts"][label] += 1
+
+        info = frame.get("info") or {}
+        short_rms = info.get("shortRmsDb")
+        if isinstance(short_rms, (int, float)):
+            bucket["vad_short_rms"].append(short_rms)
+
+        # If we've exceeded the window, flush a summary
+        if now - bucket["window_start_ms"] >= self.window_ms:
+            self.flush(sid)
+
+    def flush(self, sid: str) -> None:
+        bucket = self._state.get(sid)
+        if not bucket:
+            return
+
+        counts = bucket["counts"]
+        vad_rms = bucket["vad_short_rms"]
+
+        summary: dict[str, object] = {
+            "window_ms": bucket["window_end_ms"] - bucket["window_start_ms"],
+            "counts": dict(counts),
+        }
+        if vad_rms:
+            summary["vad_short_rms_min"] = min(vad_rms)
+            summary["vad_short_rms_max"] = max(vad_rms)
+            summary["vad_short_rms_avg"] = sum(vad_rms) / len(vad_rms)
+
+        # Single compact debug line per window
+        logger.debug(
+            "client.summary sid=%s %s", sid, json.dumps(summary, separators=(",", ":"))
+        )
+
+        # Reset for next window
+        bucket["window_start_ms"] = bucket["window_end_ms"]
+        bucket["counts"].clear()
+        bucket["vad_short_rms"].clear()
+
+    def flush_all(self) -> None:
+        for sid in list(self._state.keys()):
+            self.flush(sid)
+
+
+CLIENT_LOG_AGG = ClientLogAggregator(window_ms=1000)
+
+
+# High-volume labels we want to aggregate to 1 line/sec:
+NOISY_LABEL_PREFIXES = (
+    "client.pcm_sender",   # e.g. client.pcm_sender..., client.pcm_sender.chunk...
+    "vad.frame_input",
+    "client.audio_chunk",
+    "console.log",
+)
+
+# Labels that should always be logged individually at DEBUG:
+IMPORTANT_LABELS = {
+    "client.vad.speech.begin",
+    "client.vad.speech.end",
+    "client.vad.state",
+    "client.vad.speech",
+    "client.audio.gate.update",
+    "client.audio_stream.state",
+    "client.audio_stream.start",
+    "client.audio_stream.stop",
+    "client.pcm_sender.state",
+    "client.pcm_sender.error",
+    "client.asr",  # final ASR events on the client side
+}
 
 
 # Reduce noisy tts_timeline logs by emitting at most once per window while counting
@@ -2785,6 +2884,9 @@ class ChatV2Adapter:
                     ctx.sid,
                     {"after_close_ms": after_close_ms},
                 )
+                sid = getattr(ctx, "sid", None)
+                if sid:
+                    CLIENT_LOG_AGG.flush(sid)
                 if self.exporter:
                     self.exporter.end(ctx.sid, {"close_code": close_code})
                     self._emit_session_step(
@@ -2841,6 +2943,101 @@ class ChatV2Adapter:
         should_continue: bool
         close_code: Optional[int] = None
         close_reason: Optional[str] = None
+
+    def _log_client_log_event(self, ctx: AdapterContext, frame: dict) -> None:
+        """
+        Route chatty client.log events through an aggregator so we emit at most
+        one debug line per sid per second, while preserving important labels.
+        """
+
+        label = frame.get("label") or frame.get("type") or "client.log"
+        sid = getattr(ctx, "sid", None) or "unknown"
+
+        # First, check if this is a "noisy" label group we want to aggregate.
+        for prefix in NOISY_LABEL_PREFIXES:
+            if label.startswith(prefix):
+                CLIENT_LOG_AGG.add(sid, label, frame)
+                return
+
+        # Important labels: keep full detail at DEBUG
+        if label in IMPORTANT_LABELS:
+            logger.debug("client.log sid=%s label=%s frame=%s", sid, label, frame)
+            return
+
+        # Everything else: keep a very small one-line trace so we know it happened.
+        logger.debug("client.log sid=%s label=%s", sid, label)
+
+    def _handle_client_log(
+        self, ctx: AdapterContext, frame: Dict[str, Any], meta: Dict[str, Any]
+    ) -> None:
+        """
+        Handle client.log frames from the browser. For high-frequency labels
+        (vad.frame_input, client.pcm_sender.*, console.log, client.audio_chunk.*),
+        aggregate into a per-second summary via CLIENT_LOG_AGG. For important
+        state transitions, log individually as before.
+        """
+
+        self._log_client_log_event(ctx, frame)
+
+        sanitized_log = self._sanitize_client_log(frame)
+        if sanitized_log:
+            client_log_meta: Dict[str, Any] = {
+                "label": sanitized_log.get("label") or "client.log",
+                "detail": sanitized_log.get("detail"),
+            }
+            for key in ("message", "client_ts_ms", "extra"):
+                if key in sanitized_log:
+                    client_log_meta[key] = sanitized_log.get(key)
+            bus.publish(
+                {
+                    "type": EVT_CLIENT_LOG,
+                    "sid": ctx.sid,
+                    "who": "client",
+                    "source": "ws.adapter",
+                    "meta": client_log_meta,
+                }
+            )
+            meta["client_log"] = {
+                key: value for key, value in sanitized_log.items() if key != "detail"
+            }
+            detail_payload = sanitized_log.get("detail")
+            stage_value: Optional[str] = None
+            vendor_value: Optional[str] = None
+            outcome = None
+            attempts = None
+            if isinstance(detail_payload, Mapping):
+                outcome = detail_payload.get("outcome")
+                attempts = detail_payload.get("attempts")
+                stage_candidate = detail_payload.get("stage")
+                if isinstance(stage_candidate, str) and stage_candidate.strip():
+                    stage_value = stage_candidate.strip().lower()
+                vendor_candidate = detail_payload.get("vendor")
+                if isinstance(vendor_candidate, str) and vendor_candidate.strip():
+                    vendor_value = vendor_candidate.strip().lower()
+            if vendor_value == "gcp" and stage_value in {"ready", "started", "closed"}:
+                bus.publish(
+                    {
+                        "type": EVT_WS_JSON_RECV_SUMMARY,
+                        "sid": ctx.sid,
+                        "who": "server",
+                        "source": "ws.adapter",
+                        "meta": {
+                            "kind": stage_value,
+                            "vendor": "gcp",
+                        },
+                    }
+                )
+            self._emit_hub_log(
+                ctx,
+                sanitized_log.get("label") or "client.log",
+                sanitized_log,
+            )
+        else:
+            logger.debug(
+                "client.log sid=%s label=%s detail=empty",
+                ctx.sid,
+                frame.get("label"),
+            )
 
     async def _handle_text(
         self,
@@ -2951,6 +3148,8 @@ class ChatV2Adapter:
             )
             if frame_type == "client.pong":
                 ctx.last_client_pong_ms = now_ms
+            if frame_type == "client.log":
+                self._handle_client_log(ctx, frame, meta)
             return self._HandleResult(True)
 
         if frame_type in (
@@ -3501,76 +3700,7 @@ class ChatV2Adapter:
             )
 
         if frame_type == "client.log":
-            sanitized_log = self._sanitize_client_log(frame)
-            if sanitized_log:
-                client_log_meta: Dict[str, Any] = {
-                    "label": sanitized_log.get("label") or "client.log",
-                    "detail": sanitized_log.get("detail"),
-                }
-                for key in ("message", "client_ts_ms", "extra"):
-                    if key in sanitized_log:
-                        client_log_meta[key] = sanitized_log.get(key)
-                bus.publish(
-                    {
-                        "type": EVT_CLIENT_LOG,
-                        "sid": ctx.sid,
-                        "who": "client",
-                        "source": "ws.adapter",
-                        "meta": client_log_meta,
-                    }
-                )
-                meta["client_log"] = {
-                    key: value
-                    for key, value in sanitized_log.items()
-                    if key != "detail"
-                }
-                detail_payload = sanitized_log.get("detail")
-                stage_value: Optional[str] = None
-                vendor_value: Optional[str] = None
-                outcome = None
-                attempts = None
-                if isinstance(detail_payload, Mapping):
-                    outcome = detail_payload.get("outcome")
-                    attempts = detail_payload.get("attempts")
-                    stage_candidate = detail_payload.get("stage")
-                    if isinstance(stage_candidate, str) and stage_candidate.strip():
-                        stage_value = stage_candidate.strip().lower()
-                    vendor_candidate = detail_payload.get("vendor")
-                    if isinstance(vendor_candidate, str) and vendor_candidate.strip():
-                        vendor_value = vendor_candidate.strip().lower()
-                _log.info(
-                    "evt=ws_client_log sid=%s label=%s outcome=%s attempts=%s",
-                    ctx.sid,
-                    sanitized_log.get("label"),
-                    outcome,
-                    attempts,
-                    extra={"sid": ctx.sid, "event": "ws_client_log"},
-                )
-                if vendor_value == "gcp" and stage_value in {"ready", "started", "closed"}:
-                    bus.publish(
-                        {
-                            "type": EVT_WS_JSON_RECV_SUMMARY,
-                            "sid": ctx.sid,
-                            "who": "server",
-                            "source": "ws.adapter",
-                            "meta": {
-                                "kind": stage_value,
-                                "vendor": "gcp",
-                            },
-                        }
-                    )
-                self._emit_hub_log(
-                    ctx,
-                    sanitized_log.get("label") or "client.log",
-                    sanitized_log,
-                )
-            else:
-                _log.info(
-                    "evt=ws_client_log sid=%s label=%s detail=empty",
-                    ctx.sid,
-                    frame.get("label"),
-                    extra={"sid": ctx.sid, "event": "ws_client_log"},
-                )
+            self._handle_client_log(ctx, frame, meta)
 
         if frame_type == "client.banner":
             sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
