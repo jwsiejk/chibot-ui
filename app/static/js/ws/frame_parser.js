@@ -424,6 +424,17 @@ export function createFrameParser({
 
       handleTtsGateFrame(frame);
 
+      if (binary && (
+        frame.type === "audio.chunk" ||
+        frame.type === "audio.start" ||
+        frame.type === "audio.end"
+      )) {
+        if (!ttsPlaybackGateOpen) {
+          logDroppedAudio("tts_gate_closed", { type: frame.type });
+          return;
+        }
+      }
+
       if (binary) {
         // In practice, if we successfully decoded msgpack into an object,
         // we can treat it like any other control/message frame.
