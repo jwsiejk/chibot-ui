@@ -31,6 +31,7 @@ from app.auth.http_handlers import (
 from app.db import neon
 from app.firehose import is_firehose_enabled
 from app.logging_config import configure_logging
+from app.logging_tuning import tune_logging_noise
 from app.logging_setup import install_bus_handler
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
@@ -42,6 +43,7 @@ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 
 configure_logging()
+tune_logging_noise()
 logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(
     logging.INFO
 )
