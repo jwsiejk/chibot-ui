@@ -260,7 +260,9 @@ class ClientLogAggregator:
 
         # Single compact debug line per window
         logger.debug(
-            "client.summary sid=%s %s", sid, json.dumps(summary, separators=(",", ":"))
+            "evt=client_log_summary sid=%s %s",
+            sid,
+            json.dumps(summary, separators=(",", ":")),
         )
 
         # Reset for next window
@@ -278,10 +280,11 @@ CLIENT_LOG_AGG = ClientLogAggregator(window_ms=1000)
 
 # High-volume labels we want to aggregate to 1 line/sec:
 NOISY_LABEL_PREFIXES = (
-    "client.pcm_sender",   # e.g. client.pcm_sender..., client.pcm_sender.chunk...
-    "vad.frame_input",
-    "client.audio_chunk",
-    "console.log",
+    "client.pcm_sender",        # client.pcm_sender.*, including chunk/state noise
+    "vad.frame_input",          # per-frame VAD inputs
+    "client.audio_chunk",       # client.audio_chunk.* delegate/batch logs
+    "client.audio_chun",        # just in case label is truncated/variant
+    "console.log",              # browser console.log mirrored to server
 )
 
 # Labels that should always be logged individually at DEBUG:
@@ -3698,9 +3701,6 @@ class ChatV2Adapter:
                 meta=ready_meta,
                 source="ws.client",
             )
-
-        if frame_type == "client.log":
-            self._handle_client_log(ctx, frame, meta)
 
         if frame_type == "client.banner":
             sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
