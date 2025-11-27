@@ -280,11 +280,18 @@ CLIENT_LOG_AGG = ClientLogAggregator(window_ms=1000)
 
 # High-volume labels we want to aggregate to 1 line/sec:
 NOISY_LABEL_PREFIXES = (
-    "client.pcm_sender",        # client.pcm_sender.*, including chunk/state noise
-    "vad.frame_input",          # per-frame VAD inputs
-    "client.audio_chunk",       # client.audio_chunk.* delegate/batch logs
-    "client.audio_chun",        # just in case label is truncated/variant
-    "console.log",              # browser console.log mirrored to server
+    "client.pcm_sender",         # client.pcm_sender.*, including chunk/state noise
+    "vad.frame_input",           # per-frame VAD inputs
+    "client.audio_chunk",        # client.audio_chunk.* delegate/batch logs
+    "client.audio_chun",         # truncated/variant label
+    "console.log",               # browser console.log mirrored to server
+    "console.debug",             # mirrored console.debug
+    "console.info",              # mirrored console.info
+    "console.warn",              # mirrored console.warn
+    "client.appstate.delta",     # very chatty appstate deltas
+    "client.appstate.heartbeat", # appstate heartbeats
+    "client.mic.heartbeat",      # mic heartbeats
+    "client.audio_stream_state", # audio stream state/summary lines
 )
 
 # Labels that should always be logged individually at DEBUG:
