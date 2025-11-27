@@ -493,6 +493,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     voicePhaseController.markGreetStart(frame?.utt_id);
     syncAppStatePhase({ force: true });
     try {
+      logStage("client.phase.greet_start", { phase: getPhase() });
+    } catch (_) {}
+    try {
       logStage("client.greet_start", {
         phase: getPhase(),
         wsPhase: AppState?.wsPhase || null,
@@ -542,6 +545,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     voicePhaseController.markGreetEnd(frame?.utt_id);
     syncAppStatePhase({ force: true });
+    try {
+      logStage("client.phase.greet_end", { phase: getPhase() });
+    } catch (_) {}
   }
 
   function clearConversationStartTimer() {
@@ -621,15 +627,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeStartRecorderStreaming(policy, source) {
-    if (isGreetPhase()) {
-      try {
-        logStage?.("client.mic.start_blocked", {
-          reason: "greet_phase",
-          source: source || null,
-        });
-      } catch (_) {}
-      return false;
-    }
     const phase = voicePhaseController.getPhase();
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     try {
@@ -641,18 +638,15 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       });
     } catch (_) {}
     if (!allowed) {
-      // Allow mic warm-up even before the full conversation phase is reached.
-      // Actual PCM sending is still gated elsewhere (wsPhase, senderPaused, etc.).
       try {
-        logStage("client.mic.start_out_of_phase", {
+        logStage("client.mic.start_blocked", {
+          reason: "phase_not_conversation",
           source,
           phase,
           wsPhase: AppState?.wsPhase || null,
-          reason: "warming_up_before_conversation_phase",
         });
       } catch (_) {}
-      // Do NOT return early here: we want to give startRecorderStreaming a chance
-      // so that audio preconditions (audioCtx running, pcmWarm) can be satisfied.
+      return false;
     }
     try {
       logStage("client.mic.start_proceed", {
@@ -1721,11 +1715,15 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
   WSClient.startRecorderStreaming = async function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
     wsDiag("start_recorder_streaming", { source });
-    if (isGreetPhase()) {
+    const phase = getPhase();
+    const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+    if (!allowed) {
       try {
         logStage?.("client.mic.start_blocked", {
-          reason: "greet_phase",
+          reason: "phase_not_conversation",
           source: source || null,
+          phase,
+          wsPhase: AppState?.wsPhase || null,
         });
       } catch (_) {}
       return false;
@@ -1756,16 +1754,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         phase: getPhase(),
       });
     } catch (_) {}
-    if (!isConversationReadyPhase()) {
-      try {
-        logStage("client.mic.start_out_of_phase", {
-          source: source || "unknown",
-          reason: "warming_up_before_conversation_phase",
-          phase: getPhase(),
-          wsPhase: AppState?.wsPhase || null,
-        });
-      } catch (_) {}
-    }
     if (!captureRuntime || typeof startRecorderStreaming !== "function") {
       console.warn("WSClient.startRecorderStreaming called but captureRuntime is not ready");
       try {
