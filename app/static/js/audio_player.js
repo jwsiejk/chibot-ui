@@ -5,6 +5,7 @@
   }
 
   const emitClientLog = typeof window !== "undefined" ? window.emitClientLog : null;
+  const AUDIOPLAYER_DEBUG_HARD_MUTE = false; // set true to mute all playback
 
   const AUDIO_DEBUG_MAX_LOGS = 10;
   let audioDebugLogCount = 0;
@@ -162,6 +163,16 @@
     }
     const source = ctx.createBufferSource();
     source.buffer = buffer;
+    if (AUDIOPLAYER_DEBUG_HARD_MUTE) {
+      try {
+        console.log("AudioPlayer hard mute active; skipping buffer playback");
+      } catch (_) {}
+      if (ctx) {
+        const silentDuration = buffer.duration || 0;
+        nextStartTime = Math.max(ctx.currentTime, nextStartTime) + silentDuration;
+      }
+      return;
+    }
     source.connect(gainNode);
     const safeLeadTime = 0.005;
     const startAt = Math.max(nextStartTime, ctx.currentTime + safeLeadTime);
