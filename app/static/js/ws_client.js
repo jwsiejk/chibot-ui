@@ -99,8 +99,25 @@ const voicePhaseController = createVoicePhaseController({ log: logStage });
 let updatePcmSenderState = null;
 const markTurnAudioChunk = null;
 
+try {
+  if (typeof window !== "undefined") {
+    window.voicePhaseController = voicePhaseController;
+    window.PHASE = window.PHASE || PHASE;
+    window.VOICE_PHASE = window.VOICE_PHASE || PHASE;
+  }
+} catch (_) {}
+
 function getPhase() {
   return voicePhaseController.getPhase();
+}
+
+function isGreetPhase() {
+  try {
+    const phase = voicePhaseController?.getPhase?.();
+    return phase === PHASE.Greet;
+  } catch (_) {
+    return false;
+  }
 }
 
 function syncAppStatePhase(options = {}) {
@@ -604,6 +621,15 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeStartRecorderStreaming(policy, source) {
+    if (isGreetPhase()) {
+      try {
+        logStage?.("client.mic.start_blocked", {
+          reason: "greet_phase",
+          source: source || null,
+        });
+      } catch (_) {}
+      return false;
+    }
     const phase = voicePhaseController.getPhase();
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     try {
@@ -1695,6 +1721,15 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
   WSClient.startRecorderStreaming = async function wsClientStartRecorderStreaming(policy = {}, source = "manual") {
     wsDiag("start_recorder_streaming", { source });
+    if (isGreetPhase()) {
+      try {
+        logStage?.("client.mic.start_blocked", {
+          reason: "greet_phase",
+          source: source || null,
+        });
+      } catch (_) {}
+      return false;
+    }
     // Expose stopRecorder and input.stop helpers publicly so UI can pause mic on text input
     WSClient.stopRecorder = function wsClientStopRecorder(reason = "text_input", options = {}) {
       try {

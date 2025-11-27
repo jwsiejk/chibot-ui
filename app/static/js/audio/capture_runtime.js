@@ -4,6 +4,18 @@
 
 import { logMic as telemetryLogMic, logStage as telemetryLogStage } from "../ws/telemetry.js";
 
+function isGreetPhaseSafe() {
+  try {
+    if (typeof window === "undefined") return false;
+    const vpc = window.voicePhaseController || null;
+    const PHASE = window.VOICE_PHASE || window.PHASE || null;
+    if (!vpc || !PHASE || !vpc.getPhase) return false;
+    return vpc.getPhase() === PHASE.Greet;
+  } catch (_) {
+    return false;
+  }
+}
+
 const USER_INITIATED_STOP_REASONS = new Set([
   "user_requested",
   "user_restart",
@@ -377,6 +389,9 @@ export function createCaptureRuntime({
   }
 
   function handleVadGateChange(state) {
+    if (isGreetPhaseSafe()) {
+      return;
+    }
     if (state === "pause") {
       try { syncSenderPaused(true); } catch {}
     } else if (state === "resume") {
@@ -415,6 +430,9 @@ export function createCaptureRuntime({
   }
 
   function scheduleVadSilenceTimer() {
+    if (isGreetPhaseSafe()) {
+      return;
+    }
     const timeoutMs = getVadSilenceTimeoutMs();
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       return;
@@ -699,6 +717,15 @@ export function createCaptureRuntime({
     if (captureStream && streamIsActive(captureStream)) {
       ensureStreamProvider(captureStream);
       return captureStream;
+    }
+    if (isGreetPhaseSafe()) {
+      try {
+        logStage?.("client.mic.start_blocked", {
+          reason: "greet_phase",
+          phase: resolvePhase?.() || "unknown",
+        });
+      } catch (_) {}
+      return false;
     }
     const constraints = buildConstraintsFromPolicy(policy || {});
     const summary = summarizeConstraints(constraints);
