@@ -768,6 +768,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         });
       } catch (_) {}
       if (phaseBefore === PHASE.Greet) {
+        try {
+          logStage("client.conversation.user_turn_commit.greet_end_fixup", {
+            source,
+            wsPhase: AppState?.wsPhase || null,
+          });
+        } catch (_) {}
         voicePhaseController.markGreetEnd();
       }
       voicePhaseController.enterConversation(source);
@@ -779,6 +785,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           wsPhase: AppState?.wsPhase || null,
         });
       } catch (_) {}
+      return;
     }
 
     if (!isReadyForConversationStart()) {

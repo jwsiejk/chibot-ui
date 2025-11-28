@@ -4032,6 +4032,13 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         if not ctx.client_capture_armed:
+            _log.debug(
+                "evt=audio_drop_before_asr sid=%s bytes=%s reason=%s asr_state=%s",
+                ctx.sid,
+                byte_count,
+                "client_capture_not_armed",
+                getattr(ctx.session, "asr_state", None),
+            )
             if ALLOW_AUDIO_WITHOUT_ASR:
                 _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
             else:
@@ -4116,6 +4123,13 @@ class ChatV2Adapter:
                 getattr(ctx, "asr_bytes_sent", None),
                 getattr(ctx, "turn_index", None),
                 getattr(ctx, "asr_final_emitted", None),
+            )
+            _log.debug(
+                "evt=audio_drop_before_asr sid=%s bytes=%s reason=%s asr_state=%s",
+                ctx.sid,
+                byte_count,
+                "accepting_audio_false",
+                getattr(ctx.session, "asr_state", None),
             )
             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
             await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
@@ -4423,6 +4437,13 @@ class ChatV2Adapter:
                 ctx.audio_send_closed,
                 ctx.backpressure_state,
             )
+            _log.debug(
+                "evt=audio_forward_to_asr sid=%s bytes=%s accepting_audio=%s asr_state=%s",
+                ctx.sid,
+                byte_count,
+                ctx.accepting_audio,
+                getattr(ctx.session, "asr_state", None),
+            )
             await self._forward_audio_chunk(ctx, chunk, seq)
             return
 
@@ -4452,6 +4473,13 @@ class ChatV2Adapter:
                 ctx.audio_backlog_bytes,
             )
             return
+        _log.debug(
+            "evt=audio_drop_before_asr sid=%s bytes=%s reason=%s asr_state=%s",
+            ctx.sid,
+            byte_count,
+            reason,
+            getattr(ctx.session, "asr_state", None),
+        )
         _log.info(
             "evt=audio_drop sid=%s len=%d reason=%s",
             ctx.sid,

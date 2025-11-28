@@ -440,7 +440,7 @@ export function createWsAudioRuntime(options = {}) {
       : null;
     const enrichedMeta = meta && typeof meta === "object" ? { ...meta } : {};
     try {
-      logStage("client.audio_chunk_send", {
+      logStage("client.audio_chunk_attempt", {
         length: payload?.byteLength || payload?.length || null,
         ws_ready: resolveSocket()?.readyState,
       });
@@ -451,7 +451,11 @@ export function createWsAudioRuntime(options = {}) {
         warnedMissingReqId = true;
       }
       try {
-        logStage("client.audio_chunk_send", { lane: enrichedMeta.lane || "mic", reqId: null, dropped: true });
+        logStage("client.audio_chunk_dropped", {
+          lane: enrichedMeta.lane || "mic",
+          reqId: null,
+          reason: "missing_reqId",
+        });
       } catch (_) {}
       return false;
     } else {
@@ -473,6 +477,7 @@ export function createWsAudioRuntime(options = {}) {
             keepalive: !!enrichedMeta.keepalive,
             sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
             source: "delegate",
+            sent: true,
           });
         } catch (_) {}
         return true;
