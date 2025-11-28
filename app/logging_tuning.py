@@ -14,5 +14,8 @@ def tune_logging_noise() -> None:
     ]
     for name in noisy_loggers:
         logger = logging.getLogger(name)
-        # Drop them to INFO so per-frame <TEXT>/<BINARY> lines disappear
-        logger.setLevel(logging.INFO)
+        # Drop them to WARNING and disable propagation so per-frame
+        # <TEXT>/<BINARY> debug lines never bubble up to the root logger,
+        # even when the root is configured for DEBUG.
+        logger.setLevel(logging.WARNING)
+        logger.propagate = False
