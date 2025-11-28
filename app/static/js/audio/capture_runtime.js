@@ -609,6 +609,16 @@ export function createCaptureRuntime({
       try { console.warn("pcm.sender.disable_failed", err); } catch {}
     }
     micRecordingStartAt = null;
+    if (captureStream) {
+      try {
+        captureStream.getTracks()?.forEach((track) => {
+          try {
+            track.stop();
+          } catch (_) {}
+        });
+      } catch (_) {}
+      captureStream = null;
+    }
     if (vadController && typeof vadController.reset === "function") {
       try {
         vadController.reset();
@@ -714,10 +724,6 @@ export function createCaptureRuntime({
   }
 
   async function startCaptureFromPolicy(policy, reason = "auto") {
-    if (captureStream && streamIsActive(captureStream)) {
-      ensureStreamProvider(captureStream);
-      return captureStream;
-    }
     if (isGreetPhaseSafe()) {
       try {
         logStage?.("client.mic.start_blocked", {

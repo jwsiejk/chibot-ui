@@ -742,6 +742,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
             delay_ms: 50,
           });
         } catch (_) {}
+        try {
+          await captureStopRecorder("retry_reset", { allowVadStop: true, source: `${source}_retry` });
+        } catch (_) {}
         setTimeout(() => {
           safeStartRecorderStreaming(policy, `${source}_retry`);
         }, 50);
