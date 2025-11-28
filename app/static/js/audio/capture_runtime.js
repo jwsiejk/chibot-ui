@@ -4,6 +4,25 @@
 
 import { logMic as telemetryLogMic, logStage as telemetryLogStage } from "../ws/telemetry.js";
 
+// DEBUG: Monkey-patch MediaStreamTrack.stop to catch the culprit
+const originalStop = MediaStreamTrack.prototype.stop;
+MediaStreamTrack.prototype.stop = function () {
+  if (this.kind === "audio") {
+    console.error("🚨 MIC TRACK STOPPED! 🚨", {
+      label: this.label,
+      readyState: this.readyState,
+      stack: new Error().stack, // <--- This is the key
+    });
+    // Log to your telemetry if available
+    try {
+      if (typeof window.logStage === "function") {
+        window.logStage("client.mic.track_stopped_trace", { stack: new Error().stack });
+      }
+    } catch (e) {}
+  }
+  return originalStop.apply(this, arguments);
+};
+
 // Mic hardware lifecycle (getUserMedia + MediaStreamTrack) is now managed separately
 // from the audio graph. These module-level bindings are shared across capture runtimes
 // to guarantee single-acquire semantics per session.
