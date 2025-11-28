@@ -621,6 +621,9 @@ class AdapterContext:
     client_turn_closed: bool = False
     awaiting_asr_ready: bool = False
     client_capture_armed: bool = False
+    asr_ready_suppressed_logged: bool = False
+    asr_ready_after_greet_logged: bool = False
+    conversation_ready_logged: bool = False
     outbound_queue_depth: int = 0
     backpressure_state: Literal["off", "on"] = "off"
     outbox: asyncio.Queue[Dict[str, Any]] | None = None
@@ -1226,6 +1229,14 @@ class ChatV2Adapter:
                 summary="Skipped pre-greet ASR open",
                 meta={"reason": "greet_not_completed", "where": label},
             )
+            if not ctx.asr_ready_suppressed_logged:
+                self._log_event(
+                    "info",
+                    "asr_ready_suppressed_during_greet",
+                    ctx.sid,
+                    where=label,
+                )
+                ctx.asr_ready_suppressed_logged = True
             return
         if not ctx.asr_ready_bundle_sent_ms:
             self._log_event("info", "asr_ready_arm_post_greet", ctx.sid, where=label)
@@ -1263,6 +1274,20 @@ class ChatV2Adapter:
             if not ctx.asr_ready_bundle_sent_ms:
                 await self._send_asr_ready_bundle(send, ctx)
                 self._log_event("info", "asr_ready_emit", ctx.sid, where=label)
+                if ctx.greet_completed and not ctx.asr_ready_after_greet_logged:
+                    self._log(
+                        ctx,
+                        "server.asr_ready_after_greet",
+                        {"where": label, "greet_utt_id": ctx.greet_utt_id},
+                    )
+                    ctx.asr_ready_after_greet_logged = True
+                    if not ctx.conversation_ready_logged:
+                        self._log(
+                            ctx,
+                            "server.conversation_ready",
+                            {"greet_utt_id": ctx.greet_utt_id},
+                        )
+                        ctx.conversation_ready_logged = True
         except Exception:
             self._log_event("exception", "asr_ready_emit_failed", ctx.sid, where=label)
 
@@ -1294,6 +1319,14 @@ class ChatV2Adapter:
             if isinstance(meta, Mapping):
                 provider_value = meta.get("provider") or provider_value
             metrics["tts_provider"] = provider_value or None
+        is_greet = self._frame_signals_greet(frame)
+        if is_greet and isinstance(frame, Mapping):
+            meta = frame.setdefault("meta", {}) if isinstance(frame, Mapping) else None
+            if isinstance(meta, Mapping):
+                meta.setdefault("is_greet", True)
+                tts_meta = meta.get("tts")
+                if isinstance(tts_meta, Mapping):
+                    tts_meta.setdefault("is_greet", True)
         utt_id = metrics.get("tts_active_utt_id")
         provider_name = metrics.get("tts_provider") or "elevenlabs"
         self._emit_session_step(
@@ -1305,7 +1338,7 @@ class ChatV2Adapter:
         )
         if not ctx.greet_completed:
             greet_utt_id = self._extract_tts_utt_id(frame) or utt_id
-            if greet_utt_id and self._frame_signals_greet(frame):
+            if greet_utt_id and is_greet:
                 ctx.greet_utt_id = greet_utt_id
                 if send is not None:
                     try:
@@ -1318,6 +1351,11 @@ class ChatV2Adapter:
                                 "meta": {"is_greet": True, "provider": provider_name},
                             },
                             ctx=ctx,
+                        )
+                        self._log(
+                            ctx,
+                            "server.greet_start",
+                            {"utt_id": greet_utt_id, "provider": provider_name},
                         )
                     except Exception:
                         _log.exception("evt=greet_start_emit_failed sid=%s", ctx.sid)
@@ -1477,6 +1515,11 @@ class ChatV2Adapter:
                 source="tts",
             )
             greet_just_completed = True
+            self._log(
+                ctx,
+                "server.greet_complete",
+                {"utt_id": frame_utt_id or greet_utt_id, "provider": provider_name},
+            )
             if send is not None:
                 try:
                     await self._send_json(
@@ -1494,6 +1537,16 @@ class ChatV2Adapter:
         if ctx.greet_completed and not ctx.asr_ready_bundle_sent_ms:
             await self._ensure_asr_ready(send, ctx, "tts_end")
             if greet_just_completed:
+                if (
+                    ctx.asr_ready_bundle_sent_ms
+                    and not ctx.conversation_ready_logged
+                ):
+                    self._log(
+                        ctx,
+                        "server.conversation_ready",
+                        {"greet_utt_id": ctx.greet_utt_id},
+                    )
+                    ctx.conversation_ready_logged = True
                 await self._invoke_engine("enable_full_duplex", ctx.sid)
 
         self._schedule_no_audio_watchdog_rearm(ctx)
@@ -3351,6 +3404,12 @@ class ChatV2Adapter:
                     summary="Ignored client asr.open before greet complete",
                     meta={"reason": "greet_not_completed"},
                 )
+                self._log(
+                    ctx,
+                    "asr_open_ignored_during_greet",
+                    {"state": getattr(ctx.session, "asr_state", None)},
+                    level="debug",
+                )
                 await self._publish_json_recv(ctx, meta, frame_payload)
                 return self._HandleResult(True)
             if ctx.session.tts_active:
@@ -3916,6 +3975,19 @@ class ChatV2Adapter:
             meta={"len": byte_count},
             source="ws.audio",
         )
+
+        # During greet (greet_completed == False), incoming PCM must not be fed to ASR.
+        if not ctx.greet_completed:
+            meta = {
+                "byte_count": byte_count,
+                "error": "audio_not_expected",
+                "ws": {"dir": "in", "size": byte_count},
+            }
+            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
+            await self._send_error(
+                send, ctx.sid, "audio_not_expected", "greet in progress"
+            )
+            return self._HandleResult(False, 1003, "audio_not_expected")
 
         if byte_count > self.binary_limit_bytes:
             await self._publish(

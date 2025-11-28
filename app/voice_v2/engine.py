@@ -523,7 +523,12 @@ class EngineV2:
             buffers.pop(sid, None)
 
     def on_tts_start(
-        self, sid: str, utt_id: str, post_hold_ms: int | None = None
+        self,
+        sid: str,
+        utt_id: str,
+        post_hold_ms: int | None = None,
+        *,
+        is_greet: bool = False,
     ) -> None:
         """Engage the TTS mask and emit a telemetry breadcrumb."""
 
@@ -537,11 +542,14 @@ class EngineV2:
 
         hold_ms = post_hold_ms or 0
         voice_id, locale = self._voice_profile()
-        tts_meta = {
+        tts_meta: Dict[str, Any] = {
             "tts": {"utt_id": utt_id, "post_hold_ms": hold_ms},
             "voice_id": voice_id,
             "locale": locale,
         }
+        if is_greet:
+            tts_meta["is_greet"] = True
+            tts_meta["tts"]["is_greet"] = True
         self._gate.set_reason(
             "tts_active",
             True,
@@ -569,12 +577,23 @@ class EngineV2:
         )
 
     def on_tts_end(
-        self, sid: str, utt_id: str, post_hold_ms: int | None = None
+        self,
+        sid: str,
+        utt_id: str,
+        post_hold_ms: int | None = None,
+        *,
+        is_greet: bool = False,
     ) -> None:
         """Release the TTS mask and optionally engage a post-hold."""
 
         hold_ms = post_hold_ms or 0
-        self._teardown_tts(sid, utt_id, post_hold_ms=hold_ms, transition_to_ready=True)
+        self._teardown_tts(
+            sid,
+            utt_id,
+            post_hold_ms=hold_ms,
+            transition_to_ready=True,
+            is_greet=is_greet,
+        )
 
     def emit_tts_audio_chunk(self, sid: str, chunk: bytes | bytearray | memoryview) -> None:
         """Emit a PCM chunk for server-to-client playback."""
@@ -1606,6 +1625,7 @@ class EngineV2:
         reason: str | None = None,
         post_hold_ms: int = 0,
         transition_to_ready: bool,
+        is_greet: bool = False,
     ) -> None:
         self._streaming.set_output_finalizer(sid, None)
         session = self._ensure_session(sid)
@@ -1619,7 +1639,12 @@ class EngineV2:
         if aggregator is not None:
             aggregator.on_tts_end()
 
-        payload: Dict[str, Any] = {"meta": {"tts": {"utt_id": utt_id}}}
+        tts_meta: Dict[str, Any] = {"utt_id": utt_id}
+        if is_greet:
+            tts_meta["is_greet"] = True
+        payload: Dict[str, Any] = {"meta": {"tts": tts_meta}}
+        if is_greet:
+            payload["meta"]["is_greet"] = True
         req_id = session.req_id
         req_id_value = req_id if isinstance(req_id, str) and req_id else None
         if req_id_value:
@@ -1639,7 +1664,9 @@ class EngineV2:
             )
 
         self._publish_tts_mask(sid, "off", force=was_active)
-        self._gate.set_reason("tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}})
+        self._gate.set_reason(
+            "tts_active", False, sid=sid, meta={"tts": {"utt_id": utt_id}}
+        )
 
         if transition_to_ready:
             if post_hold_ms > 0:
