@@ -33,6 +33,8 @@ let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
 const PCM_SENDER_DEBUG = true;
 let __firstPcmFrameLogged = false;
 const WS_READY_PHASES = new Set(["connected", "ready"]);
+let wsAudioDropCount = 0;
+const WS_AUDIO_DROP_LOG_LIMIT = 5;
 
 const primedSessionIds = new Set();
 
@@ -351,6 +353,27 @@ export function createWsAudioRuntime(options = {}) {
     }
   }
 
+  function logWsAudioDropOnce(meta, reason) {
+    wsAudioDropCount += 1;
+    if (wsAudioDropCount <= WS_AUDIO_DROP_LOG_LIMIT) {
+      try {
+        logStage("client.ws.audio_drop", {
+          lane: meta?.lane || "mic",
+          reqId: meta?.reqId || null,
+          reason: reason || "send_failed",
+          count: wsAudioDropCount,
+        });
+      } catch (_) {}
+    } else if (wsAudioDropCount === WS_AUDIO_DROP_LOG_LIMIT + 1) {
+      try {
+        logStage("client.ws.audio_drop_summary", {
+          lane: meta?.lane || "mic",
+          total: wsAudioDropCount,
+        });
+      } catch (_) {}
+    }
+  }
+
   const resolveWsClient = () => {
     if (typeof getWsClient === "function") {
       try {
@@ -478,6 +501,7 @@ export function createWsAudioRuntime(options = {}) {
       ? (getCurrentTurnReqId() || null)
       : null;
     const enrichedMeta = meta && typeof meta === "object" ? { ...meta } : {};
+    const wsPhase = getAppState()?.wsPhase || null;
     try {
       logStage("client.audio_chunk_attempt", {
         length: payload?.byteLength || payload?.length || null,
@@ -506,6 +530,13 @@ export function createWsAudioRuntime(options = {}) {
     if (!enrichedMeta.sampleRateHz && typeof enrichedMeta.sampleRate === "number") {
       enrichedMeta.sampleRateHz = enrichedMeta.sampleRate;
     }
+    const socket = resolveSocket?.();
+    const socketOpen = !!socket && socket.readyState === WebSocket.OPEN;
+
+    if (!socketOpen || wsPhase === "closing" || wsPhase === "closed") {
+      logWsAudioDropOnce(enrichedMeta, "ws_not_open");
+      return false;
+    }
     if (typeof sendAudioChunk === "function") {
       try {
         logPcmEnergy(payload, enrichedMeta);
@@ -523,6 +554,7 @@ export function createWsAudioRuntime(options = {}) {
         return true;
       } catch (err) {
         console.warn("sendAudioChunk delegate failed", err);
+        logWsAudioDropOnce(enrichedMeta, "delegate_exception");
       }
     }
     const wsClient = resolveWsClient();
@@ -542,6 +574,7 @@ export function createWsAudioRuntime(options = {}) {
         return true;
       } catch (err) {
         console.warn("WSClient.sendAudioChunk failed", err);
+        logWsAudioDropOnce(enrichedMeta, "send_exception");
       }
     }
     try {
@@ -552,6 +585,7 @@ export function createWsAudioRuntime(options = {}) {
         sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
       });
     } catch (_) {}
+    logWsAudioDropOnce(enrichedMeta, "no_delegate");
     return false;
   };
 
