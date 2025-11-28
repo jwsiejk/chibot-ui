@@ -785,6 +785,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           wsPhase: AppState?.wsPhase || null,
         });
       } catch (_) {}
+      return;
     }
 
     if (!conversationStartCommitted && !isReadyForConversationStart()) {
