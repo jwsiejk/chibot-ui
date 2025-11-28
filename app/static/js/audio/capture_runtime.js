@@ -1069,7 +1069,7 @@ export function createCaptureRuntime({
       const AppState = typeof window !== "undefined" ? window.AppState : undefined;
       const phase = AppState?.phase || null;
       const wsPhase = AppState?.wsPhase || null;
-      const stream = captureStream || null;
+      const stream = captureStream || getMicStream() || null;
       const track = stream && typeof stream.getAudioTracks === "function"
         ? (stream.getAudioTracks()[0] || null)
         : null;
@@ -1087,8 +1087,9 @@ export function createCaptureRuntime({
       : null;
 
     try {
-      const track = (captureStream && typeof captureStream.getAudioTracks === "function"
-        ? captureStream.getAudioTracks()[0]
+      const stream = captureStream || getMicStream() || null;
+      const track = (stream && typeof stream.getAudioTracks === "function"
+        ? stream.getAudioTracks()[0]
         : null) || null;
       const audioCtxState = typeof window !== "undefined"
         ? window.__globalAudioCtx?.state || null
@@ -1096,7 +1097,7 @@ export function createCaptureRuntime({
       logStage("client.recorder.start_attempt", {
         phase: typeof window !== "undefined" ? window.AppState?.phase || null : null,
         wsPhase: typeof window !== "undefined" ? window.AppState?.wsPhase || null : null,
-        hasStream: Boolean(captureStream),
+        hasStream: Boolean(stream),
         trackState: track?.readyState || null,
         trackMuted: track?.muted || null,
         trackEnabled: track?.enabled || null,
@@ -1138,7 +1139,7 @@ export function createCaptureRuntime({
     firstChunkSeen = false;
     clearVadSilenceTimer();
     const captureReason = typeof reason === "string" && reason ? reason : "auto";
-    let stream = micStream || captureStream;
+    let stream = captureStream || getMicStream();
 
     if (!stream || micHardwareState !== MIC_HARDWARE_STATE.Ready) {
       try {

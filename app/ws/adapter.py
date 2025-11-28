@@ -143,6 +143,7 @@ ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
 
 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
+_FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS = 5.0
 
 _OUTBOUND_ALLOWED_TYPES = {
     "policy.interaction",
@@ -691,6 +692,7 @@ class AdapterContext:
     client_mic_open: bool = False
     turn_active: bool = False
     mic_open_timer: asyncio.TimerHandle | None = None
+    mic_open_timeout_seconds: float = _MIC_OPEN_TIMEOUT_SECONDS
     mic_nudge_sent: bool = False
     await_user_req_id: Optional[str] = None
     last_tts_end_req_id: Optional[str] = None
@@ -7160,6 +7162,11 @@ class ChatV2Adapter:
             _log.info("evt=ws_mic_open_recovered sid=%s", ctx.sid)
         self._emit_client_mic_open(ctx)
 
+    def _mic_open_timeout_seconds(self, ctx: AdapterContext) -> float:
+        if self._is_first_user_turn(ctx):
+            return _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS
+        return _MIC_OPEN_TIMEOUT_SECONDS
+
     def _schedule_mic_open_guard(
         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
     ) -> None:
@@ -7169,6 +7176,9 @@ class ChatV2Adapter:
             return
         self._cancel_mic_open_timer(ctx)
 
+        timeout_seconds = self._mic_open_timeout_seconds(ctx)
+        ctx.mic_open_timeout_seconds = timeout_seconds
+
         def _fire() -> None:
             ctx.mic_open_timer = None
             self._handle_mic_open_timeout(ctx)
@@ -7177,9 +7187,9 @@ class ChatV2Adapter:
             _log.info(
                 "evt=ws_mic_guard_arm sid=%s timeout_s=%.2f",
                 ctx.sid,
-                _MIC_OPEN_TIMEOUT_SECONDS,
+                timeout_seconds,
             )
-            ctx.mic_open_timer = loop.call_later(_MIC_OPEN_TIMEOUT_SECONDS, _fire)
+            ctx.mic_open_timer = loop.call_later(timeout_seconds, _fire)
         except RuntimeError:
             ctx.mic_open_timer = None
 
@@ -7189,11 +7199,12 @@ class ChatV2Adapter:
         if ctx.mic_nudge_sent:
             return
 
+        timeout_seconds = getattr(ctx, "mic_open_timeout_seconds", _MIC_OPEN_TIMEOUT_SECONDS)
         ctx.mic_nudge_sent = True
         _log.warning(
             "evt=ws_mic_open_timeout sid=%s timeout_s=%.2f mic_open=%s nudged=%s",
             ctx.sid,
-            _MIC_OPEN_TIMEOUT_SECONDS,
+            timeout_seconds,
             ctx.client_mic_open,
             ctx.mic_nudge_sent,
         )
@@ -7202,7 +7213,7 @@ class ChatV2Adapter:
                 self._publish(
                     "EVT_MIC_OPEN_TIMEOUT",
                     ctx.sid,
-                    {"timeout_s": _MIC_OPEN_TIMEOUT_SECONDS},
+                    {"timeout_s": timeout_seconds},
                 )
             )
         except RuntimeError:
