@@ -741,7 +741,45 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
 
     const wsReady = AppState?.wsPhase === "ready";
+    const asrReady = Boolean(AppState?.asrReady);
     const phaseBefore = getPhase();
+    const livePcmStream = (() => {
+      try {
+        const track = getCaptureStream?.()?.getAudioTracks?.()[0] || null;
+        if (!track) return false;
+        return track.readyState === "live";
+      } catch (_) {
+        return false;
+      }
+    })();
+
+    const readyForUserTurn = wsReady && asrReady && livePcmStream;
+
+    if (readyForUserTurn && !conversationStartCommitted) {
+      conversationStartCommitted = true;
+      conversationDelayedLogged = false;
+      clearConversationStartTimer();
+      try {
+        logStage("client.conversation.user_turn_commit", {
+          source,
+          wsPhase: AppState?.wsPhase || null,
+          asrReady,
+          livePcmStream,
+        });
+      } catch (_) {}
+      if (phaseBefore === PHASE.Greet) {
+        voicePhaseController.markGreetEnd();
+      }
+      voicePhaseController.enterConversation(source);
+      syncAppStatePhase({ force: true });
+      try {
+        logStage("client.enter_conversation_after_greet.phase_set", {
+          source,
+          phase: voicePhaseController?.getPhase?.() || null,
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
+    }
 
     if (!isReadyForConversationStart()) {
       try {
@@ -2465,6 +2503,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       markGreetEnd(frame);
     }
 
+    if (frame.type === "server.conversation_ready") {
+      conversationStartPlanned = true;
+      try { clearConversationStartTimer(); } catch (_) {}
+      try { enterConversationAfterGreet("server.conversation_ready"); } catch (_) {}
+      return;
+    }
+
     if (expectInfoFrame) {
       // Allow certain frames to bypass the info gate and be handled
       // by the existing handlers further down, just like before.
@@ -3404,6 +3449,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     AppState.asrReady = true;
     markConversationAsrReady("asr_ready_frame");
+    conversationStartPlanned = true;
+    try {
+      ensureTurnAudioReqId(frame?.policy || AppState?.policy || {});
+    } catch (_) {}
     try {
       window.dispatchEvent(new CustomEvent("asr.ready"));
     } catch {}
