@@ -275,7 +275,7 @@ class ClientLogAggregator:
             self.flush(sid)
 
 
-CLIENT_LOG_AGG = ClientLogAggregator(window_ms=1000)
+CLIENT_LOG_AGG = ClientLogAggregator(window_ms=2000)
 
 
 # High-volume labels we want to aggregate to 1 line/sec:
