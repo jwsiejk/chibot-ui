@@ -3889,6 +3889,18 @@ class ChatV2Adapter:
                 source="ws.client",
             )
             if (
+                ctx.greet_completed
+                and ctx.client_mic_ready_ms is None
+                and not ctx.awaiting_client_mic_ready
+            ):
+                ctx.awaiting_client_mic_ready = True
+                self._log_event(
+                    "info",
+                    "awaiting_client_mic_ready",
+                    ctx.sid,
+                    where="client_ready",
+                )
+            if (
                 ctx.awaiting_client_mic_ready
                 and ctx.greet_completed
                 and not ctx.asr_ready_bundle_sent_ms
