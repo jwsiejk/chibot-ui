@@ -252,15 +252,22 @@ export function createWsAudioRuntime(options = {}) {
       video: false,
     };
 
-    // Recreate MediaStream
+    // Recreate MediaStream from shared mic hardware
     let newStream = null;
     try {
-      newStream = await navigator.mediaDevices.getUserMedia(lastConstraints);
+      const ensureHardware = typeof window !== "undefined" ? window.ensureMicHardware : null;
+      if (typeof ensureHardware === "function") {
+        newStream = await ensureHardware(lastConstraints);
+      }
+      if (!newStream) {
+        markGumFailed("hardware_unavailable_reacquire", { constraints: lastConstraints });
+        return null;
+      }
       const track = newStream?.getAudioTracks?.()[0] || null;
       lastTrackState = track?.readyState || lastTrackState;
       if (track?.readyState === "ended") {
         markGumFailed("track_ended_immediately_reacquire", {
-          trackState: track.readyState,
+          trackState: track?.readyState || null,
           constraints: lastConstraints,
         });
         return null;
@@ -268,13 +275,6 @@ export function createWsAudioRuntime(options = {}) {
     } catch (err) {
       gumFailed = true;
       lastGumError = err?.message || String(err);
-      try {
-        console.warn("client.mic.gum_error", {
-          name: err?.name,
-          message: err?.message,
-          constraints: lastConstraints,
-        });
-      } catch (_) {}
       logStage("client.mic.reacquire.failed", { err: String(err) });
       return null;
     }

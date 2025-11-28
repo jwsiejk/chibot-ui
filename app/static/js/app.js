@@ -1,5 +1,6 @@
 import "./state.js";
 import { emitClientLog, getWsClientSocket, logStage } from "./ws/telemetry.js";
+import { ensureMicHardware } from "./audio/capture_runtime.js";
 import "./audio/guard_mic_monitor.js";
 // Robust version loader
 import * as versionModule from "./version.js";
@@ -275,7 +276,8 @@ if (typeof window !== "undefined") {
       constraintsSummary = summarizeConstraints(constraints);
       safeLogStage("client.mic.gum_request", { constraints: constraintsSummary });
 
-      if (!navigator?.mediaDevices?.getUserMedia) {
+      const stream = await ensureMicHardware(constraints);
+      if (!stream) {
         const err = new Error("MediaDevices.getUserMedia unavailable");
         safeLogMic({
           outcome: "ERROR_PERMISSIONS",
@@ -291,8 +293,6 @@ if (typeof window !== "undefined") {
         safeLogStage("client.mic.gum_error", errorDetails);
         throw err;
       }
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
       safeLogMic({
         outcome: "GUM_GRANTED",
@@ -2352,15 +2352,10 @@ if (typeof window !== "undefined") {
 
       async function requestMicStreamForVisualizer() {
         const constraints = getPreferredMicConstraints();
-        const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
-          ? window.getMicOnce
-          : null;
         try {
-          if (gum) {
-            return await gum(constraints);
-          }
-          if (navigator?.mediaDevices?.getUserMedia) {
-            return await navigator.mediaDevices.getUserMedia(constraints);
+          const stream = await ensureMicHardware(constraints);
+          if (stream) {
+            return stream;
           }
           throw new Error("MediaDevices.getUserMedia unavailable");
         } catch (err) {
