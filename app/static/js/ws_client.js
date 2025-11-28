@@ -1948,9 +1948,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         return false;
       }
       _audioStreaming = true;
-      try {
-        ensureTurnAudioReqId(policy || AppState?.policy || {});
-      } catch (_) {}
       markMicAndPcmReady("mic_start_success");
       setSenderPauseReason("server", false);
       setSenderPauseReason("tts", false);
