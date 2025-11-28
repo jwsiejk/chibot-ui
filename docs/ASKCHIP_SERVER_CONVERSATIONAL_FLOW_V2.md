@@ -3,6 +3,28 @@
 ## Overview
 ChatV2Adapter coordinates WS lifecycle, greet orchestration, ASR/LLM/TTS, and telemetry. This document describes the current behavior with code references.
 
+## Invariants & Contracts (Server)
+- **Greet gates audio ingress: no PCM is accepted until greet completes.**
+  - *Why*: Prevents ASR from running before the scripted greet finishes and before turn IDs/req_ids are established.
+  - *Enforced by*: `_handle_binary` rejecting frames with `audio_not_expected` while `ctx.greet_completed` is false, and greet completion happening only when `_handle_tts_end` observes the greet markers.【F:app/ws/adapter.py†L3979-L3990】【F:app/ws/adapter.py†L1399-L1539】
+
+- **While greet is in progress, ASR remains closed and any attempt to open is deferred.**
+  - *Why*: Keeps the mic pipeline off until the greet handshake and TTS playback finish, reducing false starts.
+  - *Enforced by*: `_ensure_asr_ready` logging `asr_ready_suppressed_during_greet` and refusing to emit the ASR-ready bundle until `ctx.greet_completed` flips true.【F:app/ws/adapter.py†L1214-L1289】【F:app/ws/adapter.py†L1537-L1539】
+
+- **When a turn closes, audio ingestion is disabled until the next turn begins.**
+  - *Why*: Prevents late PCM from a finished turn from leaking into the next ASR session.
+  - *Enforced by*: `_end_user_turn` setting `ctx.accepting_audio = False` and resetting counters; `_handle_binary` drops frames with `audio_not_expected` when `accepting_audio` is false and escalates to a close on repeated violations.【F:app/ws/adapter.py†L3920-L3990】【F:app/ws/adapter.py†L4098-L4138】
+
+- **ASR finals must resolve to exactly one policy decision (LLM turn) or a deliberate skip.**
+  - *Why*: Ensures every completed transcript either feeds the dialog policy or exits cleanly so turns do not hang.
+  - *Enforced by*: `_handle_asr_result` routing non-empty finals to `on_asr_final` and ending the turn; timeout/empty finals emit `turn.empty` with a `skip_reason` before closing the turn.【F:app/ws/adapter.py†L7756-L7824】【F:app/ws/adapter.py†L7788-L7820】【F:app/voice_v2/engine.py†L629-L713】
+
+- **`turn_index` monotonically increases per session.**
+  - *Why*: Telemetry correlation and downstream analytics assume strictly increasing turn numbers.
+  - *Enforced by*: `_next_turn_index` computing `max(current, session_turn) + 1` and invoked for each `_start_user_turn`, updating both context and session counters.【F:app/ws/adapter.py†L1057-L1070】【F:app/ws/adapter.py†L7845-L7874】
+  - *Status*: Not yet fully enforced if external callers mutate `ctx.turn_index` directly; relies on adapter discipline rather than hard immutability.
+
 ## State & Session Model (Server)
 - `_AdapterContext` holds per-connection state: ASR gates, greet completion, audio acceptance, turn indices, VAD hints, and tracking flags (e.g., `greet_completed`, `accepting_audio`, `asr_ready_bundle_sent_ms`, `turn_req_id`).【F:app/ws/adapter.py†L600-L752】
 - Engine/adapter maintain `turn_index` and `turn_req_id` on the context for correlating ASR/LLM/TTS events.【F:app/ws/adapter.py†L600-L706】

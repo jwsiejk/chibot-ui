@@ -3,6 +3,28 @@
 ## Overview
 The frontend orchestrates greet playback, mic/PCM/VAD gating, and WS interaction for AskChip. Behavior below reflects the current code paths only.
 
+## Invariants & Contracts (Client)
+- **During `PHASE.Greet`, mic capture stays stopped and PCM is dropped.**
+  - *Why*: Prevents user audio from leaking into greet playback or server ASR before the greet handshake finishes.
+  - *Enforced by*: `markGreetStart` pausing sender, disabling barge-in, and stopping recorder; `safeSendAudioChunk` returns `false` when `phase === greet`; `safeStartRecorderStreaming` hard-gates to `ConversationReady/UserTurn`.【F:app/static/js/ws_client.js†L472-L559】【F:app/static/js/audio/ws_audio_runtime.js†L494-L504】【F:app/static/js/ws_client.js†L701-L782】
+
+- **After `markGreetEnd`, mic hardware and the audio graph are rebuilt before the first ASR-ready attempt.**
+  - *Why*: Ensures the capture graph is live and unmuted before entering conversation so `safeStartRecorderStreaming` can succeed on the first turn.
+  - *Enforced by*: `markGreetEnd` calling `ensureMicHardware()` → `ensureAudioGraph()` → `markMicAndPcmReady()` and unmuting `micTrack.enabled` prior to scheduling conversation start.【F:app/static/js/ws_client.js†L561-L588】
+
+- **When `AppState.phase` is `UserTurn`, capture start attempts are serialized per turn and must carry a req_id.**
+  - *Why*: Avoids overlapping recorder sessions and guarantees PCM frames correlate to a server-issued turn.
+  - *Enforced by*: `safeStartRecorderStreaming` gating on phase and reusing a single awaited `recorderStart`; `ensureTurnAudioReqId` runs before starting; PCM chunks without a req_id are dropped by `safeSendAudioChunk` to prevent orphaned audio.【F:app/static/js/ws_client.js†L701-L782】【F:app/static/js/audio/ws_audio_runtime.js†L494-L540】
+  - *Status*: Not yet fully enforced for “at most one start” because callers can still re-enter if they ignore the returned `false`; logging helps detect this but additional locking would be required.
+
+- **PCM chunks always include a valid `req_id`.**
+  - *Why*: Server correlation depends on `req_id`; missing IDs trigger drops and would make ASR input ambiguous.
+  - *Enforced by*: `safeSendAudioChunk` enriches `reqId` from `getCurrentTurnReqId` and rejects chunks when the ID is absent.【F:app/static/js/audio/ws_audio_runtime.js†L494-L540】
+
+- **Echo prevention: mic-fed nodes never reach an audible sink, and mic-derived media elements stay muted.**
+  - *Why*: Blocks local feedback loops while still allowing downstream processing or recording.
+  - *Enforced by*: `guard_mic_monitor` intercepting `AudioNode.connect` to block destinations that lead to `AudioDestinationNode`, and auto-mutating `<audio>` elements fed by mic streams to `muted=true`/`volume=0`.【F:app/static/js/audio/guard_mic_monitor.js†L4-L254】【F:app/static/js/audio/guard_mic_monitor.js†L264-L329】
+
 ## State & Phase Model (Client)
 - `PHASE` enum covers `boot → greet → conversation_ready → user_turn → closing → closed`; `createVoicePhaseController` drives transitions and logs changes.【F:app/static/js/voice/phase_controller.js†L1-L60】
 - `markGreetStart` warms the AudioContext, tracks greet `utt_id`, sets `PHASE.Greet`, disables barge-in, pauses PCM, and stops mic capture.【F:app/static/js/ws_client.js†L472-L559】
