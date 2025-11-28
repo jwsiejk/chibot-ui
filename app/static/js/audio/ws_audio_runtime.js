@@ -50,6 +50,32 @@ function resolveAppState(provided) {
   return undefined;
 }
 
+function logPcmEnergy(buffer, meta) {
+  try {
+    const arrayBuffer = toArrayBuffer(buffer);
+    if (!arrayBuffer) return;
+    const view = new Int16Array(arrayBuffer);
+    const n = view.length || 1;
+    if (!n) return;
+    let sumSq = 0;
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+      const v = view[i] / 32768.0;
+      sumSq += v * v;
+      const abs = Math.abs(v);
+      if (abs > peak) peak = abs;
+    }
+    const rms = Math.sqrt(sumSq / n);
+    const dbfs = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+    logStage("client.pcm.energy", {
+      lane: meta?.lane || "mic",
+      reqId: meta?.reqId || null,
+      dbfs,
+      peak,
+    });
+  } catch (_) {}
+}
+
 class PcmRingBuffer {
   constructor({ millis, sampleRate, channels = DEFAULT_PCM_CHANNELS }) {
     this.sampleRate = sampleRate;
@@ -469,6 +495,7 @@ export function createWsAudioRuntime(options = {}) {
     }
     if (typeof sendAudioChunk === "function") {
       try {
+        logPcmEnergy(payload, enrichedMeta);
         sendAudioChunk(payload, enrichedMeta);
         try {
           logStage("client.audio_chunk_send", {
@@ -488,6 +515,7 @@ export function createWsAudioRuntime(options = {}) {
     const wsClient = resolveWsClient();
     if (wsClient && typeof wsClient.sendAudioChunk === "function") {
       try {
+        logPcmEnergy(payload, enrichedMeta);
         wsClient.sendAudioChunk(payload, enrichedMeta);
         try {
           logStage("client.audio_chunk_send", {
