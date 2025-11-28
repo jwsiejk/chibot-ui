@@ -9,6 +9,8 @@ ChatV2Adapter coordinates WS lifecycle, greet orchestration, ASR/LLM/TTS, and te
 
 ## Lifecycle: Full Server Conversational Flow
 
+See the implemented timeline below for the concrete ordering of adapter/engine steps.
+
 ### WS Open & Handshake
 - `asgi_gateway` instantiates `ChatV2Adapter`/`EngineV2` and routes `/ws/v2/chat` connections to the adapter singleton.【F:app/asgi_gateway.py†L1107-L1169】
 - `_on_open_and_greet` runs on connection: logs `ws.open_and_greet`, invokes engine `on_open`, then `start_greet`, and clears `await_user_*` flags to avoid premature re-arm.【F:app/ws/adapter.py†L7170-L7188】
@@ -37,6 +39,41 @@ ChatV2Adapter coordinates WS lifecycle, greet orchestration, ASR/LLM/TTS, and te
 ### Logging & Telemetry
 - Adapter emits `session_step` events such as `ws.open_and_greet`, `audio.frame.received`, `greet.start/complete`, and TTS markers for downstream telemetry.【F:app/ws/adapter.py†L1322-L1539】【F:app/ws/adapter.py†L3965-L3990】【F:app/ws/adapter.py†L7170-L7180】
 - Logging noise is tuned globally in `asgi_gateway` with `tune_logging_noise()` and per-category log levels for ws/auth/tts modules.【F:app/asgi_gateway.py†L45-L67】
+
+## End-to-End Timeline (As Implemented)
+
+1. **User hits Start** — Client click handler mints a WS token and opens `/ws/v2/chat` with `chat.v2` + JWT subprotocols; adapter singleton is constructed via `_get_adapter`. Telemetry: `evt=ws_open_attempt`.【F:app/static/js/app.js†L1891-L1979】【F:app/asgi_gateway.py†L1107-L1116】 _(Initiator: client; Phase: connect/greet)_
+2. **WS `/ws/v2/chat` connect** — ASGI gateway routes the socket to `ChatV2Adapter`; `_on_open_and_greet` logs `ws.open_and_greet`, invokes `EngineV2.on_open`, and immediately calls `start_greet`.【F:app/ws/adapter.py†L7170-L7188】【F:app/voice_v2/engine.py†L252-L270】 _(Initiator: server; Phase: greet)_
+3. **Greet start (TTS)** — Engine emits TTS greet; adapter `_handle_tts_start` tags `meta.is_greet`, records `greet_utt_id`, and publishes `tts.start/greet.start`.【F:app/ws/adapter.py†L1322-L1362】 _(Initiator: server; Phase: greet)_
+4. **Greet end** — On `tts.end`, adapter matches `greet_utt_id`, emits `greet.completed` + `server.greet_complete`, and sends `greet.complete` to the client; if greet just finished, it calls `_ensure_asr_ready` and logs `server.conversation_ready`.【F:app/ws/adapter.py†L1399-L1549】 _(Initiator: server; Phase: greet→conversation_ready)_
+5. **ASR open / `asr_ready_bundle`** — `_ensure_asr_ready` defers pre-greet attempts, schedules `_open_asr`, waits for the open task, then emits `asr.ready` + `input.start` + `start_listening` via `_send_asr_ready_bundle`. Telemetry: `asr_ready_emit`, `asr_ready_after_greet`.【F:app/ws/adapter.py†L1214-L1289】 _(Initiator: server; Phase: conversation_ready)_
+6. **ConversationReady/UserTurn arm** — Adapter logs `server.conversation_ready` when ASR ready follows greet, and will send `turn.begin` if no turn is active post-greet to allow mic streaming.【F:app/ws/adapter.py†L1524-L1556】 _(Initiator: server; Phase: conversation_ready)_
+7. **First user utterance → ASR ingest** — Binary PCM arrives as `_handle_binary` (`audio.frame.received`); greet-incomplete frames are rejected with `audio_not_expected`. ASR results flow into `_handle_asr_result`, which publishes `asr.partial`/`asr.final` session steps and defers policy to Engine.【F:app/ws/adapter.py†L3964-L3991】【F:app/ws/adapter.py†L7586-L7772】 _(Initiator: client audio; Phase: user_turn)_
+8. **LLM + dialog policy** — EngineV2 consumes `asr.final` via `on_asr_final`, records `turn_id/req_id`, emits NLU, and drives policy/NLG selection before TTS synthesis begins.【F:app/voice_v2/engine.py†L629-L713】 _(Initiator: server; Phase: thinking→responding)_
+9. **TTS synthesis + playback** — Engine streams TTS PCM through adapter `_handle_tts_start/_handle_tts_end`, publishing `tts.start/tts.end` session steps and pushing audio frames back to the client. Greet completion and conversation-ready logging live in these handlers.【F:app/ws/adapter.py†L1322-L1549】 _(Initiator: server; Phase: responding)_
+10. **Turn end** — Empty finals/timeouts trigger `turn.empty` and `_end_user_turn`; final handling logs `client_turn_stop` and closes ASR as needed.【F:app/ws/adapter.py†L3940-L3963】【F:app/ws/adapter.py†L7790-L7820】 _(Initiator: server; Phase: closing)_
+11. **Session close** — Client end button or network close drives `_close_asr` and socket teardown; adapter error paths propagate close codes (`audio_not_expected`, `frame_too_large`).【F:app/static/js/app.js†L1992-L2013】【F:app/ws/adapter.py†L3980-L4003】 _(Initiator: client/server; Phase: closed)_
+
+## Server-side View of One Turn (Post-Greet)
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant ChatV2Adapter
+    participant EngineV2
+    participant ASR as ASR provider
+    participant LLM
+    participant TTS as TTS provider
+
+    Client->>ChatV2Adapter: PCM binary frame (audio.frame.received)【F:app/ws/adapter.py†L3964-L3991】
+    ChatV2Adapter-->>ASR: feed audio (asr stream open)
+    ASR-->>ChatV2Adapter: asr.partial/asr.final【F:app/ws/adapter.py†L7586-L7772】
+    ChatV2Adapter->>EngineV2: on_asr_partial / on_asr_final【F:app/ws/adapter.py†L7733-L7754】【F:app/ws/adapter.py†L7756-L7772】
+    EngineV2->>LLM: dialog policy + LLM decision (NLG)【F:app/voice_v2/engine.py†L700-L713】
+    EngineV2-->>TTS: synthesize reply
+    TTS-->>ChatV2Adapter: tts.start / tts.end frames【F:app/ws/adapter.py†L1322-L1549】
+    ChatV2Adapter-->>Client: send TTS audio + markers (greet.complete/tts.*)【F:app/ws/adapter.py†L1345-L1355】【F:app/ws/adapter.py†L1525-L1549】
+```
 
 ## Utopia Server Conversational Architecture
 - Clear separation: greet TTS plays while ASR remains closed; ASR opens only after explicit greet completion and ASR-ready bundle acknowledgment.
