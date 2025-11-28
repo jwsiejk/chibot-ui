@@ -727,6 +727,9 @@ export function createTurnRuntime(config = {}) {
         ensureTurnAudioReqId(frame?.policy || AppState?.policy || {});
       } catch {}
       try {
+        sendAudioHeader(readyFrame || frame);
+      } catch {}
+      try {
         const started = await startRecorderStreaming(frame?.policy || {}, startReason);
         if (started) {
           audioStreaming = true;
