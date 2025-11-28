@@ -67,11 +67,23 @@ function logPcmEnergy(buffer, meta) {
     }
     const rms = Math.sqrt(sumSq / n);
     const dbfs = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+    const appState = resolveAppState();
+    const appSnapshot = appState?.get?.() || appState?.getState?.() || appState || null;
+    const vadEnergyDb = Number.isFinite(appSnapshot?.vadEnergyDb) ? appSnapshot.vadEnergyDb : null;
+    const autoVadEnergyDbfs = Number.isFinite(meta?.auto_vad_energy)
+      ? meta.auto_vad_energy
+      : Number.isFinite(meta?.autoVadEnergyDbfs)
+        ? meta.autoVadEnergyDbfs
+        : Number.isFinite(appSnapshot?.autoVadEnergyDbfs)
+          ? appSnapshot.autoVadEnergyDbfs
+          : null;
     logStage("client.pcm.energy", {
       lane: meta?.lane || "mic",
       reqId: meta?.reqId || null,
       dbfs,
       peak,
+      vadEnergyDb,
+      autoVadEnergyDbfs,
     });
   } catch (_) {}
 }
