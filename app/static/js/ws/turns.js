@@ -100,6 +100,7 @@ export function createTurnRuntime(config = {}) {
     stopInputCapture = () => {},
     handleInputStartFrame = async () => {},
     clearPartialWatchdog = () => {},
+    ensureTurnAudioReqId = () => null,
     sendAudioHeader = () => {},
     resetAudioHeaderSent = () => {},
     emitConsoleBusEvent = () => {},
@@ -723,6 +724,9 @@ export function createTurnRuntime(config = {}) {
         await openTurnOnce(startReason);
       } catch {}
       try {
+        ensureTurnAudioReqId(frame?.policy || AppState?.policy || {});
+      } catch {}
+      try {
         const started = await startRecorderStreaming(frame?.policy || {}, startReason);
         if (started) {
           audioStreaming = true;
@@ -742,9 +746,6 @@ export function createTurnRuntime(config = {}) {
       } catch {}
       logStage("diag", { label: "asr.ready" });
       logStage("client.asr_arm_clear", { vendor: AppState.asrVendor || DEFAULT_ASR_VENDOR });
-      try {
-        sendAudioHeader(frame);
-      } catch {}
       if (AppState._recoverPrimePending) {
         const sid = readyFrame?.sid || AppState?.asrSid || `${now()}`;
         primeAsrStreamFromRing(sid);
