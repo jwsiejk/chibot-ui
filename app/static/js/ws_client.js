@@ -338,6 +338,11 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let conversationStartTimer = null;
   let conversationBlockedLogged = false;
   let conversationDelayedLogged = false;
+  let conversationStartPlanned = false;
+  let conversationStartCommitted = false;
+  let conversationAsrReady = false;
+  let micAndPcmReady = false;
+  let lastConversationAttemptLog = 0;
   let hasOpenedAsrForConversation = false;
   let pendingCloseReason = null;
 
@@ -470,6 +475,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     wsDiag("greet_start", { utt_id: frame?.utt_id });
     hasOpenedAsrForConversation = false;
+    conversationStartPlanned = false;
+    conversationStartCommitted = false;
     clearConversationStartTimer();
     try {
       const audioCtx = getAudioCtx();
@@ -550,6 +557,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       logStage("client.phase.greet_end", { phase: getPhase() });
     } catch (_) {}
     try {
+      conversationStartPlanned = true;
       scheduleConversationStartAfterGreet("mark_greet_end");
     } catch (_) {}
   }
@@ -564,6 +572,41 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   function isConversationReadyPhase() {
     const phase = getPhase();
     return phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+  }
+
+  function markMicAndPcmReady(reason = "capture_runtime_ready") {
+    if (micAndPcmReady) {
+      return;
+    }
+    micAndPcmReady = true;
+    try {
+      logStage("client.mic_pcm.ready", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        reason,
+      });
+    } catch (_) {}
+  }
+
+  function markConversationAsrReady(reason = "asr_ready_frame") {
+    if (conversationAsrReady) {
+      return;
+    }
+    conversationAsrReady = true;
+    try {
+      logStage("client.conversation.asr_ready", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        reason,
+      });
+    } catch (_) {}
+  }
+
+  function isReadyForConversationStart() {
+    const phase = voicePhaseController?.getPhase?.() || null;
+    const phaseOk = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+    const wsReady = AppState?.wsPhase === "ready";
+    return phaseOk && wsReady && conversationAsrReady && micAndPcmReady;
   }
 
   function canBargeIn() {
@@ -677,7 +720,17 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
-    wsDiag("conversation_attempt", { source });
+    if (!conversationStartPlanned || conversationStartCommitted) {
+      clearConversationStartTimer();
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastConversationAttemptLog > 500) {
+      wsDiag("conversation_attempt", { source });
+      lastConversationAttemptLog = now;
+    }
+
     try {
       logStage("client.enter_conversation_after_greet.intent", {
         source,
@@ -686,15 +739,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         hasOpenedAsrForConversation,
       });
     } catch (_) {}
-    clearConversationStartTimer();
-    if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
-      return;
-    }
+
     const wsReady = AppState?.wsPhase === "ready";
     const phaseBefore = getPhase();
-    if (!wsReady) {
+
+    if (!isReadyForConversationStart()) {
       try {
-        if (!conversationDelayedLogged) {
+        if (!wsReady && !conversationDelayedLogged) {
           logStage("client.conversation.delayed_until_ready", {
             phase: phaseBefore,
             wsPhase: AppState?.wsPhase || null,
@@ -703,12 +754,30 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           conversationDelayedLogged = true;
         }
       } catch (_) {}
-      setTimeout(() => enterConversationAfterGreet("wait_ready"), 50);
+
+      if (!conversationStartTimer) {
+        conversationStartTimer = setTimeout(
+          () => {
+            conversationStartTimer = null;
+            enterConversationAfterGreet("wait_ready");
+          },
+          100
+        );
+      }
       return;
     }
-    if (wsReady) {
-      conversationDelayedLogged = false;
-    }
+
+    conversationDelayedLogged = false;
+    conversationStartCommitted = true;
+    clearConversationStartTimer();
+
+    try {
+      logStage("client.conversation.begin.committed", {
+        source,
+        phase: voicePhaseController?.getPhase?.() || null,
+        wsPhase: AppState?.wsPhase || null,
+      });
+    } catch (_) {}
 
     if (phaseBefore === PHASE.Greet) {
       voicePhaseController.markGreetEnd();
@@ -811,6 +880,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       } catch (_) {}
       return;
     }
+    if (!conversationStartPlanned) {
+      conversationStartPlanned = true;
+    }
+    if (conversationStartCommitted) {
+      return;
+    }
     if (hasOpenedAsrForConversation) {
       return;
     }
@@ -828,15 +903,22 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           conversationBlockedLogged = true;
         }
       } catch (_) {}
-      setTimeout(() => scheduleConversationStartAfterGreet("wait_ready"), 50);
+      if (!conversationStartTimer) {
+        conversationStartTimer = setTimeout(() => {
+          conversationStartTimer = null;
+          scheduleConversationStartAfterGreet("wait_ready");
+        }, 50);
+      }
       return;
     }
     clearConversationStartTimer();
     const delayMs = Math.max(0, Number(CONVERSATION_START_DELAY_MS) || 0);
-    conversationStartTimer = setTimeout(() => {
-      conversationStartTimer = null;
-      enterConversationAfterGreet(source);
-    }, delayMs);
+    if (!conversationStartTimer) {
+      conversationStartTimer = setTimeout(() => {
+        conversationStartTimer = null;
+        enterConversationAfterGreet(source);
+      }, delayMs);
+    }
     try {
       // we’re actually scheduling now – reset the spam guard
       conversationBlockedLogged = false;
@@ -1636,6 +1718,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     canAutoStopFromVad: () => speechSeenThisTurn === true,
     onCaptureStop: handleCaptureStopTelemetry,
   });
+  markMicAndPcmReady("capture_runtime_created");
+  try {
+    enterConversationAfterGreet("capture_runtime_ready");
+  } catch (_) {}
 
   const {
     getVadController,
@@ -1817,6 +1903,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         return false;
       }
       _audioStreaming = true;
+      markMicAndPcmReady("mic_start_success");
       setSenderPauseReason("server", false);
       setSenderPauseReason("tts", false);
       updatePcmSenderState();
@@ -3316,6 +3403,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       AppState.asrSid = frame.sid;
     }
     AppState.asrReady = true;
+    markConversationAsrReady("asr_ready_frame");
     try {
       window.dispatchEvent(new CustomEvent("asr.ready"));
     } catch {}
@@ -3374,6 +3462,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (err) {
       console.warn("Immediate keepalive send failed after asr.ready", err);
     }
+    try {
+      enterConversationAfterGreet("asr.ready");
+    } catch (_) {}
     return sanitized;
   }
 
