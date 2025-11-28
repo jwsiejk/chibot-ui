@@ -749,6 +749,10 @@ class AdapterContext:
     turn_audio_chunks: int = 0
     awaiting_client_mic_ready: bool = False
     client_mic_ready_ms: Optional[int] = None
+    no_audio_timeout_started_ms: Optional[int] = None
+    no_audio_timeout_deadline_ms: Optional[int] = None
+    greet_completed_ms: Optional[int] = None
+    mic_never_ready_warned: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -833,6 +837,27 @@ class ChatV2Adapter:
             extra={"meta": meta},
         )
 
+    def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
+        """
+        Returns True for the first real user turn after greet. If turn_index is
+        provided, use that; otherwise use ctx.session.turn_index or ctx.metrics.
+        The first real user turn is the one we log as turn_index == 1.
+        """
+
+        candidate: Any = turn_index
+        if candidate is None:
+            candidate = getattr(ctx, "turn_index", None)
+        if candidate is None:
+            candidate = getattr(ctx.session, "turn_index", None)
+        if candidate is None:
+            metrics = getattr(ctx, "metrics", {}) or {}
+            candidate = metrics.get("turn_index")
+        try:
+            normalized = int(candidate)
+        except (TypeError, ValueError):
+            normalized = None
+        return normalized == 1
+
     @staticmethod
     def _normalize_req_id(candidate: Any) -> Optional[str]:
         if isinstance(candidate, str):
@@ -861,6 +886,9 @@ class ChatV2Adapter:
         ctx.turn_audio_chunks = 0
         ctx.awaiting_client_mic_ready = False
         ctx.client_mic_ready_ms = None
+        ctx.no_audio_timeout_started_ms = None
+        ctx.no_audio_timeout_deadline_ms = None
+        ctx.mic_never_ready_warned = False
 
     def _ensure_greet_turn(self, ctx: AdapterContext) -> None:
         """Ensure greet metrics/turn_index are initialized before first TTS."""
@@ -1024,6 +1052,8 @@ class ChatV2Adapter:
             "reason": reason,
             "bytes_received": ctx.turn_audio_bytes,
             "first_audio_ms": ctx.first_audio_received_ms,
+            "no_audio_timeout_started_ms": ctx.no_audio_timeout_started_ms,
+            "no_audio_timeout_deadline_ms": ctx.no_audio_timeout_deadline_ms,
         }
         self._emit_session_step(
             ctx.sid,
@@ -1088,6 +1118,74 @@ class ChatV2Adapter:
 
         def _delta_ms(start: float | None) -> int | None:
             return int((now - start) * 1000) if start is not None else None
+
+    def _resolve_no_audio_timeout_ms(self, ctx: AdapterContext) -> int:
+        base_timeout_ms = 3000
+        config_map = ctx.active_asr_config if isinstance(ctx.active_asr_config, Mapping) else None
+        candidate: Any = None
+        if config_map is not None:
+            candidate = config_map.get("no_audio_timeout_ms")
+            if candidate is None:
+                candidate = config_map.get("no_audio_timeout")
+        try:
+            parsed = int(candidate) if candidate is not None else None
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None and parsed > 0:
+            base_timeout_ms = parsed
+
+        if self._is_first_user_turn(ctx):
+            base_timeout_ms = int(base_timeout_ms * 1.5)
+
+        return max(500, base_timeout_ms)
+
+    def _maybe_fallback_when_mic_never_ready(self, ctx: AdapterContext) -> None:
+        """
+        If we've been awaiting client mic readiness for too long after greet completed,
+        surface a non-fatal warning so the stall is visible.
+        """
+
+        if not ctx.greet_completed or not ctx.awaiting_client_mic_ready:
+            return
+        if ctx.client_mic_ready_ms is not None or ctx.asr_ready_bundle_sent_ms is not None:
+            return
+        if ctx.mic_never_ready_warned:
+            return
+
+        greet_ms = ctx.greet_completed_ms
+        if greet_ms is None:
+            return
+
+        now_ms = self._now_ms()
+        if now_ms - greet_ms < 8000:
+            return
+
+        ctx.mic_never_ready_warned = True
+        self._log(
+            ctx,
+            "server.warn_mic_never_ready",
+            {"elapsed_ms": now_ms - greet_ms},
+            level="warning",
+        )
+        self._emit_session_step(
+            ctx.sid,
+            "mic.never_ready",
+            summary="Client mic did not become ready after greet",
+            meta={"elapsed_ms": now_ms - greet_ms},
+            source="ws.adapter",
+        )
+        if ctx.ws_send is not None:
+            try:
+                asyncio.create_task(
+                    self._send_json(
+                        ctx.ws_send,
+                        ctx.sid,
+                        {"type": "server.warning", "label": "mic.never_ready"},
+                        ctx=ctx,
+                    )
+                )
+            except Exception:
+                _log.exception("evt=mic_never_ready_warning_emit_failed sid=%s", ctx.sid)
 
         asr_ms = _delta_ms(m.get("asr_started_at"))
         asr_to_final_ms = (
@@ -1251,10 +1349,13 @@ class ChatV2Adapter:
                 )
                 ctx.asr_ready_suppressed_logged = True
             return
+        if ctx.awaiting_client_mic_ready:
+            self._maybe_fallback_when_mic_never_ready(ctx)
         # For the very first post-greet turn, avoid opening ASR until we have
         # a realistic signal that the client mic stack is ready. This prevents
         # vendor-side no-audio timeouts before any PCM can arrive.
-        first_post_greet_turn = (getattr(ctx.session, "turn_index", 0) or 0) == 0
+        assumed_next_turn = (getattr(ctx.session, "turn_index", 0) or 0) + 1
+        first_post_greet_turn = self._is_first_user_turn(ctx, assumed_next_turn)
         if (
             first_post_greet_turn
             and not ctx.client_mic_open
@@ -1267,6 +1368,7 @@ class ChatV2Adapter:
                 {"where": label, "reason": "await_client_mic_ready"},
                 level="debug",
             )
+            self._maybe_fallback_when_mic_never_ready(ctx)
             return
         if not ctx.asr_ready_bundle_sent_ms:
             self._log_event("info", "asr_ready_arm_post_greet", ctx.sid, where=label)
@@ -1531,6 +1633,7 @@ class ChatV2Adapter:
             )
         if not ctx.greet_completed and is_greet_tts:
             ctx.greet_completed = True
+            ctx.greet_completed_ms = self._now_ms()
             _log.info(
                 "evt=greet_completed sid=%s utt_id=%s reason=%s frame_type=%s has_greet_meta=%s",
                 ctx.sid,
@@ -4300,6 +4403,13 @@ class ChatV2Adapter:
         if ctx.first_audio_received_ms is None:
             now_ms = self._now_ms()
             ctx.first_audio_received_ms = now_ms
+            if ctx.no_audio_timeout_started_ms is None:
+                ctx.no_audio_timeout_started_ms = now_ms
+                timeout_ms = self._resolve_no_audio_timeout_ms(ctx)
+                ctx.no_audio_timeout_deadline_ms = now_ms + timeout_ms
+                self._schedule_no_audio_watchdog_rearm(
+                    ctx, deadline_ms=ctx.no_audio_timeout_deadline_ms
+                )
             _log.info(
                 "evt=ws_first_audio_frame sid=%s bytes=%d ms_since_ready_bundle=%s",
                 ctx.sid,
@@ -6669,23 +6779,41 @@ class ChatV2Adapter:
 
     def _arm_no_audio_watchdog(self, ctx: AdapterContext) -> None:
         self._cancel_no_audio_watchdog(ctx)
-        ctx.no_audio_watchdog_t0_ms = self._now_ms()
+        deadline_ms = ctx.no_audio_timeout_deadline_ms
+        if deadline_ms is None:
+            return
+
+        now_ms = self._now_ms()
+        ctx.no_audio_watchdog_t0_ms = ctx.no_audio_timeout_started_ms or now_ms
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             ctx.no_audio_timer = None
             return
 
+        delay_seconds = max(0.0, float(deadline_ms - now_ms) / 1000.0)
+
         try:
-            ctx.no_audio_timer = loop.call_later(1.5, self._on_no_audio_after_header, ctx)
+            ctx.no_audio_timer = loop.call_later(delay_seconds, self._on_no_audio_after_header, ctx)
         except RuntimeError:
             ctx.no_audio_timer = None
 
     def _schedule_no_audio_watchdog_rearm(
-        self, ctx: AdapterContext, delay_ms: int = 350
+        self, ctx: AdapterContext, delay_ms: int = 350, *, deadline_ms: Optional[int] = None
     ) -> None:
         if ctx.asr_ready_bundle_sent_ms is None:
             return
+
+        target_deadline = deadline_ms
+        now_ms = self._now_ms()
+        if target_deadline is None:
+            target_deadline = ctx.no_audio_timeout_deadline_ms
+
+        if target_deadline is None:
+            if ctx.no_audio_timeout_started_ms is None:
+                return
+            target_deadline = now_ms + max(0, int(delay_ms))
+
         handle = ctx.no_audio_rearm_handle
         if handle is not None:
             try:
@@ -6698,7 +6826,7 @@ class ChatV2Adapter:
             ctx.no_audio_rearm_handle = None
             return
 
-        delay_seconds = max(0.0, float(delay_ms) / 1000.0)
+        delay_seconds = max(0.0, float(target_deadline - now_ms) / 1000.0)
 
         def _rearm() -> None:
             ctx.no_audio_rearm_handle = None
@@ -6728,9 +6856,17 @@ class ChatV2Adapter:
 
     def _on_no_audio_after_header(self, ctx: AdapterContext) -> None:
         ctx.no_audio_timer = None
-        start_ms = ctx.no_audio_watchdog_t0_ms
+        start_ms = ctx.no_audio_timeout_started_ms or ctx.no_audio_watchdog_t0_ms
+        deadline_ms = ctx.no_audio_timeout_deadline_ms
         ctx.no_audio_watchdog_t0_ms = None
+        now_ms = self._now_ms()
+
         if start_ms is None:
+            return
+        if deadline_ms is None:
+            deadline_ms = start_ms + self._resolve_no_audio_timeout_ms(ctx)
+        if now_ms < deadline_ms:
+            self._schedule_no_audio_watchdog_rearm(ctx, deadline_ms=deadline_ms)
             return
 
         if (
@@ -7853,7 +7989,7 @@ class ChatV2Adapter:
                 if (
                     ctx.turn_audio_bytes <= 0
                     and ctx.greet_completed
-                    and turn_index == 1
+                    and self._is_first_user_turn(ctx, turn_index)
                 ):
                     skip_reason = "asr.no_audio_post_greet"
                 else:
@@ -7873,6 +8009,8 @@ class ChatV2Adapter:
                 empty_meta = {
                     "bytes_received": ctx.turn_audio_bytes,
                     "first_audio_ms": ctx.first_audio_received_ms,
+                    "no_audio_timeout_started_ms": ctx.no_audio_timeout_started_ms,
+                    "no_audio_timeout_deadline_ms": ctx.no_audio_timeout_deadline_ms,
                 }
                 if skip_reason:
                     empty_meta["variant"] = skip_reason
@@ -7911,6 +8049,8 @@ class ChatV2Adapter:
         ctx.asr_closed_ack_sent = False
         ctx.asr_result_seen = False
         ctx.asr_final_text = None
+        ctx.no_audio_timeout_started_ms = None
+        ctx.no_audio_timeout_deadline_ms = None
         if not can_open(ctx.session):
             return
         if ctx.session.tts_active and not self._allow_capture_during_tts(ctx):
