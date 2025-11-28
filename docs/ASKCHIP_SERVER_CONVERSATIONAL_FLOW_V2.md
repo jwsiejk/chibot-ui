@@ -75,6 +75,36 @@ sequenceDiagram
     ChatV2Adapter-->>Client: send TTS audio + markers (greet.complete/tts.*)【F:app/ws/adapter.py†L1345-L1355】【F:app/ws/adapter.py†L1525-L1549】
 ```
 
+## Troubleshooting by Symptom (Server)
+
+### ASR never returns text (empty_final_timeout)
+- **Relevant SL log patterns**: `evt=asr.timeout` warns when `_handle_asr_timeout` promotes a final due to inactivity; `_handle_asr_result` then records `turn_empty` with `skip_reason=empty_final_timeout` when the transcript is empty and marked as timeout.【F:app/ws/adapter.py†L1008-L1044】【F:app/ws/adapter.py†L7760-L7807】
+- **Likely code paths / conditions**: ASR stream opened but no audio or partials cause `_log_asr_timeout` → `_handle_asr_result` with `promoted_final=True` and empty text, short-circuiting LLM dispatch and ending the turn.【F:app/ws/adapter.py†L1008-L1044】【F:app/ws/adapter.py†L7760-L7807】
+- **Timeout configuration**: ` _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS` and `_MIC_OPEN_TIMEOUT_SECONDS` govern the no-audio watchdog and mic-open timeout used by `_schedule_no_audio_watchdog_rearm` after `audio.header` is received.【F:app/ws/adapter.py†L144-L148】【F:app/ws/adapter.py†L3499-L3536】【F:app/ws/adapter.py†L6609-L6699】
+- **Invariants to check**: ensure `audio.header` arrived (arms watchdog) and `ctx.greet_completed` is true so ASR ready bundle is allowed; verify no `asr_no_audio_after_header` warnings indicating the watchdog fired without input.【F:app/ws/adapter.py†L1399-L1556】【F:app/ws/adapter.py†L6650-L6699】
+
+### Audio arrives during greet
+- **Relevant SL log patterns**: `_handle_binary` logs `audio.frame.received` then replies with `audio_not_expected` and closes with code `1003` when `greet_completed` is false.【F:app/ws/adapter.py†L3944-L4010】
+- **Likely code paths / conditions**: any PCM frame before `greet_completed=True` triggers the rejection, preventing ASR feed and forcing socket close with the error code `audio_not_expected`. Greet completion is only set in `_handle_tts_end` when greet metadata matches the tracked `greet_utt_id`.【F:app/ws/adapter.py†L1399-L1539】【F:app/ws/adapter.py†L3944-L4010】
+- **Invariants to check**: `greet_completed` must be true before accepting audio; verify `greet.start`/`greet.completed` logs exist and that the client respected `greet.complete` before streaming PCM.【F:app/ws/adapter.py†L1322-L1539】【F:app/ws/adapter.py†L3944-L4010】
+
+### Greet never transitions to conversation
+- **Relevant SL log patterns**: absence of `greet_completed/server.greet_complete` or `server.conversation_ready`, plus suppressed logs like `asr_ready_suppressed_during_greet` if ASR open was attempted too early.【F:app/ws/adapter.py†L1235-L1283】【F:app/ws/adapter.py†L1399-L1556】
+- **Likely code paths / conditions**: `_handle_tts_end` fails to mark `greet_completed` if `meta.is_greet` or `greet_utt_id` do not match; `_ensure_asr_ready` skips until greet completion, so ASR ready bundle and `turn.begin` never fire.【F:app/ws/adapter.py†L1235-L1283】【F:app/ws/adapter.py†L1399-L1556】
+- **Pointers to configuration/gates**: greet detection lives in `_frame_signals_greet`; ASR ready gating depends on `ctx.greet_completed` before emitting `asr.ready`/`start_listening`.【F:app/ws/adapter.py†L1322-L1362】【F:app/ws/adapter.py†L1214-L1289】
+- **Invariants to check**: `greet_completed` should be true prior to any `audio.frame.received`; `accepting_audio`/`client_mic_open` are only set after the ASR ready bundle, so missing those logs implies the greet→conversation handshake stalled.【F:app/ws/adapter.py†L1214-L1289】【F:app/ws/adapter.py†L3499-L3536】
+
+### Server closes WS unexpectedly after audio
+- **Relevant SL log patterns**: `audio_not_expected` (close code 1003) when greet incomplete, `frame_too_large` (1009) for oversized PCM, `bad_header` errors on malformed `audio.header`.【F:app/ws/adapter.py†L3499-L3566】【F:app/ws/adapter.py†L3944-L4010】
+- **Likely code paths / conditions**: `_handle_binary` enforces greet completion and binary size limits; `_handle_text` processing `audio.header` validates format/sampleRate/channels and sends `asr.error` with `bad_header` if mismatched, also closing the socket path.【F:app/ws/adapter.py†L3499-L3566】【F:app/ws/adapter.py†L3944-L4010】
+- **Invariants to check**: confirm `audio.header` matches expected PCM16/16k/mono and is sent before frames; ensure greet has completed and `turn_req_id` normalization succeeded so `req_id` is preserved instead of rejected.【F:app/ws/adapter.py†L3499-L3566】
+
+### TTS plays but no ASR/LLM afterward
+- **Relevant SL log patterns**: `turn_empty` with `reason=asr_timeout_no_text`/`skip_reason=empty_final_timeout` indicates the server closed the turn without forwarding to Engine; no subsequent `asr_final_deferred_to_policy` logs will appear.【F:app/ws/adapter.py†L7760-L7807】
+- **Likely code paths / conditions**: `_handle_asr_result` exits early when final text is empty or timeout-flagged, calling `_end_user_turn` without invoking `on_asr_final`; this can be triggered by watchdog timeouts or stopping capture before speech reached ASR.【F:app/ws/adapter.py†L1008-L1044】【F:app/ws/adapter.py†L7760-L7807】
+- **Pointers to configuration/gates**: ASR ready bundle (`asr.ready` + `input.start`) is emitted in `_ensure_asr_ready` only after greet completion; missing this bundle means ASR never opened, so TTS-only greet would play with no subsequent ASR path.【F:app/ws/adapter.py†L1214-L1289】【F:app/ws/adapter.py†L1399-L1556】
+- **Invariants to check**: verify `greet_completed` and `asr_ready_bundle_sent_ms` are set before the user's speech, and that no `asr_no_audio_after_header` warnings fired; ensure `turn.begin` was emitted after greet to authorize user audio.【F:app/ws/adapter.py†L1399-L1556】【F:app/ws/adapter.py†L6650-L6699】【F:app/ws/adapter.py†L1524-L1556】
+
 ## Utopia Server Conversational Architecture
 - Clear separation: greet TTS plays while ASR remains closed; ASR opens only after explicit greet completion and ASR-ready bundle acknowledgment.
 - Turn lifecycle: deterministic `turn_index`/`turn_req_id` issuance, ASR timeout handling, and policy decisions logged once per turn.
