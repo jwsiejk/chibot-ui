@@ -83,6 +83,38 @@ sequenceDiagram
     WSClient-->>TTSPlayer: tts.end (resume capture)【F:app/static/js/ws_client.js†L2964-L2990】
 ```
 
+## Troubleshooting by Symptom (Client)
+
+### Chip greets, but I can't respond
+- **What to look for in CL logs**: confirm `client.phase.greet_end` followed by `client.phase.conversation_ready`/`client.conversation.user_turn_commit`. Missing `client.mic_pcm.ready` or `client.mic.hardware_unmute` means the mic graph never re-enabled post-greet.
+- **Likely causes**: `markGreetEnd` might not finish mic reacquire/graph setup, leaving `AppState.phase` stuck at `greet` or `conversation_ready` without advancing; `safeStartRecorderStreaming` hard-gates to conversation phases and logs `client.mic.start_blocked` when `PHASE` is not ready.【F:app/static/js/ws_client.js†L561-L895】【F:app/static/js/ws_client.js†L701-L782】
+- **Key files/functions to inspect**: `ws_client.markGreetEnd` (mic reacquire + graph ready), `ws_client.enterConversationAfterGreet` (phase commit retries), `ws_client.safeStartRecorderStreaming` (phase gate before capture).【F:app/static/js/ws_client.js†L561-L895】【F:app/static/js/ws_client.js†L701-L782】
+- **Sanity checks**: verify `AppState.phase === "user_turn"` before pressing Start, ensure `micTrack.enabled` is `true` after greet, and that `AppState.asrReady` is `true` (conversation gate).【F:app/static/js/ws_client.js†L561-L895】
+
+### I hear my own voice / echo
+- **What to look for in CL logs**: `mic_guard.block` or `client.mic_monitor_blocked` entries indicate mic-to-output paths were detected and blocked; absence of these logs during playback suggests the guard was not active.【F:app/static/js/audio/guard_mic_monitor.js†L4-L329】
+- **Likely causes**: `guard_mic_monitor` may not have patched node connections before a custom node graph connected mic sources to an audible destination, or a media element received the mic stream without auto-muting.【F:app/static/js/audio/guard_mic_monitor.js†L4-L329】
+- **Key files/functions to inspect**: `audio/guard_mic_monitor.js` (AudioNode.connect interception, mic lineage tracking, auto-mute on media elements).【F:app/static/js/audio/guard_mic_monitor.js†L4-L329】
+- **Sanity checks**: confirm the guard is imported/executed prior to mic graph creation, and inspect the console for `client.mic_monitor_blocked` during any echo incident to ensure the path was blocked.【F:app/static/js/audio/guard_mic_monitor.js†L4-L329】
+
+### Mic never starts / no input
+- **What to look for in CL logs**: `client.mic.start_blocked` (phase gate), `client.mic.start_failed`/`client.mic.gum_failed` (getUserMedia failure), absence of `client.mic.stream_success`/`client.mic.opened` after Start. `client.mic.start_retry_scheduled` indicates the runtime is looping to retry mic start.【F:app/static/js/ws_client.js†L701-L782】【F:app/static/js/audio/capture_runtime.js†L914-L1023】
+- **Likely causes**: running start while `PHASE` is still `greet`/`conversation_ready` (blocked in `safeStartRecorderStreaming`); hardware acquisition errors in `ensureMicHardware`/`startRecorderStreaming`; capture runtime bails when `getUserMedia` rejects and logs `gum_failed`.【F:app/static/js/ws_client.js†L701-L782】【F:app/static/js/audio/capture_runtime.js†L30-L112】
+- **Key files/functions to inspect**: `ws_client.safeStartRecorderStreaming` (phase + turn gating), `audio/capture_runtime.ensureMicHardware` and `startRecorderStreaming` (GUM + track enable), `audio/ws_audio_runtime.safeSendAudioChunk` (drops PCM if no `req_id`).【F:app/static/js/ws_client.js†L701-L782】【F:app/static/js/audio/capture_runtime.js†L30-L112】【F:app/static/js/audio/ws_audio_runtime.js†L494-L540】
+- **Sanity checks**: confirm `PHASE` is `user_turn`, `AppState.listening` becomes true, the media `MicTrack.enabled` toggles true after `markGreetEnd`, and that `AppState.audioGraphReady`/`AppState.micReady` are true (set by `markMicAndPcmReady`).【F:app/static/js/ws_client.js†L561-L895】
+
+### Random "gum_failed" or repeated mic retries
+- **What to look for in CL logs**: `client.mic.gum_failed`, `client.mic.capture_retry_due_to_gum_failed`, `client.mic.reacquire.*` (sender replace, recreate AudioContext).【F:app/static/js/audio/ws_audio_runtime.js†L223-L309】【F:app/static/js/audio/ws_audio_runtime.js†L1305-L1307】
+- **Likely causes**: `getUserMedia` rejection inside `capture_runtime.startRecorderStreaming`, or sender errors triggering `ws_audio_runtime.reacquireMic`. Retries are scheduled when capture returns `gum_failed` or sender replacement fails.【F:app/static/js/audio/capture_runtime.js†L914-L1023】【F:app/static/js/audio/ws_audio_runtime.js†L223-L309】
+- **Key files/functions to inspect**: `capture_runtime.startRecorderStreaming` (GUM request, emits gum failure logs), `ws_audio_runtime.reacquireMic` (retry loop and AudioContext recreation), `ws_audio_runtime.safeStartRecorderStreaming` caller path when retries are scheduled.【F:app/static/js/audio/capture_runtime.js†L914-L1023】【F:app/static/js/audio/ws_audio_runtime.js†L223-L309】【F:app/static/js/ws_client.js†L701-L782】
+- **Sanity checks**: verify constraints passed to `getUserMedia`, ensure prior mic tracks are stopped before retry, and confirm `senderPaused`/`AppState.phase` are not blocking capture when retries fire.【F:app/static/js/audio/capture_runtime.js†L914-L1023】【F:app/static/js/audio/ws_audio_runtime.js†L494-L540】
+
+### Audio cuts off mid-turn
+- **What to look for in CL logs**: sudden `client.mic.stopped` from capture runtime, `client.mic.start_retry_scheduled`, or PCM sender drops (`client.audio_chunk_dropped`). TTS handling logs (`tts.start` with mic pause) can precede auto-stops during server speech.【F:app/static/js/audio/capture_runtime.js†L782-L1218】【F:app/static/js/audio/ws_audio_runtime.js†L494-L579】【F:app/static/js/ws_client.js†L2920-L2990】
+- **Likely causes**: VAD/phase auto-stop from capture runtime, TTS start pausing capture (`handleTtsStart` uses `pauseRecorder`/sender pause), or turn closing (`client_turn_stop` server event) driving `_autoStopRecorder`/`stopRecorderStreaming`. PCM drops also occur if `req_id` is missing or phase regresses from `user_turn`.【F:app/static/js/ws_client.js†L2920-L2990】【F:app/static/js/ws_client.js†L701-L782】【F:app/static/js/audio/ws_audio_runtime.js†L494-L579】
+- **Key files/functions to inspect**: `capture_runtime._stopRecorder` (`client.mic.stopped` reasons), `ws_client.handleTtsStart/handleTtsEnd` (mic pause/resume around TTS), `ws_audio_runtime.safeSendAudioChunk` (phase/req gates).【F:app/static/js/audio/capture_runtime.js†L782-L1218】【F:app/static/js/ws_client.js†L2920-L2990】【F:app/static/js/audio/ws_audio_runtime.js†L494-L579】
+- **Sanity checks**: confirm `AppState.phase` remains `user_turn` during the cut, `AppState.listening` stays true, and `senderPaused` flags clear after TTS ends; verify `client.phase.*` logs show no regression to greet/closing mid-turn.【F:app/static/js/ws_client.js†L2920-L2990】【F:app/static/js/ws_client.js†L561-L850】
+
 ## Utopia Client Conversational Architecture
 - Deterministic phases where greet fully gates mic/PCM/VAD/ASR; conversation entry only after explicit greet-end + ASR-ready handshake.
 - Mic lifecycle: single warm-up, graph reuse across turns, deterministic unmute when conversation starts; no out-of-phase capture attempts.
