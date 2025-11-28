@@ -753,7 +753,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       }
     })();
 
-    const readyForUserTurn = wsReady && asrReady && livePcmStream;
+    const readyForUserTurn = wsReady && asrReady;
 
     if (readyForUserTurn && !conversationStartCommitted) {
       conversationStartCommitted = true;
