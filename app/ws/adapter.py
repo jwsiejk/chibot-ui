@@ -744,6 +744,11 @@ class AdapterContext:
     asr_final_text: str | None = None
     diag_mode: bool = False
     system_hold: bool = False
+    first_audio_received_ms: Optional[int] = None
+    turn_audio_bytes: int = 0
+    turn_audio_chunks: int = 0
+    awaiting_client_mic_ready: bool = False
+    client_mic_ready_ms: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -851,6 +856,11 @@ class ChatV2Adapter:
         ctx._logged_final_req_id_mismatch = False
         ctx._logged_header_req_id_mismatch = False
         ctx._logged_asr_timeout = False
+        ctx.first_audio_received_ms = None
+        ctx.turn_audio_bytes = 0
+        ctx.turn_audio_chunks = 0
+        ctx.awaiting_client_mic_ready = False
+        ctx.client_mic_ready_ms = None
 
     def _ensure_greet_turn(self, ctx: AdapterContext) -> None:
         """Ensure greet metrics/turn_index are initialized before first TTS."""
@@ -1012,6 +1022,8 @@ class ChatV2Adapter:
         meta = {
             "req_id": ctx.active_req_id or ctx.turn_req_id,
             "reason": reason,
+            "bytes_received": ctx.turn_audio_bytes,
+            "first_audio_ms": ctx.first_audio_received_ms,
         }
         self._emit_session_step(
             ctx.sid,
@@ -1023,9 +1035,10 @@ class ChatV2Adapter:
 
     async def _handle_asr_timeout(self, ctx: AdapterContext, reason: str) -> None:
         _log.warning(
-            "evt=asr.timeout sid=%s last_partial=%s promoted_final=False",
+            "evt=asr.timeout sid=%s last_partial=%s promoted_final=False bytes=%s",
             ctx.sid,
             ctx.last_partial_for_turn,
+            ctx.turn_audio_bytes,
         )
         active_req_id = ctx.active_req_id
         if not active_req_id:
@@ -1238,6 +1251,23 @@ class ChatV2Adapter:
                 )
                 ctx.asr_ready_suppressed_logged = True
             return
+        # For the very first post-greet turn, avoid opening ASR until we have
+        # a realistic signal that the client mic stack is ready. This prevents
+        # vendor-side no-audio timeouts before any PCM can arrive.
+        first_post_greet_turn = (getattr(ctx.session, "turn_index", 0) or 0) == 0
+        if (
+            first_post_greet_turn
+            and not ctx.client_mic_open
+            and not ctx.asr_ready_bundle_sent_ms
+        ):
+            ctx.awaiting_client_mic_ready = True
+            self._log(
+                ctx,
+                "server.defer_asr_open",
+                {"where": label, "reason": "await_client_mic_ready"},
+                level="debug",
+            )
+            return
         if not ctx.asr_ready_bundle_sent_ms:
             self._log_event("info", "asr_ready_arm_post_greet", ctx.sid, where=label)
         if ctx.asr_ready_bundle_sent_ms:
@@ -1274,6 +1304,7 @@ class ChatV2Adapter:
             if not ctx.asr_ready_bundle_sent_ms:
                 await self._send_asr_ready_bundle(send, ctx)
                 self._log_event("info", "asr_ready_emit", ctx.sid, where=label)
+                ctx.awaiting_client_mic_ready = False
                 if ctx.greet_completed and not ctx.asr_ready_after_greet_logged:
                     self._log(
                         ctx,
@@ -3509,6 +3540,7 @@ class ChatV2Adapter:
                 {"type": frame_type, "ok": True, "ws": {"dir": "in", "codec": codec}},
             )
             ctx.client_mic_open = True
+            ctx.client_mic_ready_ms = self._now_ms()
             self._schedule_no_audio_watchdog_rearm(ctx, delay_ms=500)
             _log.info("evt=mic_gate_open sid=%s reason=audio_header", ctx.sid)
             provided_req_id = self._normalize_req_id(frame.get("req_id"))
@@ -3702,6 +3734,11 @@ class ChatV2Adapter:
                 ctx.sid,
                 ctx.audio_meta,
             )
+            try:
+                if ctx.awaiting_client_mic_ready or not ctx.asr_ready_bundle_sent_ms:
+                    await self._ensure_asr_ready(ctx.ws_send, ctx, "audio_header")
+            except Exception:
+                _log.exception("evt=asr_ready_after_header_failed sid=%s", ctx.sid)
             self._emit_session_step(
                 ctx.sid,
                 "audio.header.accepted",
@@ -3767,6 +3804,15 @@ class ChatV2Adapter:
                 meta=ready_meta,
                 source="ws.client",
             )
+            if (
+                ctx.awaiting_client_mic_ready
+                and ctx.greet_completed
+                and not ctx.asr_ready_bundle_sent_ms
+            ):
+                try:
+                    await self._ensure_asr_ready(ctx.ws_send, ctx, "client_ready")
+                except Exception:
+                    _log.exception("evt=asr_ready_after_client_ready_failed sid=%s", ctx.sid)
 
         if frame_type == "client.banner":
             sanitized_info = self._sanitize_client_banner_info(frame.get("info"))
@@ -4249,6 +4295,21 @@ class ChatV2Adapter:
 
         ctx.audio_chunks_recv += 1
         ctx.audio_bytes_recv += byte_count
+        ctx.turn_audio_bytes += byte_count
+        ctx.turn_audio_chunks += 1
+        if ctx.first_audio_received_ms is None:
+            now_ms = self._now_ms()
+            ctx.first_audio_received_ms = now_ms
+            _log.info(
+                "evt=ws_first_audio_frame sid=%s bytes=%d ms_since_ready_bundle=%s",
+                ctx.sid,
+                byte_count,
+                (
+                    now_ms - ctx.asr_ready_bundle_sent_ms
+                    if ctx.asr_ready_bundle_sent_ms is not None
+                    else -1
+                ),
+            )
         if ctx.audio_chunks_recv % 10 == 0:
             _log.info(
                 "evt=ws_audio_ingress sid=%s chunks=%d bytes=%d",
@@ -6891,6 +6952,8 @@ class ChatV2Adapter:
 
         self._cancel_mic_open_timer(ctx)
         ctx.client_mic_open = True
+        if ctx.client_mic_ready_ms is None:
+            ctx.client_mic_ready_ms = self._now_ms()
         payload: Dict[str, object] = {"state": "open"}
         if isinstance(vendor, str) and vendor:
             payload["vendor"] = vendor[:64]
@@ -7787,7 +7850,14 @@ class ChatV2Adapter:
 
         if not is_real_user_final:
             if is_empty_final:
-                skip_reason = "empty_final_timeout"
+                if (
+                    ctx.turn_audio_bytes <= 0
+                    and ctx.greet_completed
+                    and turn_index == 1
+                ):
+                    skip_reason = "asr.no_audio_post_greet"
+                else:
+                    skip_reason = "empty_final_timeout"
             elif timeout and not stripped_text:
                 skip_reason = "timeout_no_text"
             elif timeout:
@@ -7800,11 +7870,18 @@ class ChatV2Adapter:
                 skip_reason = "empty_transcript"
 
             if is_empty_final:
+                empty_meta = {
+                    "bytes_received": ctx.turn_audio_bytes,
+                    "first_audio_ms": ctx.first_audio_received_ms,
+                }
+                if skip_reason:
+                    empty_meta["variant"] = skip_reason
                 empty_frame = {
                     "type": "turn.empty",
                     "sid": ctx.sid,
                     "turn_index": turn_index,
                     "reason": "asr_timeout_no_text",
+                    "meta": empty_meta,
                 }
                 if ctx.ws_send is not None:
                     await self._send_json(ctx.ws_send, ctx.sid, empty_frame)
