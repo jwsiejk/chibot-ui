@@ -1,2 +1,0 @@
-{"type":"ws.json.recv_summary","sid":"40552dddf5a24d6885ccfb040e933b53","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"gcp"},"schema_version":"1","ts_ms":1762475097079,"ts_ms_monotonic":37435224.881809,"level":"debug"}
-{"type":"ws.json.recv_summary","sid":"40552dddf5a24d6885ccfb040e933b53","who":"server","source":"ws.adapter","meta":{"kind":"ready","vendor":"gcp"},"schema_version":"1","ts_ms":1762475097082,"ts_ms_monotonic":37435228.069773,"level":"debug"}
