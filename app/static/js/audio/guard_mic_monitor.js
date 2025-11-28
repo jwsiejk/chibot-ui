@@ -20,6 +20,7 @@
   const micFedNodes = new WeakSet();
   const micPaths = new WeakMap();
   const downstreamConnections = new WeakMap();
+  const blockedConnections = new Set();
 
   const getNodeName = (node) => {
     try {
@@ -32,20 +33,6 @@
   function logMicBlock(source, dest, path, reason) {
     try {
       console.warn("mic_guard.block", {
-        sourceName: getNodeName(source),
-        destName: getNodeName(dest),
-        path,
-        reason,
-        stack: new Error().stack,
-      });
-    } catch (_) {
-      // best-effort logging only
-    }
-  }
-
-  function logMicAllow(source, dest, path, reason) {
-    try {
-      console.warn("mic_guard.allow", {
         sourceName: getNodeName(source),
         destName: getNodeName(dest),
         path,
@@ -175,8 +162,11 @@
     if (!node || typeof node !== "object") {
       return false;
     }
-    if (isAudioDestination(node) || isMediaStreamDestination(node)) {
+    if (isAudioDestination(node)) {
       return true;
+    }
+    if (isMediaStreamDestination(node)) {
+      return false;
     }
     try {
       const name = node?.constructor?.name || "";
@@ -191,7 +181,10 @@
       if (!node || typeof node !== "object") {
         return false;
       }
-      if (isAudioDestination(node) || isMediaStreamDestination(node)) {
+      if (isMediaStreamDestination(node)) {
+        return false;
+      }
+      if (isAudioDestination(node)) {
         return true;
       }
       const name = node?.constructor?.name || "";
@@ -213,55 +206,43 @@
       const sourcePath = getMicPath(this);
       const sourceFromMic = originatesFromMic(this);
 
-      if (sourceFromMic && destination instanceof AudioNode) {
-        const destinationPath = Array.isArray(sourcePath)
-          ? [...sourcePath, getNodeName(destination)]
-          : [getNodeName(this), getNodeName(destination)];
-        propagateMicPath(destination, destinationPath);
+      const destinationPath = Array.isArray(sourcePath)
+        ? [...sourcePath, getNodeName(destination)]
+        : [getNodeName(this), getNodeName(destination)];
 
-        if (isAudioDestination(destination)) {
-          logMicBlock(this, destination, destinationPath, "destination_node");
+      const logBlockOnce = (reason) => {
+        const sourceName = getNodeName(this);
+        const destName = getNodeName(destination);
+        const key = `${sourceName}→${destName}`;
+        if (!blockedConnections.has(key)) {
+          blockedConnections.add(key);
+          logMicBlock(this, destination, destinationPath, reason);
           try {
             if (typeof window.emitClientLog === "function") {
               window.emitClientLog("client.mic_monitor_blocked", {
-                path: destinationPath,
-                reason: "destination_node",
+                source: sourceName,
+                destination: destName,
+                destinationPath,
+                reason,
               });
             }
           } catch (_) {}
+        }
+      };
+
+      if (sourceFromMic && destination instanceof AudioNode) {
+        const routesToOutput = isAudioDestination(destination) || leadsToOutput(destination) || isAudibleSink(destination);
+        if (routesToOutput) {
+          logBlockOnce("upstream microphone input");
           return destination;
         }
+        propagateMicPath(destination, destinationPath);
       }
 
       if (sourceFromMic && destination && typeof destination === "object") {
         if (destination instanceof AudioNode) {
           markMicFed(destination);
         }
-
-        if (isAudibleSink(destination)) {
-          const destinationPath = Array.isArray(sourcePath)
-            ? [...sourcePath, getNodeName(destination)]
-            : [getNodeName(this), getNodeName(destination)];
-          logMicBlock(this, destination, destinationPath, "upstream microphone input");
-          try {
-            if (typeof window.emitClientLog === "function") {
-              window.emitClientLog("client.mic_monitor_blocked", {
-                source: this?.constructor?.name || "AudioNode",
-                destination: destination?.constructor?.name || "AudioDestinationNode",
-                reason: isMediaStreamSource(this) ? "direct_source" : "upstream_mic",
-                path: destinationPath,
-              });
-            }
-          } catch (_) {}
-          return destination;
-        }
-      }
-
-      if (sourceFromMic && destination instanceof AudioNode && leadsToOutput(destination)) {
-        const destinationPath = Array.isArray(sourcePath)
-          ? [...sourcePath, getNodeName(destination)]
-          : [getNodeName(this), getNodeName(destination)];
-        logMicAllow(this, destination, destinationPath, "mic path to output (currently allowed)");
       }
     } catch (err) {
       try {

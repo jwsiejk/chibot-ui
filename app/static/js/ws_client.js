@@ -483,7 +483,18 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       if (audioCtx) {
         const node = audioCtx.createBufferSource();
         node.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-        node.connect(audioCtx.destination);
+        const silentGain = typeof audioCtx.createGain === "function" ? audioCtx.createGain() : null;
+        const silentDestination =
+          typeof audioCtx.createMediaStreamDestination === "function"
+            ? audioCtx.createMediaStreamDestination()
+            : null;
+        if (silentGain) {
+          silentGain.gain.value = 0;
+          if (silentDestination) {
+            silentGain.connect(silentDestination);
+          }
+          node.connect(silentGain);
+        }
         node.start(0);
         logStage("client.audio_context.pre_warm_for_greet", {});
       }
@@ -2924,7 +2935,18 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           if (audioCtx) {
             const node = audioCtx.createBufferSource();
             node.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-            node.connect(audioCtx.destination);
+            const silentGain = typeof audioCtx.createGain === "function" ? audioCtx.createGain() : null;
+            const silentDestination =
+              typeof audioCtx.createMediaStreamDestination === "function"
+                ? audioCtx.createMediaStreamDestination()
+                : null;
+            if (silentGain) {
+              silentGain.gain.value = 0;
+              if (silentDestination) {
+                silentGain.connect(silentDestination);
+              }
+              node.connect(silentGain);
+            }
             node.start(0);
             logStage("client.audio_context.warmup_output_before_greet", {});
           }

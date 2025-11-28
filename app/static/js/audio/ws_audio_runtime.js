@@ -265,6 +265,11 @@ export function createWsAudioRuntime(options = {}) {
       }
       const track = newStream?.getAudioTracks?.()[0] || null;
       lastTrackState = track?.readyState || lastTrackState;
+
+      if (track) {
+        // For post-greet sessions, we want the track enabled.
+        track.enabled = true;
+      }
       if (track?.readyState === "ended") {
         markGumFailed("track_ended_immediately_reacquire", {
           trackState: track?.readyState || null,

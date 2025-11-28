@@ -29,9 +29,20 @@ let micHardwareInitPromise = null;
 export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINTS) {
   if (micHardwareState === MIC_HARDWARE_STATE.Ready) {
     try {
-      telemetryLogStage?.("client.mic.hardware_duplicate_request", { state: micHardwareState });
-    } catch (_) {}
-    return micStream;
+      const tracks = micStream?.getAudioTracks?.() || [];
+      const liveTrack = tracks.find((t) => t && t.readyState === "live");
+      if (!liveTrack) {
+        micHardwareState = MIC_HARDWARE_STATE.Idle;
+      } else {
+        telemetryLogStage?.("client.mic.hardware_duplicate_request", {
+          state: micHardwareState,
+          trackState: liveTrack.readyState,
+        });
+        return micStream;
+      }
+    } catch (_) {
+      micHardwareState = MIC_HARDWARE_STATE.Idle;
+    }
   }
   if (micHardwareState === MIC_HARDWARE_STATE.Starting && micHardwareInitPromise) {
     return micHardwareInitPromise;
@@ -41,6 +52,20 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
   const constraintsSummary = summarizeConstraints(effectiveConstraints);
   micHardwareInitPromise = (async () => {
     try {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        micHardwareState = MIC_HARDWARE_STATE.Failed;
+        micStream = null;
+        micTrack = null;
+        try {
+          telemetryLogStage("client.mic.hardware_failed", {
+            errorName: "NotSupportedError",
+            message: "MediaDevices.getUserMedia unavailable",
+            constraints: constraintsSummary,
+          });
+        } catch (_) {}
+        return null;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia(effectiveConstraints);
       const [track] = stream.getAudioTracks();
       if (track) {
@@ -56,6 +81,7 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
           sampleRate: trackSettings.sampleRate || null,
           channelCount: trackSettings.channelCount || null,
           deviceId: trackSettings.deviceId || null,
+          trackState: track?.readyState || null,
         });
       } catch (_) {}
       return stream;
