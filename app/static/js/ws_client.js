@@ -673,7 +673,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
   }
 
-  function safeStartRecorderStreaming(policy, source) {
+  async function safeStartRecorderStreaming(policy, source) {
     // Architectural rule: recorder may only start in ConversationReady/UserTurn.
     // No warm-ups in Greet/Boot; see ASKCHIP_CONVERSATIONAL_FLOW_REPORT.
     const phase = voicePhaseController?.getPhase?.() || null;
@@ -713,13 +713,44 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     try {
       ensureTurnAudioReqId(policy || AppState?.policy || {});
     } catch (_) {}
+    let recorderStart = null;
     if (typeof WSClient?.startRecorderStreaming === "function") {
-      return WSClient.startRecorderStreaming(policy, source);
+      recorderStart = WSClient.startRecorderStreaming(policy, source);
+    } else if (typeof startRecorderStreaming === "function") {
+      recorderStart = startRecorderStreaming(policy, source);
     }
-    if (typeof startRecorderStreaming === "function") {
-      return startRecorderStreaming(policy, source);
+
+    if (!recorderStart) {
+      return false;
     }
-    return false;
+
+    const started = await recorderStart;
+    if (!started) {
+      const canRetry =
+        (source === "asr_ready_forced_start" || source === "server.start_listening") &&
+        AppState?.asrReady &&
+        !conversationStartCommitted &&
+        typeof source === "string" &&
+        !source.endsWith("_retry");
+
+      if (canRetry) {
+        try {
+          logStage("client.mic.start_retry_scheduled", {
+            source,
+            phase,
+            wsPhase: AppState?.wsPhase || null,
+            delay_ms: 50,
+          });
+        } catch (_) {}
+        setTimeout(() => {
+          safeStartRecorderStreaming(policy, `${source}_retry`);
+        }, 50);
+      }
+
+      return false;
+    }
+
+    return started;
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
