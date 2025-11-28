@@ -81,6 +81,7 @@ function logPcmEnergy(buffer, meta) {
       lane: meta?.lane || "mic",
       reqId: meta?.reqId || null,
       dbfs,
+      dbfs_str: Number.isFinite(dbfs) ? dbfs.toFixed(1) : null,
       peak,
       vadEnergyDb,
       autoVadEnergyDbfs,
