@@ -740,7 +740,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       });
     } catch (_) {}
 
-    const wsReady = AppState?.wsPhase === "ready";
+    const wsReady = WS_READY_PHASES.has(AppState?.wsPhase);
     const asrReady = Boolean(AppState?.asrReady);
     const phaseBefore = getPhase();
     const livePcmStream = (() => {
