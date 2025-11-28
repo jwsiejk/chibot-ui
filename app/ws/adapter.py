@@ -1351,25 +1351,6 @@ class ChatV2Adapter:
             return
         if ctx.awaiting_client_mic_ready:
             self._maybe_fallback_when_mic_never_ready(ctx)
-        # For the very first post-greet turn, avoid opening ASR until we have
-        # a realistic signal that the client mic stack is ready. This prevents
-        # vendor-side no-audio timeouts before any PCM can arrive.
-        assumed_next_turn = (getattr(ctx.session, "turn_index", 0) or 0) + 1
-        first_post_greet_turn = self._is_first_user_turn(ctx, assumed_next_turn)
-        if (
-            first_post_greet_turn
-            and not ctx.client_mic_open
-            and not ctx.asr_ready_bundle_sent_ms
-        ):
-            ctx.awaiting_client_mic_ready = True
-            self._log(
-                ctx,
-                "server.defer_asr_open",
-                {"where": label, "reason": "await_client_mic_ready"},
-                level="debug",
-            )
-            self._maybe_fallback_when_mic_never_ready(ctx)
-            return
         if not ctx.asr_ready_bundle_sent_ms:
             self._log_event("info", "asr_ready_arm_post_greet", ctx.sid, where=label)
         if ctx.asr_ready_bundle_sent_ms:
