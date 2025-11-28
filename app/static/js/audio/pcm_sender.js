@@ -180,57 +180,23 @@ export async function initPcmSender(mediaStream = null, {
     }
   }
 
-  const micConstraints = {
-    audio: {
-      channelCount: { ideal: 1 },
-      sampleRate: { ideal: 48000 },
-      echoCancellation: { ideal: true },
-      noiseSuppression: { ideal: true },
-      autoGainControl: { ideal: true },
-    },
-    video: false,
-  };
-
-  try {
-    if (!mediaStream) {
-      const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
-        ? window.getMicOnce
-        : null;
-      if (gum) {
-        mediaStream = await gum(micConstraints);
-      }
-    }
-    if (!mediaStream) {
-      mediaStream = await navigator.mediaDevices.getUserMedia(micConstraints);
-    }
-    const audioTracks = mediaStream?.getAudioTracks?.();
-    const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
-    const deviceId = primaryTrack?.getSettings?.()?.deviceId || null;
-    console.log('client.mic_stream_acquired_ok', {
-      deviceId,
-      sampleRate: audioCtx?.sampleRate || null,
-    });
-    try {
-      emitClientLog("client.pcm_sender.acquired_stream", {
-        audioCtxState: audioCtx?.state || null,
-        audioCtxSampleRate: audioCtx?.sampleRate || null,
-        mediaStreamId: mediaStream?.id || null,
-      });
-    } catch (_) {}
-  } catch (err) {
-    try {
-      console.warn("client.mic.gum_error", {
-        name: err?.name,
-        message: err?.message,
-        constraints: micConstraints,
-      });
-    } catch (_) {}
-    console.error('client.mic_permission_denied', {
-      name: err?.name,
-      message: err?.message,
-    });
-    throw err;
+  if (!mediaStream) {
+    throw new Error("MediaStream is required to initialize pcm_sender");
   }
+  const audioTracks = mediaStream?.getAudioTracks?.();
+  const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
+  const deviceId = primaryTrack?.getSettings?.()?.deviceId || null;
+  console.log('client.mic_stream_acquired_ok', {
+    deviceId,
+    sampleRate: audioCtx?.sampleRate || null,
+  });
+  try {
+    emitClientLog("client.pcm_sender.acquired_stream", {
+      audioCtxState: audioCtx?.state || null,
+      audioCtxSampleRate: audioCtx?.sampleRate || null,
+      mediaStreamId: mediaStream?.id || null,
+    });
+  } catch (_) {}
 
   const source = audioCtx.createMediaStreamSource(mediaStream);
 

@@ -4,6 +4,94 @@
 
 import { logMic as telemetryLogMic, logStage as telemetryLogStage } from "../ws/telemetry.js";
 
+// Mic hardware lifecycle (getUserMedia + MediaStreamTrack) is now managed separately
+// from the audio graph. These module-level bindings are shared across capture runtimes
+// to guarantee single-acquire semantics per session.
+export const MIC_HARDWARE_STATE = {
+  Idle: "idle",
+  Starting: "starting",
+  Ready: "ready",
+  Failed: "failed",
+};
+
+export const AUDIO_GRAPH_STATE = {
+  Idle: "idle",
+  Live: "live",
+};
+
+let micHardwareState = MIC_HARDWARE_STATE.Idle;
+let micStream = null;
+let micTrack = null;
+let audioGraphState = AUDIO_GRAPH_STATE.Idle;
+let audioGraphInitPromise = null;
+let micHardwareInitPromise = null;
+
+export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINTS) {
+  if (micHardwareState === MIC_HARDWARE_STATE.Ready) {
+    try {
+      telemetryLogStage?.("client.mic.hardware_duplicate_request", { state: micHardwareState });
+    } catch (_) {}
+    return micStream;
+  }
+  if (micHardwareState === MIC_HARDWARE_STATE.Starting && micHardwareInitPromise) {
+    return micHardwareInitPromise;
+  }
+  micHardwareState = MIC_HARDWARE_STATE.Starting;
+  const effectiveConstraints = constraints || DEFAULT_CAPTURE_CONSTRAINTS;
+  const constraintsSummary = summarizeConstraints(effectiveConstraints);
+  micHardwareInitPromise = (async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(effectiveConstraints);
+      const [track] = stream.getAudioTracks();
+      if (track) {
+        track.enabled = false;
+        micTrack = track;
+      }
+      micStream = stream;
+      micHardwareState = MIC_HARDWARE_STATE.Ready;
+      const trackSettings = track?.getSettings ? track.getSettings() : {};
+      try {
+        telemetryLogStage("client.mic.hardware_ready", {
+          constraints: constraintsSummary,
+          sampleRate: trackSettings.sampleRate || null,
+          channelCount: trackSettings.channelCount || null,
+          deviceId: trackSettings.deviceId || null,
+        });
+      } catch (_) {}
+      return stream;
+    } catch (err) {
+      micHardwareState = MIC_HARDWARE_STATE.Failed;
+      micStream = null;
+      micTrack = null;
+      try {
+        telemetryLogStage("client.mic.hardware_failed", {
+          errorName: err?.name || null,
+          message: err?.message || null,
+          constraints: constraintsSummary,
+        });
+      } catch (_) {}
+      try {
+        const record = typeof window !== "undefined" ? window.recordClientBannerEvent : null;
+        if (typeof record === "function") {
+          record("mic.error", { name: err?.name || "MicError", detail: err?.message || "" });
+        }
+      } catch (_) {}
+      return null;
+    } finally {
+      micHardwareInitPromise = null;
+    }
+  })();
+  return micHardwareInitPromise;
+}
+
+export function getMicStream() {
+  return micStream;
+}
+
+export function getMicTrack() {
+  return micTrack;
+}
+
 function isGreetPhaseSafe() {
   try {
     if (typeof window === "undefined") return false;
@@ -14,6 +102,40 @@ function isGreetPhaseSafe() {
   } catch (_) {
     return false;
   }
+}
+
+const DEFAULT_CAPTURE_CONSTRAINTS = {
+  audio: {
+    channelCount: { ideal: 1 },
+    sampleRate: { ideal: 48000 },
+    echoCancellation: { ideal: true },
+    noiseSuppression: { ideal: true },
+    autoGainControl: { ideal: true },
+  },
+  video: false,
+};
+
+function summarizeConstraints(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  const audio = value && typeof value.audio === "object" && !Array.isArray(value.audio)
+    ? value.audio
+    : null;
+  const audioSummary = audio
+    ? {
+        channelCount: audio.channelCount ?? null,
+        deviceId: audio.deviceId ?? null,
+        sampleRate: audio.sampleRate ?? null,
+        echoCancellation: audio.echoCancellation ?? null,
+        noiseSuppression: audio.noiseSuppression ?? null,
+        autoGainControl: audio.autoGainControl ?? null,
+      }
+    : value?.audio ?? null;
+  return { audio: audioSummary };
 }
 
 const USER_INITIATED_STOP_REASONS = new Set([
@@ -196,29 +318,6 @@ export function createCaptureRuntime({
 
   const resolvePhase = () => (typeof AppState?.phase === "string" ? AppState.phase : null);
 
-  function summarizeConstraints(value) {
-    if (value === null || value === undefined) {
-      return null;
-    }
-    if (typeof value !== "object") {
-      return value;
-    }
-    const audio = value && typeof value.audio === "object" && !Array.isArray(value.audio)
-      ? value.audio
-      : null;
-    const audioSummary = audio
-      ? {
-          channelCount: audio.channelCount ?? null,
-          deviceId: audio.deviceId ?? null,
-          sampleRate: audio.sampleRate ?? null,
-          echoCancellation: audio.echoCancellation ?? null,
-          noiseSuppression: audio.noiseSuppression ?? null,
-          autoGainControl: audio.autoGainControl ?? null,
-        }
-      : value?.audio ?? null;
-    return { audio: audioSummary };
-  }
-
   function buildConstraintsFromPolicy(policy) {
     const capture = policy && typeof policy === "object" && policy.capture && typeof policy.capture === "object"
       ? policy.capture
@@ -237,6 +336,62 @@ export function createCaptureRuntime({
         console.warn("capture_runtime: setCaptureStreamProvider failed", err);
       }
     }
+  }
+
+  async function ensureAudioGraph(reason = "auto") {
+    if (audioGraphState === AUDIO_GRAPH_STATE.Live) {
+      try {
+        logStage?.("client.audio_graph.duplicate_init", { reason });
+      } catch (_) {}
+      return true;
+    }
+    if (audioGraphInitPromise) {
+      return audioGraphInitPromise;
+    }
+    if (micHardwareState !== MIC_HARDWARE_STATE.Ready || !micStream) {
+      return false;
+    }
+    captureStream = micStream;
+    ensureStreamProvider(micStream);
+    audioGraphInitPromise = (async () => {
+      try {
+        let ctx = typeof window !== "undefined" ? window.__globalAudioCtx || null : null;
+        const previousCtxState = ctx?.state || null;
+        if (!ctx || ctx.state === "closed") {
+          const AudioContextCtor = typeof window !== "undefined"
+            ? window.AudioContext || window.webkitAudioContext
+            : null;
+          if (typeof AudioContextCtor === "function") {
+            ctx = new AudioContextCtor();
+            if (typeof window !== "undefined") {
+              window.__globalAudioCtx = ctx;
+            }
+          }
+        }
+        if (ctx?.state === "suspended" && typeof ctx.resume === "function") {
+          await ctx.resume();
+        }
+        try {
+          logStage("client.audio_graph.ctx", { prev: previousCtxState, next: ctx?.state || null });
+        } catch (_) {}
+        const sender = await ensurePcmSender();
+        if (!sender) {
+          return false;
+        }
+        audioGraphState = AUDIO_GRAPH_STATE.Live;
+        try {
+          logStage("client.audio_graph.live", {
+            reason,
+            sampleRate: ctx?.sampleRate || null,
+            streamId: micStream?.id || null,
+          });
+        } catch (_) {}
+        return true;
+      } finally {
+        audioGraphInitPromise = null;
+      }
+    })();
+    return audioGraphInitPromise;
   }
 
   function applySenderPausedState() {
@@ -740,9 +895,6 @@ export function createCaptureRuntime({
         window.__askchip_LastMicConstraints = constraints;
       } catch (_) {}
     }
-    const gum = typeof window !== "undefined" && typeof window.getMicOnce === "function"
-      ? window.getMicOnce
-      : null;
     try {
       try {
         logStage("client.mic.request_gum", {
@@ -752,17 +904,7 @@ export function createCaptureRuntime({
           phase: resolvePhase(),
         });
       } catch (_) {}
-      try {
-        logStage("client.mic.gum_attempt", {
-          source: "capture_runtime",
-          reason,
-          constraints: summary,
-          phase: resolvePhase(),
-        });
-      } catch (_) {}
-      const stream = gum
-        ? await gum(constraints)
-        : await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await ensureMicHardware(constraints);
       captureStream = stream;
       if (typeof window !== "undefined") {
         try {
@@ -937,92 +1079,33 @@ export function createCaptureRuntime({
     firstChunkSeen = false;
     clearVadSilenceTimer();
     const captureReason = typeof reason === "string" && reason ? reason : "auto";
-    let stream = captureStream;
-    const tracks = typeof stream?.getAudioTracks === "function" ? stream.getAudioTracks() : [];
-    const track = Array.isArray(tracks) && tracks.length ? tracks[0] : null;
-    const trackState = track?.readyState || null;
-    const needsNewStream = !stream || !Array.isArray(tracks) || tracks.length === 0 || trackState !== "live";
+    let stream = micStream || captureStream;
 
-    if (needsNewStream) {
+    if (!stream || micHardwareState !== MIC_HARDWARE_STATE.Ready) {
       try {
-        logStage("client.recorder.capture_missing_or_dead", {
-          hadStream: Boolean(stream),
-          trackState,
-          reason: captureReason,
-        });
+        stream = await ensureMicHardware(policy ? buildConstraintsFromPolicy(policy) : DEFAULT_CAPTURE_CONSTRAINTS);
       } catch (_) {}
+    }
+
+    if (!stream) {
       try {
-        stream = await startCaptureFromPolicy(policy || {}, captureReason);
-        if (!stream) {
-          try {
-            logStage("client.recorder.capture_failed", { error_name: null, error_message: null });
-          } catch (_) {}
-          setListeningState(false);
-          audioStreaming = false;
-          return false;
-        }
-        captureStream = stream;
-      } catch (err) {
-        try {
-          logStage("client.recorder.capture_failed", {
-            error_name: err?.name || null,
-            error_message: err?.message || String(err) || null,
-          });
-        } catch (_) {}
-        setListeningState(false);
-        audioStreaming = false;
-        return false;
-      }
-    }
-    if (stream) {
-      ensureStreamProvider(stream);
+        logStage("client.recorder.capture_failed", { error_name: null, error_message: "mic_unavailable" });
+      } catch (_) {}
+      setListeningState(false);
+      audioStreaming = false;
+      return false;
     }
 
-    // At this point we *should* have a live stream and a usable AudioContext.
-    try {
-      const ctxState = typeof window !== "undefined" && window.__globalAudioCtx ? window.__globalAudioCtx.state : null;
-      console.warn("DEBUG.startRecorderStreaming.beforeEnsurePcmSender", { hasStream: !!captureStream, audioCtxState: ctxState });
-    } catch (_) {}
+    captureStream = stream;
+    ensureStreamProvider(stream);
 
-    try {
-      let ctx = typeof window !== "undefined" ? window.__globalAudioCtx || null : null;
-      const previousCtxState = ctx?.state || null;
-      if (!ctx || ctx.state === "closed") {
-        try {
-          const AudioContextCtor = typeof window !== "undefined"
-            ? window.AudioContext || window.webkitAudioContext
-            : null;
-          if (typeof AudioContextCtor === "function") {
-            ctx = new AudioContextCtor();
-            if (typeof window !== "undefined") {
-              window.__globalAudioCtx = ctx;
-            }
-            logStage("client.audio_context.create_for_recorder", { previous_state: previousCtxState });
-          }
-        } catch (_) {}
-      }
-      if (ctx?.state === "suspended") {
-        try {
-          logStage("client.audio_context.resume_attempt_for_recorder", {});
-        } catch (_) {}
-        try {
-          await ctx.resume();
-          try {
-            logStage("client.audio_context.resumed_for_recorder", {});
-          } catch (_) {}
-        } catch (err) {
-          try {
-            logStage("client.audio_context.resume_failed_for_recorder", {
-              error_name: err?.name || null,
-              error_message: err?.message || String(err) || null,
-            });
-          } catch (_) {}
-          setListeningState(false);
-          audioStreaming = false;
-          return false;
-        }
-      }
-    } catch (_) {}
+    const graphReady = await ensureAudioGraph(captureReason);
+    if (!graphReady) {
+      try { logStage("client.audio_graph.init_failed", { reason: captureReason }); } catch (_) {}
+      setListeningState(false);
+      audioStreaming = false;
+      return false;
+    }
 
     try {
       const sender = await ensurePcmSender();
@@ -1139,9 +1222,16 @@ export function createCaptureRuntime({
     performStopRecorder,
     stopRecorder,
     startRecorderStreaming,
+    ensureAudioGraph,
+    ensureMicHardware,
+    getMicStream,
+    getMicTrack,
   };
 }
 
 if (typeof window !== "undefined") {
   window.createCaptureRuntime = createCaptureRuntime;
+  window.ensureMicHardware = ensureMicHardware;
+  window.ensureAudioGraph = ensureAudioGraph;
+  window.__askchipMicTrack = () => micTrack;
 }

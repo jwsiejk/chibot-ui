@@ -556,6 +556,20 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     try {
       logStage("client.phase.greet_end", { phase: getPhase() });
     } catch (_) {}
+    Promise.resolve().then(async () => {
+      try { await ensureMicHardware(); } catch (_) {}
+      const graphReady = await ensureAudioGraph("greet_to_conversation_ready");
+      if (graphReady) {
+        markMicAndPcmReady("audio_graph_live");
+      }
+      try {
+        const track = typeof getMicTrack === "function" ? getMicTrack() : null;
+        if (track) {
+          track.enabled = true;
+          logStage("client.mic.hardware_unmute", { phase: getPhase() });
+        }
+      } catch (_) {}
+    });
     try {
       conversationStartPlanned = true;
       scheduleConversationStartAfterGreet("mark_greet_end");
@@ -1800,7 +1814,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     canAutoStopFromVad: () => speechSeenThisTurn === true,
     onCaptureStop: handleCaptureStopTelemetry,
   });
-  markMicAndPcmReady("capture_runtime_created");
   try {
     enterConversationAfterGreet("capture_runtime_ready");
   } catch (_) {}
@@ -1825,6 +1838,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     performStopRecorder,
     stopRecorder: captureStopRecorder,
     startRecorderStreaming,
+    ensureAudioGraph,
+    ensureMicHardware,
+    getMicTrack,
   } = captureRuntime;
 
   function resetClientTtsGate(reason = "client_stop") {
