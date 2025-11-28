@@ -3818,8 +3818,47 @@ class ChatV2Adapter:
                 ctx.sid,
                 ctx.audio_meta,
             )
+            ctx.client_capture_armed = True
+            first_turn = self._is_first_user_turn(ctx)
             try:
-                if ctx.awaiting_client_mic_ready or not ctx.asr_ready_bundle_sent_ms:
+                if (
+                    ctx.greet_completed
+                    and first_turn
+                    and ctx.asr_stream_id is None
+                    and ctx.asr_ready_bundle_sent_ms is None
+                ):
+                    self._log_event(
+                        "info",
+                        "asr_open_first_turn_on_audio_header",
+                        ctx.sid,
+                        where="audio_header",
+                    )
+                    if ctx.asr_open_task is None or ctx.asr_open_task.done():
+                        await self._ensure_previous_turn_closed(ctx, "header_first_turn")
+                        self._schedule_asr_open(ctx)
+                    ctx.awaiting_asr_ready = True
+                    task = ctx.asr_open_task
+                    if task is not None and not task.done():
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            self._log_event(
+                                "info",
+                                "asr_open_task_cancelled_before_ready_first_turn",
+                                ctx.sid,
+                                where="audio_header",
+                            )
+                            return self._HandleResult(True)
+                    if not ctx.asr_ready_bundle_sent_ms:
+                        await self._send_asr_ready_bundle(send, ctx)
+                        self._log_event(
+                            "info",
+                            "asr_ready_emit_first_turn",
+                            ctx.sid,
+                            where="audio_header",
+                        )
+                        ctx.awaiting_client_mic_ready = False
+                elif ctx.awaiting_client_mic_ready or not ctx.asr_ready_bundle_sent_ms:
                     await self._ensure_asr_ready(ctx.ws_send, ctx, "audio_header")
             except Exception:
                 _log.exception("evt=asr_ready_after_header_failed sid=%s", ctx.sid)
@@ -3843,6 +3882,15 @@ class ChatV2Adapter:
             # --- START FIX: Explicitly send HUD state to fix the UI badge ---
             self._emit_hud_state(ctx, "Listening")
             # --- END FIX ---
+            if ctx.greet_completed and self._is_first_user_turn(ctx):
+                ctx.awaiting_client_mic_ready = True
+                self._log_event(
+                    "info",
+                    "asr_prearm_first_turn_deferred_until_header",
+                    ctx.sid,
+                    where="asr_rearm_request",
+                )
+                return self._HandleResult(True)
             try:
                 # Use the standard ASR readiness path so we never emit asr.ready
                 # without a corresponding, fully-open ASR stream.
