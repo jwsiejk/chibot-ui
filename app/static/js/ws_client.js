@@ -710,6 +710,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         wsPhase: AppState?.wsPhase || null,
       });
     } catch (_) {}
+    try {
+      ensureTurnAudioReqId(policy || AppState?.policy || {});
+    } catch (_) {}
     if (typeof WSClient?.startRecorderStreaming === "function") {
       return WSClient.startRecorderStreaming(policy, source);
     }
@@ -1560,7 +1563,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     setMicChunks: (value) => { __micChunks = Number.isFinite(value) ? Number(value) : 0; },
     getMicBytes: () => __micBytes,
     setMicBytes: (value) => { __micBytes = Number.isFinite(value) ? Number(value) : 0; },
-    getCurrentTurnReqId: () => getCurrentTurnReqIdValue(),
+    getCurrentTurnReqId: () => getCurrentTurnReqId(),
   });
 
   if (typeof window !== "undefined") {
@@ -1990,24 +1993,57 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     channels: 1,
   });
 
-  function makeReqId() {
-    return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  // Shared turn-audio request id for header + PCM chunks
+  let currentTurnAudioReqId = null;
+
+  function getCurrentTurnReqId() {
+    return currentTurnAudioReqId;
   }
 
-  let currentTurnReqId = null;
-
-  function setCurrentTurnReqId(value) {
-    if (typeof value === "string" && value) {
-      currentTurnReqId = value;
-      return;
+  function ensureTurnAudioReqId(policy = AppState?.policy || {}) {
+    // If we already have an id for this turn, reuse it
+    if (currentTurnAudioReqId) {
+      return currentTurnAudioReqId;
     }
-    currentTurnReqId = null;
+
+    // Optional: lane label for telemetry
+    let lane = "mic";
+    try {
+      if (policy && typeof policy === "object") {
+        if (typeof policy.input_lane === "string" && policy.input_lane) {
+          lane = policy.input_lane;
+        } else if (typeof policy.capture?.lane === "string" && policy.capture.lane) {
+          lane = policy.capture.lane;
+        }
+      }
+    } catch (_) {}
+
+    const nowPart = Date.now().toString(36);
+    const randPart = Math.random().toString(36).slice(2, 8);
+
+    currentTurnAudioReqId = `req-${lane}-${nowPart}${randPart}`;
+
+    try {
+      logStage("client.turn_req_id.set", {
+        reqId: currentTurnAudioReqId,
+        lane,
+      });
+    } catch (_) {}
+
+    return currentTurnAudioReqId;
   }
 
-  function getCurrentTurnReqIdValue() {
-    return typeof currentTurnReqId === "string" && currentTurnReqId
-      ? currentTurnReqId
-      : null;
+  function resetTurnAudioContext() {
+    try {
+      logStage("client.turn_audio_context.reset", {
+        prevReqId: currentTurnAudioReqId || null,
+      });
+    } catch (_) {}
+    currentTurnAudioReqId = null;
+
+    // keep your existing audio-header state resets here (e.g. audioHeaderSent = false)
+    __resetAudioHeaderSent();
+    // ... any other existing reset logic ...
   }
 
   // --- Begin: header idempotency + strict schema ---
@@ -2068,7 +2104,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       codec: "pcm_s16le",
     };
   }
-  function __sendAudioHeaderOnce(header) {
+  function __sendAudioHeaderOnce(frameOrMeta = {}) {
     if (__audioHeaderSent) {
       try { console.warn("audio.header already sent; skipping"); } catch {}
       return true;
@@ -2079,6 +2115,17 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       : null;
     if (!sendJSON) {
       console.warn("Failed to send audio header: WSClient.sendJSON unavailable");
+      return false;
+    }
+
+    let header;
+    try {
+      const reqId = typeof frameOrMeta?.reqId === "string" && frameOrMeta.reqId
+        ? frameOrMeta.reqId
+        : (typeof frameOrMeta?.req_id === "string" && frameOrMeta.req_id ? frameOrMeta.req_id : null);
+      header = __buildStrictAudioHeader(frameOrMeta, { ...frameOrMeta, reqId });
+    } catch (err) {
+      console.warn("Failed to build audio header", err);
       return false;
     }
 
@@ -2120,41 +2167,42 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     console.warn("Failed to send audio header: transport returned false");
     return false;
   }
-  function sendAudioHeader(frameOrPolicy = AppState?.policy, headerOptions = {}) {
-    const explicitReq = typeof headerOptions?.reqId === "string" && headerOptions.reqId
-      ? headerOptions.reqId
+  function sendAudioHeader(frameOrMeta) {
+    const policy = AppState?.policy || {};
+    let reqId = typeof getCurrentTurnReqId === "function"
+      ? getCurrentTurnReqId()
       : null;
-    const reqId = explicitReq || getCurrentTurnReqIdValue();
+
+    // Last-chance: allocate if missing
+    if (!reqId && typeof ensureTurnAudioReqId === "function") {
+      reqId = ensureTurnAudioReqId(policy);
+    }
+
     if (!reqId) {
-      try { console.debug("sendAudioHeader skipped: missing req_id"); } catch {}
+      console.warn("sendAudioHeader skipped: missing req_id");
+      try {
+        logStage("client.audio_header.skipped", {
+          reason: "missing_reqId",
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
       return false;
     }
-    let header;
+
+    // Merge frame/meta with reqId
+    const meta = {};
+    if (frameOrMeta && typeof frameOrMeta === "object") {
+      Object.assign(meta, frameOrMeta);
+    }
+    meta.reqId = reqId;
+
     try {
-      header = __buildStrictAudioHeader(frameOrPolicy, { ...headerOptions, reqId });
+      // This should be the ONLY place __sendAudioHeaderOnce is called
+      return __sendAudioHeaderOnce(meta);
     } catch (err) {
-      console.warn("Failed to build audio header", err);
+      console.warn("sendAudioHeader failed", err);
       return false;
     }
-    return __sendAudioHeaderOnce(header);
-  }
-
-  function resetTurnAudioContext() {
-    setCurrentTurnReqId(null);
-    __resetAudioHeaderSent();
-  }
-
-  function ensureTurnAudioReqId(policy) {
-    const existing = getCurrentTurnReqIdValue();
-    if (existing) {
-      sendAudioHeader(policy, { reqId: existing });
-      return existing;
-    }
-    const nextId = makeReqId();
-    setCurrentTurnReqId(nextId);
-    __resetAudioHeaderSent();
-    sendAudioHeader(policy, { reqId: nextId });
-    return nextId;
   }
   // --- End: header idempotency + strict schema ---
   let __lastErrorSig = null, __lastErrorAt = 0;
@@ -2885,7 +2933,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
             "start_listening";
           _audioStreaming = true;
           setListeningState(true);
-          ensureTurnAudioReqId(policy || AppState?.policy || {});
           emitConsoleBusEvent("client.ui_badge", { state: "Listening" });
           resetTurnStopFlag();
           resetSpeechFlag();
@@ -3909,7 +3956,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     const reqId = typeof options.reqId === "string" && options.reqId
       ? options.reqId
-      : getCurrentTurnReqIdValue();
+      : getCurrentTurnReqId();
     if (reqId) {
       options.reqId = reqId;
     } else {
