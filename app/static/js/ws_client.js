@@ -631,6 +631,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function safeStartRecorderStreaming(policy, source) {
+    // Architectural rule: recorder may only start in ConversationReady/UserTurn.
+    // No warm-ups in Greet/Boot; see ASKCHIP_CONVERSATIONAL_FLOW_REPORT.
     const phase = voicePhaseController.getPhase();
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     try {
@@ -643,6 +645,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
     if (!allowed) {
       try {
+        logStage("client.recorder.start_gated", {
+          reason: "phase_block",
+          phase,
+          wsPhase: AppState?.wsPhase || null,
+          source: source || null,
+        });
         logStage("client.mic.start_blocked", {
           reason: "phase_not_conversation",
           source,
@@ -1736,6 +1744,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     if (!allowed) {
       try {
+        logStage?.("client.recorder.start_gated", {
+          reason: "phase_block",
+          phase,
+          wsPhase: AppState?.wsPhase || null,
+          source: source || null,
+        });
         logStage?.("client.mic.start_blocked", {
           reason: "phase_not_conversation",
           source: source || null,
