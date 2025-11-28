@@ -7604,6 +7604,7 @@ class ChatV2Adapter:
         metrics_map = getattr(ctx, "metrics", {})
         if not isinstance(metrics_map, Mapping):
             metrics_map = {}
+        turn_index = metrics_map.get("turn_index", getattr(ctx, "turn_index", None))
 
         # ASR finals flow through the policy -> LLM -> NLG path via engine.on_asr_final.
         def _log_llm_turn_decision(decision: str, reason: str) -> None:
@@ -7770,6 +7771,12 @@ class ChatV2Adapter:
         )
         _log.debug("evt=asr.to_user_turn sid=%s transcript=%s", ctx.sid, text)
         stripped_text = text.strip()
+        is_empty_final = bool(
+            is_final
+            and promoted_final
+            and timeout
+            and not stripped_text
+        )
         is_real_user_final = (
             is_final
             and bool(stripped_text)
@@ -7779,7 +7786,9 @@ class ChatV2Adapter:
         )
 
         if not is_real_user_final:
-            if timeout and not stripped_text:
+            if is_empty_final:
+                skip_reason = "empty_final_timeout"
+            elif timeout and not stripped_text:
                 skip_reason = "timeout_no_text"
             elif timeout:
                 skip_reason = "timeout_flagged"
@@ -7790,6 +7799,21 @@ class ChatV2Adapter:
             else:
                 skip_reason = "empty_transcript"
 
+            if is_empty_final:
+                empty_frame = {
+                    "type": "turn.empty",
+                    "sid": ctx.sid,
+                    "turn_index": turn_index,
+                    "reason": "asr_timeout_no_text",
+                }
+                if ctx.ws_send is not None:
+                    await self._send_json(ctx.ws_send, ctx.sid, empty_frame)
+                _log.info(
+                    "evt=turn_empty sid=%s turn_index=%s reason=%s",
+                    ctx.sid,
+                    turn_index,
+                    skip_reason,
+                )
             _log_llm_turn_decision("skip", skip_reason)
             if not stripped_text:
                 self._end_user_turn(ctx)

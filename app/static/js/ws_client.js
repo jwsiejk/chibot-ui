@@ -2582,6 +2582,32 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       return;
     }
 
+    if (frame.type === "turn.empty") {
+      try {
+        logStage("client.turn.empty", {
+          sid: frame.sid || null,
+          turnIndex: frame.turn_index ?? null,
+          reason: frame.reason || null,
+        });
+      } catch (_) {}
+
+      try {
+        setListeningState?.(false);
+      } catch (_) {}
+
+      try {
+        if (typeof AppState.emit === "function") {
+          AppState.emit("turnEmpty", {
+            sid: frame.sid || null,
+            turnIndex: frame.turn_index ?? null,
+            reason: frame.reason || null,
+          });
+        }
+      } catch (_) {}
+
+      return;
+    }
+
     if (frameSignalsGreetStart(frame)) {
       markGreetStart(frame);
     }
