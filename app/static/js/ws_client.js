@@ -3090,6 +3090,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       stopInputCapture,
       handleInputStartFrame,
       clearPartialWatchdog,
+      ensureTurnAudioReqId,
       sendAudioHeader,
       resetAudioHeaderSent: () => resetTurnAudioContext(),
       emitConsoleBusEvent,
