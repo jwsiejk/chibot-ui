@@ -447,9 +447,13 @@ export function createWsAudioRuntime(options = {}) {
     } catch (_) {}
     if (!currentReqId) {
       if (!warnedMissingReqId) {
-        console.warn("ws_audio_runtime: audio chunk without active req_id; sending anyway");
+        console.warn("ws_audio_runtime: audio chunk without active req_id; dropping");
         warnedMissingReqId = true;
       }
+      try {
+        logStage("client.audio_chunk_send", { lane: enrichedMeta.lane || "mic", reqId: null, dropped: true });
+      } catch (_) {}
+      return false;
     } else {
       warnedMissingReqId = false;
       if (!enrichedMeta.reqId) {
