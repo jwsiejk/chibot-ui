@@ -25,6 +25,7 @@ let micTrack = null;
 let audioGraphState = AUDIO_GRAPH_STATE.Idle;
 let audioGraphInitPromise = null;
 let micHardwareInitPromise = null;
+let exportedEnsureAudioGraph = null;
 
 export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINTS) {
   if (micHardwareState === MIC_HARDWARE_STATE.Ready) {
@@ -419,6 +420,9 @@ export function createCaptureRuntime({
     })();
     return audioGraphInitPromise;
   }
+
+  // Expose the latest ensureAudioGraph so globals can reference it safely
+  exportedEnsureAudioGraph = ensureAudioGraph;
 
   function applySenderPausedState() {
     const nextPaused = senderPauseReasons.size > 0;
@@ -1258,6 +1262,11 @@ export function createCaptureRuntime({
 if (typeof window !== "undefined") {
   window.createCaptureRuntime = createCaptureRuntime;
   window.ensureMicHardware = ensureMicHardware;
-  window.ensureAudioGraph = ensureAudioGraph;
+  window.ensureAudioGraph = (...args) => {
+    if (typeof exportedEnsureAudioGraph === "function") {
+      return exportedEnsureAudioGraph(...args);
+    }
+    return Promise.resolve(false);
+  };
   window.__askchipMicTrack = () => micTrack;
 }
