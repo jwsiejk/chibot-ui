@@ -777,6 +777,7 @@ export function createCaptureRuntime({
   async function performStopRecorder(reason, options = {}) {
     const opts = options && typeof options === "object" ? options : {};
     const softStop = opts.softStop === true || opts.soft === true;
+    const sessionClosing = opts.sessionClosing === true;
 
     audioStreaming = false;
     firstChunkSeen = false;
@@ -815,13 +816,20 @@ export function createCaptureRuntime({
     micRecordingStartAt = null;
     if (captureStream) {
       try {
-        captureStream.getTracks()?.forEach((track) => {
+        const audioTracks = captureStream.getAudioTracks?.() || captureStream.getTracks?.() || [];
+        audioTracks.forEach((track) => {
           try {
-            track.stop();
+            if (sessionClosing) {
+              track.stop();
+            } else {
+              track.enabled = false;
+            }
           } catch (_) {}
         });
       } catch (_) {}
-      captureStream = null;
+      if (sessionClosing) {
+        captureStream = null;
+      }
     }
     if (vadController && typeof vadController.reset === "function") {
       try {
@@ -895,6 +903,7 @@ export function createCaptureRuntime({
     const source = Object.prototype.hasOwnProperty.call(opts, "source")
       ? opts.source
       : null;
+    const sessionClosing = opts.sessionClosing === true || source === "ws.close";
 
     const { allowed, blocked, label } = evaluateStopRecorderReason(reason, fallbackReason);
 
@@ -915,6 +924,7 @@ export function createCaptureRuntime({
         ? label
         : normalizeReason(fallbackReason || reason);
 
+    opts.sessionClosing = sessionClosing;
     return performStopRecorder(normalizedLabel, opts);
   }
 
