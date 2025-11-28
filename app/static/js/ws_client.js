@@ -336,6 +336,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let __secondGreetingTraceStartMs = 0;
   let __secondGreetingStartChunkCount = 0;
   let conversationStartTimer = null;
+  let conversationBlockedLogged = false;
+  let conversationDelayedLogged = false;
   let hasOpenedAsrForConversation = false;
   let pendingCloseReason = null;
 
@@ -683,13 +685,21 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const wsReady = AppState?.wsPhase === "ready";
     const phaseBefore = getPhase();
     if (!wsReady) {
-      logStage("client.conversation.delayed_until_ready", {
-        phase: phaseBefore,
-        wsPhase: AppState?.wsPhase || null,
-        reason: "ws_not_ready",
-      });
+      try {
+        if (!conversationDelayedLogged) {
+          logStage("client.conversation.delayed_until_ready", {
+            phase: phaseBefore,
+            wsPhase: AppState?.wsPhase || null,
+            reason: "ws_not_ready",
+          });
+          conversationDelayedLogged = true;
+        }
+      } catch (_) {}
       setTimeout(() => enterConversationAfterGreet("wait_ready"), 50);
       return;
+    }
+    if (wsReady) {
+      conversationDelayedLogged = false;
     }
 
     if (phaseBefore === PHASE.Greet) {
@@ -801,11 +811,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const greetCompleted = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     if (!wsReady || !greetCompleted) {
       try {
-        logStage("client.schedule_conversation_blocked_until_ready", {
-          phase,
-          wsPhase: AppState?.wsPhase || null,
-          greetCompleted,
-        });
+        if (!conversationBlockedLogged) {
+          logStage("client.schedule_conversation_blocked_until_ready", {
+            phase,
+            wsPhase: AppState?.wsPhase || null,
+            greetCompleted,
+          });
+          conversationBlockedLogged = true;
+        }
       } catch (_) {}
       setTimeout(() => scheduleConversationStartAfterGreet("wait_ready"), 50);
       return;
@@ -817,6 +830,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       enterConversationAfterGreet(source);
     }, delayMs);
     try {
+      // we’re actually scheduling now – reset the spam guard
+      conversationBlockedLogged = false;
       logStage("client.conversation.begin.scheduled", {
         source,
         delay_ms: delayMs,
