@@ -35,6 +35,7 @@ class _SynthesisState:
 
     utt_id: str
     post_hold_ms: int
+    is_greet: bool = False
     emit_end: bool = True
     task: asyncio.Task[Any] | ThreadFuture[Any] | None = None
     stream: ElevenLabsStream | None = None
@@ -87,6 +88,7 @@ class TTSRuntime:
         sid = event.get("sid")
         text = event.get("text")
         req_id = event.get("req_id")
+        meta = event.get("meta") if isinstance(event, Mapping) else None
 
         if not isinstance(sid, str) or not sid:
             return
@@ -94,6 +96,18 @@ class TTSRuntime:
             return
         if not isinstance(req_id, str) or not req_id:
             req_id = f"req-{uuid.uuid4().hex}"
+
+        is_greet = False
+        if isinstance(meta, Mapping):
+            if meta.get("is_greet") is True:
+                is_greet = True
+            else:
+                reason = meta.get("reason")
+                if isinstance(reason, str) and reason.lower() == "greet":
+                    is_greet = True
+                nested = meta.get("tts")
+                if isinstance(nested, Mapping) and nested.get("is_greet") is True:
+                    is_greet = True
 
         loop = self._ensure_loop()
         if loop is None:
@@ -111,6 +125,7 @@ class TTSRuntime:
         self._cancel_state(sid, reason="superseded")
 
         state = _SynthesisState(utt_id=utt_id, post_hold_ms=post_hold_ms)
+        state.is_greet = is_greet
         self._states[sid] = state
 
         coroutine = self._run_synthesis(sid, req_id, text, voice_id, state)
@@ -227,7 +242,9 @@ class TTSRuntime:
             return
 
         try:
-            self._engine.on_tts_start(sid, state.utt_id, state.post_hold_ms)
+            self._engine.on_tts_start(
+                sid, state.utt_id, state.post_hold_ms, is_greet=state.is_greet
+            )
             note_start = getattr(self._bus, "note_tts_start", None)
             if callable(note_start):
                 note_start(sid, state.utt_id)
@@ -238,10 +255,16 @@ class TTSRuntime:
                     "sid": sid,
                     "who": "server",
                     "source": "tts",
+                    "utt_id": state.utt_id,
                     "meta": {
                         "provider": "elevenlabs",
                         "voice": voice_id,
                         "chars": text_chars,
+                        "is_greet": state.is_greet,
+                        "tts": {
+                            "utt_id": state.utt_id,
+                            "is_greet": state.is_greet,
+                        },
                     },
                 }
             )
@@ -374,7 +397,9 @@ class TTSRuntime:
             _flush_chunk_log(force=True)
             elapsed_ms = int((time.monotonic() - start_time_ms) * 1000) if start_time_ms else 0
             if start_emitted and state.emit_end:
-                self._engine.on_tts_end(sid, state.utt_id, state.post_hold_ms)
+                self._engine.on_tts_end(
+                    sid, state.utt_id, state.post_hold_ms, is_greet=state.is_greet
+                )
             if start_emitted:
                 self._bus.publish(
                     {
@@ -385,7 +410,13 @@ class TTSRuntime:
                         "meta": {
                             "ms_elapsed": elapsed_ms,
                             "provider": "elevenlabs",
+                            "is_greet": state.is_greet,
+                            "tts": {
+                                "utt_id": state.utt_id,
+                                "is_greet": state.is_greet,
+                            },
                         },
+                        "utt_id": state.utt_id,
                     }
                 )
                 _log.info("evt=tts_end sid=%s ms_elapsed=%d", sid, elapsed_ms)
