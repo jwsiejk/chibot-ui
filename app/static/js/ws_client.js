@@ -409,7 +409,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     syncAppStatePhase({ force: true });
     expectInfoFrame = false;
     promoteReadyPhase(reason);
-    try { scheduleConversationStartAfterGreet(reason); } catch {}
   }
 
   function resetTurnStopFlag() {
@@ -548,6 +547,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     try {
       logStage("client.phase.greet_end", { phase: getPhase() });
     } catch (_) {}
+    try {
+      scheduleConversationStartAfterGreet("mark_greet_end");
+    } catch (_) {}
   }
 
   function clearConversationStartTimer() {
@@ -678,37 +680,38 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (hasOpenedAsrForConversation && isConversationReadyPhase()) {
       return;
     }
-    if (!arePreconditionsForConversationMet()) {
+    const wsReady = AppState?.wsPhase === "ready";
+    const phaseBefore = getPhase();
+    if (!wsReady) {
       logStage("client.conversation.delayed_until_ready", {
-        audioCtx_state: getAudioCtx()?.state,
-        pcmWarm: audioRuntime?.getPcmWarm?.() || false,
+        phase: phaseBefore,
+        wsPhase: AppState?.wsPhase || null,
+        reason: "ws_not_ready",
       });
       setTimeout(() => enterConversationAfterGreet("wait_ready"), 50);
       return;
     }
-    if (AppState?.policy?.auto_record_after_greet !== false) {
-      logStage("client.asr_arm_queued_greet_end", {});
 
-      const tryArm = () => {
-        const audioCtx = getAudioCtx();
-        const pcmWarm = audioRuntime?.getPcmWarm?.() || false;
-        const audioReady = audioCtx && audioCtx.state === "running";
-        if (!audioReady || !pcmWarm) {
-          setTimeout(tryArm, 50);
-          return;
-        }
-
-        logStage("client.asr_arm_after_greet_ready", {
-          audioCtx_state: audioCtx?.state,
-          pcmWarm,
-        });
-
-        requestAsrArm("tts_end_ready");
-      };
-      tryArm();
+    if (phaseBefore === PHASE.Greet) {
+      voicePhaseController.markGreetEnd();
+    } else if (phaseBefore !== PHASE.ConversationReady && phaseBefore !== PHASE.UserTurn) {
+      voicePhaseController.endUserTurn("conversation_ready_bridge");
     }
-    voicePhaseController.enterConversation(source);
     syncAppStatePhase({ force: true });
+
+    if (getPhase() === PHASE.ConversationReady) {
+      try {
+        logStage("client.conversation_ready", {
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
+    }
+
+    if (getPhase() !== PHASE.UserTurn) {
+      voicePhaseController.enterConversation(source);
+      syncAppStatePhase({ force: true });
+    }
     try {
       logStage("client.enter_conversation_after_greet.post_phase", {
         source,
@@ -719,9 +722,9 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     } catch (_) {}
     if (!hasOpenedAsrForConversation) {
       hasOpenedAsrForConversation = true;
-      safeRequestAsrOpen(source);
+      safeRequestAsrOpen("conversation_after_greet");
     }
-    safeStartRecorderStreaming(AppState?.policy || {}, "post_greet");
+    safeStartRecorderStreaming(AppState?.policy || {}, "conversation_after_greet");
     try {
       logStage("client.enter_conversation_after_greet.asr_and_mic_called", {
         source,
@@ -793,11 +796,17 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (hasOpenedAsrForConversation) {
       return;
     }
-    if (!arePreconditionsForConversationMet()) {
-      logStage("client.schedule_conversation_blocked_until_ready", {
-        audioCtx_state: getAudioCtx()?.state,
-        pcmWarm: audioRuntime?.getPcmWarm?.() || false,
-      });
+    const phase = getPhase();
+    const wsReady = AppState?.wsPhase === "ready";
+    const greetCompleted = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+    if (!wsReady || !greetCompleted) {
+      try {
+        logStage("client.schedule_conversation_blocked_until_ready", {
+          phase,
+          wsPhase: AppState?.wsPhase || null,
+          greetCompleted,
+        });
+      } catch (_) {}
       setTimeout(() => scheduleConversationStartAfterGreet("wait_ready"), 50);
       return;
     }
@@ -1418,13 +1427,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       try { window.__audioCtx = ctx; } catch (_) {}
     }
     return ctx;
-  }
-
-  function arePreconditionsForConversationMet() {
-    const audioCtx = getAudioCtx();
-    const pcmWarm = audioRuntime?.getPcmWarm?.() || false;
-    const audioReady = audioCtx && audioCtx.state === "running";
-    return audioReady && pcmWarm;
   }
 
   if (typeof window !== "undefined") {
@@ -2344,11 +2346,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       markGreetStart(frame);
     }
     if (frameSignalsGreetEnd(frame)) {
-      const wasGreetPhase = getPhase() === PHASE.Greet;
       markGreetEnd(frame);
-      if (wasGreetPhase) {
-        scheduleConversationStartAfterGreet("greet_complete_frame");
-      }
     }
 
     if (expectInfoFrame) {
