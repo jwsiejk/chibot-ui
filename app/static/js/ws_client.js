@@ -736,9 +736,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         wsPhase: AppState?.wsPhase || null,
       });
     } catch (_) {}
-    try {
-      ensureTurnAudioReqId(policy || AppState?.policy || {});
-    } catch (_) {}
     let recorderStart = null;
     if (typeof WSClient?.startRecorderStreaming === "function") {
       recorderStart = WSClient.startRecorderStreaming(policy, source);
@@ -2125,7 +2122,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       // Ensure a fresh turn-stop guard when we locally begin a new capture/turn.
       resetTurnStopFlag();
       resetSpeechFlag();
-      ensureTurnAudioReqId(policy || AppState?.policy || {});
       const started = await orchestratedStartCapture(policy, source);
       if (!started) {
         try {
