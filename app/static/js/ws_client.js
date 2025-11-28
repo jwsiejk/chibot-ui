@@ -98,6 +98,7 @@ const CONVERSATION_START_DELAY_MS = 350;
 const voicePhaseController = createVoicePhaseController({ log: logStage });
 let updatePcmSenderState = null;
 const markTurnAudioChunk = null;
+let frameParser = null;
 
 try {
   if (typeof window !== "undefined") {
@@ -741,8 +742,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     let recorderStart = null;
     if (typeof WSClient?.startRecorderStreaming === "function") {
       recorderStart = WSClient.startRecorderStreaming(policy, source);
-    } else if (typeof startRecorderStreaming === "function") {
-      recorderStart = startRecorderStreaming(policy, source);
+    } else if (typeof orchestratedStartCapture === "function") {
+      recorderStart = orchestratedStartCapture(policy, source);
     }
 
     if (!recorderStart) {
@@ -1854,6 +1855,138 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     getMicTrack,
   } = captureRuntime;
 
+  let currentTurnId = null;
+  let micTurnState = "idle"; // "idle" | "starting" | "active" | "failed"
+  let micTurnSource = null;
+  const micStartSkipLogSet = new Set();
+  let fallbackTurnCounter = 0;
+
+  function logMicStartSkippedOnce(source, reason, turnId) {
+    const key = `${source || "unknown"}|${turnId || "null"}|${reason || "unknown"}`;
+    if (micStartSkipLogSet.has(key)) {
+      return;
+    }
+    micStartSkipLogSet.add(key);
+    try {
+      logStage?.("client.mic_start_skipped", { source, reason, turnId });
+    } catch (_) {}
+  }
+
+  function getActiveTurnId(policy = AppState?.policy || {}) {
+    let turnId = null;
+    try {
+      if (typeof getCurrentTurnReqId === "function") {
+        const candidate = getCurrentTurnReqId();
+        if (typeof candidate === "string" && candidate) {
+          turnId = candidate;
+        }
+      }
+    } catch (_) {}
+
+    if (!turnId) {
+      try {
+        if (frameParser && typeof frameParser.getCurrentTurnReqId === "function") {
+          const candidate = frameParser.getCurrentTurnReqId();
+          if (typeof candidate === "string" && candidate) {
+            turnId = candidate;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!turnId) {
+      try {
+        if (typeof ensureTurnAudioReqId === "function") {
+          turnId = ensureTurnAudioReqId(policy);
+        }
+      } catch (_) {}
+    }
+
+    if (!turnId) {
+      fallbackTurnCounter += 1;
+      turnId = `fallback-${fallbackTurnCounter}`;
+    }
+
+    return turnId;
+  }
+
+  function resetMicTurnState(reason = "turn_end") {
+    if (micTurnState !== "idle") {
+      try {
+        logStage?.("client.mic_turn_reset", {
+          reason,
+          prevState: micTurnState,
+          turnId: currentTurnId,
+          source: micTurnSource,
+        });
+      } catch (_) {}
+    }
+    micTurnState = "idle";
+    micTurnSource = null;
+    currentTurnId = null;
+    micStartSkipLogSet.clear();
+  }
+
+  async function orchestratedStartCapture(policy = AppState?.policy || {}, source = "manual") {
+    const turnId = getActiveTurnId(policy);
+
+    if (micTurnState === "active" && currentTurnId === turnId && turnId !== null) {
+      logMicStartSkippedOnce(source, "already_active_for_turn", turnId);
+      return true;
+    }
+
+    if (micTurnState === "starting" && currentTurnId === turnId && turnId !== null) {
+      logMicStartSkippedOnce(source, "already_starting_for_turn", turnId);
+      return true;
+    }
+
+    if (turnId !== currentTurnId && turnId !== null) {
+      currentTurnId = turnId;
+      micTurnState = "idle";
+      micTurnSource = null;
+      micStartSkipLogSet.clear();
+    }
+
+    micTurnState = "starting";
+    micTurnSource = source;
+
+    try {
+      logStage?.("client.mic_start_attempt_orchestrated", {
+        source,
+        turnId,
+        phase: getPhase(),
+      });
+    } catch (_) {}
+
+    let ok = false;
+    try {
+      ok = await startRecorderStreaming({ policy, reason: source });
+    } catch (err) {
+      try { console.warn("orchestratedStartCapture failed", err); } catch (_) {}
+      ok = false;
+    }
+
+    if (ok) {
+      micTurnState = "active";
+      try {
+        logStage?.("client.mic_start_success_orchestrated", {
+          source,
+          turnId,
+        });
+      } catch (_) {}
+    } else {
+      micTurnState = "failed";
+      try {
+        logStage?.("client.mic_start_failed_orchestrated", {
+          source,
+          turnId,
+        });
+      } catch (_) {}
+    }
+
+    return ok;
+  }
+
   function resetClientTtsGate(reason = "client_stop") {
     try {
       if (frameParser && typeof frameParser.resetTtsGate === "function") {
@@ -1907,6 +2040,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     // Always pass a normalized string reason into the capture runtime.
     const result = captureStopRecorder(normalized, opts);
     updateMicBaseEnabled(false, "mic_stop");
+    try { resetMicTurnState("capture_stopped"); } catch (_) {}
     return result;
   }
 
@@ -1992,7 +2126,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       resetTurnStopFlag();
       resetSpeechFlag();
       ensureTurnAudioReqId(policy || AppState?.policy || {});
-      const started = await startRecorderStreaming({ policy, reason: source });
+      const started = await orchestratedStartCapture(policy, source);
       if (!started) {
         try {
           logStage("client.recorder.start_failed", {
@@ -2105,6 +2239,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     // keep your existing audio-header state resets here (e.g. audioHeaderSent = false)
     __resetAudioHeaderSent();
     // ... any other existing reset logic ...
+    resetMicTurnState("turn_audio_context_reset");
   }
 
   // --- Begin: header idempotency + strict schema ---
@@ -2626,6 +2761,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       } catch (_) {}
 
       try {
+        resetMicTurnState("turn_frame_complete");
+      } catch (_) {}
+
+      try {
         if (typeof AppState.emit === "function") {
           AppState.emit("turnEmpty", {
             sid: frame.sid || null,
@@ -3130,7 +3269,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     handleIncomingFrame,
   });
 
-  const frameParser = createFrameParser({
+  frameParser = createFrameParser({
     hubLog: logStage,
     logStage,
     connection,
