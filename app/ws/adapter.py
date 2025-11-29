@@ -57,7 +57,6 @@ from app.telemetry.events import (
     ASR_VENDOR_BYTES_TOTAL,
     ASR_ROLLUP,
     CLIENT_IDLE_TICK,
-    NO_AUDIO_POST_GREET_REASON,
     EVT_ASR_CLOSE,
     EVT_ASR_OPEN,
     EVT_SESSION_TRANSPORT_CLOSED,
@@ -146,10 +145,6 @@ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
 _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS = 5.0
 _NO_AUDIO_SAFETY_NET_SECONDS = 10.0
-NO_AUDIO_POST_GREET_NUDGE = (
-    "I didn’t hear anything on my side that time. "
-    "When you’re ready, go ahead and ask your question again."
-)
 
 _OUTBOUND_ALLOWED_TYPES = {
     "policy.interaction",
@@ -8120,7 +8115,7 @@ class ChatV2Adapter:
                     and ctx.greet_completed
                     and self._is_first_user_turn(ctx, turn_index)
                 ):
-                    skip_reason = NO_AUDIO_POST_GREET_REASON
+                    skip_reason = "empty_final_first_turn_post_greet"
                 else:
                     skip_reason = "empty_final_timeout"
             elif timeout and not stripped_text:
@@ -8158,13 +8153,9 @@ class ChatV2Adapter:
                     turn_index,
                     skip_reason,
                 )
-            if skip_reason == NO_AUDIO_POST_GREET_REASON:
-                _log_llm_turn_decision("nudge", skip_reason)
-                await self._send_no_audio_post_greet_nudge(ctx, turn_index)
-            else:
-                _log_llm_turn_decision("skip", skip_reason)
-                if not stripped_text:
-                    self._end_user_turn(ctx)
+            _log_llm_turn_decision("skip", skip_reason)
+            if not stripped_text:
+                self._end_user_turn(ctx)
             return
 
         _log_llm_turn_decision("llm_turn", "non_empty_user_final")
@@ -8173,43 +8164,6 @@ class ChatV2Adapter:
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
         # - deciding whether to keep listening vs close ASR, and
         # - calling _close_asr(ctx, reason=...) and _end_user_turn(ctx) as appropriate.
-
-    async def _send_no_audio_post_greet_nudge(
-        self, ctx: AdapterContext, turn_index: int
-    ) -> None:
-        req_id = ctx.turn_req_id if isinstance(ctx.turn_req_id, str) else None
-        if not req_id:
-            req_id = ctx.active_req_id if isinstance(ctx.active_req_id, str) else None
-        if not req_id:
-            req_id = f"req-{uuid.uuid4().hex}"
-            ctx.turn_req_id = req_id
-            ctx.active_req_id = req_id
-
-        _log.info(
-            "evt=turn_empty_nudged sid=%s turn_index=%s reason=%s bytes=%s",
-            ctx.sid,
-            turn_index,
-            NO_AUDIO_POST_GREET_REASON,
-            ctx.turn_audio_bytes or 0,
-        )
-
-        bus.publish(
-            {
-                "type": NO_AUDIO_POST_GREET_REASON,
-                "sid": ctx.sid,
-                "turn_index": turn_index,
-                "meta": {"bytes": ctx.turn_audio_bytes or 0},
-            }
-        )
-
-        await self._invoke_engine(
-            "emit_static_assistant_response",
-            ctx.sid,
-            NO_AUDIO_POST_GREET_NUDGE,
-            req_id=req_id,
-            reason=NO_AUDIO_POST_GREET_REASON,
-        )
-        self._end_user_turn(ctx)
 
     def _schedule_asr_open(self, ctx: AdapterContext) -> None:
         if ctx.ws_send is None:
