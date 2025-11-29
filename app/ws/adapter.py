@@ -57,6 +57,7 @@ from app.telemetry.events import (
     ASR_VENDOR_BYTES_TOTAL,
     ASR_ROLLUP,
     CLIENT_IDLE_TICK,
+    NO_AUDIO_POST_GREET_REASON,
     EVT_ASR_CLOSE,
     EVT_ASR_OPEN,
     EVT_SESSION_TRANSPORT_CLOSED,
@@ -8108,6 +8109,14 @@ class ChatV2Adapter:
                     skip_reason = "asr.no_audio_post_greet"
                 else:
                     skip_reason = "empty_final_timeout"
+                if skip_reason == "asr.no_audio_post_greet":
+                    bus.publish(
+                        {
+                            "type": NO_AUDIO_POST_GREET_REASON,
+                            "sid": ctx.sid,
+                            "turn_index": turn_index,
+                        }
+                    )
             elif timeout and not stripped_text:
                 skip_reason = "timeout_no_text"
             elif timeout:
