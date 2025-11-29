@@ -144,6 +144,7 @@ ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
 _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS = 5.0
+_NO_AUDIO_SAFETY_NET_SECONDS = 10.0
 
 _OUTBOUND_ALLOWED_TYPES = {
     "policy.interaction",
@@ -769,7 +770,7 @@ class AdapterContext:
     no_audio_timeout_deadline_ms: Optional[int] = None
     greet_completed_ms: Optional[int] = None
     mic_never_ready_warned: bool = False
-    asr_auto_arm_skipped_logged: bool = False
+    no_audio_safety_net: asyncio.TimerHandle | None = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -906,6 +907,7 @@ class ChatV2Adapter:
         ctx.no_audio_timeout_started_ms = None
         ctx.no_audio_timeout_deadline_ms = None
         ctx.mic_never_ready_warned = False
+        self._cancel_no_audio_safety_net(ctx)
 
     def _ensure_greet_turn(self, ctx: AdapterContext) -> None:
         """Ensure greet metrics/turn_index are initialized before first TTS."""
@@ -1667,37 +1669,19 @@ class ChatV2Adapter:
                 except Exception:
                     _log.exception("evt=greet_complete_emit_failed sid=%s", ctx.sid)
         if ctx.greet_completed and not ctx.asr_ready_bundle_sent_ms:
-            # We only want to log the "auto-arm skipped" telemetry once per session.
-            # After that, we quietly keep skipping the auto-arm path for the first
-            # post-greet user turn without spamming the logs.
-            assumed_next_turn = (getattr(ctx.session, "turn_index", 0) or 0) + 1
-            first_user_turn = self._is_first_user_turn(ctx, assumed_next_turn)
+            await self._ensure_asr_ready(send, ctx, "tts_end")
 
-            if first_user_turn:
-                if not getattr(ctx, "asr_auto_arm_skipped_logged", False):
-                    self._log_event(
-                        "info",
-                        "asr_auto_arm_after_greet_skipped_first_turn",
-                        ctx.sid,
-                        where="tts_end",
-                    )
-                    ctx.asr_auto_arm_skipped_logged = True
-            else:
-                # For non-first turns, keep the original behavior and auto-arm ASR
-                # as soon as greet/TTS has completed.
-                await self._ensure_asr_ready(send, ctx, "tts_end")
-
-            if greet_just_completed:
-                if (
-                    ctx.asr_ready_bundle_sent_ms
-                    and not ctx.conversation_ready_logged
-                ):
-                    self._log(
-                        ctx,
-                        "server.conversation_ready",
-                        {"greet_utt_id": ctx.greet_utt_id},
-                    )
-                    ctx.conversation_ready_logged = True
+        if greet_just_completed:
+            if (
+                ctx.asr_ready_bundle_sent_ms
+                and not ctx.conversation_ready_logged
+            ):
+                self._log(
+                    ctx,
+                    "server.conversation_ready",
+                    {"greet_utt_id": ctx.greet_utt_id},
+                )
+                ctx.conversation_ready_logged = True
                 await self._invoke_engine("enable_full_duplex", ctx.sid)
 
         self._schedule_no_audio_watchdog_rearm(ctx)
@@ -2651,7 +2635,7 @@ class ChatV2Adapter:
                 except RuntimeError:
                     loop = None
                 if loop:
-                    self._schedule_mic_open_guard(ctx, loop)
+                    self._schedule_no_audio_safety_net(ctx, loop)
         else:
             telemetry_bus.publish(
                 {
@@ -4455,6 +4439,9 @@ class ChatV2Adapter:
             )
             return self._HandleResult(False, 1003, "unexpected_container")
 
+        if ctx.asr_stream_id is None:
+            return self._HandleResult(True)
+
         if ctx.audio_highest_seq < 0:
             ctx.audio_expected_seq = ctx.audio_seq
         seq = ctx.audio_seq
@@ -4484,6 +4471,13 @@ class ChatV2Adapter:
         if ctx.first_audio_received_ms is None:
             now_ms = self._now_ms()
             ctx.first_audio_received_ms = now_ms
+            self._cancel_no_audio_safety_net(ctx)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            else:
+                self._schedule_mic_open_guard(ctx, loop)
             if ctx.no_audio_timeout_started_ms is None:
                 ctx.no_audio_timeout_started_ms = now_ms
                 timeout_ms = self._resolve_no_audio_timeout_ms(ctx)
@@ -5689,7 +5683,7 @@ class ChatV2Adapter:
             ctx.mic_nudge_sent = False
 
             self._emit_hud_state(ctx, "Listening")
-            self._schedule_mic_open_guard(ctx, loop)
+            self._schedule_no_audio_safety_net(ctx, loop)
             _log.info(
                 "evt=listen_handoff_ready sid=%s req_id=%s input.mode=%s input.mime=%s",
                 ctx.sid,
@@ -7205,6 +7199,24 @@ class ChatV2Adapter:
             return _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS
         return _MIC_OPEN_TIMEOUT_SECONDS
 
+    def _schedule_no_audio_safety_net(
+        self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        self._cancel_no_audio_safety_net(ctx)
+        safety_timeout = max(
+            _NO_AUDIO_SAFETY_NET_SECONDS, self._mic_open_timeout_seconds(ctx) * 2.0
+        )
+        ctx.mic_open_timeout_seconds = self._mic_open_timeout_seconds(ctx)
+
+        def _fire() -> None:
+            ctx.no_audio_safety_net = None
+            self._handle_mic_open_timeout(ctx)
+
+        try:
+            ctx.no_audio_safety_net = loop.call_later(safety_timeout, _fire)
+        except RuntimeError:
+            ctx.no_audio_safety_net = None
+
     def _schedule_mic_open_guard(
         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
     ) -> None:
@@ -7230,6 +7242,17 @@ class ChatV2Adapter:
             ctx.mic_open_timer = loop.call_later(timeout_seconds, _fire)
         except RuntimeError:
             ctx.mic_open_timer = None
+
+    @staticmethod
+    def _cancel_no_audio_safety_net(ctx: AdapterContext) -> None:
+        handle = ctx.no_audio_safety_net
+        ctx.no_audio_safety_net = None
+        if handle is None:
+            return
+        try:
+            handle.cancel()
+        except Exception:
+            pass
 
     def _handle_mic_open_timeout(self, ctx: AdapterContext) -> None:
         if ctx.client_mic_open:
@@ -8336,6 +8359,13 @@ class ChatV2Adapter:
         ctx.session.first_chunk_sent = False
         ctx.asr_open = True
 
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop:
+            self._schedule_no_audio_safety_net(ctx, loop)
+
         await self._publish(
             ASR_SINGLE_STREAM_INVARIANT,
             ctx.sid,
@@ -8376,6 +8406,7 @@ class ChatV2Adapter:
         *,
         reason: Optional[str] = None,
     ) -> None:
+        self._cancel_no_audio_safety_net(ctx)
         task = ctx.asr_open_task
         ctx.asr_open_task = None
         if task is not None and not task.done():
@@ -8581,7 +8612,7 @@ class ChatV2Adapter:
             except RuntimeError:
                 loop = None
             if loop:
-                self._schedule_mic_open_guard(ctx, loop)
+                self._schedule_no_audio_safety_net(ctx, loop)
         turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
         if turn_begin_payload is not None:
             try:
