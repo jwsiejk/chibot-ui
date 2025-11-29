@@ -1173,6 +1173,19 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           }));
         }
       } catch {}
+
+      try {
+        if (_audioStreaming) {
+          stopRecorder("partial_watchdog_timeout", { force: true, allowVadStop: true, auto: true });
+        } else {
+          resetMicTurnState("partial_watchdog_timeout");
+        }
+        awaitingTurnEndForRearm = false;
+        pendingRearmReason = null;
+        speechSeenThisTurn = false;
+        partialWatchdogFirstTurn = true;
+        promoteReadyPhase("partial_watchdog_timeout");
+      } catch {}
     }, delay);
   }
 

@@ -2128,6 +2128,46 @@ class EngineV2:
         }
         self._publish_chat_frame(sid, end_frame)
 
+    def emit_static_assistant_response(
+        self, sid: str, text: str, *, req_id: str | None = None, reason: str | None = None
+    ) -> None:
+        if not isinstance(text, str):
+            return
+        normalized_text = text.strip()
+        if not normalized_text:
+            return
+
+        session = self._ensure_session(sid)
+        if session.state != RESPONDING:
+            self._set_state(sid, RESPONDING, reason="static_response")
+
+        effective_req_id = req_id if isinstance(req_id, str) and req_id else session.req_id
+        if not isinstance(effective_req_id, str) or not effective_req_id:
+            effective_req_id = f"req-{uuid.uuid4().hex}"
+        session.req_id = effective_req_id
+
+        turn_id = session.turn_id or f"turn-{uuid.uuid4().hex}"
+        session.turn_id = turn_id
+        session.answer_chars = len(normalized_text)
+        session.nlg_emitted = True
+
+        self._emit_assistant_turn_begin(sid, session)
+
+        nlg_payload: Dict[str, Any] = {"req_id": effective_req_id, "text": normalized_text}
+        if isinstance(reason, str) and reason:
+            nlg_payload["meta"] = {"reason": reason}
+        nlg_event = self._envelope(sid, EVT_NLG, nlg_payload)
+        self._publish(nlg_event)
+
+        self._emit_assistant_streaming_chat(sid, session, effective_req_id, normalized_text)
+
+        publish_chat = getattr(self._llm, "publish_chat_message", None)
+        if callable(publish_chat):
+            try:
+                publish_chat(effective_req_id, normalized_text)
+            except Exception:
+                _log.debug("evt=static_response_history_failed sid=%s", sid, exc_info=True)
+
     def _prepare_llm_history(
         self,
         sid: str,
