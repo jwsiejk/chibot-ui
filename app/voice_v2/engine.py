@@ -2146,6 +2146,13 @@ class EngineV2:
             effective_req_id = f"req-{uuid.uuid4().hex}"
         session.req_id = effective_req_id
 
+        _log.info(
+            "evt=static_nudge_emitted sid=%s req_id=%s reason=%s",
+            sid,
+            effective_req_id,
+            reason,
+        )
+
         turn_id = session.turn_id or f"turn-{uuid.uuid4().hex}"
         session.turn_id = turn_id
         session.answer_chars = len(normalized_text)
