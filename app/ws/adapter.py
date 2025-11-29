@@ -7470,20 +7470,30 @@ class ChatV2Adapter:
             payload["summary"] = summary
         bus.publish(payload)
 
-    async def _invoke_engine(self, hook: str, *args: Any) -> None:
-        if not self.engine:
-            return
-        handler = getattr(self.engine, hook, None)
-        if handler is None:
-            return
+    async def _invoke_engine(self, method: str, sid: str, *args: Any, **kwargs: Any) -> Any:
+        """
+        Thin wrapper to call into EngineV2.
+
+        - Always passes `sid` as the first argument.
+        - Supports both positional and keyword args so that engine methods
+          with keyword-only parameters (e.g. emit_static_assistant_response)
+          can be invoked safely.
+        """
+        engine = self.engine
+        if engine is None:
+            return None
+        fn = getattr(engine, method, None)
+        if fn is None:
+            _log.warning("evt=engine_method_missing sid=%s method=%s", sid, method)
+            return None
         try:
-            result = handler(*args)
+            result = fn(sid, *args, **kwargs)
             if inspect.isawaitable(result):
-                await result
+                return await result
+            return result
         except Exception:
-            sid = args[0] if args else None
-            _log.exception("evt=ws_engine_hook_failed hook=%s sid=%s", hook, sid)
-            raise
+            _log.exception("evt=engine_invoke_failed sid=%s method=%s", sid, method)
+            return None
 
     async def _on_open_and_greet(
         self,
