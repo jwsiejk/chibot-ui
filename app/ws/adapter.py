@@ -1652,7 +1652,19 @@ class ChatV2Adapter:
                 except Exception:
                     _log.exception("evt=greet_complete_emit_failed sid=%s", ctx.sid)
         if ctx.greet_completed and not ctx.asr_ready_bundle_sent_ms:
-            await self._ensure_asr_ready(send, ctx, "tts_end")
+            assumed_next_turn = (getattr(ctx.session, "turn_index", 0) or 0) + 1
+            first_user_turn = self._is_first_user_turn(ctx, assumed_next_turn)
+
+            if first_user_turn:
+                self._log_event(
+                    "info",
+                    "asr_auto_arm_after_greet_skipped_first_turn",
+                    ctx.sid,
+                    where="tts_end",
+                )
+            else:
+                await self._ensure_asr_ready(send, ctx, "tts_end")
+
             if greet_just_completed:
                 if (
                     ctx.asr_ready_bundle_sent_ms
