@@ -823,7 +823,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       wsReady &&
       micAndPcmReady &&
       greetCompleted &&
-      !asrReady;
+      !asrReady &&
+      !livePcmStream;
 
     if (shouldAutoStartMic) {
       firstPostGreetMicStarted = true;
@@ -961,7 +962,13 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         safeRequestAsrOpen("conversation_after_greet");
       }
     }
-    safeStartRecorderStreaming(AppState?.policy || {}, "conversation_after_greet");
+
+    const shouldStartMicNow =
+      !firstPostGreetMicStarted || !conversationStartPlanned || conversationStartCommitted;
+
+    if (shouldStartMicNow) {
+      safeStartRecorderStreaming(AppState?.policy || {}, "conversation_after_greet");
+    }
     try {
       logStage("client.enter_conversation_after_greet.asr_and_mic_called", {
         source,
