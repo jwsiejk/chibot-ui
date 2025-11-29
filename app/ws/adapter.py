@@ -146,7 +146,6 @@ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
 _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS = 5.0
 _NO_AUDIO_SAFETY_NET_SECONDS = 10.0
-NO_AUDIO_POST_GREET_REASON = "asr.no_audio_post_greet"
 NO_AUDIO_POST_GREET_NUDGE = (
     "I didn’t hear anything on my side that time. "
     "When you’re ready, go ahead and ask your question again."
@@ -8114,14 +8113,6 @@ class ChatV2Adapter:
                     skip_reason = NO_AUDIO_POST_GREET_REASON
                 else:
                     skip_reason = "empty_final_timeout"
-                if skip_reason == "asr.no_audio_post_greet":
-                    bus.publish(
-                        {
-                            "type": NO_AUDIO_POST_GREET_REASON,
-                            "sid": ctx.sid,
-                            "turn_index": turn_index,
-                        }
-                    )
             elif timeout and not stripped_text:
                 skip_reason = "timeout_no_text"
             elif timeout:
@@ -8190,6 +8181,15 @@ class ChatV2Adapter:
             turn_index,
             NO_AUDIO_POST_GREET_REASON,
             ctx.turn_audio_bytes or 0,
+        )
+
+        bus.publish(
+            {
+                "type": NO_AUDIO_POST_GREET_REASON,
+                "sid": ctx.sid,
+                "turn_index": turn_index,
+                "meta": {"bytes": ctx.turn_audio_bytes or 0},
+            }
         )
 
         await self._invoke_engine(
