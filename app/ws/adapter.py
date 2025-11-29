@@ -4470,6 +4470,7 @@ class ChatV2Adapter:
         ctx.turn_audio_chunks += 1
         if ctx.first_audio_received_ms is None:
             now_ms = self._now_ms()
+            # First audio this turn: record timestamp and move the guards
             ctx.first_audio_received_ms = now_ms
             self._cancel_no_audio_safety_net(ctx)
             try:
