@@ -203,6 +203,12 @@ _log = logging.getLogger(__name__)
 logger = _log
 
 
+# Disable forwarding of client debug logs to the server log by default. This can be
+# re-enabled via the CLIENT_LOG_DEBUG_ENABLED env var for targeted debugging
+# sessions without flooding stdout in normal operation.
+CLIENT_LOG_DEBUG_ENABLED = os.getenv("CLIENT_LOG_DEBUG_ENABLED", "false").lower() == "true"
+
+
 class ClientLogAggregator:
     """
     Coalesces high-frequency client.log events into a single summary
@@ -258,6 +264,14 @@ class ClientLogAggregator:
             summary["vad_short_rms_min"] = min(vad_rms)
             summary["vad_short_rms_max"] = max(vad_rms)
             summary["vad_short_rms_avg"] = sum(vad_rms) / len(vad_rms)
+
+        # When client debug logging is disabled, just reset the window without
+        # emitting anything to the server log.
+        if not CLIENT_LOG_DEBUG_ENABLED:
+            bucket["window_start_ms"] = bucket["window_end_ms"]
+            bucket["counts"].clear()
+            bucket["vad_short_rms"].clear()
+            return
 
         # Single compact debug line per window
         logger.debug(
@@ -3147,8 +3161,12 @@ class ChatV2Adapter:
     def _log_client_log_event(self, ctx: AdapterContext, frame: dict) -> None:
         """
         Route chatty client.log events through an aggregator so we emit at most
-        one debug line per sid per second, while preserving important labels.
+        one debug line per sid per second, while preserving important labels,
+        when CLIENT_LOG_DEBUG_ENABLED is set.
         """
+
+        if not CLIENT_LOG_DEBUG_ENABLED:
+            return
 
         label = frame.get("label") or frame.get("type") or "client.log"
         sid = getattr(ctx, "sid", None) or "unknown"
