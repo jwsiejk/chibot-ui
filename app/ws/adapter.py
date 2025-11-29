@@ -755,6 +755,7 @@ class AdapterContext:
     no_audio_timeout_deadline_ms: Optional[int] = None
     greet_completed_ms: Optional[int] = None
     mic_never_ready_warned: bool = False
+    asr_auto_arm_skipped_logged: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -1652,17 +1653,24 @@ class ChatV2Adapter:
                 except Exception:
                     _log.exception("evt=greet_complete_emit_failed sid=%s", ctx.sid)
         if ctx.greet_completed and not ctx.asr_ready_bundle_sent_ms:
+            # We only want to log the "auto-arm skipped" telemetry once per session.
+            # After that, we quietly keep skipping the auto-arm path for the first
+            # post-greet user turn without spamming the logs.
             assumed_next_turn = (getattr(ctx.session, "turn_index", 0) or 0) + 1
             first_user_turn = self._is_first_user_turn(ctx, assumed_next_turn)
 
             if first_user_turn:
-                self._log_event(
-                    "info",
-                    "asr_auto_arm_after_greet_skipped_first_turn",
-                    ctx.sid,
-                    where="tts_end",
-                )
+                if not getattr(ctx, "asr_auto_arm_skipped_logged", False):
+                    self._log_event(
+                        "info",
+                        "asr_auto_arm_after_greet_skipped_first_turn",
+                        ctx.sid,
+                        where="tts_end",
+                    )
+                    ctx.asr_auto_arm_skipped_logged = True
             else:
+                # For non-first turns, keep the original behavior and auto-arm ASR
+                # as soon as greet/TTS has completed.
                 await self._ensure_asr_ready(send, ctx, "tts_end")
 
             if greet_just_completed:
