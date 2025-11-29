@@ -341,6 +341,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let conversationDelayedLogged = false;
   let conversationStartPlanned = false;
   let conversationStartCommitted = false;
+  let firstPostGreetMicStarted = false;
   let conversationAsrReady = false;
   let micAndPcmReady = false;
   let lastConversationAttemptLog = 0;
@@ -476,6 +477,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     wsDiag("greet_start", { utt_id: frame?.utt_id });
     hasOpenedAsrForConversation = false;
+    firstPostGreetMicStarted = false;
     conversationStartPlanned = false;
     conversationStartCommitted = false;
     clearConversationStartTimer();
@@ -803,6 +805,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     const wsReady = WS_READY_PHASES.has(AppState?.wsPhase);
     const asrReady = Boolean(AppState?.asrReady);
     const phaseBefore = getPhase();
+    const greetCompleted = phaseBefore === PHASE.ConversationReady || phaseBefore === PHASE.UserTurn;
     const livePcmStream = (() => {
       try {
         const track = getCaptureStream?.()?.getAudioTracks?.()[0] || null;
@@ -812,6 +815,36 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         return false;
       }
     })();
+
+    const shouldAutoStartMic =
+      conversationStartPlanned &&
+      !conversationStartCommitted &&
+      !firstPostGreetMicStarted &&
+      wsReady &&
+      micAndPcmReady &&
+      greetCompleted &&
+      !asrReady;
+
+    if (shouldAutoStartMic) {
+      firstPostGreetMicStarted = true;
+      try {
+        logStage("client.conversation.first_turn_mic_autostart", {
+          source,
+          wsPhase: AppState?.wsPhase || null,
+          phase: phaseBefore,
+        });
+      } catch (_) {}
+      try {
+        const startResult = safeStartRecorderStreaming(AppState?.policy || {}, "post_greet_first_turn");
+        if (startResult && typeof startResult.catch === "function") {
+          startResult.catch((err) => {
+            console.warn("first post-greet mic start failed", err);
+          });
+        }
+      } catch (err) {
+        console.warn("first post-greet mic start failed", err);
+      }
+    }
 
     const readyForUserTurn = wsReady && asrReady;
 
@@ -913,8 +946,20 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       });
     } catch (_) {}
     if (!hasOpenedAsrForConversation) {
+      const skipAsrOpen = firstPostGreetMicStarted && asrReady;
       hasOpenedAsrForConversation = true;
-      safeRequestAsrOpen("conversation_after_greet");
+      if (skipAsrOpen) {
+        try {
+          logStage("client.asr_open.skipped", {
+            reason: "first_turn_already_opened_via_header",
+            source,
+            phase: getPhase(),
+            wsPhase: AppState?.wsPhase || null,
+          });
+        } catch (_) {}
+      } else {
+        safeRequestAsrOpen("conversation_after_greet");
+      }
     }
     safeStartRecorderStreaming(AppState?.policy || {}, "conversation_after_greet");
     try {
