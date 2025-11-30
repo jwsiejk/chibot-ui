@@ -43,18 +43,22 @@ class VADAggregator:
         "mode": "or",
         "priority": "asr",
         "min_speech_ms": 200,
-        "energy_threshold_dbfs": -45.0,
+        "energy_threshold_dbfs": -50.0,
         "hold_ms": 200,
         "echo_suppression_ms": 350,
         "barge_cooldown_ms": 250,
         "asr_conf_threshold": 0.75,
+        "reduce_margin_after_greet": True,
+        "post_greet_margin_reduction_db": 2.0,
     }
 
-    MIN_MARGIN_DB = 10.0
+    MIN_MARGIN_DB = 8.0
     MAX_MARGIN_DB = 18.0
     NOISE_ALPHA = 0.05
     SHORT_RMS_ALPHA = 0.2
     LONG_RMS_ALPHA = 0.05
+    NOISE_BOOTSTRAP_FRAMES = 15
+    NOISE_BOOTSTRAP_ALPHA = 0.3
 
     def __init__(
         self,
@@ -98,6 +102,7 @@ class VADAggregator:
         self._long_rms = 0.0
         self._last_energy_dbfs = -96.0
         self._last_threshold_dbfs = float(self.DEFAULTS["energy_threshold_dbfs"])
+        self._nf_bootstrap_frames = self.NOISE_BOOTSTRAP_FRAMES
 
         self._refresh_policy()
 
@@ -120,6 +125,9 @@ class VADAggregator:
         self._refresh_policy()
         now_ms = self._now_ms()
         self._expire_asr(now_ms)
+
+        if self._nf_bootstrap_frames > 0:
+            self._seed_noise_floor(dbfs)
 
         threshold = self.dynamic_threshold_dbfs()
         effective_mode, _, min_speech_ms = self._effective_settings()
@@ -226,7 +234,8 @@ class VADAggregator:
 
     def dynamic_threshold_dbfs(self) -> float:
         baseline = float(self._policy["energy_threshold_dbfs"])
-        return max(baseline, self._nf_dbfs + self._margin_db)
+        margin = self._effective_margin()
+        return max(baseline, self._nf_dbfs + margin)
 
     def _update_rms(self, dbfs: float) -> None:
         rms = self._dbfs_to_rms(dbfs)
@@ -439,9 +448,10 @@ class VADAggregator:
             "energy": getattr(state, "energy", None),
             "threshold": getattr(state, "speech_threshold", None),
             "energy_dbfs": float(self._last_energy_dbfs),
+            "threshold_dbfs": float(self._last_threshold_dbfs),
             "reasons": list(reasons),
             "nf_dbfs": float(self._nf_dbfs),
-            "margin_db": float(self._margin_db),
+            "margin_db": float(self._effective_margin()),
             "environment": self._environment,
             "who": "server",
             "source": "policy",
@@ -475,4 +485,26 @@ class VADAggregator:
 
     def _update_noise_floor(self, dbfs: float) -> None:
         self._nf_dbfs = (1.0 - self.NOISE_ALPHA) * self._nf_dbfs + self.NOISE_ALPHA * float(dbfs)
+
+    def _seed_noise_floor(self, dbfs: float) -> None:
+        if self._nf_bootstrap_frames <= 0:
+            return
+
+        baseline = float(self._policy.get("energy_threshold_dbfs", self.DEFAULTS["energy_threshold_dbfs"]))
+        sample_dbfs = min(float(dbfs), baseline - self.MIN_MARGIN_DB)
+
+        if self._nf_bootstrap_frames == self.NOISE_BOOTSTRAP_FRAMES:
+            self._nf_dbfs = sample_dbfs
+        else:
+            self._nf_dbfs = (1.0 - self.NOISE_BOOTSTRAP_ALPHA) * self._nf_dbfs + self.NOISE_BOOTSTRAP_ALPHA * sample_dbfs
+
+        self._nf_bootstrap_frames -= 1
+
+    def _effective_margin(self) -> float:
+        margin = self._margin_db
+        if self._full_duplex_enabled and bool(self._policy.get("reduce_margin_after_greet")):
+            reduction = max(0.0, float(self._policy.get("post_greet_margin_reduction_db", 0.0)))
+            margin = max(self.MIN_MARGIN_DB, margin - reduction)
+
+        return margin
 

@@ -40,11 +40,13 @@ def _base_policy(mode: str = "or", priority: str = "asr", overrides: Optional[Di
             "mode": mode,
             "priority": priority,
             "min_speech_ms": 200,
-            "energy_threshold_dbfs": -45.0,
+            "energy_threshold_dbfs": -50.0,
             "hold_ms": 200,
             "echo_suppression_ms": 350,
             "barge_cooldown_ms": 250,
             "asr_conf_threshold": 0.75,
+            "reduce_margin_after_greet": True,
+            "post_greet_margin_reduction_db": 2.0,
         },
     }
     if overrides:
