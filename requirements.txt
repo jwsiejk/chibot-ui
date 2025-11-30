@@ -51,6 +51,12 @@ SQLAlchemy>=2.0.29
 beautifulsoup4
 
 
+# Python 3.13 removed the stdlib audioop module. The audioop-lts
+# package provides a drop-in replacement so our WebSocket adapter's
+# resampling helpers keep working on modern runtimes.
+audioop-lts
+
+
 # msgpack 1.0.7 fails to build against Python 3.13 due to changes in
 # _PyLong_AsByteArray signature. Bump to a version with official 3.13
 # support so environments can install prebuilt wheels.
