@@ -363,6 +363,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   let turnStopSent = false;
   let speechSeenThisTurn = false;
   let greetUtteranceId = null;
+  let micDebugGreetEndLogged = false;
 
   function queueFrameUntilInfo(frame) {
     pendingInfoGateFrames.push(frame);
@@ -567,6 +568,12 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     voicePhaseController.markGreetEnd(frame?.utt_id);
     syncAppStatePhase({ force: true });
+    if (!micDebugGreetEndLogged) {
+      micDebugGreetEndLogged = true;
+      try {
+        logStage("mic_debug.greet_end", { ts: typeof performance?.now === "function" ? performance.now() : Date.now() });
+      } catch (_) {}
+    }
     try {
       logStage("client.phase.greet_end", { phase: getPhase() });
     } catch (_) {}

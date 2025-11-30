@@ -5,25 +5,6 @@
 import { getMicAudioContext } from "./audio_core.js";
 import { logMic as telemetryLogMic, logStage as telemetryLogStage } from "../ws/telemetry.js";
 
-// DEBUG: Monkey-patch MediaStreamTrack.stop to catch the culprit
-const originalStop = MediaStreamTrack.prototype.stop;
-MediaStreamTrack.prototype.stop = function () {
-  if (this.kind === "audio") {
-    console.error("🚨 MIC TRACK STOPPED! 🚨", {
-      label: this.label,
-      readyState: this.readyState,
-      stack: new Error().stack, // <--- This is the key
-    });
-    // Log to your telemetry if available
-    try {
-      if (typeof window.logStage === "function") {
-        window.logStage("client.mic.track_stopped_trace", { stack: new Error().stack });
-      }
-    } catch (e) {}
-  }
-  return originalStop.apply(this, arguments);
-};
-
 // Mic hardware lifecycle (getUserMedia + MediaStreamTrack) is now managed separately
 // from the audio graph. These module-level bindings are shared across capture runtimes
 // to guarantee single-acquire semantics per session.
@@ -46,6 +27,9 @@ let audioGraphState = AUDIO_GRAPH_STATE.Idle;
 let audioGraphInitPromise = null;
 let micHardwareInitPromise = null;
 let exportedEnsureAudioGraph = null;
+let micAcquireStartLogged = false;
+let micAcquireSuccessLogged = false;
+let micAudioGraphLiveLogged = false;
 
 export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINTS) {
   if (micHardwareState === MIC_HARDWARE_STATE.Ready) {
@@ -73,6 +57,15 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
   const constraintsSummary = summarizeConstraints(effectiveConstraints);
   micHardwareInitPromise = (async () => {
     try {
+      if (!micAcquireStartLogged) {
+        micAcquireStartLogged = true;
+        try {
+          telemetryLogStage?.("mic_debug.mic_acquire_start", {
+            ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+            phase: typeof AppState?.phase === "string" ? AppState.phase : null,
+          });
+        } catch (_) {}
+      }
       if (!navigator?.mediaDevices?.getUserMedia) {
         micHardwareState = MIC_HARDWARE_STATE.Failed;
         micStream = null;
@@ -94,6 +87,15 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
         micTrack = track;
       }
       micStream = stream;
+      if (!micAcquireSuccessLogged) {
+        micAcquireSuccessLogged = true;
+        try {
+          telemetryLogStage?.("mic_debug.mic_acquire_success", {
+            ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+            hasStream: true,
+          });
+        } catch (_) {}
+      }
       micHardwareState = MIC_HARDWARE_STATE.Ready;
       const trackSettings = track?.getSettings ? track.getSettings() : {};
       try {
@@ -422,6 +424,15 @@ export function createCaptureRuntime({
             streamId: micStream?.id || null,
           });
         } catch (_) {}
+        if (!micAudioGraphLiveLogged) {
+          micAudioGraphLiveLogged = true;
+          try {
+            logStage("mic_debug.audio_graph_live", {
+              ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+              sampleRate: ctx?.sampleRate || null,
+            });
+          } catch (_) {}
+        }
         return true;
       } finally {
         audioGraphInitPromise = null;
@@ -1054,25 +1065,6 @@ export function createCaptureRuntime({
   }
 
   async function startRecorderStreaming(opts = {}) {
-    // DEBUG: direct console instrumentation for recorder start
-    try {
-      const AppState = typeof window !== "undefined" ? window.AppState : undefined;
-      const phase = AppState?.phase || null;
-      const wsPhase = AppState?.wsPhase || null;
-      const stream = captureStream || getMicStream() || null;
-      const track = stream && typeof stream.getAudioTracks === "function"
-        ? (stream.getAudioTracks()[0] || null)
-        : null;
-      const audioCtxState = (() => {
-        try {
-          return getMicAudioContext()?.state || null;
-        } catch (_) {
-          return null;
-        }
-      })();
-      console.warn("DEBUG.startRecorderStreaming.pre", { phase, wsPhase, hasStream: !!stream, trackState: track?.readyState || null, audioCtxState, opts });
-    } catch (_) {}
-
     const providedPolicy = opts && typeof opts === "object" && !Array.isArray(opts) && Object.prototype.hasOwnProperty.call(opts, "policy")
       ? opts.policy
       : opts;
@@ -1186,12 +1178,6 @@ export function createCaptureRuntime({
         console.warn("PCM sender unavailable; cannot start streaming");
         return false;
       }
-      try {
-        const ctxState = (() => {
-          try { return getMicAudioContext()?.state || null; } catch (_) { return null; }
-        })();
-        console.warn("DEBUG.startRecorderStreaming.senderReady", { hasStream: !!captureStream, audioCtxState: ctxState });
-      } catch (_) {}
       if (!pcmSenderReady) {
         pcmSenderReady = true;
         if (!pcmSenderReadyLogged) {
@@ -1236,7 +1222,6 @@ export function createCaptureRuntime({
       } catch {}
       return true;
     } catch (err) {
-      console.warn("DEBUG.startRecorderStreaming.error", err);
       const meta = {
         name: err?.name || "Error",
         message: err?.message || "",

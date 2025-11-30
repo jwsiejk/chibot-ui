@@ -30,15 +30,21 @@
     }
   };
 
+  const shouldThrowOnBlock = typeof window !== "undefined" && window.NODE_ENV === "development";
+
   function logMicBlock(source, dest, path, reason) {
     try {
-      console.error("[MIC_ECHO_GUARD] blocked mic node connecting to destination", {
+      const detail = {
         sourceName: getNodeName(source),
         destName: getNodeName(dest),
         path,
         reason,
         stack: new Error().stack,
-      });
+      };
+      console.error("[MIC_ECHO_GUARD] blocked mic node connecting to destination", detail);
+      if (shouldThrowOnBlock) {
+        throw new Error("[MIC_ECHO_GUARD] blocked mic node connecting to destination");
+      }
     } catch (_) {
       // best-effort logging only
     }
