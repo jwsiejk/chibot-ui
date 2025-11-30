@@ -1,5 +1,6 @@
 // app/static/js/ws/turns.js
 // Encapsulates turn state, ASR control, and "can capture now?" logic.
+import { getMicAudioContext } from "../audio/audio_core.js";
 
 const DEFAULT_ASR_VENDOR = "gcp";
 const HARD_ASR_CLOSE_REASONS = new Set([
@@ -742,9 +743,9 @@ export function createTurnRuntime(config = {}) {
         const mode = typeof capturePolicy?.mode === "string" && capturePolicy.mode
           ? capturePolicy.mode
           : "webrtc_aec";
-        const ctxRate = window.__audioCtx && typeof window.__audioCtx.sampleRate === "number"
-          ? window.__audioCtx.sampleRate
-          : 16000;
+        const ctxRate = (() => {
+          try { return getMicAudioContext()?.sampleRate || 16000; } catch (_) { return 16000; }
+        })();
         emitConsoleBusEvent("client.capture.mode", { mode, ctxSampleRate: ctxRate });
       } catch {}
       logStage("diag", { label: "asr.ready" });

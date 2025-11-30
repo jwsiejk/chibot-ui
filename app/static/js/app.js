@@ -1,6 +1,7 @@
 import "./state.js";
 import { emitClientLog, getWsClientSocket, logStage } from "./ws/telemetry.js";
 import { ensureMicHardware } from "./audio/capture_runtime.js";
+import { getMicAudioContext, getPlaybackAudioContext } from "./audio/audio_core.js";
 import "./audio/guard_mic_monitor.js";
 // Robust version loader
 import * as versionModule from "./version.js";
@@ -1891,6 +1892,18 @@ if (typeof window !== "undefined") {
     async function handleStartSessionClick() {
       try { if (window.WSClient && typeof window.WSClient.clearResume === 'function') { window.WSClient.clearResume(); } } catch {}
       try {
+        const micCtx = getMicAudioContext();
+        const playbackCtx = getPlaybackAudioContext();
+        if (micCtx?.state === "suspended" && typeof micCtx.resume === "function") {
+          await micCtx.resume();
+        }
+        if (playbackCtx?.state === "suspended" && typeof playbackCtx.resume === "function") {
+          await playbackCtx.resume();
+        }
+      } catch (err) {
+        console.warn("audio context resume failed", err);
+      }
+      try {
         const me = await getMe();
         if (!me.authenticated) {
           if (typeof showLoginModal === 'function') showLoginModal();
@@ -2385,10 +2398,6 @@ if (typeof window !== "undefined") {
           try { source.disconnect(); } catch (_) {}
           source = null;
         }
-        if (audioCtx) {
-          try { audioCtx.close(); } catch (_) {}
-          audioCtx = null;
-        }
         analyser = null;
         dataArray = null;
         currentSourceStream = null;
@@ -2413,7 +2422,10 @@ if (typeof window !== "undefined") {
 
         teardownAudioGraph();
 
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        audioCtx = getMicAudioContext();
+        if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
+          try { audioCtx.resume(); } catch (_) {}
+        }
         analyser = audioCtx.createAnalyser();
         // MIC ECHO NOTE:
         // This analyser is attached to the mic stream for visualization; mic guard logs

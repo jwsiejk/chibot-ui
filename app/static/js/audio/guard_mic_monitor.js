@@ -32,7 +32,7 @@
 
   function logMicBlock(source, dest, path, reason) {
     try {
-      console.warn("mic_guard.block", {
+      console.error("[MIC_ECHO_GUARD] blocked mic node connecting to destination", {
         sourceName: getNodeName(source),
         destName: getNodeName(dest),
         path,
@@ -311,7 +311,6 @@
             this.muted = true;
             this.volume = 0;
             try {
-              // eslint-disable-next-line no-console
               console.warn("[guard_mic_monitor] muted media element assigned mic stream");
             } catch (_) {}
           }
