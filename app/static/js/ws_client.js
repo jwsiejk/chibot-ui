@@ -476,6 +476,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (getPhase() === PHASE.Greet) {
       return;
     }
+    resetConversationAsrReady("greet_start");
     wsDiag("greet_start", { utt_id: frame?.utt_id });
     hasOpenedAsrForConversation = false;
     firstPostGreetMicStarted = false;
@@ -624,6 +625,20 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     conversationAsrReady = true;
     try {
       logStage("client.conversation.asr_ready", {
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        reason,
+      });
+    } catch (_) {}
+  }
+
+  function resetConversationAsrReady(reason = "session_reset") {
+    if (!conversationAsrReady) {
+      return;
+    }
+    conversationAsrReady = false;
+    try {
+      logStage("client.conversation.asr_ready.reset", {
         phase: getPhase(),
         wsPhase: AppState?.wsPhase || null,
         reason,
@@ -3399,6 +3414,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     pendingCloseReason = normalizedReason;
     updateMicBaseEnabled(false, "mic_stop");
     resetClientTtsGate("client_shutdown");
+    resetConversationAsrReady("session_shutdown");
     try {
       voicePhaseController.beginClosing(normalizedReason);
       syncAppStatePhase({ force: true });
@@ -3485,6 +3501,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       ? event.reason
       : null;
     const closeCode = event && typeof event.code === "number" ? event.code : undefined;
+    resetConversationAsrReady(detailReason || closeCode || "ws_close");
     recordClientBannerEvent("ws.socket.close", {
       code: closeCode,
       reason: truncateBannerString(detailReason || "", 160),
