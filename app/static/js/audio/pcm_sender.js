@@ -271,6 +271,7 @@ export async function initPcmSender(mediaStream = null, {
           ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
           sampleRate,
           targetSampleRate,
+          bytes: pcm16.byteLength,
         });
       } catch (_) {}
     }

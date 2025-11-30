@@ -5,6 +5,8 @@
 import { getMicAudioContext } from "./audio_core.js";
 import { logMic as telemetryLogMic, logStage as telemetryLogStage } from "../ws/telemetry.js";
 
+const nowTs = () => (typeof performance?.now === "function" ? performance.now() : Date.now());
+
 // Mic hardware lifecycle (getUserMedia + MediaStreamTrack) is now managed separately
 // from the audio graph. These module-level bindings are shared across capture runtimes
 // to guarantee single-acquire semantics per session.
@@ -61,8 +63,9 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
         micAcquireStartLogged = true;
         try {
           telemetryLogStage?.("mic_debug.mic_acquire_start", {
-            ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+            ts: nowTs(),
             phase: typeof AppState?.phase === "string" ? AppState.phase : null,
+            constraints: constraintsSummary,
           });
         } catch (_) {}
       }
@@ -87,17 +90,18 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
         micTrack = track;
       }
       micStream = stream;
+      const trackSettings = track?.getSettings ? track.getSettings() : {};
       if (!micAcquireSuccessLogged) {
         micAcquireSuccessLogged = true;
         try {
           telemetryLogStage?.("mic_debug.mic_acquire_success", {
-            ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+            ts: nowTs(),
             hasStream: true,
+            trackSampleRate: trackSettings?.sampleRate || null,
           });
         } catch (_) {}
       }
       micHardwareState = MIC_HARDWARE_STATE.Ready;
-      const trackSettings = track?.getSettings ? track.getSettings() : {};
       try {
         telemetryLogStage("client.mic.hardware_ready", {
           constraints: constraintsSummary,
@@ -428,8 +432,9 @@ export function createCaptureRuntime({
           micAudioGraphLiveLogged = true;
           try {
             logStage("mic_debug.audio_graph_live", {
-              ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+              ts: nowTs(),
               sampleRate: ctx?.sampleRate || null,
+              reason,
             });
           } catch (_) {}
         }
