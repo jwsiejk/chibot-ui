@@ -208,7 +208,10 @@ class GCPStreamingASREngine(ASREngine):
         self._streaming_config = speech.StreamingRecognitionConfig(
             config=recognition_config,
             interim_results=True,
-            single_utterance=True,
+            # Keep recognition open until we explicitly close it instead of
+            # relying on GCP's end-of-utterance detection so that the first
+            # user speech is not prematurely missed.
+            single_utterance=False,
         )
 
         logger.info(
