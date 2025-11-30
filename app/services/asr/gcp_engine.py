@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 ResultCallback = Callable[[str, bool], Optional[Awaitable[None]]]
 
+_RMS_TARGET_FLOOR = 0.05  # Target normalized RMS (0.0 - 1.0) before gain.
+_RMS_MAX_AUTOMATIC_GAIN = 4.0  # Avoid aggressive amplification that could clip.
+_RMS_EPSILON = 1e-6  # Protect against divide-by-zero when audio is silent.
+
 
 @dataclass
 class AsrStreamStats:
@@ -88,6 +92,43 @@ def _apply_linear16_gain(pcm: bytes, gain: float) -> bytes:
         samples[index] = amplified
 
     return samples.tobytes()
+
+
+def _normalized_linear16_rms(pcm: bytes) -> float:
+    """Return the RMS level normalized to the LINEAR16 full-scale range."""
+
+    if not pcm:
+        return 0.0
+
+    if len(pcm) % 2:
+        raise ValueError("PCM buffer length must be a multiple of 2 bytes for LINEAR16 audio")
+
+    samples = array("h")  # signed short (16-bit)
+    samples.frombytes(pcm)
+
+    if not samples:
+        return 0.0
+
+    square_sum = 0
+    for value in samples:
+        square_sum += value * value
+
+    rms = (square_sum / len(samples)) ** 0.5
+    return rms / 32768.0
+
+
+def _auto_gain_for_rms(pcm: bytes) -> float:
+    """Calculate an automatic gain multiplier to reach the RMS floor."""
+
+    rms = _normalized_linear16_rms(pcm)
+    if rms <= _RMS_EPSILON:
+        return 1.0
+
+    if rms >= _RMS_TARGET_FLOOR:
+        return 1.0
+
+    required_gain = _RMS_TARGET_FLOOR / rms
+    return min(required_gain, _RMS_MAX_AUTOMATIC_GAIN)
 
 
 class ASREngine:
@@ -183,9 +224,19 @@ class GCPStreamingASREngine(ASREngine):
     async def write(self, pcm: bytes) -> None:
         if self._queue is None or self._closed:
             raise RuntimeError("Engine not open or already closed")
-        if self._input_gain and self._input_gain != 1.0:
+        gain = self._input_gain or 1.0
+        if pcm:
             try:
-                pcm = _apply_linear16_gain(pcm, self._input_gain)
+                gain *= _auto_gain_for_rms(pcm)
+            except Exception:  # pragma: no cover - defensive
+                logger.exception(
+                    "evt=asr_error vendor=gcp sid=%s",
+                    self._sid,
+                    extra={"sid": self._sid, "event": "asr_error"},
+                )
+        if gain != 1.0:
+            try:
+                pcm = _apply_linear16_gain(pcm, gain)
             except Exception:  # pragma: no cover - defensive
                 logger.exception(
                     "evt=asr_error vendor=gcp sid=%s",
