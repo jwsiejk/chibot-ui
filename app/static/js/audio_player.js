@@ -136,7 +136,11 @@ import { getPlaybackAudioContext } from "./audio/audio_core.js";
     if (!ctx || flushToken !== token) return;
     if (float32.length === 0) return;
     const channels = descriptor.channels || 1;
-    const buffer = ctx.createBuffer(channels, float32.length, ctx.sampleRate);
+    const bufferSampleRate =
+      typeof descriptor.sampleRate === "number" && descriptor.sampleRate > 0
+        ? descriptor.sampleRate
+        : ctx.sampleRate;
+    const buffer = ctx.createBuffer(channels, float32.length, bufferSampleRate);
     for (let ch = 0; ch < channels; ch += 1) {
       buffer.copyToChannel(float32, ch);
     }
