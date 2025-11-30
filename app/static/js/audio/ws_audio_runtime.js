@@ -1379,6 +1379,18 @@ export function createWsAudioRuntime(options = {}) {
     });
     const sr = meta?.sampleRate || meta?.sampleRateHz || null;
     const sampledBytes = chunk.byteLength || 0;
+    const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
+    const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
+    const metaSampleRate = Number(meta.sampleRate);
+    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
+      pcmSampleRate = metaSampleRate;
+    }
+
+    const effectiveSampleRate =
+      sr ||
+      metaSampleRate ||
+      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
+
     if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
       try {
         logStage("client.pcm.send", {
@@ -1399,17 +1411,6 @@ export function createWsAudioRuntime(options = {}) {
         });
       } catch (_) {}
     }
-    const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
-    const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
-    const metaSampleRate = Number(meta.sampleRate);
-    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
-      pcmSampleRate = metaSampleRate;
-    }
-
-    const effectiveSampleRate =
-      sr ||
-      metaSampleRate ||
-      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
 
     // ✅ NEW: actually send the PCM over the WebSocket.
     const sent = safeSendAudioChunk(chunk, {

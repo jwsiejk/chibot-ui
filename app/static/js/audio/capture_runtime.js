@@ -57,14 +57,17 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
   micHardwareState = MIC_HARDWARE_STATE.Starting;
   const effectiveConstraints = constraints || DEFAULT_CAPTURE_CONSTRAINTS;
   const constraintsSummary = summarizeConstraints(effectiveConstraints);
-  micHardwareInitPromise = (async () => {
+      micHardwareInitPromise = (async () => {
     try {
       if (!micAcquireStartLogged) {
         micAcquireStartLogged = true;
         try {
+          const appState =
+            typeof window !== "undefined" && window.AppState ? window.AppState : null;
           telemetryLogStage?.("mic_debug.mic_acquire_start", {
             ts: nowTs(),
-            phase: typeof AppState?.phase === "string" ? AppState.phase : null,
+            phase:
+              appState && typeof appState.phase === "string" ? appState.phase : null,
             constraints: constraintsSummary,
           });
         } catch (_) {}
