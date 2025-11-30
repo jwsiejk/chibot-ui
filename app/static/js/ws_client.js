@@ -524,19 +524,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         wsPhase: AppState?.wsPhase || null,
         utt_id: greetUtteranceId,
       });
-      console.log("client.greet_start", {
-        phase: getPhase(),
-        wsPhase: AppState?.wsPhase || null,
-        utt_id: greetUtteranceId,
-      });
     } catch (_) {}
     try {
       setBaseEnabled?.(false, "greet_start");
       logStage("client.greet_start.set_base_enabled", {
-        phase: getPhase(),
-        wsPhase: AppState?.wsPhase || null,
-      });
-      console.log("client.greet_start.set_base_enabled", {
         phase: getPhase(),
         wsPhase: AppState?.wsPhase || null,
       });
@@ -571,7 +562,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (!micDebugGreetEndLogged) {
       micDebugGreetEndLogged = true;
       try {
-        logStage("mic_debug.greet_end", { ts: typeof performance?.now === "function" ? performance.now() : Date.now() });
+        logStage("mic_debug.greet_end", {
+          ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+          phase: getPhase(),
+        });
       } catch (_) {}
     }
     try {
@@ -2010,6 +2004,10 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
     micTurnState = "starting";
     micTurnSource = source;
+
+    try {
+      audioRuntime?.resetFirstChunkTelemetry?.();
+    } catch (_) {}
 
     try {
       logStage?.("client.mic_start_attempt_orchestrated", {

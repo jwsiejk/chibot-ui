@@ -1,5 +1,9 @@
 // app/static/js/audio/guard_mic_monitor.js
 // Safety net to prevent routing microphone sources to the speakers.
+// Invariant: microphone capture runs on its own AudioContext and must never
+// connect to an audible sink. Playback (TTS) uses a separate AudioContext
+// that is allowed to reach destinations. This guard hooks AudioNode.connect
+// as a last resort to block any mic-fed path that attempts to reach an output.
 
 (function guardMicMonitor() {
   if (typeof AudioNode === "undefined" || !AudioNode.prototype?.connect) {
@@ -31,6 +35,7 @@
   };
 
   const shouldThrowOnBlock = typeof window !== "undefined" && window.NODE_ENV === "development";
+  const mutedMediaElements = new WeakSet();
 
   function logMicBlock(source, dest, path, reason) {
     try {
@@ -316,9 +321,12 @@
             // Any media element fed a mic stream is forcibly silenced.
             this.muted = true;
             this.volume = 0;
-            try {
-              console.warn("[guard_mic_monitor] muted media element assigned mic stream");
-            } catch (_) {}
+            if (!mutedMediaElements.has(this)) {
+              mutedMediaElements.add(this);
+              try {
+                console.warn("[guard_mic_monitor] muted media element assigned mic stream");
+              } catch (_) {}
+            }
           }
         } catch (_) {
           // ignore guard errors and still call original setter

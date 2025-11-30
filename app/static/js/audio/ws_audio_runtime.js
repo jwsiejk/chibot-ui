@@ -31,7 +31,7 @@ const AUDIO_KEEPALIVE_CHUNK_MS = 20;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
-const PCM_SENDER_DEBUG = true;
+const PCM_SENDER_DEBUG = false;
 let __firstPcmFrameLogged = false;
 const WS_READY_PHASES = new Set(["connected", "ready"]);
 let wsAudioDropCount = 0;
@@ -479,6 +479,12 @@ export function createWsAudioRuntime(options = {}) {
     if (!desired) {
       firstPcmToWsLogged = false;
     }
+  };
+
+  const resetFirstChunkTelemetry = () => {
+    writeFirstChunkSeen(false);
+    firstRuntimeFrameLogged = false;
+    __firstPcmFrameLogged = false;
   };
 
   const readMicRecordingStartAt = () => {
@@ -1388,6 +1394,8 @@ export function createWsAudioRuntime(options = {}) {
         logStage("mic_debug.first_pcm_to_ws", {
           ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
           bytes: sampledBytes,
+          sampleRate: effectiveSampleRate,
+          seq,
         });
       } catch (_) {}
     }
@@ -1464,12 +1472,6 @@ export function createWsAudioRuntime(options = {}) {
   function setBaseEnabled(enabled, reason = "manual") {
     baseEnabled = Boolean(enabled);
     baseEnabledReason = reason || baseEnabledReason || "manual";
-    try {
-      console.log("[ws_audio_runtime] base_enabled_update", {
-        enabled: baseEnabled,
-        reason: baseEnabledReason,
-      });
-    } catch (_) {}
     updatePcmSenderState(`set_base_enabled:${reason}`);
   }
 
@@ -1785,11 +1787,6 @@ export function createWsAudioRuntime(options = {}) {
     if (pcmSender) {
       return pcmSender;
     }
-    try {
-      console.warn("DEBUG.ensurePcmSender.enter", {
-        hasCaptureStreamProvider: !!captureStreamProvider,
-      });
-    } catch (_) {}
     if (pcmSenderInitPromise) {
       return pcmSenderInitPromise;
     }
@@ -1798,10 +1795,6 @@ export function createWsAudioRuntime(options = {}) {
     }
     let stream = null;
     if (captureStreamProvider) {
-      try {
-        console.warn("DEBUG.ensurePcmSender.callCaptureStreamProvider");
-      } catch (_) {}
-
       stream = await captureStreamProvider();
       if (!stream) {
         markGumFailed("no_stream_returned");
@@ -1811,14 +1804,6 @@ export function createWsAudioRuntime(options = {}) {
         markGumFailed("no_audio_tracks");
         return null;
       }
-      try {
-        const track = stream.getAudioTracks && stream.getAudioTracks()[0];
-        console.warn("DEBUG.ensurePcmSender.streamResolved", {
-          hasStream: !!stream,
-          trackState: track?.readyState || null,
-        });
-      } catch (_) {}
-
       captureStreamResolved = stream;
       const track = stream.getAudioTracks()[0];
       lastTrackState = track?.readyState || lastTrackState;
@@ -1846,9 +1831,6 @@ export function createWsAudioRuntime(options = {}) {
       chunkMs: PCM_TARGET_BATCH_MS,
       flushIntervalMs: PCM_FLUSH_TIMER_MS,
     }).then(async (sender) => {
-      try {
-        console.warn("DEBUG.ensurePcmSender.senderInitDone");
-      } catch (_) {}
       pcmSender = sender;
       try {
         if (audioCtx?.state === "suspended") {
@@ -1973,6 +1955,7 @@ export function createWsAudioRuntime(options = {}) {
     setAudioKeepaliveIdleMs,
     getAudioContext: () => audioCtx,
     getPcmWarm: () => pcmWarm,
+    resetFirstChunkTelemetry,
   };
 }
 
