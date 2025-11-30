@@ -888,7 +888,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       }
     }
 
-    const readyForUserTurn = wsReady && asrReady;
+    const readyForUserTurn = wsReady && asrReady && micAndPcmReady && conversationAsrReady;
 
     if (readyForUserTurn && !conversationStartCommitted) {
       conversationStartCommitted = true;
