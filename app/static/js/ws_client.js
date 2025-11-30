@@ -1084,9 +1084,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (conversationStartCommitted) {
       return;
     }
-    if (hasOpenedAsrForConversation) {
-      return;
-    }
     const phase = getPhase();
     const wsReady = AppState?.wsPhase === "ready";
     const greetCompleted = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
@@ -1114,6 +1111,14 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     if (!conversationStartTimer) {
       conversationStartTimer = setTimeout(() => {
         conversationStartTimer = null;
+        const currentPhase = getPhase();
+        const currentWsReady = AppState?.wsPhase === "ready";
+        const currentGreetCompleted =
+          currentPhase === PHASE.ConversationReady || currentPhase === PHASE.UserTurn;
+        if (!currentWsReady || !currentGreetCompleted) {
+          scheduleConversationStartAfterGreet("wait_ready");
+          return;
+        }
         enterConversationAfterGreet(source);
       }, delayMs);
     }
