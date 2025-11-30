@@ -260,18 +260,72 @@ class VADAggregator:
 
     def _maybe_emit_vad_summary(self, ctx, state) -> None:
         now = int(time.monotonic() * 1000)
+
+        short_rms = getattr(state, "short_rms", getattr(state, "_short_rms", None))
+        long_rms = getattr(state, "long_rms", getattr(state, "_long_rms", None))
+        threshold = getattr(
+            state,
+            "speech_threshold",
+            getattr(state, "threshold_dbfs", getattr(state, "_last_threshold_dbfs", None)),
+        )
+        energy = getattr(
+            state,
+            "energy",
+            getattr(state, "energy_dbfs", getattr(state, "_last_energy_dbfs", None)),
+        )
+
+        baseline_threshold = None
+        policy = getattr(state, "_policy", None)
+        if isinstance(policy, Mapping):
+            try:
+                baseline_threshold = float(
+                    policy.get("energy_threshold_dbfs", self.DEFAULTS["energy_threshold_dbfs"])
+                )
+            except (TypeError, ValueError):
+                baseline_threshold = None
+
+        threshold_delta = None if threshold is None or baseline_threshold is None else float(threshold) - float(baseline_threshold)
+        energy_delta = None if threshold is None or energy is None else float(energy) - float(threshold)
+
+        summary = {
+            "short_rms": short_rms,
+            "long_rms": long_rms,
+            "threshold": threshold,
+            "energy": energy,
+            "threshold_delta": threshold_delta,
+            "energy_delta": energy_delta,
+            "speech": getattr(state, "speech", None),
+        }
+
+        ctx._vad_summary_snapshot = summary  # type: ignore[attr-defined]
+
         if not hasattr(ctx, "_last_vad_summary"):
+            _log.debug(
+                "evt=vad.summary sid=%s short_rms=%s long_rms=%s threshold=%s energy=%s threshold_delta=%s energy_delta=%s speech=%s",
+                ctx.sid,
+                short_rms,
+                long_rms,
+                threshold,
+                energy,
+                threshold_delta,
+                energy_delta,
+                summary["speech"],
+            )
             ctx._last_vad_summary = now
+            ctx._vad_summary_once = True  # type: ignore[attr-defined]
             return
 
         if now - ctx._last_vad_summary >= 2000:
             _log.debug(
-                "evt=vad.summary sid=%s short_rms=%s long_rms=%s threshold=%s speech=%s",
+                "evt=vad.summary sid=%s short_rms=%s long_rms=%s threshold=%s energy=%s threshold_delta=%s energy_delta=%s speech=%s",
                 ctx.sid,
-                getattr(state, "short_rms", None),
-                getattr(state, "long_rms", None),
-                getattr(state, "speech_threshold", None),
-                getattr(state, "speech", None),
+                short_rms,
+                long_rms,
+                threshold,
+                energy,
+                threshold_delta,
+                energy_delta,
+                summary["speech"],
             )
             ctx._last_vad_summary = now
 
