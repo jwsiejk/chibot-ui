@@ -201,6 +201,7 @@ export function createWsAudioRuntime(options = {}) {
   let lastTrackState = null;
   let lastConstraints = null;
   let reacquireAttempted = false;
+  let firstPcmToWsLogged = false;
 
   // Global diagnostics for debugging
   if (typeof window !== "undefined") {
@@ -475,6 +476,9 @@ export function createWsAudioRuntime(options = {}) {
       }
     }
     localFirstChunkSeen = desired;
+    if (!desired) {
+      firstPcmToWsLogged = false;
+    }
   };
 
   const readMicRecordingStartAt = () => {
@@ -1375,6 +1379,15 @@ export function createWsAudioRuntime(options = {}) {
           bytes: sampledBytes,
           samples: chunk.length || null,
           sampleRate: sr,
+        });
+      } catch (_) {}
+    }
+    if (!firstPcmToWsLogged && sampledBytes > 0 && !meta?.keepalive) {
+      firstPcmToWsLogged = true;
+      try {
+        logStage("mic_debug.first_pcm_to_ws", {
+          ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+          bytes: sampledBytes,
         });
       } catch (_) {}
     }

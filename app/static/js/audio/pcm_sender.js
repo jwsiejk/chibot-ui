@@ -122,6 +122,7 @@ export async function initPcmSender(mediaStream = null, {
   let sinkNode = null;
   let workletCallbackSeen = false;
   let processorCallbackSeen = false;
+  let firstPcmLogEmitted = false;
 
   if (supportsWorklet) {
     try {
@@ -147,10 +148,10 @@ export async function initPcmSender(mediaStream = null, {
   const audioTracks = mediaStream?.getAudioTracks?.();
   const primaryTrack = audioTracks && audioTracks.length ? audioTracks[0] : null;
   const deviceId = primaryTrack?.getSettings?.()?.deviceId || null;
-  console.log('client.mic_stream_acquired_ok', {
-    deviceId,
-    sampleRate: audioCtx?.sampleRate || null,
-  });
+    console.log('client.mic_stream_acquired_ok', {
+      deviceId,
+      sampleRate: audioCtx?.sampleRate || null,
+    });
   try {
     emitClientLog("client.pcm_sender.acquired_stream", {
       audioCtxState: audioCtx?.state || null,
@@ -226,13 +227,6 @@ export async function initPcmSender(mediaStream = null, {
   }
 
   function handleFrame(pcm16, frameInfo = {}) {
-    try {
-      logStage("client.pcm_sender.frame_received", {
-        length: Array.isArray(pcm16) || pcm16 instanceof Int16Array ? pcm16.length : 0,
-        sampleRate: Number.isFinite(frameInfo?.sampleRate) ? frameInfo.sampleRate : null,
-        timestampMs: typeof frameInfo?.timestamp === "number" ? frameInfo.timestamp : null,
-      });
-    } catch (_) {}
     if (!pcm16 || typeof pcm16.length !== "number" || pcm16.length === 0) {
       return;
     }
@@ -268,6 +262,17 @@ export async function initPcmSender(mediaStream = null, {
       } catch (err) {
         console.warn("[pcm_sender] onFrame callback failed", err);
       }
+    }
+
+    if (!firstPcmLogEmitted && pcm16.length > 0) {
+      firstPcmLogEmitted = true;
+      try {
+        logStage("mic_debug.first_pcm_client", {
+          ts: typeof performance?.now === "function" ? performance.now() : Date.now(),
+          sampleRate,
+          targetSampleRate,
+        });
+      } catch (_) {}
     }
 
     if (!enabled) {
@@ -477,14 +482,6 @@ export async function initPcmSender(mediaStream = null, {
     try { processor.disconnect(); } catch (_) {}
     try { sinkNode?.disconnect?.(); } catch (_) {}
     try { source.disconnect(); } catch (_) {}
-    try {
-      mediaStream.getTracks().forEach((track) => {
-        try { track.stop(); } catch (_) {}
-      });
-    } catch (_) {}
-    try {
-      await audioCtx.close();
-    } catch (_) {}
     throw err;
   }
 
