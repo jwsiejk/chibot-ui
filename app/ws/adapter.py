@@ -145,7 +145,7 @@ ASR_CLOSE_DEDUP = "ASR_CLOSE_DEDUP"
 _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
 _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS = 5.0
-_NO_AUDIO_SAFETY_NET_SECONDS = 10.0
+_NO_AUDIO_SAFETY_NET_DEFAULT_MS = 10_000
 
 _OUTBOUND_ALLOWED_TYPES = {
     "policy.interaction",
@@ -2369,6 +2369,7 @@ class ChatV2Adapter:
         self, ctx: AdapterContext, event_name: str, meta: Mapping[str, Any]
     ) -> None:
         now_ms = self._now_ms()
+        previous_vad_speech = ctx.client_vad_speech
         if event_name == "client.vad.speech_start":
             self._set_client_vad_state(ctx, True, now_ms)
             ctx.client_vad_last_event_ms = now_ms
@@ -2419,6 +2420,9 @@ class ChatV2Adapter:
                 ctx.client_vad_noise_db = noise
         else:
             ctx.client_vad_last_event_ms = now_ms
+
+        if not previous_vad_speech and ctx.client_vad_speech:
+            self._refresh_no_audio_safety_net(ctx)
 
         if isinstance(event_name, str) and event_name.startswith("client."):
             detail = dict(meta)
@@ -4687,6 +4691,7 @@ class ChatV2Adapter:
                 source="ws.audio",
             )
         self._handle_client_audio_activity(ctx)
+        self._refresh_no_audio_safety_net(ctx)
         mask_phase = ctx.tts_mask_phase or "off"
         mask_open = mask_phase == "off"
         ready_gate = ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR
@@ -7296,14 +7301,27 @@ class ChatV2Adapter:
             return _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS
         return _MIC_OPEN_TIMEOUT_SECONDS
 
+    def _no_audio_safety_net_seconds(self, ctx: AdapterContext) -> float:
+        policy = ctx.policy if isinstance(ctx.policy, Mapping) else None
+        server_policy = policy.get("server") if isinstance(policy, Mapping) else None
+        timeout_ms: float | None = None
+        if isinstance(server_policy, Mapping):
+            candidate = server_policy.get("no_speech_timeout_ms")
+            if isinstance(candidate, (int, float)) and candidate > 0:
+                timeout_ms = float(candidate)
+
+        if timeout_ms is None:
+            timeout_ms = float(_NO_AUDIO_SAFETY_NET_DEFAULT_MS)
+
+        mic_guard_seconds = self._mic_open_timeout_seconds(ctx) * 2.0
+        return max(mic_guard_seconds, timeout_ms / 1000.0)
+
     def _schedule_no_audio_safety_net(
         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
     ) -> None:
         self._cancel_no_audio_safety_net(ctx)
-        safety_timeout = max(
-            _NO_AUDIO_SAFETY_NET_SECONDS, self._mic_open_timeout_seconds(ctx) * 2.0
-        )
         ctx.mic_open_timeout_seconds = self._mic_open_timeout_seconds(ctx)
+        safety_timeout = self._no_audio_safety_net_seconds(ctx)
 
         def _fire() -> None:
             ctx.no_audio_safety_net = None
@@ -7313,6 +7331,13 @@ class ChatV2Adapter:
             ctx.no_audio_safety_net = loop.call_later(safety_timeout, _fire)
         except RuntimeError:
             ctx.no_audio_safety_net = None
+
+    def _refresh_no_audio_safety_net(self, ctx: AdapterContext) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._schedule_no_audio_safety_net(ctx, loop)
 
     def _schedule_mic_open_guard(
         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
