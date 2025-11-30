@@ -52,8 +52,10 @@ class VADAggregator:
         "post_greet_margin_reduction_db": 2.0,
     }
 
-    MIN_MARGIN_DB = 8.0
+    MIN_MARGIN_DB = 10.0
+    STABLE_SILENCE_MIN_MARGIN_DB = 7.0
     MAX_MARGIN_DB = 18.0
+    STABLE_SILENCE_MS = 5000
     NOISE_ALPHA = 0.05
     SHORT_RMS_ALPHA = 0.2
     LONG_RMS_ALPHA = 0.05
@@ -95,6 +97,7 @@ class VADAggregator:
         self._nf_dbfs = baseline - self._margin_db
         self._environment = "normal"
         self._false_positive_events: List[int] = []
+        self._silence_streak_ms = 0
 
         self._grant_handler: Optional[Callable[[str, Dict[str, object]], None]] = None
 
@@ -155,7 +158,10 @@ class VADAggregator:
             )
 
         if dbfs < threshold:
+            self._silence_streak_ms = min(self._silence_streak_ms + frame_ms, 2 * self.STABLE_SILENCE_MS)
             self._update_noise_floor(dbfs)
+        else:
+            self._silence_streak_ms = 0
 
         if suppressed:
             if self._auto_active:
@@ -303,6 +309,19 @@ class VADAggregator:
 
     def _policy_hold_ms(self) -> int:
         return int(self._policy["hold_ms"])
+
+    def _min_margin_floor(self) -> float:
+        self._prune_false_positive_events(self._now_ms())
+
+        if self._silence_streak_ms >= self.STABLE_SILENCE_MS and not self._false_positive_events:
+            floor = self.STABLE_SILENCE_MIN_MARGIN_DB
+        else:
+            floor = self.MIN_MARGIN_DB
+
+        if floor > self._margin_db:
+            self._margin_db = floor
+
+        return floor
 
     def _effective_settings(self) -> tuple[str, str, int]:
         mode = str(self._policy["mode"]).lower()
@@ -473,11 +492,19 @@ class VADAggregator:
             self._grant_handler(grant_source, {"mode": effective_mode, "reasons": reasons})
 
     def _register_false_positive(self, now_ms: int) -> None:
-        self._margin_db = min(self.MAX_MARGIN_DB, self._margin_db + 1.5)
+        self._silence_streak_ms = 0
+        floor = self._min_margin_floor()
+        next_margin = max(floor, self._margin_db + 1.25)
+        self._margin_db = min(self.MAX_MARGIN_DB, next_margin)
         self._false_positive_events.append(now_ms)
 
     def _register_miss(self) -> None:
-        self._margin_db = max(self.MIN_MARGIN_DB, self._margin_db - 1.0)
+        floor = self._min_margin_floor()
+        decay = 1.0 if self._false_positive_events else 1.5
+        if self._silence_streak_ms >= self.STABLE_SILENCE_MS and not self._false_positive_events:
+            decay = max(decay, 1.75)
+
+        self._margin_db = max(floor, self._margin_db - decay)
 
     def _prune_false_positive_events(self, now_ms: int) -> None:
         window_ms = 5000
@@ -491,7 +518,7 @@ class VADAggregator:
             return
 
         baseline = float(self._policy.get("energy_threshold_dbfs", self.DEFAULTS["energy_threshold_dbfs"]))
-        sample_dbfs = min(float(dbfs), baseline - self.MIN_MARGIN_DB)
+        sample_dbfs = min(float(dbfs), baseline - self._min_margin_floor())
 
         if self._nf_bootstrap_frames == self.NOISE_BOOTSTRAP_FRAMES:
             self._nf_dbfs = sample_dbfs
@@ -501,10 +528,11 @@ class VADAggregator:
         self._nf_bootstrap_frames -= 1
 
     def _effective_margin(self) -> float:
-        margin = self._margin_db
+        floor = self._min_margin_floor()
+        margin = max(floor, self._margin_db)
         if self._full_duplex_enabled and bool(self._policy.get("reduce_margin_after_greet")):
             reduction = max(0.0, float(self._policy.get("post_greet_margin_reduction_db", 0.0)))
-            margin = max(self.MIN_MARGIN_DB, margin - reduction)
+            margin = max(floor, margin - reduction)
 
         return margin
 
