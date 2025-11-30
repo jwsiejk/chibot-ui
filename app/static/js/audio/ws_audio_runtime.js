@@ -303,8 +303,7 @@ export function createWsAudioRuntime(options = {}) {
       if (audioCtx?.state === "suspended" || audioCtx?.state === "closed") {
         logStage("client.mic.reacquire.recreate_audioctx", { prev: audioCtx?.state });
         wsDiag("audio_warmup", { state: audioCtx?.state });
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: PCM_TARGET_SAMPLE_RATE });
-        setGlobalAudioContext(audioCtx);
+        audioCtx = getMicAudioContext();
       }
     } catch (err) {
       logStage("client.mic.reacquire.audioctx_failed", { err: String(err) });

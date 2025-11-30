@@ -374,7 +374,6 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     }
     const queued = pendingInfoGateFrames.splice(0);
     for (const queuedFrame of queued) {
-      // eslint-disable-next-line no-await-in-loop
       await handleMessageFrame(queuedFrame);
     }
   }

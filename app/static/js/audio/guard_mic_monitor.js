@@ -311,7 +311,6 @@
             this.muted = true;
             this.volume = 0;
             try {
-              // eslint-disable-next-line no-console
               console.warn("[guard_mic_monitor] muted media element assigned mic stream");
             } catch (_) {}
           }
