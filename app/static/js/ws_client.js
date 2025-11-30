@@ -122,6 +122,16 @@ function isGreetPhase() {
   }
 }
 
+function isActiveBargeIn() {
+  try {
+    const bargeInEnabled = AppState?.barge_in_enabled !== false;
+    const ttsActive = Boolean(AppState?.ttsActive);
+    return Boolean(bargeInEnabled && ttsActive);
+  } catch (_) {
+    return false;
+  }
+}
+
 function syncAppStatePhase(options = {}) {
   const force = options && options.force === true;
   if (!AppState || typeof AppState !== "object") return;
@@ -153,7 +163,7 @@ if (typeof initPcmSender !== "function") {
 if (typeof createWsAudioRuntime !== "function") {
   missingAudioExports.push("createWsAudioRuntime");
 }
-if (missingAudioExports.length > 0) {
+  if (missingAudioExports.length > 0) {
   const detail = {
     missing: missingAudioExports,
     vadModuleLoaded: Boolean(vadModule),
@@ -4284,6 +4294,23 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         const pauseMs = __pauseSendUntil - now;
         const ts = Number.isFinite(options.ts) ? Number(options.ts) : now;
         try { AppState?.hub?.log?.('client.audio.chunk_dropped_throttle', { ts, pause_ms: pauseMs }); } catch {}
+        return true;
+      }
+      const phase = getPhase();
+      const bargeInActive = isActiveBargeIn();
+      if (phase === PHASE.ConversationReady && !bargeInActive) {
+        const ts = Number.isFinite(options.ts) ? Number(options.ts) : now;
+        try { AppState?.hub?.log?.('client.audio.chunk_dropped_phase', { ts, phase, reason: 'await_user_turn' }); } catch {}
+        try {
+          logStage("client.audio.chunk_dropped_phase", {
+            ts,
+            phase,
+            lane,
+            reason: "await_user_turn",
+            barge_in_enabled: AppState?.barge_in_enabled ?? null,
+            tts_active: Boolean(AppState?.ttsActive),
+          });
+        } catch {}
         return true;
       }
     }
