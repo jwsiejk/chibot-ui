@@ -23,6 +23,7 @@ import {
   recordClientBannerEvent,
   logStage,
 } from "./ws/telemetry.js";
+import { getMicAudioContext, getPlaybackAudioContext } from "./audio/audio_core.js";
 
 // Before any WS logic, confirm audio modules are loaded
 if (typeof window !== "undefined" && typeof window.createWsAudioRuntime !== "function") {
@@ -482,7 +483,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     conversationStartCommitted = false;
     clearConversationStartTimer();
     try {
-      const audioCtx = getAudioCtx();
+      const audioCtx = getPlaybackAudioContext();
       if (audioCtx) {
         const node = audioCtx.createBufferSource();
         node.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
@@ -1692,27 +1693,19 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     try { window.audioRuntime = audioRuntime; } catch (_) {}
   }
 
-  function getAudioCtx() {
-    const ctx =
-      (audioRuntime && typeof audioRuntime.getAudioContext === "function" && audioRuntime.getAudioContext()) ||
-      (typeof window !== "undefined" ? window.__audioCtx || window.audioCtx : null) ||
-      (AppState && typeof AppState === "object" ? AppState.audioCtx || null : null);
-
-    if (ctx && typeof window !== "undefined") {
-      try { window.__audioCtx = ctx; } catch (_) {}
-    }
-    return ctx;
-  }
-
   if (typeof window !== "undefined") {
     try {
       window.addEventListener("click", () => {
-        const audioCtx = getAudioCtx();
-        if (audioCtx?.state === "suspended") {
-          audioCtx.resume().then(() => {
-            logStage("client.audio_context.user_unlocked");
-          }).catch(() => {});
-        }
+        [getMicAudioContext, getPlaybackAudioContext].forEach((fn) => {
+          try {
+            const ctx = fn();
+            if (ctx?.state === "suspended") {
+              ctx.resume().then(() => {
+                logStage("client.audio_context.user_unlocked");
+              }).catch(() => {});
+            }
+          } catch (_) {}
+        });
       });
     } catch (_) {}
   }
@@ -2707,16 +2700,20 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       handler = globalThis.startRecording;
     }
     try {
-      const audioCtx = getAudioCtx();
-      if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
-        audioCtx.resume()
-          .then(() => {
-            logStage("client.audio_context.resume_on_gesture", {});
-          })
-          .catch((err) => {
-            logStage("client.audio_context.resume_on_gesture_failed", { err: String(err) });
-          });
-      }
+      [getMicAudioContext, getPlaybackAudioContext].forEach((fn) => {
+        try {
+          const ctx = fn();
+          if (ctx?.state === "suspended" && typeof ctx.resume === "function") {
+            ctx.resume()
+              .then(() => {
+                logStage("client.audio_context.resume_on_gesture", {});
+              })
+              .catch((err) => {
+                logStage("client.audio_context.resume_on_gesture_failed", { err: String(err) });
+              });
+          }
+        } catch (_) {}
+      });
     } catch (_) {}
     if (handler) {
       const context = typeof window !== "undefined" ? window : null;
@@ -3131,7 +3128,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       }
       if (frame?.meta?.is_greet === true) {
         try {
-          const audioCtx = getAudioCtx();
+          const audioCtx = getPlaybackAudioContext();
           if (audioCtx) {
             const node = audioCtx.createBufferSource();
             node.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);

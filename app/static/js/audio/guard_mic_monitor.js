@@ -32,7 +32,7 @@
 
   function logMicBlock(source, dest, path, reason) {
     try {
-      console.warn("mic_guard.block", {
+      console.error("[MIC_ECHO_GUARD] blocked mic node connecting to destination", {
         sourceName: getNodeName(source),
         destName: getNodeName(dest),
         path,

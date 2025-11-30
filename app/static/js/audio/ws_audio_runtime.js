@@ -5,6 +5,7 @@ import { isTypedArray, toArrayBuffer } from "../utils/binary.js";
 import { recordClientBannerEvent } from "../ws/telemetry.js";
 import { logStage } from "../ws/telemetry.js";
 import { PHASE as VOICE_PHASE } from "../voice/phase_controller.js";
+import { getMicAudioContext } from "./audio_core.js";
 
 function wsDiag(tag, detail = {}) {
   try {
@@ -710,15 +711,6 @@ export function createWsAudioRuntime(options = {}) {
     ? initialAudioKeepaliveMs
     : AUDIO_KEEPALIVE_MS;
 
-  function setGlobalAudioContext(ctx) {
-    if (!ctx || typeof window === "undefined") {
-      return;
-    }
-    try {
-      window.__audioCtx = ctx;
-    } catch (_) {}
-  }
-
   setInterval(() => {
     const track = getCaptureStream?.()?.getAudioTracks?.()[0];
     try {
@@ -726,7 +718,6 @@ export function createWsAudioRuntime(options = {}) {
         trackReadyState: track?.readyState || "missing",
         enabled: track?.enabled,
         muted: track?.muted,
-        audioCtx: audioCtx?.state || "unknown",
         audioCtxState: audioCtx?.state || "unknown",
         isInterrupted: audioCtx?.state === "interrupted",
         gumFailed,
@@ -1825,7 +1816,17 @@ export function createWsAudioRuntime(options = {}) {
       }
       updatePcmSenderState("ensure_sender_stream_resolved");
     }
+    audioCtx = audioCtx || getMicAudioContext();
+    if (audioCtx?.state === "suspended" && typeof audioCtx.resume === "function") {
+      try {
+        await audioCtx.resume();
+      } catch (err) {
+        logStage("client.audio_context.resume_failed", { err: String(err) });
+      }
+    }
+
     pcmSenderInitPromise = initPcmSender(stream, {
+      audioCtx,
       onSampleRate: handleSampleRate,
       onFrame: handlePcmFrame,
       onSend: handlePcmSend,
@@ -1837,8 +1838,6 @@ export function createWsAudioRuntime(options = {}) {
         console.warn("DEBUG.ensurePcmSender.senderInitDone");
       } catch (_) {}
       pcmSender = sender;
-      audioCtx = sender?.ctx || audioCtx;
-      setGlobalAudioContext(audioCtx);
       try {
         if (audioCtx?.state === "suspended") {
           logStage("client.audio_context.resume_attempt", {});

@@ -1,3 +1,5 @@
+import { getPlaybackAudioContext } from "./audio/audio_core.js";
+
 (() => {
   const AppState = window.AppState;
   if (!AppState) {
@@ -32,35 +34,12 @@
     return { sampleRate: rateCandidate, channels };
   }
 
-  function closeContext() {
-    if (!audioContext) return;
-    try {
-      audioContext.close();
-    } catch (err) {
-      console.warn("AudioPlayer failed to close AudioContext", err);
-    }
-    audioContext = null;
-    gainNode = null;
-    nextStartTime = 0;
-  }
-
   function ensureContext() {
     if (!descriptor) return null;
-    const desiredRate = descriptor.sampleRate;
-    if (audioContext && Math.abs(audioContext.sampleRate - desiredRate) > 1) {
-      closeContext();
-    }
     if (!audioContext) {
-      const Ctor = window.AudioContext || window.webkitAudioContext;
-      if (!Ctor) {
+      audioContext = getPlaybackAudioContext();
+      if (!audioContext) {
         console.error("Web Audio API is not supported in this browser");
-        return null;
-      }
-      try {
-        audioContext = new Ctor({ sampleRate: desiredRate });
-      } catch (err) {
-        console.error("AudioPlayer failed to create AudioContext", err);
-        audioContext = null;
         return null;
       }
       gainNode = audioContext.createGain();

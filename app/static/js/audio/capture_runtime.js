@@ -2,6 +2,7 @@
 // Encapsulates VAD+AppState bridge, consoleBus publishing, silence timers,
 // and recorder start/stop lifecycle for AskChip.
 
+import { getMicAudioContext } from "./audio_core.js";
 import { logMic as telemetryLogMic, logStage as telemetryLogStage } from "../ws/telemetry.js";
 
 // DEBUG: Monkey-patch MediaStreamTrack.stop to catch the culprit
@@ -401,19 +402,8 @@ export function createCaptureRuntime({
     ensureStreamProvider(micStream);
     audioGraphInitPromise = (async () => {
       try {
-        let ctx = typeof window !== "undefined" ? window.__globalAudioCtx || null : null;
+        const ctx = getMicAudioContext();
         const previousCtxState = ctx?.state || null;
-        if (!ctx || ctx.state === "closed") {
-          const AudioContextCtor = typeof window !== "undefined"
-            ? window.AudioContext || window.webkitAudioContext
-            : null;
-          if (typeof AudioContextCtor === "function") {
-            ctx = new AudioContextCtor();
-            if (typeof window !== "undefined") {
-              window.__globalAudioCtx = ctx;
-            }
-          }
-        }
         if (ctx?.state === "suspended" && typeof ctx.resume === "function") {
           await ctx.resume();
         }
@@ -1073,9 +1063,13 @@ export function createCaptureRuntime({
       const track = stream && typeof stream.getAudioTracks === "function"
         ? (stream.getAudioTracks()[0] || null)
         : null;
-      const audioCtxState = typeof window !== "undefined" && window.__globalAudioCtx
-        ? window.__globalAudioCtx.state
-        : null;
+      const audioCtxState = (() => {
+        try {
+          return getMicAudioContext()?.state || null;
+        } catch (_) {
+          return null;
+        }
+      })();
       console.warn("DEBUG.startRecorderStreaming.pre", { phase, wsPhase, hasStream: !!stream, trackState: track?.readyState || null, audioCtxState, opts });
     } catch (_) {}
 
@@ -1091,9 +1085,13 @@ export function createCaptureRuntime({
       const track = (stream && typeof stream.getAudioTracks === "function"
         ? stream.getAudioTracks()[0]
         : null) || null;
-      const audioCtxState = typeof window !== "undefined"
-        ? window.__globalAudioCtx?.state || null
-        : null;
+      const audioCtxState = (() => {
+        try {
+          return getMicAudioContext()?.state || null;
+        } catch (_) {
+          return null;
+        }
+      })();
       logStage("client.recorder.start_attempt", {
         phase: typeof window !== "undefined" ? window.AppState?.phase || null : null,
         wsPhase: typeof window !== "undefined" ? window.AppState?.wsPhase || null : null,
@@ -1189,7 +1187,9 @@ export function createCaptureRuntime({
         return false;
       }
       try {
-        const ctxState = typeof window !== "undefined" && window.__globalAudioCtx ? window.__globalAudioCtx.state : null;
+        const ctxState = (() => {
+          try { return getMicAudioContext()?.state || null; } catch (_) { return null; }
+        })();
         console.warn("DEBUG.startRecorderStreaming.senderReady", { hasStream: !!captureStream, audioCtxState: ctxState });
       } catch (_) {}
       if (!pcmSenderReady) {

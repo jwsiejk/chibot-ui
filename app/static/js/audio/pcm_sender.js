@@ -74,49 +74,8 @@ function downsampleTo16k(float32Samples, inputSampleRate) {
   return result;
 }
 
-function ensureAudioContext() {
-  if (typeof window === "undefined") {
-    throw new Error("AudioContext unavailable: window not defined");
-  }
-  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextCtor) {
-    throw new Error("Web Audio API is not supported in this browser");
-  }
-  return new AudioContextCtor();
-}
-
-async function resumeAudioContext(audioCtx, { stage } = {}) {
-  if (!audioCtx || typeof audioCtx.resume !== "function") {
-    return;
-  }
-  const label = typeof stage === "string" && stage ? stage : "unknown";
-  try {
-    logStage("client.pcm_sender.resume_attempt", { stage: label });
-  } catch (_) {}
-  if (audioCtx.state !== "suspended") {
-    try {
-      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
-    } catch (_) {}
-    return;
-  }
-  try {
-    await audioCtx.resume();
-    try {
-      logStage("client.pcm_sender.resume_ok", { stage: label, state: audioCtx.state });
-    } catch (_) {}
-  } catch (err) {
-    try {
-      logStage("client.pcm_sender.resume_failed", {
-        stage: label,
-        error_name: err?.name || null,
-        error_message: err?.message || null,
-      });
-    } catch (_) {}
-    throw err;
-  }
-}
-
 export async function initPcmSender(mediaStream = null, {
+  audioCtx,
   onSampleRate,
   onFrame,
   onSend,
@@ -124,7 +83,9 @@ export async function initPcmSender(mediaStream = null, {
   chunkMs = DEFAULT_CHUNK_MS,
   flushIntervalMs = DEFAULT_FLUSH_MS,
 } = {}) {
-  const audioCtx = ensureAudioContext();
+  if (!audioCtx) {
+    throw new Error("AudioContext is required for pcm_sender");
+  }
   const chunkDurationMs = Number.isFinite(chunkMs) && chunkMs > 0 ? chunkMs : DEFAULT_CHUNK_MS;
   const flushMs = Number.isFinite(flushIntervalMs) && flushIntervalMs > 0
     ? flushIntervalMs
@@ -214,17 +175,6 @@ export async function initPcmSender(mediaStream = null, {
   console.log("[pcm_sender] audioCtx.sampleRate", sampleRate);
   let effectiveSampleRate = targetSampleRate;
   let samplesPerMs = effectiveSampleRate / 1000;
-
-  // Attempt to move the AudioContext to a running state immediately after creation
-  // (within the same user gesture that triggered initPcmSender). Browsers may keep
-  // a newly created context suspended until resume() is called from a trusted
-  // gesture, and without a running context the worklet/processor callbacks never
-  // fire, starving PCM/VAD.
-  try {
-    await resumeAudioContext(audioCtx, { stage: "init" });
-  } catch (err) {
-    console.warn("[pcm_sender] audioCtx initial resume failed", err);
-  }
 
   function clearFlushTimer() {
     if (flushTimer) {
@@ -498,17 +448,9 @@ export async function initPcmSender(mediaStream = null, {
       sinkNode = audioCtx.createGain();
       sinkNode.gain.value = 0;
 
-      const MIC_MONITOR_DEBUG = false;
-      const monitorDestination = MIC_MONITOR_DEBUG
-        ? audioCtx.destination
-        : audioCtx.createMediaStreamDestination();
-      // MIC ECHO NOTE:
-      // This MediaStreamAudioDestinationNode is fed from the mic path for PCM capture.
-      // The mic guard will log mic_guard.block / mic_guard.allow if this chain tries
-      // to route toward an audible sink.
-
       processor.connect(sinkNode);
-      sinkNode.connect(monitorDestination);
+      // Do not connect any mic-origin nodes to an audible sink.
+      sinkNode.connect(audioCtx.createMediaStreamDestination());
     }
     try {
       logStage("client.pcm_sender.node_connect_success", {
@@ -547,12 +489,8 @@ export async function initPcmSender(mediaStream = null, {
   }
 
   async function resume() {
-    try {
-      await resumeAudioContext(audioCtx, { stage: "resume" });
-    } catch (err) {
-      notifyError(err);
-      console.warn("[pcm_sender] failed to resume AudioContext", err);
-    }
+    // Context lifecycle is managed by callers; pcm_sender must not resume or
+    // route mic audio toward an audible destination.
   }
 
   function setEnabled(nextEnabled) {
@@ -616,18 +554,6 @@ export async function initPcmSender(mediaStream = null, {
       source.disconnect();
     } catch (err) {
       console.warn("[pcm_sender] source disconnect failed", err);
-    }
-    try {
-      mediaStream.getTracks().forEach((track) => {
-        try { track.stop(); } catch (_) {}
-      });
-    } catch (err) {
-      console.warn("[pcm_sender] failed to stop media tracks", err);
-    }
-    try {
-      await audioCtx.close();
-    } catch (err) {
-      console.warn("[pcm_sender] audio context close failed", err);
     }
   }
 
