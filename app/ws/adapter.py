@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import audioop
 import array
 import asyncio
 import contextlib
@@ -630,6 +631,9 @@ class AdapterContext:
     sid_bucket: Optional[TokenBucket] = None
     ip_bucket: Optional[TokenBucket] = None
     audio_profile: Optional[Dict[str, Any]] = None
+    audio_source_profile: Optional[Dict[str, Any]] = None
+    audio_normalizer: Optional[Dict[str, Any]] = None
+    _audio_ratecv_state: Any | None = None
     audio_meta: Optional[Dict[str, Any]] = None
     audio_meta_req_id: Optional[str] = None
     accepting_audio: bool = True
@@ -3683,29 +3687,63 @@ class ChatV2Adapter:
             normalized_ch = (
                 channels if channels is not None else expected["channels"]
             )
-            if (
-                normalized_fmt != expected["format"]
-                or normalized_sr != expected["sample_rate"]
-                or normalized_ch != expected["channels"]
-            ):
-                meta["error"] = "bad_header"
+            ctx.audio_normalizer = None
+            ctx.audio_source_profile = None
+            ctx._audio_ratecv_state = None
+            supported_formats = {"pcm", "pcm16"}
+            if normalized_fmt not in supported_formats:
+                meta["error"] = "unsupported_format"
                 await self._publish_json_recv(ctx, meta, frame_payload)
-                await self._send_json(
+                await self._send_error(
                     send,
                     ctx.sid,
-                    {
-                        "type": "asr.error",
-                        "code": "bad_header",
-                        "expected": expected,
-                    },
+                    "unsupported_audio_format",
+                    f"format {normalized_fmt!r} is not supported; expected pcm16",
                 )
+                return self._HandleResult(False, 1003, "unsupported_audio_format")
+
+            source_profile = {
+                "format": normalized_fmt,
+                "sample_rate": normalized_sr,
+                "channels": normalized_ch,
+            }
+            normalization_actions: list[str] = []
+            if normalized_fmt != expected["format"]:
+                normalized_fmt = expected["format"]
+            if normalized_ch != expected["channels"]:
+                normalization_actions.append("downmix")
+            if normalized_sr != expected["sample_rate"]:
+                normalization_actions.append("resample")
+            normalizer: Dict[str, Any] | None = None
+            if normalization_actions:
+                normalizer = {
+                    "format": expected["format"],
+                    "source_rate": normalized_sr,
+                    "source_channels": normalized_ch,
+                    "target_rate": expected["sample_rate"],
+                    "target_channels": expected["channels"],
+                }
+                ctx._audio_ratecv_state = None
+                _log.info(
+                    "evt=audio_header_normalized sid=%s actions=%s source_rate=%s source_channels=%s",
+                    ctx.sid,
+                    ",".join(normalization_actions),
+                    normalized_sr,
+                    normalized_ch,
+                )
+                normalized_sr = expected["sample_rate"]
+                normalized_ch = expected["channels"]
+            ctx.audio_normalizer = normalizer
+            ctx.audio_source_profile = source_profile
             profile = {
-                "format": "pcm16",
+                "format": normalized_fmt,
                 "codec": frame.get("codec") or "pcm_s16le",
-                "sample_rate": expected["sample_rate"],
-                "channels": expected["channels"],
+                "sample_rate": normalized_sr,
+                "channels": normalized_ch,
                 "container": "raw",
             }
+            if ctx.audio_normalizer and ctx.audio_source_profile:
+                profile["source_profile"] = dict(ctx.audio_source_profile)
             seq_start = frame.get("seq_start")
             if seq_start is not None:
                 if not isinstance(seq_start, int):
@@ -3769,9 +3807,9 @@ class ChatV2Adapter:
                 )
                 return self._HandleResult(True)
             normalized_header = dict(frame)
-            normalized_header.setdefault("format", expected["format"])
-            normalized_header.setdefault("sample_rate", expected["sample_rate"])
-            normalized_header.setdefault("channels", expected["channels"])
+            normalized_header["format"] = normalized_header.get("format", normalized_fmt)
+            normalized_header["sample_rate"] = normalized_sr
+            normalized_header["channels"] = normalized_ch
             policy_for_validation: Mapping[str, Any] | None
             if FEATURE_LEGACY_POLICY and isinstance(ctx.policy_snapshot, Mapping):
                 policy_for_validation = ctx.policy_snapshot
@@ -3835,6 +3873,9 @@ class ChatV2Adapter:
             }
             if profile.get("seq_start") is not None:
                 audio_meta["seq_start"] = profile.get("seq_start")
+            if ctx.audio_normalizer and ctx.audio_source_profile:
+                audio_meta["source_sample_rate"] = ctx.audio_source_profile.get("sample_rate")
+                audio_meta["source_channels"] = ctx.audio_source_profile.get("channels")
             ctx.audio_meta = {key: value for key, value in audio_meta.items() if value is not None}
             ctx.audio_meta_req_id = original_req_id
             await self._publish(
@@ -4626,7 +4667,8 @@ class ChatV2Adapter:
             ctx.audio_highest_seq = ctx.audio_expected_seq - 1
 
     async def _emit_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
-        byte_count = len(chunk)
+        normalized_chunk = self._apply_audio_normalization(ctx, chunk)
+        byte_count = len(normalized_chunk)
         self._ensure_audio_meta(ctx)
         meta = {
             "byte_count": byte_count,
@@ -4635,7 +4677,7 @@ class ChatV2Adapter:
         }
         await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
         now_ms = self._now_ms()
-        self._maybe_update_server_vad(ctx, chunk, now_ms)
+        self._maybe_update_server_vad(ctx, normalized_chunk, now_ms)
         if ctx.audio_chunks_recv == 1:
             self._emit_session_step(
                 ctx.sid,
@@ -4691,7 +4733,7 @@ class ChatV2Adapter:
                 ctx.accepting_audio,
                 getattr(ctx.session, "asr_state", None),
             )
-            await self._forward_audio_chunk(ctx, chunk, seq)
+            await self._forward_audio_chunk(ctx, normalized_chunk, seq)
             return
 
         if not mask_open:
@@ -4711,7 +4753,7 @@ class ChatV2Adapter:
         except Exception:
             queue_pre = True
         if reason in ("not_ready", "send_closed", "backpressure") and queue_pre:
-            self._queue_audio_backlog(ctx, chunk, seq)
+            self._queue_audio_backlog(ctx, normalized_chunk, seq)
             _log.info(
                 "evt=audio_backlog_enqueue sid=%s reason=%s pending=%d bytes=%d",
                 ctx.sid,
@@ -4734,6 +4776,60 @@ class ChatV2Adapter:
             reason,
         )
         return
+
+    def _apply_audio_normalization(self, ctx: AdapterContext, chunk: bytes) -> bytes:
+        normalizer = getattr(ctx, "audio_normalizer", None)
+        if not normalizer or not chunk:
+            return chunk
+        if normalizer.get("format") != "pcm16":
+            return chunk
+        try:
+            return self._normalize_pcm_chunk(ctx, chunk, normalizer)
+        except Exception:  # pragma: no cover - defensive logging
+            _log.exception("evt=audio_normalize_failed sid=%s", ctx.sid)
+            return chunk
+
+    def _normalize_pcm_chunk(
+        self, ctx: AdapterContext, chunk: bytes, normalizer: Mapping[str, Any]
+    ) -> bytes:
+        sample_width = PCM_BYTES_PER_SAMPLE
+        data = bytes(chunk)
+        try:
+            source_channels = int(normalizer.get("source_channels", 1) or 1)
+        except Exception:
+            source_channels = 1
+        if source_channels < 1:
+            source_channels = 1
+        channel_count = source_channels
+        if source_channels > 1:
+            data = audioop.tomono(data, sample_width, 0.5, 0.5)
+            channel_count = 1
+        try:
+            source_rate = int(normalizer.get("source_rate", normalizer.get("target_rate", 16000)) or 16000)
+        except Exception:
+            source_rate = 16000
+        try:
+            target_rate = int(normalizer.get("target_rate", source_rate) or source_rate)
+        except Exception:
+            target_rate = source_rate
+        if source_rate != target_rate:
+            state = getattr(ctx, "_audio_ratecv_state", None)
+            data, state = audioop.ratecv(data, sample_width, channel_count, source_rate, target_rate, state)
+            ctx._audio_ratecv_state = state
+        try:
+            target_channels = int(normalizer.get("target_channels", channel_count) or channel_count)
+        except Exception:
+            target_channels = channel_count
+        if target_channels < 1:
+            target_channels = 1
+        if target_channels > 2:
+            target_channels = 2
+        if target_channels > channel_count:
+            # Expand mono to stereo or higher by duplicating channels as needed.
+            data = audioop.tostereo(data, sample_width, 1, 1)
+        elif target_channels < channel_count and target_channels == 1 and channel_count > 1:
+            data = audioop.tomono(data, sample_width, 0.5, 0.5)
+        return data
 
     def _queue_audio_backlog(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
         backlog = ctx.audio_backlog
