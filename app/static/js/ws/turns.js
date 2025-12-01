@@ -140,6 +140,13 @@ export function createTurnRuntime(config = {}) {
   let armingGraceUntil = 0;
   const senderPauseReasons = new Set();
   let senderPaused = false;
+  function snapshotSenderPauseReasons() {
+    const snapshot = {};
+    senderPauseReasons.forEach((value) => {
+      snapshot[value] = true;
+    });
+    return snapshot;
+  }
 
   function updateState(patch) {
     if (!patch || typeof patch !== "object") {
@@ -270,13 +277,26 @@ export function createTurnRuntime(config = {}) {
     : function setSenderPauseReason(reason, value) {
       const key = typeof reason === "string" && reason ? reason : "legacy";
       const desired = Boolean(value);
-      if (desired) {
-        if (!senderPauseReasons.has(key)) {
-          senderPauseReasons.add(key);
+      try {
+        if (desired) {
+          if (!senderPauseReasons.has(key)) {
+            senderPauseReasons.add(key);
+            applySenderPausedState();
+          }
+        } else if (senderPauseReasons.delete(key)) {
           applySenderPausedState();
         }
-      } else if (senderPauseReasons.delete(key)) {
-        applySenderPausedState();
+      } finally {
+        try {
+          console.log("[pcm_sender] pause_reasons", {
+            updated_reason: key,
+            paused: desired,
+            all_reasons: snapshotSenderPauseReasons(),
+          });
+          if (typeof updatePcmSenderState === "function") {
+            updatePcmSenderState("pause_reason_change");
+          }
+        } catch (_) {}
       }
     };
 
