@@ -3839,6 +3839,19 @@ class ChatV2Adapter:
                     log_detail["turn_id"] = turn_id
                 self._emit_hub_log(ctx, "policy.violation", log_detail)
                 return self._HandleResult(False, 4400, "policy_violation")
+            session = ctx.session
+            session.audio_rx_chunks = 0
+            session.audio_rx_bytes = 0
+            session.audio_rx_dropped = 0
+            session.audio_rx_turn_index += 1
+            _log.info(
+                "evt=audio_bridge_turn_start sid=%s turn=%s codec=%s rate_hz=%s ch=%s",
+                ctx.sid,
+                session.audio_rx_turn_index,
+                normalized_header.get("codec"),
+                normalized_header.get("sample_rate"),
+                normalized_header.get("channels"),
+            )
             ctx.audio_profile = profile
             ctx.session.audio_profile = profile
             self._arm_no_audio_watchdog(ctx)
@@ -4769,11 +4782,21 @@ class ChatV2Adapter:
             return
         _log.debug(
             "evt=audio_drop_before_asr sid=%s bytes=%s reason=%s asr_state=%s",
-            ctx.sid,
-            byte_count,
-            reason,
-            getattr(ctx.session, "asr_state", None),
-        )
+                ctx.sid,
+                byte_count,
+                reason,
+                getattr(ctx.session, "asr_state", None),
+            )
+        session = ctx.session
+        session.audio_rx_dropped += 1
+        if session.audio_rx_dropped <= 3:
+            _log.debug(
+                "evt=ws_audio_chunk_dropped sid=%s turn=%s reason=%s len=%d",
+                ctx.sid,
+                session.audio_rx_turn_index,
+                reason,
+                byte_count,
+            )
         _log.info(
             "evt=audio_drop sid=%s len=%d reason=%s",
             ctx.sid,
@@ -4908,6 +4931,18 @@ class ChatV2Adapter:
         frame_meta: Optional[Mapping[str, Any]] = None,
     ) -> None:
         byte_count = len(chunk)
+        session = ctx.session
+        session.audio_rx_chunks += 1
+        session.audio_rx_bytes += byte_count
+        if session.audio_rx_chunks <= 3 or session.audio_rx_chunks % 20 == 0:
+            _log.debug(
+                "evt=ws_audio_chunk_rx sid=%s turn=%s chunk=%d len=%d total_bytes=%d",
+                ctx.sid,
+                session.audio_rx_turn_index,
+                session.audio_rx_chunks,
+                byte_count,
+                session.audio_rx_bytes,
+            )
         bus.publish(
             {
                 "type": EVT_WS_AUDIO_SEND,
@@ -8579,6 +8614,17 @@ class ChatV2Adapter:
             ctx.sid,
             ctx.asr_final_emitted,
             ctx.asr_bytes_sent,
+        )
+
+        session = ctx.session
+        _log.info(
+            "evt=audio_bridge_summary sid=%s turn=%s rx_chunks=%d rx_bytes=%d asr_bytes_sent=%d timeout=%s",
+            ctx.sid,
+            getattr(session, "audio_rx_turn_index", 0),
+            getattr(session, "audio_rx_chunks", 0),
+            getattr(session, "audio_rx_bytes", 0),
+            ctx.asr_bytes_sent,
+            reason == "timeout",
         )
 
         await self._publish(
