@@ -1094,18 +1094,21 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         asrReady: Boolean(AppState?.asrReady),
       });
     } catch (_) {}
-  } finally {
-    if (cleanupRequested && !cleanupRan) {
-      cleanupRan = true;
-      try {
-        logStage("client.conversation.post_greet_cleanup.finally", {
-          cleanupSource,
-          phase: getPhase(),
-          wsPhase: AppState?.wsPhase || null,
-        });
-      } catch (_) {}
-      runPostGreetCleanup(cleanupSource);
+    } finally {
+      if (cleanupRequested && !cleanupRan) {
+        cleanupRan = true;
+        try {
+          logStage("client.conversation.post_greet_cleanup.finally", {
+            cleanupSource,
+            phase: getPhase(),
+            wsPhase: AppState?.wsPhase || null,
+          });
+        } catch (_) {}
+        runPostGreetCleanup(cleanupSource);
+      }
     }
+
+    // end enterConversationAfterGreet
   }
 
   function scheduleConversationStartAfterGreet(source = "greet_tts_end") {
