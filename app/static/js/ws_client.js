@@ -823,8 +823,37 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
+    const runPostGreetCleanup = () => {
+      try {
+        setSenderPauseReason("greet", false);
+        applySenderPausedState();
+        updatePcmSenderState("post_greet_phase_change");
+      } catch (_) {}
+      try {
+        const senderPausedSnapshot = Boolean(AppState?.senderPaused ?? senderPaused);
+        setBaseEnabled?.(true, "post_greet");
+        logStage("client.conversation.begin.set_base_enabled", {
+          source,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+          asrReady: Boolean(AppState?.asrReady),
+          senderPaused: senderPausedSnapshot,
+        });
+        console.log("client.conversation.begin.set_base_enabled", {
+          source,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+          asrReady: Boolean(AppState?.asrReady),
+          senderPaused: senderPausedSnapshot,
+        });
+      } catch (_) {}
+    };
+
     if (!conversationStartPlanned || conversationStartCommitted) {
       clearConversationStartTimer();
+      if (conversationStartCommitted) {
+        runPostGreetCleanup();
+      }
       return;
     }
 
@@ -920,6 +949,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           wsPhase: AppState?.wsPhase || null,
         });
       } catch (_) {}
+      runPostGreetCleanup();
       return;
     }
 
@@ -1029,26 +1059,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         connection.flushQueuedFrames();
       }
     } catch (_) {}
-    try {
-      setSenderPauseReason("greet", false);
-      applySenderPausedState();
-      updatePcmSenderState("post_greet_phase_change");
-    } catch (_) {}
-    try {
-      setBaseEnabled?.(true, "post_greet");
-      logStage("client.conversation.begin.set_base_enabled", {
-        source,
-        phase: getPhase(),
-        wsPhase: AppState?.wsPhase || null,
-        asrReady: Boolean(AppState?.asrReady),
-      });
-      console.log("client.conversation.begin.set_base_enabled", {
-        source,
-        phase: getPhase(),
-        wsPhase: AppState?.wsPhase || null,
-        asrReady: Boolean(AppState?.asrReady),
-      });
-    } catch (_) {}
+    runPostGreetCleanup();
     try {
       setAppStateValue?.("barge_in_enabled", true);
       if (AppState && typeof AppState === "object") {
