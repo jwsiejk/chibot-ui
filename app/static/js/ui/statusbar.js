@@ -11,14 +11,19 @@
       // "user_turn", "closing", "closed".
       const phase = ui.phase || null;
 
+      const wsPhase = typeof ui.wsPhase === "string" ? ui.wsPhase : null;
+      const connectionState = typeof ui.connectionState === "string" ? ui.connectionState : null;
+
       const f = {
-        connected:    !!(ui.wsConn || ui.wsConning),
+        connecting:   !!(ui.wsConning || ui.wsConnecting || wsPhase === "connecting" || wsPhase === "resuming" || connectionState === "connecting" || connectionState === "resuming"),
+        connected:    !!(ui.wsConn || ui.wsConnected || wsPhase === "connected" || wsPhase === "ready" || connectionState === "connected"),
         asrReady:     !!ui.asrReady,
         // Unified mic/listening flag from the new audio runtime
-        micOpen:      !!ui.listening,
-        ttsActive:    !!ui.tts,
+        micOpen:      !!(ui.listening || ui.micLive),
+        ttsActive:    !!(ui.tts || ui.ttsActive),
         senderPaused: !!ui.senderPaused,
         processing:   !!ui.processing,
+        hearingUser:  !!ui.asrTurnActive,
       };
 
       const canCapture = f.asrReady && f.micOpen && !f.ttsActive;
@@ -27,15 +32,22 @@
 
       // --- Highest-level: session lifecycle / connection ---
 
-      if (!f.connected) {
-        // No live WS connection yet
+      if (!f.connected && f.connecting) {
         st = {
-          label: "Ready",
-          sub: "Press Start to begin.",
+          label: "Connecting…",
+          sub: "Establishing a voice link.",
           tone: "gray",
         };
 
-      } else if (phase === "closing" || phase === "closed") {
+      } else if (!f.connected) {
+        // No live WS connection yet
+        st = {
+          label: "Disconnected",
+          sub: "Press Start to connect and begin.",
+          tone: "gray",
+        };
+
+      } else if (phase === "closing" || phase === "closed" || wsPhase === "closing" || wsPhase === "closed" || connectionState === "closing" || connectionState === "closed") {
         st = {
           label: "Session ended",
           sub: "Press Start to begin a new session.",
@@ -58,6 +70,13 @@
           tone: "blue",
         };
 
+      } else if (!f.asrReady && f.micOpen) {
+        st = {
+          label: "Preparing mic…",
+          sub: "Calibrating your input.",
+          tone: "amber",
+        };
+
       // --- LLM processing (no TTS yet) ---
 
       } else if (f.processing) {
@@ -69,6 +88,13 @@
           label: "Thinking…",
           sub: thinkingSub,
           tone: "purple",
+        };
+
+      } else if (canCapture && f.hearingUser) {
+        st = {
+          label: "Hearing you…",
+          sub: "Capturing your speech.",
+          tone: "green",
         };
 
       // --- Conversation-ready & listening states ---
