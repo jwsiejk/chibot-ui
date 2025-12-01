@@ -232,10 +232,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     : JSON_SUBPROTOCOL;
   const TOKEN_EXPIRY_MS = 60 * 1000;
 
-  const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
-  const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
-  const DEFAULT_ASR_VENDOR = 'gcp';
-const WS_READY_PHASES = new Set(['connected', 'ready']);
+    const IGNORED_VENDOR_MESSAGES = new Set(["AddPartialTranscript", "AddTranscript"]);
+    const PCM_BREADCRUMB_POLICY = { input: 'pcm_16k', mode: 'pcm16' };
+    const DEFAULT_ASR_VENDOR = 'gcp';
+    const WS_READY_PHASES = new Set(['connected', 'ready']);
   let negotiatedControlCodec = REQUESTED_CONTROL_CODEC;
 
   function getNegotiatedControlCodec() {
