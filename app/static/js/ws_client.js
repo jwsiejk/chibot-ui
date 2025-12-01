@@ -823,7 +823,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
-    const runPostGreetCleanup = () => {
+    const runPostGreetCleanup = (cleanupSource = source) => {
       try {
         setSenderPauseReason("greet", false);
         applySenderPausedState();
@@ -833,14 +833,21 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         const senderPausedSnapshot = Boolean(AppState?.senderPaused ?? senderPaused);
         setBaseEnabled?.(true, "post_greet");
         logStage("client.conversation.begin.set_base_enabled", {
-          source,
+          source: cleanupSource,
           phase: getPhase(),
           wsPhase: AppState?.wsPhase || null,
           asrReady: Boolean(AppState?.asrReady),
           senderPaused: senderPausedSnapshot,
         });
+        if (getPhase() === PHASE.ConversationReady) {
+          logStage("client.conversation_ready.cleanup_snapshot", {
+            source: cleanupSource,
+            senderPaused: senderPausedSnapshot,
+            wsPhase: AppState?.wsPhase || null,
+          });
+        }
         console.log("client.conversation.begin.set_base_enabled", {
-          source,
+          source: cleanupSource,
           phase: getPhase(),
           wsPhase: AppState?.wsPhase || null,
           asrReady: Boolean(AppState?.asrReady),
@@ -849,11 +856,16 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       } catch (_) {}
     };
 
+    let cleanupRan = false;
+    const ensureCleanup = (cleanupSource = source) => {
+      if (cleanupRan) return;
+      cleanupRan = true;
+      runPostGreetCleanup(cleanupSource);
+    };
+
     if (!conversationStartPlanned || conversationStartCommitted) {
       clearConversationStartTimer();
-      if (conversationStartCommitted) {
-        runPostGreetCleanup();
-      }
+      ensureCleanup("conversation_already_committed");
       return;
     }
 
@@ -949,7 +961,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           wsPhase: AppState?.wsPhase || null,
         });
       } catch (_) {}
-      runPostGreetCleanup();
+      ensureCleanup("user_turn_commit");
       return;
     }
 
@@ -974,7 +986,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
           100
         );
       }
-      return;
+      return ensureCleanup("awaiting_ready");
     }
 
     conversationDelayedLogged = false;
@@ -1059,7 +1071,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         connection.flushQueuedFrames();
       }
     } catch (_) {}
-    runPostGreetCleanup();
+    ensureCleanup("post_begin");
     try {
       setAppStateValue?.("barge_in_enabled", true);
       if (AppState && typeof AppState === "object") {
