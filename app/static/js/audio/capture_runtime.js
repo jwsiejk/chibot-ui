@@ -32,6 +32,7 @@ let exportedEnsureAudioGraph = null;
 let micAcquireStartLogged = false;
 let micAcquireSuccessLogged = false;
 let micAudioGraphLiveLogged = false;
+let micDeviceLogged = false;
 
 export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINTS) {
   if (micHardwareState === MIC_HARDWARE_STATE.Ready) {
@@ -57,7 +58,7 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
   micHardwareState = MIC_HARDWARE_STATE.Starting;
   const effectiveConstraints = constraints || DEFAULT_CAPTURE_CONSTRAINTS;
   const constraintsSummary = summarizeConstraints(effectiveConstraints);
-      micHardwareInitPromise = (async () => {
+  micHardwareInitPromise = (async () => {
     try {
       if (!micAcquireStartLogged) {
         micAcquireStartLogged = true;
@@ -94,6 +95,7 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
       }
       micStream = stream;
       const trackSettings = track?.getSettings ? track.getSettings() : {};
+      const trackLabel = typeof track?.label === "string" && track.label ? track.label : null;
       if (!micAcquireSuccessLogged) {
         micAcquireSuccessLogged = true;
         try {
@@ -114,6 +116,19 @@ export async function ensureMicHardware(constraints = DEFAULT_CAPTURE_CONSTRAINT
           trackState: track?.readyState || null,
         });
       } catch (_) {}
+      if (!micDeviceLogged) {
+        micDeviceLogged = true;
+        try {
+          telemetryLogStage("client.mic.device_selected", {
+            constraints: constraintsSummary,
+            label: trackLabel,
+            deviceId: trackSettings.deviceId || null,
+            groupId: trackSettings.groupId || null,
+            sampleRate: trackSettings.sampleRate || null,
+            channelCount: trackSettings.channelCount || null,
+          });
+        } catch (_) {}
+      }
       return stream;
     } catch (err) {
       micHardwareState = MIC_HARDWARE_STATE.Failed;
