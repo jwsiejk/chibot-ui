@@ -1,8 +1,8 @@
-BUILD_ID c582053.4ef1219b3d7fe8c3
+BUILD_ID 1ed6c16.1b4f50c1f56aed51
 app.js:129 console.log Object
 app.js:156 AskChip AppState debug: Object
 app.js:129 console.log Object
-app.js:156 AskChip build: c582053.4ef1219b3d7fe8c3
+app.js:156 AskChip build: 1ed6c16.1b4f50c1f56aed51
 app.js:129 console.debug Object
 app.js:156 client turn summary logging enabled
 app.js:129 console.log Object
@@ -50,6 +50,8 @@ app.js:156 client.vad.state
 app.js:129 console.log Object
 app.js:156 client.vad.state
 app.js:129 console.log Object
+app.js:156 client.appstate.delta
+app.js:129 console.log Object
 app.js:156 console.debug
 app.js:129 console.log Object
 app.js:156 console.debug
@@ -67,130 +69,146 @@ app.js:129 console.log
 app.js:129 console.log Object
 app.js:156 client.hub.installed Object
 app.js:129 console.log Object
-app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:129 console.log Object
+app.js:156 client.mic.heartbeat
+app.js:129 console.log Object
+app.js:156 client.mic.heartbeat
 app.js:129 console.log Object
 app.js:156 client.mic.heartbeat
 app.js:129 console.log Object
 app.js:156 client.mic.heartbeat
 app.js:129 console.log Object
 app.js:156 client.mic.heartbeat
-app.js:129 console.log
 app.js:129 console.log Object
-app.js:156 evt=ws_open_attempt Object
-app.js:129 console.log
+app.js:156 client.mic.heartbeat
 app.js:129 console.log Object
-app.js:156 evt=ws_client_open_params Object
+app.js:156 client.mic.heartbeat
+main.LJ36J25Y.js?v=1ed6c16.1b4f50c1f56aed51:1 [Violation] 'setTimeout' handler took 313ms
+main.LJ36J25Y.js?v=1ed6c16.1b4f50c1f56aed51:1 [Violation] 'setTimeout' handler took 2503ms
+app.js:1837 Fetch finished loading: GET "https://chibot-ui.onrender.com/api/v1/auth/me".
+_o @ app.js:1837
+In @ app.js:1926
+(anonymous) @ app.js:2019
+app.js:1849 Fetch finished loading: POST "https://chibot-ui.onrender.com/api/v1/auth/ws-token".
+bo @ app.js:1849
+In @ app.js:1943
+await in In
+(anonymous) @ app.js:2019
 app.js:129 console.log
-app.js:129 console.log Object
-app.js:156 WS opening Object
+app.js:129 console.log {message: 'evt=ws_open_attempt {"url":"/ws/v2/chat?access_tok…yiLoM"],"sid":"ff5afd3cd7ee458d860227ed09f550b0"}', level: 'log'}
+app.js:156 evt=ws_open_attempt {url: '/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5c…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2), sid: 'ff5afd3cd7ee458d860227ed09f550b0'}
 app.js:129 console.log
-app.js:129 console.log Object
-app.js:156 evt=ws_connection_open_params Object
+app.js:129 console.log {message: 'evt=ws_client_open_params {"url":"wss://chibot-ui.…X0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM"]}', level: 'log'}
+app.js:156 evt=ws_client_open_params {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2)}
+app.js:129 console.log
+app.js:129 console.log {message: 'WS opening {"url":"wss://chibot-ui.onrender.com/ws…X0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM"]}', level: 'log'}
+app.js:156 WS opening {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2)}
+app.js:129 console.log
+app.js:129 console.log {message: 'evt=ws_connection_open_params {"url":"wss://chibot…X0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM"]}', level: 'log'}
+app.js:156 evt=ws_connection_open_params {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2)}
 app.js:156 client.ws
 app.js:156 client.appstate.heartbeat
-app.js:156 Waveform visualizer using synth mode Object
-app.js:156 [firehose] getWsClientSocket() → WebSocket
+app.js:156 Waveform visualizer using synth mode {reason: 'waiting_for_primary_mic'}
+app.js:156 [firehose] getWsClientSocket() → WebSocket {__accessTokenInfo: {…}, __intentionalClose: false, __handlers: {…}, send: ƒ, __originalSend: ƒ, …}
 app.js:156 client.ws
-app.js:156 [firehose] hub bound to socket: wss://chibot-ui.onrender.com/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjQzY2IyNTAzOTg1ZTRjZDA5MGY4ZjUzNjgyMTUwNzZiIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2NDUzMjE2NiwiZXhwIjoxNzY0NTMyMjI2LCJqdGkiOiI0NmE5ZGIxZS1mMjhlLTQ3YTMtOGZhNC00ZjRlOTE5YTYwZGQiLCJpc19hZG1pbiI6dHJ1ZX0.3We6VgPC9S9wqF4qhxCeOuzWQUMJKsdE6d3CJ_m8azA
+app.js:156 [firehose] hub bound to socket: wss://chibot-ui.onrender.com/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmNWFmZDNjZDdlZTQ1OGQ4NjAyMjdlZDA5ZjU1MGIwIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2NDU5MTI4MCwiZXhwIjoxNzY0NTkxMzQwLCJqdGkiOiIyOTIxZWUzYy00MTc1LTRiMTktOGQ5Ni03ZGMzNTQzYmQ0YzMiLCJpc19hZG1pbiI6dHJ1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM
 app.js:156 client.firehose.marker
-app.js:156 client.firehose.marker Object
-app.js:156 WS server banner Object
+app.js:156 client.firehose.marker {build_id: '1ed6c16.1b4f50c1f56aed51', href: 'https://chibot-ui.onrender.com/', user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb…KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', sid: null}
+app.js:156 WS server banner {type: 'server.banner', build_id: '1ed6c16.1b4f50c1f56aed51', host: 'srv-d26hqi3e5dus73b43g10-6467666c87-kjsk2', cwd: '/opt/render/project/src', python: '3.13.4', …}
 app.js:156 phase.greet.expectInfo
 app.js:156 phase.greet.receivedInfo
 app.js:156 client.ws
 app.js:156 phase.transition
-app.js:156 [WS-DIAG] ws_phase_set Object
-app.js:156 client.mic.heartbeat
-app.js:156 client.appstate.delta
-2app.js:156 client.mic.heartbeat
-app.js:156 client.ws.tts_descriptor_frame Object
-app.js:156 client.audio_player.descriptor_set Object
-2app.js:156 client.ws
-3app.js:156 client.mic.heartbeat
-app.js:156 [WS-DIAG] greet_start Object
+app.js:156 [WS-DIAG] ws_phase_set {phase: 'ready'}
+app.js:156 client.ws.tts_descriptor_frame {type: 'info', sampleRate: 16000, channels: 1}
+app.js:156 client.audio_player.descriptor_set {sampleRate: 16000, channels: 1}
+app.js:156 client.ws
+app.js:156 client.ws
+app.js:156 [WS-DIAG] greet_start {utt_id: 'utt-00001'}
 app.js:156 client.audio_context.pre_warm_for_greet
 app.js:156 client.audio_context.prepared_before_greet
 app.js:156 voice.phase
-app.js:156 [WS-DIAG] ws_phase_set Object
+app.js:156 [WS-DIAG] ws_phase_set {phase: 'greet'}
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'phase_change', asrReady: false, ttsActive: false, micPerm: true, senderPaused: false, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'phase_change', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'phase_change', phase: null, hasStream: false, wsConnected: true, senderPaused: false, …}
 app.js:156 client.phase.change
-app.js:156 client.phase.change Object
+app.js:156 client.phase.change {prev: 'boot', next: 'greet'}
 app.js:156 client.phase.greet_start
 app.js:156 client.greet_start
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:greet_start', asrReady: false, ttsActive: false, micPerm: true, senderPaused: false, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'set_base_enabled:greet_start', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'set_base_enabled:greet_start', phase: null, hasStream: false, wsConnected: true, senderPaused: false, …}
 app.js:156 client.greet_start.set_base_enabled
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: false, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'greet_start', asrReady: false, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'greet_start', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'greet_start', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.mic
-app.js:156 stopRecorder skipped for non user/server trigger Object
+app.js:156 stopRecorder skipped for non user/server trigger {reason: 'greet_start', source: null}
 app.js:156 client.greet.mic_stop
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
-app.js:156 client.audio_player.enqueue_chunk Object
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 1}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 2}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 3}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 4}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 5}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 6}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 7}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 8}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 9}
+app.js:156 client.audio_player.enqueue_chunk {size: 1280, count: 10}
 app.js:156 voice.phase
-app.js:156 [WS-DIAG] ws_phase_set Object
+app.js:156 [WS-DIAG] ws_phase_set {phase: 'conversation_ready'}
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'phase_change', asrReady: false, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'phase_change', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'phase_change', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.phase.change
-app.js:156 client.phase.change Object
+app.js:156 client.phase.change {prev: 'greet', next: 'conversation_ready'}
 app.js:156 mic_debug.greet_end
 app.js:156 client.phase.greet_end
 app.js:156 client.conversation.begin.scheduled
 app.js:156 mic_debug.mic_acquire_start
 app.js:156 client.turn.empty
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: false, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.schedule_conversation_blocked_until_ready
 app.js:156 evt=mic_start timeslice_ms=unknown
 app.js:156 client.mic
 app.js:156 diag=asr_ready
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.asr
 app.js:156 client.ws_ready_check
 app.js:156 client.turn.intent
 app.js:156 client.mic.start_intent
 app.js:156 client.mic.start_proceed
-app.js:156 [WS-DIAG] start_recorder_streaming Object
+app.js:156 [WS-DIAG] start_recorder_streaming {source: 'asr_ready_forced_start'}
 app.js:156 client.mic.start_requested
 app.js:156 client.turn_req_id.set
 app.js:156 client.mic_start_attempt_orchestrated
@@ -199,71 +217,72 @@ app.js:156 client.mic
 app.js:156 client.stream.on
 app.js:156 client.mic.start_intent
 app.js:156 client.mic.start_proceed
-app.js:156 [WS-DIAG] start_recorder_streaming Object
+app.js:156 [WS-DIAG] start_recorder_streaming {source: 'input.start'}
 app.js:156 client.mic.start_requested
 app.js:156 client.mic_start_skipped
 app.js:156 client.mic_pcm.ready
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_gate_snapshot
 app.js:156 [ws_client] baseEnabled set true from mic_start
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:mic_start', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'set_base_enabled:mic_start', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'set_base_enabled:mic_start', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.mic
-app.js:156 start_listening received after ASR ready; relying on automatic mic start. Object
+app.js:156 start_listening received after ASR ready; relying on automatic mic start. {vendor: null}
 app.js:156 client.mic.start_intent
 app.js:156 client.mic.start_proceed
-app.js:156 [WS-DIAG] start_recorder_streaming Object
+app.js:156 [WS-DIAG] start_recorder_streaming {source: 'server.start_listening'}
 app.js:156 client.mic.start_requested
 app.js:156 client.mic_start_skipped
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.mic
 app.js:156 client.stream.on
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.conversation.begin.scheduled
 app.js:156 diag=asr_ready
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.asr
 app.js:156 client.ws_ready_check
 app.js:156 client.mic.start_intent
 app.js:156 client.mic.start_proceed
-app.js:156 [WS-DIAG] start_recorder_streaming Object
+app.js:156 [WS-DIAG] start_recorder_streaming {source: 'asr_ready_forced_start'}
 app.js:156 client.mic.start_requested
 app.js:156 client.mic_start_skipped
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 diag
 app.js:156 client.asr_arm_clear
 app.js:156 client.audio_header.send_intent
@@ -271,545 +290,12 @@ app.js:156 client.audio_header_send
 app.js:156 diag=asr_ready
 app.js:156 client.stream.off
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
 app.js:156 client.turn.intent
-2app.js:156 client.mic
-app.js:156 client.mic.stopped
-app.js:156 [ws_client] baseEnabled set false from mic_stop
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.mic_turn_reset
-app.js:156 client.turn_audio_context.reset
-app.js:156 client.mic.gum_failed
-app.js:156 client.mic.reacquire.start
-2app.js:156 client.vad.state
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-2app.js:156 client.pcm.capture_stop
-app.js:156 client.appstate.delta
-app.js:156 mic_debug.mic_acquire_success
-app.js:156 client.mic.hardware_ready
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.audio_graph.ctx
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 AskChip pcm_sender initialized Object
-app.js:156 client.mic.heartbeat
-app.js:156 client.mic_stream_acquired_ok Object
-app.js:156 [pcm_sender] audioCtx.sampleRate 48000
-app.js:156 client.pcm.hardware_sample_rate 48000
-app.js:156 client.pcm.target_sample_rate 16000
-app.js:156 client.pcm.sample_rate 16000
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.pcm_sender.node_connect_success
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.audio_stream_state
-app.js:156 [ws_audio_runtime] updatePcmSenderState Object
-app.js:156 client.pcm_sender.state Object
-app.js:156 client.pcm_sender.state
-app.js:156 client.audio_graph.live
-app.js:156 mic_debug.audio_graph_live
-app.js:156 client.mic.hardware_unmute
-app.js:156 client.mic
-2app.js:156 client.vad.state
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-2app.js:156 client.pcm.capture_start
-app.js:156 client.mic_start_success_orchestrated
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 [ws_client] baseEnabled set true from mic_start
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 diag
-app.js:156 client.asr_arm_clear
-app.js:156 client.turn_req_id.set
-app.js:156 client.audio_header.send_intent
-app.js:156 client.audio_header_send
-app.js:156 diag=asr_ready
-app.js:156 client.appstate.delta
-app.js:156 client.pcm.first_frame
-app.js:156 client.pcm.warm
-app.js:156 client.pcm.first_frame_runtime
-app.js:156 client.pcm.first_frame
-app.js:156 client.audio_first_chunk
-app.js:156 vad.frame_input
-app.js:156 mic_debug.first_pcm_client
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-2app.js:156 client.vad.speech_start
-2app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 [WS-DIAG] conversation_attempt Object
-app.js:156 client.enter_conversation_after_greet.intent
-app.js:156 client.conversation.user_turn_commit
-app.js:156 voice.phase
-app.js:156 [WS-DIAG] ws_phase_set Object
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates Object
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs Object
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary Object
-app.js:156 client.phase.change
-app.js:156 client.phase.change Object
-app.js:156 client.enter_conversation_after_greet.phase_set
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-2app.js:156 client.vad.speech_end
-2app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-2app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-2app.js:156 client.vad.speech_start
-2app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-2app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-2app.js:156 client.vad.speech_end
-2app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt Object
-app.js:156 client.audio_chunk
-app.js:156 mic_debug.first_pcm_to_ws
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-2app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt Object
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-2app.js:156 client.audio_chunk_send
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.appstate.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 VAD silence timer fired pre-speech; not auto-stopping
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.speech_start
-app.js:156 client.vad.speech_start
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.appstate.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.watchdog.partial_timeout
-app.js:156 client.turn_stop {type: 'input.stop', reason: 'partial_watchdog_timeout', ts: 1764532177922}
 app.js:156 client.mic
 app.js:156 client.mic
 app.js:156 client.mic.stopped
@@ -817,208 +303,377 @@ app.js:156 [ws_client] baseEnabled set false from mic_stop
 app.js:156 client.pcm_sender_state.update
 app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:mic_stop', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
 app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'set_base_enabled:mic_stop', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'set_base_enabled:mic_stop', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
+app.js:156 client.mic_turn_reset
+app.js:156 client.turn_audio_context.reset
+app.js:156 client.mic.gum_failed
+app.js:156 client.mic.reacquire.start
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: false, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: false, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm.capture_stop
+app.js:156 client.pcm.capture_stop
+app.js:156 mic_debug.mic_acquire_success
+app.js:156 client.mic.hardware_ready
+app.js:156 client.mic.device_selected
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'capture_stream_provider_set', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'capture_stream_provider_set', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'capture_stream_provider_set', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.audio_graph.ctx
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'capture_stream_provider_set', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'capture_stream_provider_set', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'capture_stream_provider_set', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'ensure_sender_stream_resolved', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'ensure_sender_stream_resolved', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'ensure_sender_stream_resolved', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 AskChip pcm_sender initialized {sampleRate: 16000, encoding: 'pcm16', chunkMs: 60, flushIntervalMs: 50}
+app.js:156 client.mic_stream_acquired_ok {deviceId: '9244bf8a4784dbd648d45853024e5d84ea707891df02ca3e15d136fc85fdd448', sampleRate: 48000}
+app.js:156 [pcm_sender] audioCtx.sampleRate 48000
+app.js:156 client.pcm.hardware_sample_rate 48000
+app.js:156 client.pcm.target_sample_rate 16000
+app.js:156 client.pcm.sample_rate 16000
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'handleSampleRate', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'handleSampleRate', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'handleSampleRate', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender.node_connect_success
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state
+app.js:156 [ws_audio_runtime] updatePcmSenderState {reason: 'unknown', enabled: false, base_enabled: false, force_pcm_send: false, isAudioStreaming: false, …}
+app.js:156 client.pcm_sender.state {enabled: false, reason: 'unknown', wsPhase: 'connected', wsPhaseKnown: true, ws_ready: true}
+app.js:156 client.pcm_sender.state
+app.js:156 client.audio_graph.live
+app.js:156 mic_debug.audio_graph_live
+app.js:156 client.mic.hardware_unmute
+app.js:156 client.mic
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm.capture_start
+app.js:156 client.pcm.capture_start
+app.js:156 client.mic_start_success_orchestrated
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_gate_snapshot
+app.js:156 [ws_client] baseEnabled set true from mic_start
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:mic_start', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'set_base_enabled:mic_start', shouldSend: false, base_enabled: true, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'set_base_enabled:mic_start', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 diag
+app.js:156 client.asr_arm_clear
+app.js:156 client.turn_req_id.set
+app.js:156 client.audio_header.send_intent
+app.js:156 client.audio_header_send
+app.js:156 diag=asr_ready
+app.js:156 client.pcm.first_frame
+app.js:156 client.pcm.warm
+app.js:156 client.pcm.first_frame_runtime
+app.js:156 client.pcm.first_frame
+app.js:156 client.audio_first_chunk
+app.js:156 vad.frame_input
+app.js:156 mic_debug.first_pcm_client
+3app.js:156 vad.frame_input
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+10app.js:156 vad.frame_input
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+2app.js:156 vad.frame_input
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 mic_debug.first_pcm_to_ws
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+3app.js:156 vad.frame_input
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+10app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 vad.frame_input
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+10app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+2app.js:156 vad.frame_input
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+8app.js:156 vad.frame_input
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+8app.js:156 vad.frame_input
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+3app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+10app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+8app.js:156 vad.frame_input
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+5app.js:156 vad.frame_input
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+3app.js:156 vad.frame_input
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+4app.js:156 vad.frame_input
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+10app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+10app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 [ws_client] baseEnabled set false from mic_stop
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:mic_stop', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
 app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'set_base_enabled:mic_stop', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
 app.js:156 client.audio_stream_state_summary
 app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'set_base_enabled:mic_stop', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.mic_turn_reset
-app.js:156 phase.transition
-app.js:156 [WS-DIAG] ws_phase_set {phase: 'ready'}
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.pcm.capture_stop
-app.js:156 client.pcm.capture_stop
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client_turn_summary {sid: null, outcome: 'final', duration_ms: 7935, speech_ms: null, chunk_count: 0, …}
-app.js:156 voice.phase
-app.js:156 [WS-DIAG] ws_phase_set {phase: 'conversation_ready'}
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'phase_change', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'phase_change', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'phase_change', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.phase.change
-app.js:156 client.phase.change {prev: 'user_turn', next: 'conversation_ready'}
-app.js:156 client.turn_audio_context.reset
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 client.mic.heartbeat
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
-app.js:156 vad.frame_input
-app.js:156 client.appstate.delta
+app.js:156 client.mic_pcm.reset
 app.js:156 voice.phase
 app.js:156 [WS-DIAG] ws_phase_set {phase: 'closing'}
 app.js:156 client.pcm_sender_state.update
@@ -1031,6 +686,7 @@ app.js:156 client.phase.change
 app.js:156 client.phase.change {prev: 'conversation_ready', next: 'closing'}
 app.js:156 client.stream.off
 app.js:156 client.turn_audio_context.reset
+app.js:156 client.mic_turn_reset
 app.js:156 client.mic
 app.js:156 client.mic.stopped
 app.js:156 client.vad.state
@@ -1054,24 +710,24 @@ app.js:129 console.warn {message: 'ws.connection.send queued (phase not ready) {
 app.js:156 ws.connection.send queued (phase not ready) {phase: 'closing'}
 i.<computed> @ app.js:156
 send @ connection.js:515
-sendJSONPayload @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:4208
-sendJSONFast @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:4371
+sendJSONPayload @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4301
+sendJSONFast @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4481
 flushClientBannerQueue @ telemetry.js:280
 queueClientBannerPayload @ telemetry.js:260
 recordClientBannerEvent @ telemetry.js:221
 close @ connection.js:878
 close @ session_manager.js:481
 await in close
-requestSessionShutdown @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:3407
-wsClientClose @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:4313
-(anonymous) @ app.js:2008Understand this warning
+requestSessionShutdown @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:3497
+wsClientClose @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4423
+(anonymous) @ app.js:2027Understand this warning
 app.js:129 console.warn
 app.js:129 console.warn {message: 'ws.connection.send queued (phase not ready) {"phase":"closing"}', level: 'warn'}
 app.js:156 ws.connection.send queued (phase not ready) {phase: 'closing'}
 i.<computed> @ app.js:156
 send @ connection.js:515
-sendJSONPayload @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:4208
-sendJSONFast @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:4371
+sendJSONPayload @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4301
+sendJSONFast @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4481
 flushClientBannerQueue @ telemetry.js:280
 queueClientBannerPayload @ telemetry.js:260
 recordClientBannerEvent @ telemetry.js:221
@@ -1079,26 +735,8 @@ cleanupSocket @ connection.js:642
 close @ connection.js:879
 close @ session_manager.js:481
 await in close
-requestSessionShutdown @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:3407
-wsClientClose @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:4313
-(anonymous) @ app.js:2008Understand this warning
-app.js:129 console.log {message: 'client.ws', level: 'log'}
-app.js:156 client.ws
-app.js:129 console.log {message: 'client.mic.gum_failed', level: 'log'}
-app.js:156 client.mic.gum_failed
-app.js:129 console.log {message: 'client.mic.reacquire.start', level: 'log'}
-app.js:156 client.mic.reacquire.start
-app.js:129 console.log {message: 'client.appstate.delta', level: 'log'}
-app.js:156 client.appstate.delta
-app.js:129 console.warn
-app.js:129 console.warn {message: 'client.ws outcome: close {"code":1000,"reason":""}', level: 'warn'}
-app.js:156 client.ws outcome: close {code: 1000, reason: ''}
-i.<computed> @ app.js:156
-(anonymous) @ ws_client.js?v=c582053.4ef1219b3d7fe8c3:4306Understand this warning
-app.js:129 console.log {message: 'client.mic.gum_failed', level: 'log'}
-app.js:156 client.mic.gum_failed
-app.js:129 console.log {message: 'client.mic.hardware_ready', level: 'log'}
-app.js:156 client.mic.hardware_ready
-app.js:129 console.log {message: 'client.mic.heartbeat', level: 'log'}
-app.js:156 client.mic.heartbeat
-app.js:129 console.log {message: 'client.mic.heartbeat', level: 'log'}
+requestSessionShutdown @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:3497
+wsClientClose @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4423
+(anonymous) @ app.js:2027Understand this warning
+app.js:129 console.debug
+app.js:129 console.debug 
