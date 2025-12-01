@@ -467,6 +467,14 @@ export function createCaptureRuntime({
   // Expose the latest ensureAudioGraph so globals can reference it safely
   exportedEnsureAudioGraph = ensureAudioGraph;
 
+  function snapshotSenderPauseReasons() {
+    const snapshot = {};
+    senderPauseReasons.forEach((value) => {
+      snapshot[value] = true;
+    });
+    return snapshot;
+  }
+
   function applySenderPausedState() {
     const nextPaused = senderPauseReasons.size > 0;
     if (senderPaused === nextPaused) {
@@ -496,13 +504,26 @@ export function createCaptureRuntime({
   function setSenderPauseReason(reason, value) {
     const key = typeof reason === "string" && reason ? reason : "legacy";
     const desired = Boolean(value);
-    if (desired) {
-      if (!senderPauseReasons.has(key)) {
-        senderPauseReasons.add(key);
+    try {
+      if (desired) {
+        if (!senderPauseReasons.has(key)) {
+          senderPauseReasons.add(key);
+          applySenderPausedState();
+        }
+      } else if (senderPauseReasons.delete(key)) {
         applySenderPausedState();
       }
-    } else if (senderPauseReasons.delete(key)) {
-      applySenderPausedState();
+    } finally {
+      try {
+        console.log("[pcm_sender] pause_reasons", {
+          updated_reason: key,
+          paused: desired,
+          all_reasons: snapshotSenderPauseReasons(),
+        });
+        if (typeof updatePcmSenderState === "function") {
+          updatePcmSenderState("pause_reason_change");
+        }
+      } catch (_) {}
     }
   }
 
