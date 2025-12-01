@@ -173,6 +173,7 @@ export function createWsAudioRuntime(options = {}) {
     canCaptureNow = () => true,
     isSenderPaused = () => false,
     setSenderPauseReason = () => {},
+    applySenderPausedState = () => {},
     getCaptureStream = null,
     getVadController = () => null,
     getFirstChunkSeen,
@@ -742,6 +743,7 @@ export function createWsAudioRuntime(options = {}) {
   let audioCtx = null;
   let baseEnabled = false;
   let baseEnabledReason = "boot";
+  let pcmSenderAutoUnpauseGuard = false;
   let silenceConsecutiveFrames = 0;
   let silenceSuppressed = false;
   let silenceLastIdleTickAt = 0;
@@ -1510,6 +1512,77 @@ export function createWsAudioRuntime(options = {}) {
     updatePcmSenderState(`set_base_enabled:${reason}`);
   }
 
+  function maybeAutoUnpauseSender(gateSnapshot) {
+    if (pcmSenderAutoUnpauseGuard) {
+      return false;
+    }
+
+    const {
+      senderPaused,
+      baseGate,
+      hasStream,
+      audioStreaming,
+      captureAllowed,
+      asrReady,
+      ttsActive,
+      micPerm,
+      turnActive,
+      phaseAllowsSend,
+      wsReadyForAudio,
+      phaseValue,
+      wsPhase,
+    } = gateSnapshot;
+
+    const onlyPauseBlockingSend = Boolean(
+      senderPaused &&
+      baseGate &&
+      hasStream &&
+      audioStreaming &&
+      captureAllowed &&
+      asrReady &&
+      !ttsActive &&
+      micPerm &&
+      turnActive &&
+      phaseAllowsSend &&
+      wsReadyForAudio
+    );
+
+    if (!onlyPauseBlockingSend) {
+      return false;
+    }
+
+    pcmSenderAutoUnpauseGuard = true;
+    try {
+      try {
+        logStage("client.pcm_sender.auto_unpause", {
+          phase: phaseValue,
+          wsPhase,
+          baseGate,
+          hasStream,
+          audioStreaming,
+          captureAllowed,
+          asrReady,
+          ttsActive,
+          micPerm,
+          turnActive,
+          phaseAllowsSend,
+          wsReadyForAudio,
+          senderPaused,
+        });
+      } catch (_) {}
+      try {
+        console.log("[ws_audio_runtime] pcm_sender.auto_unpause", gateSnapshot);
+      } catch (_) {}
+      try { setSenderPauseReason("greet", false); } catch (_) {}
+      try { applySenderPausedState(); } catch (_) {}
+      try { updatePcmSenderState("auto_unpause_watchdog"); } catch (_) {}
+    } finally {
+      pcmSenderAutoUnpauseGuard = false;
+    }
+
+    return true;
+  }
+
   function computePcmGateSnapshot() {
     const AppState = getAppState();
     const stateSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
@@ -1642,6 +1715,9 @@ export function createWsAudioRuntime(options = {}) {
       trackState,
       ctxState,
     } = gateSnapshot;
+    if (maybeAutoUnpauseSender(gateSnapshot)) {
+      return;
+    }
     const previousState = pcmSenderStateLast;
     const gates = {
       asrReady,

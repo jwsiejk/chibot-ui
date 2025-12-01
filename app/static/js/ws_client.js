@@ -856,18 +856,20 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       } catch (_) {}
     };
 
+    let cleanupRequested = true;
     let cleanupRan = false;
-    const ensureCleanup = (cleanupSource = source) => {
-      if (cleanupRan) return;
-      cleanupRan = true;
-      runPostGreetCleanup(cleanupSource);
+    let cleanupSource = source;
+    const ensureCleanup = (nextSource = source) => {
+      cleanupRequested = true;
+      cleanupSource = nextSource || cleanupSource;
     };
 
-    if (!conversationStartPlanned || conversationStartCommitted) {
-      clearConversationStartTimer();
-      ensureCleanup("conversation_already_committed");
-      return;
-    }
+    try {
+      if (!conversationStartPlanned || conversationStartCommitted) {
+        clearConversationStartTimer();
+        ensureCleanup("conversation_already_committed");
+        return;
+      }
 
     const now = Date.now();
     if (now - lastConversationAttemptLog > 500) {
@@ -1092,6 +1094,18 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
         asrReady: Boolean(AppState?.asrReady),
       });
     } catch (_) {}
+  } finally {
+    if (cleanupRequested && !cleanupRan) {
+      cleanupRan = true;
+      try {
+        logStage("client.conversation.post_greet_cleanup.finally", {
+          cleanupSource,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
+      runPostGreetCleanup(cleanupSource);
+    }
   }
 
   function scheduleConversationStartAfterGreet(source = "greet_tts_end") {
@@ -1744,6 +1758,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     canCaptureNow: () => canCaptureNow(),
     isSenderPaused: () => senderPaused,
     setSenderPauseReason,
+    applySenderPausedState,
     getCaptureStream: () => getCaptureStream?.(),
     getVadController: () => captureRuntime?.getVadController?.(),
     getFirstChunkSeen: () => __firstChunkSeen,
