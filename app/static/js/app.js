@@ -485,12 +485,15 @@ if (typeof window !== "undefined") {
         policy: snapshot.policy ?? (window.AppState?.policy || {}),
         wsConn: snapshot.wsConn ?? snapshot.wsConnected ?? appState.wsConnected,
         wsConning: snapshot.wsConning ?? snapshot.wsConnecting ?? appState.wsConnecting,
+        wsPhase: snapshot.wsPhase ?? appState.wsPhase ?? window.UIState?.wsPhase,
+        connectionState: snapshot.connectionState ?? appState.connectionState ?? window.UIState?.connectionState,
         asrReady: snapshot.asrReady ?? appState.asrReady,
         // Now only checks the single, unified 'listening' flag:
-        micLive: snapshot.listening ?? appState.listening,
-        tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts,
+        micLive: snapshot.listening ?? appState.listening ?? snapshot.micLive ?? appState.micLive,
+        tts: snapshot.tts ?? snapshot.ttsActive ?? appState.tts ?? appState.ttsActive,
         senderPaused: snapshot.senderPaused ?? appState.senderPaused,
         processing: snapshot.processing ?? appState.processing,
+        asrTurnActive: snapshot.asrTurnActive ?? appState.asrTurnActive ?? window.UIState?.asrTurnActive,
       };
       window.StatusBar?.render(merged);
     } catch {}
