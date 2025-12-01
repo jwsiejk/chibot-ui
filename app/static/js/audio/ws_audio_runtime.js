@@ -333,6 +333,8 @@ export function createWsAudioRuntime(options = {}) {
   let localMicRecordingStartAt = null;
   let warnedMissingReqId = false;
   let pcmSenderStateLast = null;
+  let dropSummaryReqId = null;
+  const dropSummarySignatures = new Set();
   let firstRuntimeFrameLogged = false;
   let captureStreamProvider = typeof getCaptureStream === "function" ? getCaptureStream : null;
   let captureStreamResolved = null;
@@ -360,12 +362,23 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function logWsAudioDropOnce(meta, reason) {
+    const reqIdCandidate = typeof meta?.reqId === "string" && meta.reqId
+      ? meta.reqId
+      : null;
+    const currentReqId = reqIdCandidate || (typeof getCurrentTurnReqId === "function"
+      ? (getCurrentTurnReqId() || null)
+      : null);
+    if (currentReqId && currentReqId !== dropSummaryReqId) {
+      dropSummaryReqId = currentReqId;
+      dropSummarySignatures.clear();
+    }
+
     wsAudioDropCount += 1;
     if (wsAudioDropCount <= WS_AUDIO_DROP_LOG_LIMIT) {
       try {
         logStage("client.ws.audio_drop", {
           lane: meta?.lane || "mic",
-          reqId: meta?.reqId || null,
+          reqId: currentReqId,
           reason: reason || "send_failed",
           count: wsAudioDropCount,
         });
@@ -375,6 +388,27 @@ export function createWsAudioRuntime(options = {}) {
         logStage("client.ws.audio_drop_summary", {
           lane: meta?.lane || "mic",
           total: wsAudioDropCount,
+        });
+      } catch (_) {}
+    }
+
+    const dropSignature = `${currentReqId || "none"}|${reason || "unknown"}`;
+    if (!dropSummarySignatures.has(dropSignature)) {
+      dropSummarySignatures.add(dropSignature);
+      try {
+        const gateSnapshot = getPcmSenderGateSnapshot();
+        logStage("client.audio_chunk_drop_summary", {
+          reason: reason || "send_failed",
+          lane: meta?.lane || "mic",
+          reqId: currentReqId,
+          phase: gateSnapshot?.voicePhase || gateSnapshot?.phase || null,
+          wsPhase: gateSnapshot?.wsPhase || null,
+          asrReady: gateSnapshot?.asrReady,
+          senderPaused: gateSnapshot?.senderPaused,
+          base_enabled: gateSnapshot?.base_enabled,
+          hasStream: gateSnapshot?.hasStream,
+          shouldSend: gateSnapshot?.shouldSend,
+          isAudioStreaming: gateSnapshot?.isAudioStreaming,
         });
       } catch (_) {}
     }
@@ -1476,7 +1510,7 @@ export function createWsAudioRuntime(options = {}) {
     updatePcmSenderState(`set_base_enabled:${reason}`);
   }
 
-  function updatePcmSenderState(reason = "unknown") {
+  function computePcmGateSnapshot() {
     const AppState = getAppState();
     const stateSnapshot = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
     const asrReady = Boolean(stateSnapshot?.asrReady);
@@ -1504,16 +1538,6 @@ export function createWsAudioRuntime(options = {}) {
       stream ||
       (pcmSender && typeof pcmSender.getStateSnapshot === "function" && pcmSender.getStateSnapshot()?.mediaStreamActive)
     );
-    try {
-      logStage("client.pcm_sender_state.update", {
-        gumFailed,
-        isAudioStreaming: isAudioStreaming(),
-        canCaptureNow: canCaptureNow(),
-        senderPaused: isSenderPaused(),
-        trackReady: stream?.getAudioTracks?.()[0]?.readyState || "unknown",
-        ctxState: audioCtx?.state || "unknown",
-      });
-    } catch (_) {}
     const baseGate = baseEnabled && hasStream;
     const gates = {
       asrReady,
@@ -1537,7 +1561,6 @@ export function createWsAudioRuntime(options = {}) {
     const shouldSend = FORCE_PCM_SEND
       ? gates.asrReady && !gates.ttsActive && gates.micPerm
       : shouldSendBase;
-    const previousState = pcmSenderStateLast;
 
     let decisionReason = "ok";
     if (!baseEnabled) {
@@ -1565,6 +1588,80 @@ export function createWsAudioRuntime(options = {}) {
     } else if (FORCE_PCM_SEND && !shouldSendBase) {
       decisionReason = "forced";
     }
+
+    return {
+      sid: stateSnapshot?.sid || stateSnapshot?.sessionId || null,
+      phaseValue,
+      phaseAllowsSend,
+      wsPhase,
+      wsPhaseKnown,
+      wsReadyForAudio,
+      audioStreaming,
+      senderPaused,
+      captureAllowed,
+      hasStream,
+      baseGate,
+      shouldSendBase,
+      shouldSend,
+      asrReady,
+      ttsActive,
+      micPerm,
+      turnActive,
+      decisionReason,
+      trackState: stream?.getAudioTracks?.()[0]?.readyState || "unknown",
+      ctxState: audioCtx?.state || "unknown",
+      isAudioStreaming: audioStreaming,
+    };
+  }
+
+  function getPcmSenderGateSnapshot() {
+    return computePcmGateSnapshot();
+  }
+
+  function updatePcmSenderState(reason = "unknown") {
+    const gateSnapshot = computePcmGateSnapshot();
+    const {
+      sid,
+      phaseValue,
+      phaseAllowsSend,
+      wsPhase,
+      wsPhaseKnown,
+      wsReadyForAudio,
+      audioStreaming,
+      senderPaused,
+      captureAllowed,
+      hasStream,
+      baseGate,
+      shouldSendBase,
+      shouldSend,
+      asrReady,
+      ttsActive,
+      micPerm,
+      turnActive,
+      decisionReason,
+      trackState,
+      ctxState,
+    } = gateSnapshot;
+    const previousState = pcmSenderStateLast;
+    const gates = {
+      asrReady,
+      ttsActive,
+      micPerm,
+      senderPaused,
+      canCapture: captureAllowed,
+    };
+
+    try {
+      logStage("client.pcm_sender_state.update", {
+        gumFailed,
+        isAudioStreaming: audioStreaming,
+        canCaptureNow: captureAllowed,
+        senderPaused,
+        trackReady: trackState,
+        ctxState,
+        sid: sid || null,
+      });
+    } catch (_) {}
 
     try {
       console.log("AskChip pcm_sender.gates", { reason, ...gates });
@@ -1944,6 +2041,7 @@ export function createWsAudioRuntime(options = {}) {
     recordRecorderChunk: recordRecorderChunkPublic,
     getPcmRing,
     getPcmSenderSnapshot,
+    getPcmSenderGateSnapshot,
     resetPcmStateForTesting,
     setCaptureStreamProvider,
     setBaseEnabled,
