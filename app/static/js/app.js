@@ -475,10 +475,12 @@ if (typeof window !== "undefined") {
     return withVersion(joined);
   }
 
-  function renderStatusBarFromState() {
+  function renderStatusBarFromState(latestSnapshot) {
     try {
       const appState = window.AppState || {};
-      const snapshot = typeof appState.getState === "function" ? appState.getState() : appState;
+      const snapshot =
+        latestSnapshot ||
+        (typeof appState.getState === "function" ? appState.getState() : appState);
       const recorder = snapshot.recorder && typeof snapshot.recorder === "object" ? snapshot.recorder : {};
       const merged = {
         ...snapshot,
@@ -498,6 +500,20 @@ if (typeof window !== "undefined") {
       window.StatusBar?.render(merged);
     } catch {}
   }
+
+  try {
+    const appState = getAppState();
+    if (appState && typeof appState.subscribe === "function") {
+      appState.subscribe(() => {
+        try {
+          const latest = typeof appState.getState === "function" ? appState.getState() : appState;
+          renderStatusBarFromState(latest);
+        } catch (_) {
+          renderStatusBarFromState();
+        }
+      });
+    }
+  } catch (_) {}
 
   if (typeof document !== "undefined") {
     document.addEventListener("DOMContentLoaded", () => {
