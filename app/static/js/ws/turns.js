@@ -103,6 +103,7 @@ export function createTurnRuntime(config = {}) {
     clearPartialWatchdog = () => {},
     ensureTurnAudioReqId = () => null,
     sendAudioHeader = () => {},
+    logPcmSenderGateSnapshot = () => {},
     resetAudioHeaderSent = () => {},
     emitConsoleBusEvent = () => {},
     openTurnOnce = async () => true,
@@ -728,12 +729,11 @@ export function createTurnRuntime(config = {}) {
         ensureTurnAudioReqId(frame?.policy || AppState?.policy || {});
       } catch {}
       try {
-        sendAudioHeader(readyFrame || frame);
-      } catch {}
-      try {
         const started = await startRecorderStreaming(frame?.policy || {}, startReason);
         if (started) {
           audioStreaming = true;
+          try { logPcmSenderGateSnapshot("asr.ready"); } catch {}
+          try { sendAudioHeader(readyFrame || frame); } catch {}
         }
       } catch (err) {
         console.warn("auto-arm on asr.ready failed", err);

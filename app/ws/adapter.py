@@ -607,6 +607,7 @@ class AdapterContext:
     audio_window: int = AUDIO_SEQ_WINDOW
     audio_chunks_recv: int = 0
     audio_bytes_recv: int = 0
+    audio_bridge_first_chunk_logged: bool = False
     ingress_packets: int = 0
     ingress_bytes: int = 0
     first_ingress_ms: Optional[int] = None
@@ -3844,6 +3845,7 @@ class ChatV2Adapter:
             session.audio_rx_bytes = 0
             session.audio_rx_dropped = 0
             session.audio_rx_turn_index += 1
+            ctx.audio_bridge_first_chunk_logged = False
             _log.info(
                 "evt=audio_bridge_turn_start sid=%s turn=%s codec=%s rate_hz=%s ch=%s",
                 ctx.sid,
@@ -4720,6 +4722,41 @@ class ChatV2Adapter:
             mask_open and ready_gate and mic_open and send_open and backpressure_ok
         ):
             _log.debug("evt=audio_gate_bypass sid=%s reason=asr_open", ctx.sid)
+
+        if not ctx.audio_bridge_first_chunk_logged:
+            ctx.audio_bridge_first_chunk_logged = True
+            profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else {}
+            descriptor = self._input_descriptor_for_mode(ctx.audio_pipeline_mode or "pcm16")
+            codec = profile.get("codec") if isinstance(profile, Mapping) else None
+            rate_hz = profile.get("sample_rate") if isinstance(profile, Mapping) else None
+            channels = profile.get("channels") if isinstance(profile, Mapping) else None
+            input_mode = descriptor.get("mode") if isinstance(descriptor, Mapping) else None
+            mime = descriptor.get("mime") if isinstance(descriptor, Mapping) else None
+            will_forward = False
+            forward_reason = None
+            if gate_open and ctx.session.asr_state == "open" and ctx.session.asr_engine is not None:
+                will_forward = True
+                forward_reason = "asr_open"
+            elif not gate_open:
+                forward_reason = "gate_closed"
+            elif ctx.session.asr_state != "open":
+                forward_reason = f"asr_state_{ctx.session.asr_state}"
+            else:
+                forward_reason = "no_engine"
+
+            _log.info(
+                "evt=audio_bridge_first_chunk sid=%s turn=%s bytes=%s codec=%s rate_hz=%s channels=%s input_mode=%s mime=%s will_forward_to_asr=%s reason=%s",
+                ctx.sid,
+                getattr(ctx.session, "audio_rx_turn_index", None),
+                byte_count,
+                codec or descriptor.get("codec"),
+                rate_hz or descriptor.get("rate_hz"),
+                channels or descriptor.get("channels"),
+                input_mode,
+                mime,
+                will_forward,
+                forward_reason,
+            )
 
         if not gate_open:
             _log.info(

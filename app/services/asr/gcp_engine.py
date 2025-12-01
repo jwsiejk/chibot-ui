@@ -306,6 +306,8 @@ class GCPStreamingASREngine(ASREngine):
         )
 
         first_chunk_at = None
+        outcome = "ok"
+        error_reason: Optional[str] = None
         try:
             responses = self._client.streaming_recognize(
                 config=self._streaming_config,
@@ -346,6 +348,7 @@ class GCPStreamingASREngine(ASREngine):
         except Exception as exc:
             # Treat GCP "Audio Timeout Error" as a soft end-of-turn.
             if isinstance(exc, OutOfRange) and "Audio Timeout Error" in str(exc):
+                outcome = "timeout"
                 logger.warning(
                     "evt=asr_timeout vendor=gcp sid=%s",
                     self._sid,
@@ -368,6 +371,8 @@ class GCPStreamingASREngine(ASREngine):
                         True,
                     )
             else:
+                outcome = "error"
+                error_reason = exc.__class__.__name__
                 logger.exception(
                     "evt=asr_error vendor=gcp sid=%s",
                     self._sid,
@@ -383,6 +388,22 @@ class GCPStreamingASREngine(ASREngine):
                     },
                 )
         finally:
+            bytes_from_bridge = self._stats.bytes_sent if self._stats else 0
+            extra = {
+                "sid": self._sid,
+                "event": "asr_bytes_to_vendor_summary",
+                "bytes_from_bridge": bytes_from_bridge,
+                "outcome": outcome,
+            }
+            if error_reason:
+                extra["error_reason"] = error_reason
+            logger.info(
+                "evt=asr_bytes_to_vendor_summary sid=%s bytes_from_bridge=%s outcome=%s",
+                self._sid,
+                bytes_from_bridge,
+                outcome,
+                extra=extra,
+            )
             if first_chunk_at is None:
                 idle_ms = int((time.monotonic() - asr_stream_wait_start) * 1000)
                 logger.warning(

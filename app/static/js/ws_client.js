@@ -1797,6 +1797,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
     recordRecorderChunk,
     getPcmRing,
     getPcmSenderSnapshot,
+    getPcmSenderGateSnapshot,
     setBaseEnabled,
     resetSilenceSuppression,
     updatePcmSenderState: runtimeUpdatePcmSenderState,
@@ -2253,6 +2254,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       setSenderPauseReason("server", false);
       setSenderPauseReason("tts", false);
       updatePcmSenderState();
+      emitPcmSenderGateSnapshot("mic_start_success");
       updateMicBaseEnabled(true, "mic_start");
       return started;
     } catch (err) {
@@ -2293,6 +2295,45 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
 
   // Shared turn-audio request id for header + PCM chunks
   let currentTurnAudioReqId = null;
+  let lastPcmGateSnapshotKey = null;
+
+  function emitPcmSenderGateSnapshot(reason = "unknown") {
+    const reqId = typeof getCurrentTurnReqId === "function"
+      ? (getCurrentTurnReqId() || null)
+      : null;
+    const dedupeKey = reqId || "__none__";
+    if (lastPcmGateSnapshotKey === dedupeKey) {
+      return;
+    }
+
+    const gateSnapshot = typeof getPcmSenderGateSnapshot === "function"
+      ? getPcmSenderGateSnapshot()
+      : null;
+    const pcmSnapshot = typeof getPcmSenderSnapshot === "function"
+      ? getPcmSenderSnapshot()
+      : null;
+    const voicePhase = voicePhaseController?.getPhase?.() || null;
+    const payload = {
+      reason: reason || null,
+      reqId,
+      sid: gateSnapshot?.sid || AppState?.sid || null,
+      wsPhase: gateSnapshot?.wsPhase || AppState?.wsPhase || null,
+      voicePhase: gateSnapshot?.phase || voicePhase,
+      asrReady: gateSnapshot?.asrReady,
+      base_enabled: gateSnapshot?.base_enabled,
+      hasStream: gateSnapshot?.hasStream,
+      senderPaused: gateSnapshot?.senderPaused,
+      shouldSend: gateSnapshot?.shouldSend,
+      micPerm: gateSnapshot?.micPerm,
+      isAudioStreaming: gateSnapshot?.isAudioStreaming,
+      trackState: gateSnapshot?.trackState || pcmSnapshot?.tracks?.[0]?.readyState || null,
+      mediaStreamActive: pcmSnapshot?.mediaStreamActive ?? null,
+    };
+    try {
+      logStage("client.pcm_sender_gate_snapshot", payload);
+      lastPcmGateSnapshotKey = dedupeKey;
+    } catch (_) {}
+  }
 
   function getCurrentTurnReqId() {
     return currentTurnAudioReqId;
@@ -2338,6 +2379,8 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       });
     } catch (_) {}
     currentTurnAudioReqId = null;
+
+    lastPcmGateSnapshotKey = null;
 
     // keep your existing audio-header state resets here (e.g. audioHeaderSent = false)
     __resetAudioHeaderSent();
@@ -3485,6 +3528,7 @@ const WS_READY_PHASES = new Set(['connected', 'ready']);
       clearPartialWatchdog,
       ensureTurnAudioReqId,
       sendAudioHeader,
+      logPcmSenderGateSnapshot: emitPcmSenderGateSnapshot,
       resetAudioHeaderSent: () => resetTurnAudioContext(),
       emitConsoleBusEvent,
       openTurnOnce,
