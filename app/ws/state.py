@@ -27,6 +27,11 @@ class SessionCtx:
     last_vendor_activity_ms: Optional[float] = None
     eot_armed: bool = False
     audio_profile: Any | None = None
+    # Audio bridge debug stats (reset per turn / ASR stream)
+    audio_rx_chunks: int = 0
+    audio_rx_bytes: int = 0
+    audio_rx_dropped: int = 0
+    audio_rx_turn_index: int = 0
 
 
 def can_open(ctx: SessionCtx) -> bool:
