@@ -1,8 +1,8 @@
-BUILD_ID 1ed6c16.1b4f50c1f56aed51
+BUILD_ID afb096c.30425862277da9f4
 app.js:129 console.log Object
 app.js:156 AskChip AppState debug: Object
 app.js:129 console.log Object
-app.js:156 AskChip build: 1ed6c16.1b4f50c1f56aed51
+app.js:156 AskChip build: afb096c.30425862277da9f4
 app.js:129 console.debug Object
 app.js:156 client turn summary logging enabled
 app.js:129 console.log Object
@@ -50,8 +50,6 @@ app.js:156 client.vad.state
 app.js:129 console.log Object
 app.js:156 client.vad.state
 app.js:129 console.log Object
-app.js:156 client.appstate.delta
-app.js:129 console.log Object
 app.js:156 console.debug
 app.js:129 console.log Object
 app.js:156 console.debug
@@ -69,7 +67,7 @@ app.js:129 console.log
 app.js:129 console.log Object
 app.js:156 client.hub.installed Object
 app.js:129 console.log Object
-app.js:156 client.mic.heartbeat
+app.js:156 client.appstate.delta
 app.js:129 console.log Object
 app.js:156 client.mic.heartbeat
 app.js:129 console.log Object
@@ -78,14 +76,6 @@ app.js:129 console.log Object
 app.js:156 client.mic.heartbeat
 app.js:129 console.log Object
 app.js:156 client.mic.heartbeat
-app.js:129 console.log Object
-app.js:156 client.mic.heartbeat
-app.js:129 console.log Object
-app.js:156 client.mic.heartbeat
-app.js:129 console.log Object
-app.js:156 client.mic.heartbeat
-main.LJ36J25Y.js?v=1ed6c16.1b4f50c1f56aed51:1 [Violation] 'setTimeout' handler took 313ms
-main.LJ36J25Y.js?v=1ed6c16.1b4f50c1f56aed51:1 [Violation] 'setTimeout' handler took 2503ms
 app.js:1837 Fetch finished loading: GET "https://chibot-ui.onrender.com/api/v1/auth/me".
 _o @ app.js:1837
 In @ app.js:1926
@@ -96,31 +86,32 @@ In @ app.js:1943
 await in In
 (anonymous) @ app.js:2019
 app.js:129 console.log
-app.js:129 console.log {message: 'evt=ws_open_attempt {"url":"/ws/v2/chat?access_tok…yiLoM"],"sid":"ff5afd3cd7ee458d860227ed09f550b0"}', level: 'log'}
-app.js:156 evt=ws_open_attempt {url: '/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5c…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2), sid: 'ff5afd3cd7ee458d860227ed09f550b0'}
+app.js:129 console.log {message: 'evt=ws_open_attempt {"url":"/ws/v2/chat?access_tok…WKymI"],"sid":"2baf79b207ee4b4c9fe3ad2728ed7062"}', level: 'log'}
+app.js:156 evt=ws_open_attempt {url: '/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5c…J1ZX0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI', protocols: Array(2), sid: '2baf79b207ee4b4c9fe3ad2728ed7062'}
 app.js:129 console.log
-app.js:129 console.log {message: 'evt=ws_client_open_params {"url":"wss://chibot-ui.…X0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM"]}', level: 'log'}
-app.js:156 evt=ws_client_open_params {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2)}
+app.js:129 console.log {message: 'evt=ws_client_open_params {"url":"wss://chibot-ui.…X0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI"]}', level: 'log'}
+app.js:156 evt=ws_client_open_params {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI', protocols: Array(2)}
 app.js:129 console.log
-app.js:129 console.log {message: 'WS opening {"url":"wss://chibot-ui.onrender.com/ws…X0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM"]}', level: 'log'}
-app.js:156 WS opening {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2)}
+app.js:129 console.log {message: 'WS opening {"url":"wss://chibot-ui.onrender.com/ws…X0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI"]}', level: 'log'}
+app.js:156 WS opening {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI', protocols: Array(2)}
 app.js:129 console.log
-app.js:129 console.log {message: 'evt=ws_connection_open_params {"url":"wss://chibot…X0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM"]}', level: 'log'}
-app.js:156 evt=ws_connection_open_params {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM', protocols: Array(2)}
+app.js:129 console.log {message: 'evt=ws_connection_open_params {"url":"wss://chibot…X0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI"]}', level: 'log'}
+app.js:156 evt=ws_connection_open_params {url: 'wss://chibot-ui.onrender.com/ws/v2/chat?access_tok…J1ZX0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI', protocols: Array(2)}
 app.js:156 client.ws
 app.js:156 client.appstate.heartbeat
 app.js:156 Waveform visualizer using synth mode {reason: 'waiting_for_primary_mic'}
 app.js:156 [firehose] getWsClientSocket() → WebSocket {__accessTokenInfo: {…}, __intentionalClose: false, __handlers: {…}, send: ƒ, __originalSend: ƒ, …}
 app.js:156 client.ws
-app.js:156 [firehose] hub bound to socket: wss://chibot-ui.onrender.com/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6ImZmNWFmZDNjZDdlZTQ1OGQ4NjAyMjdlZDA5ZjU1MGIwIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2NDU5MTI4MCwiZXhwIjoxNzY0NTkxMzQwLCJqdGkiOiIyOTIxZWUzYy00MTc1LTRiMTktOGQ5Ni03ZGMzNTQzYmQ0YzMiLCJpc19hZG1pbiI6dHJ1ZX0.HK6dWO8wd_uuB7ujSDRmoNW0dzV0bqqmttIjZcyiLoM
+app.js:156 [firehose] hub bound to socket: wss://chibot-ui.onrender.com/ws/v2/chat?access_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqd3NpZWprQHB1cmVzdG9yYWdlLmNvbSIsInNpZCI6IjJiYWY3OWIyMDdlZTRiNGM5ZmUzYWQyNzI4ZWQ3MDYyIiwiYXVkIjoiY2hhdC52MiIsImlhdCI6MTc2NDU5OTczNywiZXhwIjoxNzY0NTk5Nzk3LCJqdGkiOiI4NDAyODczYi04ZmYzLTQ3YzctYjc3ZS03NTcyZDkwNDUwNTkiLCJpc19hZG1pbiI6dHJ1ZX0.7YHY0Zv2o8X9ixWdOht9hfrde9fyYn9UJPludcWKymI
 app.js:156 client.firehose.marker
-app.js:156 client.firehose.marker {build_id: '1ed6c16.1b4f50c1f56aed51', href: 'https://chibot-ui.onrender.com/', user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb…KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', sid: null}
-app.js:156 WS server banner {type: 'server.banner', build_id: '1ed6c16.1b4f50c1f56aed51', host: 'srv-d26hqi3e5dus73b43g10-6467666c87-kjsk2', cwd: '/opt/render/project/src', python: '3.13.4', …}
+app.js:156 client.firehose.marker {build_id: 'afb096c.30425862277da9f4', href: 'https://chibot-ui.onrender.com/', user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb…KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36', sid: null}
+app.js:156 WS server banner {type: 'server.banner', build_id: 'afb096c.30425862277da9f4', host: 'srv-d26hqi3e5dus73b43g10-5fc759d6df-44zvr', cwd: '/opt/render/project/src', python: '3.13.4', …}
 app.js:156 phase.greet.expectInfo
 app.js:156 phase.greet.receivedInfo
 app.js:156 client.ws
 app.js:156 phase.transition
 app.js:156 [WS-DIAG] ws_phase_set {phase: 'ready'}
+app.js:156 client.mic.heartbeat
 app.js:156 client.ws.tts_descriptor_frame {type: 'info', sampleRate: 16000, channels: 1}
 app.js:156 client.audio_player.descriptor_set {sampleRate: 16000, channels: 1}
 app.js:156 client.ws
@@ -424,24 +415,24 @@ app.js:156 client.vad.speech_start
 app.js:156 client.vad.speech_start
 app.js:156 client.vad.state
 app.js:156 client.vad.state
+6app.js:156 vad.frame_input
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.speech_end
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+11app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
 10app.js:156 vad.frame_input
-app.js:156 client.vad.speech_end
-app.js:156 client.vad.speech_end
 app.js:156 client.vad.state
 app.js:156 client.vad.state
-11app.js:156 vad.frame_input
+10app.js:156 vad.frame_input
 app.js:156 client.vad.state
 app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-2app.js:156 vad.frame_input
+4app.js:156 vad.frame_input
 app.js:156 client.audio_chunk_attempt
 app.js:156 client.pcm.energy
 app.js:156 client.audio.chunk_dropped_phase
@@ -469,203 +460,647 @@ app.js:156 client.audio.chunk_dropped_phase
 app.js:156 client.audio.chunk_dropped_phase
 app.js:156 client.audio_chunk_send
 app.js:156 client.audio_chunk_send
-3app.js:156 vad.frame_input
-app.js:156 client.vad.speech_start
-app.js:156 client.vad.speech_start
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-10app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-app.js:156 vad.frame_input
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-10app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-2app.js:156 vad.frame_input
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-8app.js:156 vad.frame_input
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-8app.js:156 vad.frame_input
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-3app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-10app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-8app.js:156 vad.frame_input
-app.js:156 client.vad.speech_end
-app.js:156 client.vad.speech_end
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-5app.js:156 vad.frame_input
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
-app.js:156 client.audio_chunk
-app.js:156 client.audio_chunk_attempt
-app.js:156 client.pcm.energy
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio.chunk_dropped_phase
-app.js:156 client.audio_chunk_send
-app.js:156 client.audio_chunk_send
-3app.js:156 vad.frame_input
-app.js:156 client.vad.speech_start
-app.js:156 client.vad.speech_start
-app.js:156 client.vad.state
-app.js:156 client.vad.state
-11app.js:156 vad.frame_input
-app.js:156 client.vad.state
-app.js:156 client.vad.state
 4app.js:156 vad.frame_input
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 client.schedule_conversation_blocked_until_ready
+app.js:156 client.appstate.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
 app.js:156 client.vad.speech_end
 app.js:156 client.vad.speech_end
 app.js:156 client.vad.state
 app.js:156 client.vad.state
-10app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 3200, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 [WS-DIAG] pcm_send_attempt {bytes: 1600, gumFailed: false, audioCtxState: 'running'}
+app.js:156 client.audio_chunk
+app.js:156 client.audio_chunk_attempt
+app.js:156 client.pcm.energy
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio.chunk_dropped_phase
+app.js:156 client.audio_chunk_send
+app.js:156 client.audio_chunk_send
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.vad.speech_start
+app.js:156 client.vad.speech_start
 app.js:156 client.vad.state
 app.js:156 client.vad.state
-11app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
 app.js:156 client.vad.state
 app.js:156 client.vad.state
-10app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
 app.js:156 client.vad.state
 app.js:156 client.vad.state
-11app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
 app.js:156 client.vad.state
 app.js:156 client.vad.state
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.watchdog.partial_timeout
+app.js:156 client.turn_stop {type: 'input.stop', reason: 'partial_watchdog_timeout', ts: 1764599748884}
+app.js:156 client.mic
+app.js:156 client.mic
+app.js:156 client.mic.stopped
+app.js:156 [ws_client] baseEnabled set false from mic_stop
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:mic_stop', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'set_base_enabled:mic_stop', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'set_base_enabled:mic_stop', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.mic_turn_reset
+app.js:156 phase.transition
+app.js:156 [WS-DIAG] ws_phase_set {phase: 'ready'}
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm.capture_stop
+app.js:156 client.pcm.capture_stop
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client_turn_summary {sid: null, outcome: 'final', duration_ms: 6411, speech_ms: null, chunk_count: 0, …}
+app.js:156 voice.phase
+app.js:156 client.turn_audio_context.reset
+app.js:156 client.asr_rearm_request
+app.js:156 client.asr_open_request
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 evt=mic_start timeslice_ms=unknown
+app.js:156 client.mic
+app.js:156 diag=asr_ready
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.asr
+app.js:156 client.ws_ready_check
+app.js:156 client.turn.intent
+app.js:156 client.mic.start_intent
+app.js:156 client.mic.start_proceed
+app.js:156 [WS-DIAG] start_recorder_streaming {source: 'asr_ready_forced_start'}
+app.js:156 client.mic.start_requested
+app.js:156 client.turn_req_id.set
+app.js:156 client.mic_start_attempt_orchestrated
+app.js:156 client.recorder.start_attempt
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'capture_stream_provider_set', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'capture_stream_provider_set', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'capture_stream_provider_set', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.audio_graph.duplicate_init
+app.js:156 client.vad.state
+app.js:156 client.vad.state
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm.capture_start
+app.js:156 client.pcm.capture_start
+app.js:156 client.mic_start_success_orchestrated
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 client.pcm_sender_gate_snapshot
+app.js:156 [ws_client] baseEnabled set true from mic_start
+app.js:156 client.pcm_sender_state.update
+app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:mic_start', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
+app.js:156 client.audio_stream_state_inputs
+app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'set_base_enabled:mic_start', shouldSend: false, base_enabled: true, hasStream: true, force_pcm_send: false, …}
+app.js:156 client.audio_stream_state_summary
+app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'set_base_enabled:mic_start', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
+app.js:156 diag
+app.js:156 client.asr_arm_clear
+app.js:156 client.audio_header.send_intent
+app.js:156 client.audio_header_send
+app.js:156 diag=asr_ready
+app.js:156 client.pcm.first_frame
+app.js:156 client.pcm.first_frame_runtime
+app.js:156 client.pcm.first_frame
+app.js:156 client.audio_first_chunk
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.conversation.begin.scheduled
+app.js:156 client.appstate.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.appstate.heartbeat
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 client.appstate.delta
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 [WS-DIAG] conversation_attempt {source: 'wait_ready'}
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
+app.js:156 client.mic.heartbeat
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 vad.frame_input
+app.js:156 client.appstate.delta
+app.js:156 client.enter_conversation_after_greet.intent
 app.js:156 [ws_client] baseEnabled set false from mic_stop
 app.js:156 client.pcm_sender_state.update
 app.js:156 AskChip pcm_sender.gates {reason: 'set_base_enabled:mic_stop', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
@@ -687,56 +1122,10 @@ app.js:156 client.phase.change {prev: 'conversation_ready', next: 'closing'}
 app.js:156 client.stream.off
 app.js:156 client.turn_audio_context.reset
 app.js:156 client.mic_turn_reset
+app.js:156 client.turn.intent
 app.js:156 client.mic
 app.js:156 client.mic.stopped
 app.js:156 client.vad.state
 app.js:156 client.vad.state
 app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.pcm_sender_state.update
-app.js:156 AskChip pcm_sender.gates {reason: 'unknown', asrReady: true, ttsActive: false, micPerm: true, senderPaused: true, …}
-app.js:156 client.audio_stream_state_inputs
-app.js:156 [ws_audio_runtime] updatePcmSenderState.inputs {reason: 'unknown', shouldSend: false, base_enabled: false, hasStream: true, force_pcm_send: false, …}
-app.js:156 client.audio_stream_state_summary
-app.js:156 [ws_audio_runtime] pcm_sender_state_summary {reason: 'unknown', phase: null, hasStream: true, wsConnected: true, senderPaused: true, …}
-app.js:156 client.pcm.capture_stop
-app.js:156 client.pcm.capture_stop
-app.js:129 console.warn
-app.js:129 console.warn {message: 'ws.connection.send queued (phase not ready) {"phase":"closing"}', level: 'warn'}
-app.js:156 ws.connection.send queued (phase not ready) {phase: 'closing'}
-i.<computed> @ app.js:156
-send @ connection.js:515
-sendJSONPayload @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4301
-sendJSONFast @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4481
-flushClientBannerQueue @ telemetry.js:280
-queueClientBannerPayload @ telemetry.js:260
-recordClientBannerEvent @ telemetry.js:221
-close @ connection.js:878
-close @ session_manager.js:481
-await in close
-requestSessionShutdown @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:3497
-wsClientClose @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4423
-(anonymous) @ app.js:2027Understand this warning
-app.js:129 console.warn
-app.js:129 console.warn {message: 'ws.connection.send queued (phase not ready) {"phase":"closing"}', level: 'warn'}
-app.js:156 ws.connection.send queued (phase not ready) {phase: 'closing'}
-i.<computed> @ app.js:156
-send @ connection.js:515
-sendJSONPayload @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4301
-sendJSONFast @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4481
-flushClientBannerQueue @ telemetry.js:280
-queueClientBannerPayload @ telemetry.js:260
-recordClientBannerEvent @ telemetry.js:221
-cleanupSocket @ connection.js:642
-close @ connection.js:879
-close @ session_manager.js:481
-await in close
-requestSessionShutdown @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:3497
-wsClientClose @ ws_client.js?v=1ed6c16.1b4f50c1f56aed51:4423
-(anonymous) @ app.js:2027Understand this warning
-app.js:129 console.debug
-app.js:129 console.debug 
+app.js:156 AskChip pcm_sender.gates 
