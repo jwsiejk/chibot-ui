@@ -18,14 +18,10 @@ function wsDiag(tag, detail = {}) {
 
 const PCM_TARGET_SAMPLE_RATE = 16000;
 const DEFAULT_RING_CAPACITY_MS = 1500;
+const DEFAULT_PRE_SPEECH_BUFFER_MS = 800;
 const DEFAULT_PCM_CHANNELS = 1;
 const PCM_TARGET_BATCH_MS = 60;
 const PCM_FLUSH_TIMER_MS = 50;
-const SILENCE_FRAME_MS = 20;
-const SILENCE_REQUIRED_FRAMES = 5;
-const SILENCE_RMS_THRESHOLD = 0.012;
-const SILENCE_PREROLL_MS = 100;
-const SILENCE_IDLE_TICK_MS = 5000;
 const AUDIO_KEEPALIVE_MS = 1000;
 const AUDIO_KEEPALIVE_CHUNK_MS = 20;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
@@ -123,6 +119,24 @@ class PcmRingBuffer {
     if (this.write === 0) this.filled = true;
   }
 
+  drainAll() {
+    const size = this.filled ? this.maxSamples : this.write;
+    if (!size) {
+      return [];
+    }
+    const out = new Int16Array(size);
+    const start = (this.write - size + this.maxSamples) % this.maxSamples;
+    if (start + size <= this.maxSamples) {
+      out.set(this.buf.subarray(start, start + size), 0);
+    } else {
+      const first = this.maxSamples - start;
+      out.set(this.buf.subarray(start), 0);
+      out.set(this.buf.subarray(0, size - first), first);
+    }
+    this.clear();
+    return [out];
+  }
+
   tailMillis(millis) {
     const samples = Math.min(this.maxSamples, Math.ceil((millis / 1000) * this.sampleRate) * this.channels);
     const out = new Int16Array(samples);
@@ -144,18 +158,57 @@ class PcmRingBuffer {
   }
 }
 
-function getWindowPcmRing(sampleRate) {
-  if (typeof window === "undefined") {
-    return null;
+function createRingBufferManager(sampleRate) {
+  let ring = null;
+  let preSpeechBufferMs = DEFAULT_PRE_SPEECH_BUFFER_MS;
+  let lastStatus = null;
+
+  function logStatus(reason = "status") {
+    if (!ring) return;
+    const framesStored = ring.filled ? ring.maxSamples : ring.write;
+    const statusSignature = `${reason}:${framesStored}`;
+    if (statusSignature === lastStatus) return;
+    lastStatus = statusSignature;
+    try {
+      logStage("client.google_v3.ring_buffer_status", {
+        preSpeechBufferMs,
+        framesStored,
+        bytesStored: framesStored * Int16Array.BYTES_PER_ELEMENT,
+        reason,
+      });
+    } catch (_) {}
   }
-  if (!(window.__pcmRing instanceof PcmRingBuffer)) {
-    window.__pcmRing = new PcmRingBuffer({
-      millis: DEFAULT_RING_CAPACITY_MS,
-      sampleRate,
-      channels: DEFAULT_PCM_CHANNELS,
-    });
+
+  function init(ms, sr) {
+    const millis = Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_RING_CAPACITY_MS;
+    preSpeechBufferMs = millis;
+    const rate = Number.isFinite(sr) && sr > 0 ? sr : PCM_TARGET_SAMPLE_RATE;
+    ring = new PcmRingBuffer({ millis, sampleRate: rate, channels: DEFAULT_PCM_CHANNELS });
+    logStatus("init");
+    return ring;
   }
-  return window.__pcmRing;
+
+  function pushFrame(frame) {
+    if (!ring) return;
+    try {
+      ring.push(frame);
+    } catch (err) {
+      console.warn("ringBuffer.pushFrame failed", err);
+    }
+  }
+
+  function drainAll() {
+    if (!ring) return [];
+    const drained = ring.drainAll();
+    logStatus("drain");
+    return drained;
+  }
+
+  function getRing() {
+    return ring;
+  }
+
+  return { init, pushFrame, drainAll, getRing, logStatus };
 }
 
 export function createWsAudioRuntime(options = {}) {
@@ -346,17 +399,6 @@ export function createWsAudioRuntime(options = {}) {
     }
     try {
       logStage("client.pcm_sender.decision", detail);
-    } catch (_) {
-      // Do not let logging break the audio path
-    }
-  }
-
-  function logAudioGate(label, detail = {}) {
-    if (!PCM_SENDER_DEBUG) {
-      return;
-    }
-    try {
-      logStage(label, detail);
     } catch (_) {
       // Do not let logging break the audio path
     }
@@ -724,15 +766,11 @@ export function createWsAudioRuntime(options = {}) {
   const asrRate = Number.isFinite(initialAppState?.targetSampleRate)
     ? Number(initialAppState.targetSampleRate)
     : PCM_TARGET_SAMPLE_RATE;
-
-  let pcmRing = getWindowPcmRing(asrRate);
-  if (!pcmRing) {
-    pcmRing = new PcmRingBuffer({
-      millis: DEFAULT_RING_CAPACITY_MS,
-      sampleRate: asrRate,
-      channels: DEFAULT_PCM_CHANNELS,
-    });
-  }
+  const ringBufferManager = createRingBufferManager(asrRate);
+  const preSpeechBufferMs = Number.isFinite(initialAppState?.preSpeechBufferMs)
+    ? initialAppState.preSpeechBufferMs
+    : DEFAULT_PRE_SPEECH_BUFFER_MS;
+  const pcmRing = ringBufferManager.init(preSpeechBufferMs, asrRate);
 
   let pcmSender = null;
   let pcmSenderInitPromise = null;
@@ -744,9 +782,6 @@ export function createWsAudioRuntime(options = {}) {
   let baseEnabled = false;
   let baseEnabledReason = "boot";
   let pcmSenderAutoUnpauseGuard = false;
-  let silenceConsecutiveFrames = 0;
-  let silenceSuppressed = false;
-  let silenceLastIdleTickAt = 0;
   let micKeepaliveTimerId = null;
   let micLastChunkAt = 0;
   let lastRealAudioAt = 0;
@@ -781,6 +816,11 @@ export function createWsAudioRuntime(options = {}) {
       clearTimeout(micKeepaliveTimerId);
       micKeepaliveTimerId = null;
     }
+  }
+
+  function resetSilenceSuppression() {
+    // Phase 1 (Google Flow V3): silence pause reasons are removed. This stub remains
+    // for API compatibility with previous implementations and test helpers.
   }
 
   function sendAudioKeepaliveChunk(now) {
@@ -934,121 +974,112 @@ export function createWsAudioRuntime(options = {}) {
     return Math.sqrt(sumSq / int16.length);
   }
 
-  function resetSilenceSuppression() {
-    silenceConsecutiveFrames = 0;
-    silenceSuppressed = false;
-    silenceLastIdleTickAt = 0;
-    setSenderPauseReason("silence_gate", false);
+  function computeHardGateSnapshot({ wsPhase, appPhase, serverHold, fatalError }) {
+    const wsReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
+    const appReady = typeof appPhase === "string"
+      ? (appPhase === "conversation_ready" ||
+        appPhase === VOICE_PHASE.ConversationReady ||
+        appPhase === VOICE_PHASE.UserTurn ||
+        appPhase === "user_turn")
+      : true;
+    let allowed = wsReady && appReady && !serverHold && !fatalError && Boolean(isAudioStreaming());
+    let reason = "ok";
+    if (!Boolean(isAudioStreaming())) {
+      allowed = false;
+      reason = "not_streaming";
+    } else if (!wsReady) {
+      allowed = false;
+      reason = "ws_not_ready";
+    } else if (!appReady) {
+      allowed = false;
+      reason = "app_phase";
+    } else if (serverHold) {
+      allowed = false;
+      reason = "server_hold";
+    } else if (fatalError) {
+      allowed = false;
+      reason = "fatal_error";
+    }
+    return { allowed, reason, wsPhase, appPhase };
   }
 
-  function maybeSendSilenceIdleTick(now) {
-    if (!silenceSuppressed) {
-      silenceLastIdleTickAt = 0;
-      return;
-    }
-    if (!Number.isFinite(now) || now <= 0) {
-      return;
-    }
-    if (silenceLastIdleTickAt && now - silenceLastIdleTickAt < SILENCE_IDLE_TICK_MS) {
-      return;
-    }
-    const ws = resolveSocket();
-    if (!ws) {
-      return;
-    }
-    if (typeof WebSocket !== "undefined" && ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
+  let lastHardGateLogged = null;
+  function maybeLogHardGate(snapshot, { wsPhase, appPhase }) {
+    const signature = snapshot ? `${snapshot.allowed}:${snapshot.reason}` : "none";
+    if (lastHardGateLogged === signature) return;
+    lastHardGateLogged = signature;
     try {
-      if (safeSendJSON({ type: "client.idle", lane: "mic", ts: now })) {
-        silenceLastIdleTickAt = now;
-      }
-    } catch (err) {
-      console.warn("client.idle send failed", err);
-    }
+      logStage("client.google_v3.hard_gate_snapshot", {
+        allowed: snapshot?.allowed ?? false,
+        reason: snapshot?.reason || "unknown",
+        wsPhase,
+        appPhase,
+      });
+    } catch (_) {}
   }
 
-  function evaluateSilenceSuppression(int16, sampleRate, now) {
-    if (!(int16 instanceof Int16Array) || !int16.length) {
-      return false;
-    }
-    const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : asrRate;
-    const frameSamples = Math.max(1, Math.round((SILENCE_FRAME_MS / 1000) * rate));
-    let resumeTriggered = false;
-    let framesEvaluated = 0;
-    if (frameSamples > 0 && int16.length >= frameSamples) {
-      for (const frame of chunk20ms(int16, rate)) {
-        if (!(frame instanceof Int16Array) || !frame.length) {
-          continue;
-        }
-        framesEvaluated += 1;
-        const frameRms = computeRms(frame);
-        if (frameRms >= SILENCE_RMS_THRESHOLD) {
-          if (silenceSuppressed) {
-            resumeTriggered = true;
-          }
-          silenceConsecutiveFrames = 0;
-        } else {
-          silenceConsecutiveFrames += 1;
-          if (!silenceSuppressed && silenceConsecutiveFrames >= SILENCE_REQUIRED_FRAMES) {
-            silenceSuppressed = true;
-            setSenderPauseReason("silence_gate", true);
-          }
-        }
-      }
-    }
-    if (!framesEvaluated) {
-      const frameRms = computeRms(int16);
-      if (frameRms >= SILENCE_RMS_THRESHOLD) {
-        if (silenceSuppressed) {
-          resumeTriggered = true;
-        }
-        silenceConsecutiveFrames = 0;
-      } else {
-        silenceConsecutiveFrames += 1;
-        if (!silenceSuppressed && silenceConsecutiveFrames >= SILENCE_REQUIRED_FRAMES) {
-          silenceSuppressed = true;
-          setSenderPauseReason("silence_gate", true);
-        }
-      }
-    }
-    if (resumeTriggered) {
-      silenceSuppressed = false;
-      silenceConsecutiveFrames = 0;
-      silenceLastIdleTickAt = 0;
-      setSenderPauseReason("silence_gate", false);
-      return true;
-    }
-    if (silenceSuppressed) {
-      maybeSendSilenceIdleTick(now);
-    } else {
-      silenceLastIdleTickAt = 0;
-    }
-    return false;
+  let speechSeenThisTurn = false;
+  let lastSpeechSeenReqId = null;
+  function shouldSendFrameSoftGate({ vadState, speechSeen, turnActive }) {
+    const vadLikelySpeech = Boolean(
+      vadState?.isSpeech ||
+      vadState?.speech ||
+      vadState?.speaking ||
+      vadState?.state === "speech" ||
+      vadState?.state === "voice"
+    );
+    const shouldSend = speechSeen ? Boolean(turnActive) : vadLikelySpeech;
+    const rmsAtTrigger = !speechSeen && vadLikelySpeech ? vadState?.rms ?? vadState?.rmsDb ?? null : null;
+    return { shouldSend, vadLikelySpeech, rmsAtTrigger };
   }
 
-  function getSilencePreroll(sampleRate) {
-    if (!pcmRing || typeof pcmRing.tailMillis !== "function") {
-      return [];
+  function markSpeechSeen({ rmsAtTrigger = null, framesSinceGreet = null, reqId = null }) {
+    speechSeenThisTurn = true;
+    lastSpeechSeenReqId = reqId || lastSpeechSeenReqId || null;
+    try {
+      logStage("client.google_v3.speech_seen_this_turn", {
+        speechSeenThisTurn: true,
+        rmsAtTrigger,
+        framesSinceGreet,
+      });
+    } catch (_) {}
+  }
+
+  const pcmSummaryWindowMs = 2000;
+  let pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
+  let lastPcmSummaryAt = 0;
+
+  function maybeLogPcmSummary(force = false) {
+    const now = Date.now();
+    if (!force && now - lastPcmSummaryAt < pcmSummaryWindowMs) {
+      return;
     }
-    const rate = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : asrRate;
-    const desiredSamples = Math.max(0, Math.round((SILENCE_PREROLL_MS / 1000) * rate));
-    const tails = pcmRing.tailMillis(SILENCE_PREROLL_MS);
-    if (!Array.isArray(tails) || !tails.length) {
-      return [];
+    if (!pcmSummaryCounters.framesSent && !pcmSummaryCounters.framesDroppedHardGate && !pcmSummaryCounters.framesDroppedSoftGate) {
+      return;
     }
-    const payloads = [];
-    for (const tail of tails) {
-      if (!(tail instanceof Int16Array) || !tail.length) {
-        continue;
-      }
-      if (desiredSamples > 0 && tail.length > desiredSamples) {
-        payloads.push(tail.subarray(tail.length - desiredSamples));
-      } else {
-        payloads.push(tail);
-      }
-    }
-    return payloads;
+    lastPcmSummaryAt = now;
+    try {
+      logStage("client.google_v3.pcm_send_summary", {
+        windowMs: pcmSummaryWindowMs,
+        framesSent: pcmSummaryCounters.framesSent,
+        framesDroppedHardGate: pcmSummaryCounters.framesDroppedHardGate,
+        framesDroppedSoftGate: pcmSummaryCounters.framesDroppedSoftGate,
+      });
+    } catch (_) {}
+    pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
+  }
+
+  function recordPcmFrameOutcome({ sent = 0, droppedHard = 0, droppedSoft = 0 }) {
+    pcmSummaryCounters.framesSent += sent;
+    pcmSummaryCounters.framesDroppedHardGate += droppedHard;
+    pcmSummaryCounters.framesDroppedSoftGate += droppedSoft;
+    maybeLogPcmSummary(false);
+  }
+
+  function emitPolicyHook(reason, detail = {}) {
+    try {
+      logStage("client.google_v3.policy_hook", { reason, ...detail });
+    } catch (_) {}
   }
 
   function sendPrerollAndChunk(prerollChunks, chunk, sampleRate) {
@@ -1230,15 +1261,6 @@ export function createWsAudioRuntime(options = {}) {
     const currentSampleRate = Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate;
     const now = Date.now();
 
-    let resumeTriggered = false;
-    let prerollChunks = [];
-    if (isAudioStreaming()) {
-      resumeTriggered = evaluateSilenceSuppression(wire, currentSampleRate, now);
-      if (resumeTriggered) {
-        prerollChunks = getSilencePreroll(currentSampleRate);
-      }
-    }
-
     if (!firstRuntimeFrameLogged && wire.length) {
       firstRuntimeFrameLogged = true;
       try {
@@ -1250,19 +1272,13 @@ export function createWsAudioRuntime(options = {}) {
     }
 
     try {
-      if (typeof pcmRing?.push === "function") {
-        pcmRing.push(wire);
-      }
+      ringBufferManager.pushFrame(wire);
     } catch (e) {
       console.warn("pcmRing.push failed", e);
     }
 
     if (!isAudioStreaming()) {
       return;
-    }
-
-    if (resumeTriggered) {
-      sendPrerollAndChunk(prerollChunks, wire, currentSampleRate);
     }
 
     if (!readFirstChunkSeen()) {
@@ -1350,72 +1366,43 @@ export function createWsAudioRuntime(options = {}) {
         try { window.__gumFailed = gumFailed; } catch (_) {}
       }
     }
+    const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
+    const currentReqId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
+    if (currentReqId && currentReqId !== lastSpeechSeenReqId) {
+      speechSeenThisTurn = false;
+      lastSpeechSeenReqId = currentReqId;
+    }
+
     const AppState = getAppState();
     const ws = resolveSocket();
     const wsReadyState = ws?.readyState ?? null;
     const wsPhase = typeof AppState?.wsPhase === "string" ? AppState.wsPhase : null;
-    const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
-    const wsReadyPhase = wsPhaseKnown ? WS_READY_PHASES.has(wsPhase) : true;
     const phaseValue = typeof AppState?.phase === "string" ? AppState.phase : null;
-    const senderPaused = Boolean(isSenderPaused());
-    const captureAllowed = Boolean(canCaptureNow());
-
-    if (wsPhaseKnown && !wsReadyPhase) {
-      logAudioGate("client.audio.gate", {
-        action: "send_chunk",
-        blocked: true,
-        reason: "ws_phase_not_ready",
-        phase: phaseValue,
-        wsPhase,
-        readyPhases: Array.from(WS_READY_PHASES),
-        wsReadyState,
-        senderPaused,
-        canCaptureNow: captureAllowed,
-      });
+    const turnActive = Object.prototype.hasOwnProperty.call(AppState || {}, "turnActive")
+      ? Boolean(AppState.turnActive)
+      : true;
+    const serverHold = Boolean(AppState?.server_hold || AppState?.serverHold || AppState?.system_hold || AppState?.systemHold);
+    const hardGate = computeHardGateSnapshot({ wsPhase, appPhase: phaseValue, serverHold, fatalError: gumFailed });
+    maybeLogHardGate(hardGate, { wsPhase, appPhase: phaseValue });
+    if (!hardGate.allowed) {
+      recordPcmFrameOutcome({ droppedHard: chunkCount });
+      emitPolicyHook("hard_gate_drop", { reason: hardGate.reason, wsReadyState });
       return;
     }
 
-    if (typeof WebSocket !== "undefined" && ws && ws.readyState !== WebSocket.OPEN) {
-      logAudioGate("client.audio.gate", {
-        action: "send_chunk",
-        blocked: true,
-        reason: "ws_closed",
-        phase: phaseValue,
-        wsPhase,
-        readyPhases: Array.from(WS_READY_PHASES),
-        wsReadyState,
-        senderPaused,
-        canCaptureNow: captureAllowed,
-      });
+    const vadState = typeof getVadController === "function" ? getVadController()?.getState?.() || null : null;
+    const softDecision = shouldSendFrameSoftGate({ vadState, speechSeen: speechSeenThisTurn, turnActive });
+    if (!speechSeenThisTurn && softDecision.vadLikelySpeech) {
+      markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
+    }
+    if (!softDecision.shouldSend) {
+      recordPcmFrameOutcome({ droppedSoft: chunkCount });
+      emitPolicyHook("soft_gate_drop", { reason: "vad_silence", wsPhase, appPhase: phaseValue });
       return;
     }
 
-    if (!isAudioStreaming()) {
-      logAudioGate("client.audio.gate", {
-        action: "send_chunk",
-        blocked: true,
-        reason: "not_streaming",
-        phase: phaseValue,
-        wsPhase,
-        readyPhases: Array.from(WS_READY_PHASES),
-        wsReadyState,
-        senderPaused,
-        canCaptureNow: captureAllowed,
-      });
-      return;
-    }
-
-    logAudioGate("client.audio.gate", {
-      action: "send_chunk",
-      blocked: false,
-      reason: "ok",
-      phase: phaseValue,
-      wsPhase,
-      wsReadyState,
-    });
     const sr = meta?.sampleRate || meta?.sampleRateHz || null;
     const sampledBytes = chunk.byteLength || 0;
-    const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
     const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
     const metaSampleRate = Number(meta.sampleRate);
     if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
@@ -1488,6 +1475,8 @@ export function createWsAudioRuntime(options = {}) {
     const nextByteTotal = getMicBytesValue() + bytes;
     setMicChunksValue(nextChunkTotal);
     setMicBytesValue(nextByteTotal);
+
+    recordPcmFrameOutcome({ sent: chunkCount });
 
     if (pcmSampleRate && Number.isFinite(pcmSampleRate)) {
       const samplesPerMs = pcmSampleRate / 1000;
@@ -2028,7 +2017,7 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function getPcmRing() {
-    return pcmRing;
+    return ringBufferManager.getRing();
   }
 
   function getPcmSenderSnapshot() {
