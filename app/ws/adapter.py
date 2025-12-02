@@ -4431,8 +4431,15 @@ class ChatV2Adapter:
 
     async def _handle_binary(
         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-        ) -> _HandleResult:
+    ) -> _HandleResult:
         byte_count = len(data)
+        # TEMPORARY DEBUG: confirm binary frames reach _handle_binary
+        try:
+            print(
+                f"[DEBUG] _handle_binary called sid={ctx.sid} turn_id={ctx.current_turn_id} bytes={byte_count}"
+            )
+        except Exception:
+            pass
         ctx.last_client_activity_ms = int(time.time() * 1000)
         self._cancel_no_audio_watchdog(ctx)
 
