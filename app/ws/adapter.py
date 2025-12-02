@@ -3486,7 +3486,7 @@ class ChatV2Adapter:
 
             normalized_turn_id = raw_turn_id.strip()
             if ctx.current_turn_open:
-                logger.warning(
+                _log.warning(
                     "evt=google_v3.turn_start_overlap",
                     extra={
                         "sid": ctx.sid,
@@ -3500,7 +3500,7 @@ class ChatV2Adapter:
             ctx.turn_start_ts_ms = self._now_ms()
             ctx.bytes_from_client_this_turn = 0
 
-            logger.info(
+            _log.info(
                 "evt=google_v3.turn_start",
                 extra={
                     "sid": ctx.sid,
@@ -3540,7 +3540,7 @@ class ChatV2Adapter:
 
             normalized_turn_id = raw_turn_id.strip()
             if ctx.current_turn_id and ctx.current_turn_id != normalized_turn_id:
-                logger.warning(
+                _log.warning(
                     "evt=google_v3.turn_stop_mismatch",
                     extra={
                         "sid": ctx.sid,
@@ -3551,7 +3551,7 @@ class ChatV2Adapter:
 
             ctx.current_turn_open = False
 
-            logger.info(
+            _log.info(
                 "evt=google_v3.turn_stop",
                 extra={
                     "sid": ctx.sid,
