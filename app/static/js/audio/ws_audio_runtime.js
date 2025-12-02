@@ -985,16 +985,14 @@ export function createWsAudioRuntime(options = {}) {
     const wsReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
     const appReady = typeof appPhase === "string"
       ? (appPhase === "conversation_ready" ||
+        appPhase === "conversation" ||
         appPhase === VOICE_PHASE.ConversationReady ||
         appPhase === VOICE_PHASE.UserTurn ||
         appPhase === "user_turn")
       : true;
-    let allowed = wsReady && appReady && !serverHold && !fatalError && Boolean(isAudioStreaming());
+    let allowed = wsReady && appReady && !serverHold && !fatalError;
     let reason = "ok";
-    if (!Boolean(isAudioStreaming())) {
-      allowed = false;
-      reason = "not_streaming";
-    } else if (!wsReady) {
+    if (!wsReady) {
       allowed = false;
       reason = "ws_not_ready";
     } else if (!appReady) {
@@ -1637,12 +1635,12 @@ export function createWsAudioRuntime(options = {}) {
       hasStream,
       audioStreaming,
       captureAllowed,
-      asrReady,
       ttsActive,
       micPerm,
-      turnActive,
       phaseAllowsSend,
       wsReadyForAudio,
+      serverHold,
+      fatalError,
       phaseValue,
       wsPhase,
     } = gateSnapshot;
@@ -1651,14 +1649,13 @@ export function createWsAudioRuntime(options = {}) {
       senderPaused &&
       baseGate &&
       hasStream &&
-      audioStreaming &&
       captureAllowed &&
-      asrReady &&
       !ttsActive &&
       micPerm &&
-      turnActive &&
       phaseAllowsSend &&
-      wsReadyForAudio
+      wsReadyForAudio &&
+      !serverHold &&
+      !fatalError
     );
 
     if (!onlyPauseBlockingSend) {
@@ -1675,12 +1672,12 @@ export function createWsAudioRuntime(options = {}) {
           hasStream,
           audioStreaming,
           captureAllowed,
-          asrReady,
           ttsActive,
           micPerm,
-          turnActive,
           phaseAllowsSend,
           wsReadyForAudio,
+          serverHold,
+          fatalError,
           senderPaused,
         });
       } catch (_) {}
@@ -1708,9 +1705,18 @@ export function createWsAudioRuntime(options = {}) {
     const turnActive = Object.prototype.hasOwnProperty.call(stateSnapshot || {}, "turnActive")
       ? Boolean(stateSnapshot.turnActive)
       : true;
+    const serverHold = Boolean(
+      stateSnapshot?.server_hold ||
+      stateSnapshot?.serverHold ||
+      stateSnapshot?.system_hold ||
+      stateSnapshot?.systemHold
+    );
+    const fatalError = Boolean(gumFailed);
     const phaseValue = typeof stateSnapshot?.phase === "string" ? stateSnapshot.phase : null;
     const phaseAllowsSend = phaseValue
-      ? phaseValue === "conversation" ||
+      ? phaseValue === "conversation_ready" ||
+        phaseValue === "user_turn" ||
+        phaseValue === "conversation" ||
         phaseValue === VOICE_PHASE.ConversationReady ||
         phaseValue === VOICE_PHASE.UserTurn
       : true;
@@ -1735,18 +1741,17 @@ export function createWsAudioRuntime(options = {}) {
     };
     const shouldSendBase = Boolean(
       baseGate &&
-      audioStreaming &&
       !gates.senderPaused &&
       gates.canCapture &&
-      gates.asrReady &&
       !gates.ttsActive &&
       gates.micPerm &&
-      turnActive &&
       phaseAllowsSend &&
-      wsReadyForAudio
+      wsReadyForAudio &&
+      !serverHold &&
+      !fatalError
     );
     const shouldSend = FORCE_PCM_SEND
-      ? gates.asrReady && !gates.ttsActive && gates.micPerm
+      ? (baseGate && !gates.ttsActive && gates.micPerm && !serverHold && !fatalError)
       : shouldSendBase;
 
     let decisionReason = "ok";
@@ -1754,24 +1759,22 @@ export function createWsAudioRuntime(options = {}) {
       decisionReason = "base_disabled";
     } else if (!hasStream) {
       decisionReason = "no_stream";
-    } else if (!audioStreaming) {
-      decisionReason = "not_streaming";
     } else if (gates.senderPaused) {
       decisionReason = "sender_paused";
     } else if (!gates.canCapture) {
       decisionReason = "cannot_capture";
-    } else if (!gates.asrReady) {
-      decisionReason = "asr_not_ready";
     } else if (gates.ttsActive) {
       decisionReason = "tts_active";
     } else if (!gates.micPerm) {
       decisionReason = "mic_perm";
-    } else if (!turnActive) {
-      decisionReason = "turn_inactive";
     } else if (!phaseAllowsSend) {
       decisionReason = "phase_not_ready";
     } else if (!wsReadyForAudio) {
       decisionReason = "ws_not_ready";
+    } else if (serverHold) {
+      decisionReason = "server_hold";
+    } else if (fatalError) {
+      decisionReason = "fatal_error";
     } else if (FORCE_PCM_SEND && !shouldSendBase) {
       decisionReason = "forced";
     }
@@ -1794,6 +1797,8 @@ export function createWsAudioRuntime(options = {}) {
       ttsActive,
       micPerm,
       turnActive,
+      serverHold,
+      fatalError,
       decisionReason,
       trackState: stream?.getAudioTracks?.()[0]?.readyState || "unknown",
       ctxState: audioCtx?.state || "unknown",
@@ -1825,6 +1830,8 @@ export function createWsAudioRuntime(options = {}) {
       ttsActive,
       micPerm,
       turnActive,
+      serverHold,
+      fatalError,
       decisionReason,
       trackState,
       ctxState,
@@ -1872,6 +1879,8 @@ export function createWsAudioRuntime(options = {}) {
         ttsActive: gates.ttsActive,
         micPerm: gates.micPerm,
         turnActive,
+        serverHold,
+        fatalError,
         hasPcmSender: !!pcmSender,
         baseEnabledReason,
         phase: phaseValue,
@@ -1895,6 +1904,8 @@ export function createWsAudioRuntime(options = {}) {
         ttsActive: gates.ttsActive,
         micPerm: gates.micPerm,
         turnActive,
+        serverHold,
+        fatalError,
         hasPcmSender: !!pcmSender,
         baseEnabledReason,
         phase: phaseValue,
@@ -1927,6 +1938,8 @@ export function createWsAudioRuntime(options = {}) {
       enabled: shouldSend,
       isAudioStreaming: audioStreaming,
       baseEnabledReason,
+      serverHold,
+      fatalError,
     };
 
     try {
@@ -1975,6 +1988,8 @@ export function createWsAudioRuntime(options = {}) {
           canCaptureNow: captureAllowed,
           asrReady,
           turnActive,
+          serverHold,
+          fatalError,
           phase: phaseValue,
           phase_allows_send: phaseAllowsSend,
           wsPhase,
@@ -1994,6 +2009,8 @@ export function createWsAudioRuntime(options = {}) {
             micPerm: gates.micPerm,
             senderPaused: gates.senderPaused,
             canCapture: gates.canCapture,
+            serverHold,
+            fatalError,
           },
           hasStream,
           turnActive,
@@ -2015,12 +2032,27 @@ export function createWsAudioRuntime(options = {}) {
           canCaptureNow: captureAllowed,
           asrReady,
           turnActive,
+          serverHold,
+          fatalError,
           phase_allows_send: phaseAllowsSend,
           wsPhase,
           wsPhaseKnown,
           ws_ready: wsReadyForAudio,
         });
       } catch (_) {}
+      const gateOpened = previousState !== true && shouldSend === true;
+      if (gateOpened) {
+        try {
+          logStage("client.google_v3.sender_gate_opened", {
+          phase: phaseValue,
+          wsPhase,
+          baseEnabled,
+          hasStream,
+          serverHold,
+          asrReady,
+        });
+      } catch (_) {}
+    }
       pcmSenderStateLast = shouldSend;
       try {
         console.log("client.pcm_sender.state", {
@@ -2040,6 +2072,8 @@ export function createWsAudioRuntime(options = {}) {
           wsPhase,
           wsPhaseKnown,
           wsReady: wsReadyForAudio,
+          serverHold,
+          fatalError,
         });
       } catch (_) {}
     }
@@ -2057,6 +2091,8 @@ export function createWsAudioRuntime(options = {}) {
       isAudioStreaming: audioStreaming,
       senderPaused,
       canCaptureNow: captureAllowed,
+      serverHold,
+      fatalError,
       firstChunkSeen: readFirstChunkSeen(),
       hasCaptureStream: Boolean(captureStreamResolved || captureStreamProvider),
       vadState: typeof getVadController === "function" ? getVadController()?.getState?.() || null : null,
