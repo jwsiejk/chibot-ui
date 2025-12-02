@@ -600,6 +600,7 @@ export function createWsAudioRuntime(options = {}) {
       logStage("client.audio_chunk_attempt", {
         length: payload?.byteLength || payload?.length || null,
         ws_ready: resolveSocket()?.readyState,
+        turnId: enrichedMeta.turnId || null,
       });
     } catch (_) {}
     if (!currentReqId) {
@@ -612,6 +613,7 @@ export function createWsAudioRuntime(options = {}) {
           lane: enrichedMeta.lane || "mic",
           reqId: null,
           reason: "missing_reqId",
+          turnId: enrichedMeta.turnId || null,
         });
       } catch (_) {}
       return false;
@@ -642,6 +644,7 @@ export function createWsAudioRuntime(options = {}) {
             keepalive: !!enrichedMeta.keepalive,
             sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
             source: "delegate",
+            turnId: enrichedMeta.turnId || null,
             sent: true,
           });
         } catch (_) {}
@@ -663,6 +666,7 @@ export function createWsAudioRuntime(options = {}) {
             keepalive: !!enrichedMeta.keepalive,
             sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
             source: "wsclient",
+            turnId: enrichedMeta.turnId || null,
           });
         } catch (_) {}
         return true;
@@ -677,6 +681,7 @@ export function createWsAudioRuntime(options = {}) {
         reqId: enrichedMeta.reqId || null,
         keepalive: !!enrichedMeta.keepalive,
         sampleRate: enrichedMeta.sampleRateHz || enrichedMeta.sampleRate || null,
+        turnId: enrichedMeta.turnId || null,
       });
     } catch (_) {}
     logWsAudioDropOnce(enrichedMeta, "no_delegate");
@@ -1115,23 +1120,44 @@ export function createWsAudioRuntime(options = {}) {
     } catch (_) {}
   }
 
-  function sendPrerollAndChunk(prerollChunks, chunk, sampleRate) {
-    const payloads = [];
-    if (Array.isArray(prerollChunks) && prerollChunks.length) {
-      payloads.push(...prerollChunks);
-    }
-    if (chunk instanceof Int16Array && chunk.length) {
-      payloads.push(chunk);
-    }
-    if (!payloads.length) {
+  function sendPrerollChunks(prerollChunks, sampleRate, baseMeta = {}) {
+    if (!Array.isArray(prerollChunks) || !prerollChunks.length) {
       return;
     }
-    for (const payload of payloads) {
+
+    const sr = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : asrRate;
+    const lane = typeof baseMeta.lane === "string" ? baseMeta.lane : "mic";
+    const turnId = baseMeta.turnId || null;
+
+    try {
+      logStage("client.google_v3.preroll_flush", {
+        lane,
+        turnId,
+        chunks: prerollChunks.length,
+        preRollMs: preSpeechBufferMs,
+      });
+    } catch (_) {}
+
+    for (const payload of prerollChunks) {
       if (!(payload instanceof Int16Array) || !payload.length) {
         continue;
       }
-      const sr = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : asrRate;
-      handlePcmSend(payload, { chunkCount: 1, sampleRate: sr });
+      const sent = safeSendAudioChunk(payload, {
+        ...baseMeta,
+        lane,
+        sampleRateHz: sr,
+        chunkCount: 1,
+        preRoll: true,
+        preRollMs: preSpeechBufferMs,
+        turnId,
+      });
+      if (sent) {
+        recordPcmFrameOutcome({ sent: 1 });
+      } else {
+        try {
+          logStage("client.audio_preroll_send_failed", { lane, turnId });
+        } catch (_) {}
+      }
     }
   }
 
@@ -1369,6 +1395,7 @@ export function createWsAudioRuntime(options = {}) {
     if (!(chunk instanceof Int16Array) || !chunk.length) {
       return;
     }
+    const isKeepalive = Boolean(meta.keepalive);
     let prerollChunksToSend = null;
     wsDiag("pcm_send_attempt", {
       bytes: chunk?.byteLength,
@@ -1379,6 +1406,7 @@ export function createWsAudioRuntime(options = {}) {
       logStage("client.audio_chunk", {
         bytes: chunk?.byteLength || 0,
         gumFailed,
+        turnId: currentTurnId,
       });
     } catch (_) {}
     // Instead of hard abort, allow one retry per session.
@@ -1422,8 +1450,11 @@ export function createWsAudioRuntime(options = {}) {
     }
 
     const vadState = typeof getVadController === "function" ? getVadController()?.getState?.() || null : null;
-    const softDecision = shouldSendFrameSoftGate({ vadState, speechSeen: speechSeenThisTurn, turnActive });
-    if (currentTurnId && speechSeenThisTurn && !turnActive) {
+    const softDecision = isKeepalive
+      ? { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null }
+      : shouldSendFrameSoftGate({ vadState, speechSeen: speechSeenThisTurn, turnActive });
+
+    if (!isKeepalive && currentTurnId && speechSeenThisTurn && !turnActive) {
       try {
         safeSendJSON({
           type: "client.turn_stop",
@@ -1437,7 +1468,7 @@ export function createWsAudioRuntime(options = {}) {
       currentTurnId = null;
       speechSeenThisTurn = false;
     }
-    if (!speechSeenThisTurn && softDecision.vadLikelySpeech) {
+    if (!isKeepalive && !speechSeenThisTurn && softDecision.vadLikelySpeech) {
       markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
       const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
       currentTurnId = turnIdCandidate && `${turnIdCandidate}`.length ? `${turnIdCandidate}` : allocateTurnId();
@@ -1477,9 +1508,12 @@ export function createWsAudioRuntime(options = {}) {
       metaSampleRate ||
       (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
 
+    if (!isKeepalive && prerollChunksToSend) {
+      sendPrerollChunks(prerollChunksToSend, effectiveSampleRate, { turnId: currentTurnId, seq });
+    }
+
     if (prerollChunksToSend) {
-      sendPrerollAndChunk(prerollChunksToSend, chunk, effectiveSampleRate);
-      return;
+      // Pre-roll chunks were already sent above. Continue to send the live chunk below.
     }
 
     if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
@@ -1509,6 +1543,8 @@ export function createWsAudioRuntime(options = {}) {
       sampleRateHz: effectiveSampleRate,
       chunkCount,
       seq,
+      keepalive: isKeepalive,
+      turnId: currentTurnId,
     });
 
     if (!sent) {
@@ -1518,6 +1554,7 @@ export function createWsAudioRuntime(options = {}) {
           bytes: chunk.byteLength,
           chunkCount,
           sampleRate: effectiveSampleRate,
+          turnId: currentTurnId,
         });
       } catch (_) {}
       return;
@@ -1528,7 +1565,7 @@ export function createWsAudioRuntime(options = {}) {
 
     // Existing metrics + telemetry
     try {
-      logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount });
+      logStage("client.audio_chunk_send", { seq, bytes, batch_chunks: chunkCount, turnId: currentTurnId });
     } catch (_) {}
 
     if (typeof onClientAudioChunkSend === "function") {
