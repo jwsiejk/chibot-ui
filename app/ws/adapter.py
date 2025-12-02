@@ -4421,7 +4421,7 @@ class ChatV2Adapter:
         meta: Dict[str, object] = {"byte_count": byte_count}
         if reason:
             meta["reason"] = reason
-        _log.debug(
+        _log.info(
             "evt=google_v3.audio_frame_ingest sid=%s turn_id=%s decision=%s",
             ctx.sid,
             ctx.current_turn_id,
