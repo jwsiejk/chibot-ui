@@ -1029,6 +1029,8 @@ export function createWsAudioRuntime(options = {}) {
   let lastSpeechSeenReqId = null;
   let currentTurnId = null;
   let nextTurnId = 1;
+  let speechStartSeen = false;
+  let speechNeverMarkedSeenLogged = false;
 
   function allocateTurnId() {
     return String(nextTurnId++);
@@ -1037,16 +1039,31 @@ export function createWsAudioRuntime(options = {}) {
     if (!vadState) {
       return { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null };
     }
+    const state = typeof vadState?.state === "string" ? vadState.state : null;
     const vadLikelySpeech = Boolean(
       vadState?.isSpeech ||
       vadState?.speech ||
       vadState?.speaking ||
-      vadState?.state === "speech" ||
-      vadState?.state === "voice"
+      state === "speech" ||
+      state === "voice" ||
+      (state && state !== "silence" && state !== "quiet")
     );
+    if (!speechSeenThisTurn && vadLikelySpeech) {
+      speechStartSeen = true;
+    }
     const shouldSend = speechSeen ? Boolean(turnActive) : vadLikelySpeech;
     const rmsAtTrigger = !speechSeen && vadLikelySpeech ? vadState?.rms ?? vadState?.rmsDb ?? null : null;
     return { shouldSend, vadLikelySpeech, rmsAtTrigger };
+  }
+
+  function maybeLogSpeechNeverMarkedSeen() {
+    if (speechNeverMarkedSeenLogged || !speechStartSeen || speechSeenThisTurn) {
+      return;
+    }
+    speechNeverMarkedSeenLogged = true;
+    try {
+      logStage("client.google_v3.speech_never_marked_seen", { turnId: currentTurnId || null });
+    } catch (_) {}
   }
 
   function markSpeechSeen({ rmsAtTrigger = null, framesSinceGreet = null, reqId = null }) {
@@ -1427,6 +1444,8 @@ export function createWsAudioRuntime(options = {}) {
     const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
     const currentReqId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
     if (currentReqId && currentReqId !== lastSpeechSeenReqId) {
+      maybeLogSpeechNeverMarkedSeen();
+      speechStartSeen = false;
       speechSeenThisTurn = false;
       lastSpeechSeenReqId = currentReqId;
       currentTurnId = null;
@@ -1467,6 +1486,7 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
       currentTurnId = null;
       speechSeenThisTurn = false;
+      speechStartSeen = false;
     }
     if (!isKeepalive && !speechSeenThisTurn && softDecision.vadLikelySpeech) {
       markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
