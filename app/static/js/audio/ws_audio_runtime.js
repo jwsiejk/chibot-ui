@@ -161,6 +161,7 @@ class PcmRingBuffer {
 function createRingBufferManager(sampleRate) {
   let ring = null;
   let preSpeechBufferMs = DEFAULT_PRE_SPEECH_BUFFER_MS;
+  let capacityMs = DEFAULT_RING_CAPACITY_MS;
   let lastStatus = null;
 
   function logStatus(reason = "status") {
@@ -172,6 +173,7 @@ function createRingBufferManager(sampleRate) {
     try {
       logStage("client.google_v3.ring_buffer_status", {
         preSpeechBufferMs,
+        capacityMs,
         framesStored,
         bytesStored: framesStored * Int16Array.BYTES_PER_ELEMENT,
         reason,
@@ -180,10 +182,10 @@ function createRingBufferManager(sampleRate) {
   }
 
   function init(ms, sr) {
-    const millis = Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_RING_CAPACITY_MS;
-    preSpeechBufferMs = millis;
+    preSpeechBufferMs = Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_PRE_SPEECH_BUFFER_MS;
+    capacityMs = Math.max(DEFAULT_RING_CAPACITY_MS, preSpeechBufferMs);
     const rate = Number.isFinite(sr) && sr > 0 ? sr : PCM_TARGET_SAMPLE_RATE;
-    ring = new PcmRingBuffer({ millis, sampleRate: rate, channels: DEFAULT_PCM_CHANNELS });
+    ring = new PcmRingBuffer({ millis: capacityMs, sampleRate: rate, channels: DEFAULT_PCM_CHANNELS });
     logStatus("init");
     return ring;
   }
@@ -1021,6 +1023,9 @@ export function createWsAudioRuntime(options = {}) {
   let speechSeenThisTurn = false;
   let lastSpeechSeenReqId = null;
   function shouldSendFrameSoftGate({ vadState, speechSeen, turnActive }) {
+    if (!vadState) {
+      return { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null };
+    }
     const vadLikelySpeech = Boolean(
       vadState?.isSpeech ||
       vadState?.speech ||
