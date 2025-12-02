@@ -150,6 +150,7 @@ export function initVAD({
   let gatePausedAt = 0;
   let lastGateHeartbeatAt = 0;
   let initialized = false;
+  let lastState = null;
 
   function computeThresholdDb() {
     const base = DEFAULTS.thresholdDb;
@@ -218,12 +219,14 @@ export function initVAD({
       return;
     }
     lastStatePublishAt = nowMs;
-    safePublish(publish, "client.vad.state", {
+    const state = {
       speech: vadSpeech,
       conf: computeConfidence(nowMs),
       energyDb: vadEnergyDb,
       noiseDb: vadNoiseDb,
-    });
+    };
+    lastState = state;
+    safePublish(publish, "client.vad.state", state);
     try {
       logStage("client.vad.state", {
         energyDb: vadEnergyDb,
@@ -260,6 +263,7 @@ export function initVAD({
     speechStartedAt = null;
     holdUntilMs = 0;
     initialized = false;
+    lastState = null;
     if (gatePaused && typeof onGateChange === "function") {
       onGateChange("resume", "reset");
       try {
@@ -362,6 +366,9 @@ export function initVAD({
     onPcmFrame,
     reset() {
       resetState(Date.now());
+    },
+    getState() {
+      return lastState;
     },
   };
 }
