@@ -1054,6 +1054,25 @@ export function createWsAudioRuntime(options = {}) {
   let pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
   let lastPcmSummaryAt = 0;
 
+  const policyHookLogLimitPerReason = 3;
+  let lastPolicyHookTurnId = null;
+  let policyHookCounts = new Map();
+
+  function shouldLogPolicyHook(reason) {
+    const turnId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() || null : null;
+    if (turnId !== lastPolicyHookTurnId) {
+      policyHookCounts.clear();
+      lastPolicyHookTurnId = turnId;
+    }
+    const key = `${turnId || "__none__"}:${reason || "unknown"}`;
+    const count = policyHookCounts.get(key) || 0;
+    if (count >= policyHookLogLimitPerReason) {
+      return false;
+    }
+    policyHookCounts.set(key, count + 1);
+    return true;
+  }
+
   function maybeLogPcmSummary(force = false) {
     const now = Date.now();
     if (!force && now - lastPcmSummaryAt < pcmSummaryWindowMs) {
@@ -1082,6 +1101,9 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function emitPolicyHook(reason, detail = {}) {
+    if (!shouldLogPolicyHook(reason)) {
+      return;
+    }
     try {
       logStage("client.google_v3.policy_hook", { reason, ...detail });
     } catch (_) {}
