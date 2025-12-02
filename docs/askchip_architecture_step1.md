@@ -55,6 +55,43 @@
 - Client logs aggregated and downloadable via admin export routes; console bridge in client forwards console messages to server (`client.log`). 【F:app/asgi_gateway.py†L300-L365】【F:app/static/js/app.js†L123-L160】
 - Admin UI routes for logs and flow tracing (`/admin/logs`, `/api/v1/admin/flow/...`) gated by auth helpers. 【F:app/asgi_gateway.py†L312-L365】
 
+### 3.5 Conversation, Greet, and ASR State Machine (Current)
+- **Server turn/voice state machine (EngineV2)**
+  - States: READY → LISTENING → THINKING → RESPONDING → CONFIRMING_BARGE (ordered by `_STATE_ORDER`). 【F:app/voice_v2/engine.py†L92-L106】
+  - Transitions (guarded by `_ALLOWED_TRANSITIONS` and `_set_state`):
+    - READY
+      - on `on_audio` when PCM arrives → LISTENING (creates new `turn_id`/`req_id`). 【F:app/voice_v2/engine.py†L1375-L1440】
+      - on `on_chat_user` text input → LISTENING (then `THINKING` once text committed). 【F:app/voice_v2/engine.py†L625-L690】
+      - on TTS events or barge recovery can go to RESPONDING (allowed transition). 【F:app/voice_v2/engine.py†L100-L105】【F:app/voice_v2/engine.py†L1375-L1511】
+    - LISTENING
+      - on ASR final commit (`on_asr_final`) → THINKING (LLM pipeline). 【F:app/voice_v2/engine.py†L812-L896】
+      - on barge grant triggers → CONFIRMING_BARGE (after `cancel_current_tts`). 【F:app/voice_v2/engine.py†L1109-L1147】
+    - THINKING
+      - on LLM plan/response start → RESPONDING (when TTS begins). 【F:app/voice_v2/engine.py†L520-L575】【F:app/voice_v2/engine.py†L570-L615】
+    - RESPONDING
+      - on TTS end (`on_tts_end`) → READY (emits EVT_TURN_END/perf summary). 【F:app/voice_v2/engine.py†L520-L575】【F:app/voice_v2/engine.py†L1441-L1511】
+      - on user audio/text barge with policy enabled → CONFIRMING_BARGE (then READY or LISTENING). 【F:app/voice_v2/engine.py†L1078-L1147】
+      - on new audio while speaking without barge policy → LISTENING allowed but may be rejected; telemetry logs ignored audio. 【F:app/voice_v2/engine.py†L680-L720】
+    - CONFIRMING_BARGE
+      - on scheduled confirmation → READY or LISTENING depending on policy result. 【F:app/voice_v2/engine.py†L1109-L1147】
+  - Each transition publishes EVT_TURN_STATE breadcrumbs; READY transition emits EVT_TURN_END and perf summary, resetting session metrics. 【F:app/voice_v2/engine.py†L1441-L1511】
+
+- **ASR streaming lifecycle (adapter + EngineV2 hooks)**
+  - Stream open triggers: `_schedule_asr_open` when headers validated and session not TTS-blocked; invoked on first user audio header or explicit client `asr.open`, after ensuring `can_open(ctx.session)` and not queued behind active TTS unless `_allow_capture_during_tts` says otherwise. 【F:app/ws/adapter.py†L8361-L8393】
+  - Preconditions: no existing open task, policy/session permits (`can_open`), TTS not masking unless allowed, queues reset and turn metrics initialized. 【F:app/ws/adapter.py†L8361-L8411】
+  - Open path: `_open_asr` allocates vendor engine, assigns `asr_stream_id`/`req_id`, resolves sample rate/language, and calls `engine.open` with GCP. On success marks session `open`, sets `asr_open=True`, starts no-audio safety net, publishes EVT_ASR_OPEN/EVT_ASR_READY to bus and `asr.ready` bundle to client. 【F:app/ws/adapter.py†L8444-L8605】
+  - Audio forwarding: incoming PCM frames are wrapped as WS audio events (seq/byte_count) in EngineV2 `on_audio`; adapter-side ring buffers count `audio_rx_*` metrics before ASR write (details in adapter queues). 【F:app/voice_v2/engine.py†L660-L720】【F:app/ws/adapter.py†L4392-L4440】
+  - Stream close conditions: `_close_asr` runs on end-of-turn, timeout, transport close, or errors; cancels open task, closes vendor engine, resets readiness flags, clears VAD/stream ids, and publishes ASR_CLOSED + invariants. 【F:app/ws/adapter.py†L8607-L8681】
+  - End-of-utterance handling: EngineV2 `on_asr_final` commits turn and transitions to THINKING; adapter `_handle_asr_result` marks `asr_final_emitted` then `_close_asr` may be invoked by `_end_user_turn`. 【F:app/voice_v2/engine.py†L812-L896】【F:app/ws/adapter.py†L8340-L8359】
+  - Silence/vendor timeouts: adapter tracks `no_audio_timeout_deadline_ms` and `_schedule_no_audio_safety_net` (invoked after open) to cancel when idle; `_MIC_OPEN_TIMEOUT_SECONDS` also guards initial mic open during greet. GCP errors like “Audio Timeout” lead to `_close_asr` with reason `timeout` and summary logging. 【F:app/ws/adapter.py†L51-L70】【F:app/ws/adapter.py†L8361-L8411】【F:app/ws/adapter.py†L8607-L8681】
+  - Keepalive behavior: client sends 20ms silence chunks; server constants `AUDIO_KEEPALIVE_CHUNK_MS=20` and idle safety nets expect periodic frames. Adapter logs WS_AUDIO_FIRST_CHUNK and uses `_DIAG_NO_AUDIO_CHECK_DELAY_SECONDS` plus `_NO_AUDIO_SAFETY_NET_DEFAULT_MS` to detect stalls; if keepalive missing, ASR safety net fires. 【F:app/ws/adapter.py†L51-L70】【F:app/ws/adapter.py†L113-L150】【F:app/ws/adapter.py†L8361-L8411】
+
+- **Current server gating rules**
+  - `GateController` reasons (`tts_active`, `manual_gate`, `system_hold`) determine mic mask; EngineV2 sets gate on TTS start and clears on TTS end or session close. 【F:app/voice_v2/gate.py†L7-L67】【F:app/voice_v2/engine.py†L520-L575】【F:app/voice_v2/engine.py†L520-L546】
+  - Adapter guards ASR open via `can_open(ctx.session)` and `_allow_capture_during_tts`; queued arm prevents open while TTS active. 【F:app/ws/adapter.py†L8361-L8393】
+  - Audio frames ignored when EngineV2 state not LISTENING (logs `audio_ignored`) ensuring gate by state. 【F:app/voice_v2/engine.py†L680-L720】
+  - Policy flags `barge_in_enabled`, `ALLOW_AUDIO_WITHOUT_ASR`, and adapter `client_turn_closed`/`asr_ready` fields gate processing; inferred from `_schedule_asr_open` resets and barge checks. 【F:app/voice_v2/engine.py†L600-L690】【F:app/ws/adapter.py†L8361-L8393】
+
 ## 4. Client-Side Architecture (Current)
 
 ### 4.1 UI Shell & Application State
@@ -77,11 +114,42 @@
 - AppState default phase `greet`; comment notes ws_audio_runtime treats missing `turnActive` as true, so PCM can flow unless turn gating set elsewhere. 【F:app/static/js/app.js†L188-L195】
 - PCM warm flag set after first frame; keepalive timers manage audio even when paused. 【F:app/static/js/audio/ws_audio_runtime.js†L32-L45】
 - Silence detector can trigger banners via `recordClientBannerEvent` when mic data absent (from imported telemetry). 【F:app/static/js/audio/ws_audio_runtime.js†L4-L25】
+- Additional gating flags and where they live:
+  - `baseEnabled` / `baseEnabledReason` in `ws_audio_runtime` must be true with an active MediaStream (`hasStream`) to form the base gate; toggled by `setBaseEnabled` and cleared on reset. 【F:app/static/js/audio/ws_audio_runtime.js†L737-L758】【F:app/static/js/audio/ws_audio_runtime.js†L1489-L1520】【F:app/static/js/audio/ws_audio_runtime.js†L2048-L2075】
+  - `senderPaused` and `pause_reasons` managed via injected `setSenderPauseReason` / `applySenderPausedState`; auto-unpause watchdog clears `greet` pause when all gates satisfied. 【F:app/static/js/audio/ws_audio_runtime.js†L1469-L1540】【F:app/static/js/audio/ws_audio_runtime.js†L1501-L1539】
+  - `phaseAllowsSend` derived from AppState phase; allowed when `conversation`, `conversation_ready`, or `user_turn` and WS `wsPhase` is `connected`/`ready`. 【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1664】
+  - `micAndPcmReady` equivalent: `baseGate` (baseEnabled + stream) and `hasStream` checks ensure capture stream and pcmSender exist before enabling sender. 【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1687】【F:app/static/js/audio/ws_audio_runtime.js†L1694-L1824】
+  - `conversationAsrReady`: `asrReady` flag from AppState gates `shouldSend` unless debug `FORCE_PCM_SEND` override. 【F:app/static/js/audio/ws_audio_runtime.js†L1589-L1636】
+  - `turnActive` default true if missing; combined with `senderPaused` and `phaseAllowsSend` to decide `decisionReason` such as `turn_inactive` or `phase_not_ready`. 【F:app/static/js/audio/ws_audio_runtime.js†L1589-L1663】
+  - Silence/idle gates: keepalive timers track `lastRealAudioAt`; when idle beyond `AUDIO_KEEPALIVE_IDLE_MS` a `idle_timeout` pause reason is set. 【F:app/static/js/audio/ws_audio_runtime.js†L737-L821】
+  - Watchdogs and drop reporting: `maybeAutoUnpauseSender` flips pause off when all gates true; `logAudioDropSummary` (invoked on send failures) emits gate snapshot. 【F:app/static/js/audio/ws_audio_runtime.js†L1469-L1540】【F:app/static/js/audio/ws_audio_runtime.js†L1210-L1255】
+- VAD interaction:
+  - VAD controller (if provided) influences `canCaptureNow`/`isAudioStreaming`; RMS-based silence detector uses `SILENCE_REQUIRED_FRAMES`, `SILENCE_RMS_THRESHOLD`, `SILENCE_IDLE_TICK_MS`. 【F:app/static/js/audio/ws_audio_runtime.js†L19-L37】【F:app/static/js/audio/ws_audio_runtime.js†L56-L94】
+  - `maybeSendAudioKeepalive` only runs when AppState `listening` and streaming; speech start from VAD effectively drives `captureAllowed` and PCM send decisions. 【F:app/static/js/audio/ws_audio_runtime.js†L823-L872】
+  - WS/App phases feed the gate: if `wsPhase` not in ready set or phase not allowed, `decisionReason` becomes `ws_not_ready`/`phase_not_ready` and `pcmSender.setEnabled(False)` blocks PCM. 【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1663】【F:app/static/js/audio/ws_audio_runtime.js†L1694-L1824】
 
 ### 4.5 Error Handling and Edge Cases
 - `gumFailed` flag in ws_audio_runtime prevents reuse of failed capture session; diagnostic hook `window.__askchipShowMicStatus` presents mic errors. 【F:app/static/js/audio/ws_audio_runtime.js†L196-L200】【F:app/static/js/app.js†L31-L43】
 - Console bridge avoids infinite loops via guard flag; noisy messages dropped. 【F:app/static/js/app.js†L73-L160】
 - Keepalive and silence thresholds act as safeties to avoid ASR timeouts; WS-ready phases required to send audio to avoid drop logging. 【F:app/static/js/audio/ws_audio_runtime.js†L23-L39】
+
+### 4.6 Client Audio & Phase State Machine (Current)
+- **Phases and states**
+  - Voice phase controller states: `boot` → `greet` → `conversation_ready` → `user_turn` → `conversation_ready` (on turn end) → `closing`/`closed`. 【F:app/static/js/voice/phase_controller.js†L1-L37】
+  - AppState initializes `phase="greet"`; `turnActive` treated as true when absent (ws_audio_runtime comment). 【F:app/static/js/app.js†L183-L195】
+- **Transitions and triggers (textual state diagram)**
+  - boot → greet: page load initializes AppState, console bridge, and mic helpers. 【F:app/static/js/app.js†L183-L236】
+  - greet → conversation_ready: greet TTS start/end mark phase via `markGreetStart`/`markGreetEnd`. 【F:app/static/js/voice/phase_controller.js†L17-L31】
+  - conversation_ready → user_turn: VAD speech start or ASR arm leads to `enterConversation`; PCM sender still gated by `wsPhase` readiness and `asrReady`. 【F:app/static/js/voice/phase_controller.js†L17-L31】【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1664】
+  - user_turn → conversation_ready: server `turn.end` handling sets AppState.turnActive false and voice phase `endUserTurn`. 【F:app/static/js/voice/phase_controller.js†L23-L31】
+  - closing/closed: WS close/error sets `wsPhase` to `closing/closed`, making `wsReadyForAudio` false and disabling PCM send. 【F:app/static/js/ws/connection.js†L156-L330】【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1664】
+- **Timeline: page load → greet → first user turn (current)**
+  1. Page loads; AppState.phase set to `greet`, console bridge patched, mic ensured via `ensureMicHardware`. 【F:app/static/js/app.js†L31-L90】【F:app/static/js/app.js†L183-L236】
+  2. WS client connects (`wsPhase` transitions `connecting` → `connected` → `ready`). 【F:app/static/js/ws/connection.js†L156-L330】【F:app/static/js/ws_client.js†L400-L430】
+  3. Greet playback: voice phase marks greet start/end; during greet, `senderPaused` may include `greet` until `maybeAutoUnpauseSender` clears when gates allow. 【F:app/static/js/voice/phase_controller.js†L17-L31】【F:app/static/js/audio/ws_audio_runtime.js†L1469-L1540】
+  4. Conversation ready: adapter publishes `asr.ready`; AppState.asrReady set, and `computePcmGateSnapshot` sees `phaseAllowsSend` true. 【F:app/ws/adapter.py†L8444-L8605】【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1664】
+  5. First PCM send: mic stream acquired, pcmSender initialized; when `baseGate`, `wsReadyForAudio`, `asrReady`, and `turnActive` hold, `updatePcmSenderState` enables sender and logs `client.audio_chunk_send`. 【F:app/static/js/audio/ws_audio_runtime.js†L1469-L1516】【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1687】
+  6. Turn end: EngineV2 ASR final → THINKING/RESPONDING; client receives TTS/`turn.end`, phase returns to `conversation_ready`, gating next turn. 【F:app/voice_v2/engine.py†L812-L896】【F:app/static/js/voice/phase_controller.js†L23-L31】
 
 ## 5. Data & Persistence (Current)
 
@@ -96,3 +164,11 @@
 - On page load, app.js sets initial phase, patches console, ensures mic readiness; WS client connects and when in `connected/ready` phases audio runtime can stream PCM16 @16k mono batches with silence keepalives. 【F:app/static/js/app.js†L183-L196】【F:app/static/js/audio/ws_audio_runtime.js†L19-L37】
 - Server ASGI gateway routes `/ws/v2/chat` to ChatV2 adapter which validates policy, handles JWT, rate limits, and forwards PCM to GCP ASR; EngineV2 orchestrates turn states, LLM, and TTS responses streamed back over WS. 【F:app/asgi_gateway.py†L188-L235】【F:app/ws/adapter.py†L101-L185】【F:app/voice_v2/engine.py†L114-L174】
 - Hard-coded constraints include PCM16 mono 16k requirement, ASR silence/utterance timing from config defaults, mic-open timeouts, heartbeat/ping intervals, and readiness via export directory writeability. 【F:app/config.py†L101-L144】【F:app/ws/adapter.py†L145-L150】【F:app/asgi_gateway.py†L258-L276】
+
+#### 6.1 Current Event Sequence: Greet + First User Turn
+1. Client loads page and opens WS (`wsPhase=connected/ready`), sends initial telemetry.
+2. Server emits `policy.interaction`/`info`, then greets; TTS start/end propagate to client, voice phase marks greet start/end. 【F:app/voice_v2/engine.py†L520-L575】【F:app/static/js/voice/phase_controller.js†L17-L31】
+3. Adapter publishes `asr.ready` bundle after GCP stream opens; client sets `asrReady` and updates PCM gate. 【F:app/ws/adapter.py†L8444-L8605】【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1664】
+4. Client begins PCM send once `baseGate` + `wsReadyForAudio` + `asrReady` satisfied; first chunk logged (`client.audio_chunk_send`). 【F:app/static/js/audio/ws_audio_runtime.js†L1586-L1687】【F:app/static/js/audio/ws_audio_runtime.js†L1469-L1516】
+5. Adapter forwards PCM to GCP; on final ASR result EngineV2 transitions LISTENING→THINKING→RESPONDING, sends `chat.delta/commit` and TTS start. 【F:app/voice_v2/engine.py†L812-L896】【F:app/voice_v2/engine.py†L520-L575】
+6. TTS streamed to client; TTS end triggers EngineV2 READY and adapter `_close_asr`; client phase returns to `conversation_ready`, awaiting next turn. 【F:app/voice_v2/engine.py†L520-L575】【F:app/ws/adapter.py†L8607-L8681】【F:app/static/js/voice/phase_controller.js†L17-L31】
