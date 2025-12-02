@@ -1022,6 +1022,12 @@ export function createWsAudioRuntime(options = {}) {
 
   let speechSeenThisTurn = false;
   let lastSpeechSeenReqId = null;
+  let currentTurnId = null;
+  let nextTurnId = 1;
+
+  function allocateTurnId() {
+    return String(nextTurnId++);
+  }
   function shouldSendFrameSoftGate({ vadState, speechSeen, turnActive }) {
     if (!vadState) {
       return { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null };
@@ -1125,11 +1131,7 @@ export function createWsAudioRuntime(options = {}) {
         continue;
       }
       const sr = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : asrRate;
-      if (!safeSendAudioChunk(payload, { lane: "mic" })) {
-        console.warn("preroll send fallback failed");
-      } else {
-        handlePcmSend(payload, { chunkCount: 1, sampleRate: sr });
-      }
+      handlePcmSend(payload, { chunkCount: 1, sampleRate: sr });
     }
   }
 
@@ -1367,6 +1369,7 @@ export function createWsAudioRuntime(options = {}) {
     if (!(chunk instanceof Int16Array) || !chunk.length) {
       return;
     }
+    let prerollChunksToSend = null;
     wsDiag("pcm_send_attempt", {
       bytes: chunk?.byteLength,
       gumFailed,
@@ -1398,6 +1401,7 @@ export function createWsAudioRuntime(options = {}) {
     if (currentReqId && currentReqId !== lastSpeechSeenReqId) {
       speechSeenThisTurn = false;
       lastSpeechSeenReqId = currentReqId;
+      currentTurnId = null;
     }
 
     const AppState = getAppState();
@@ -1419,8 +1423,40 @@ export function createWsAudioRuntime(options = {}) {
 
     const vadState = typeof getVadController === "function" ? getVadController()?.getState?.() || null : null;
     const softDecision = shouldSendFrameSoftGate({ vadState, speechSeen: speechSeenThisTurn, turnActive });
+    if (currentTurnId && speechSeenThisTurn && !turnActive) {
+      try {
+        safeSendJSON({
+          type: "client.turn_stop",
+          lane: "mic",
+          turn_id: currentTurnId,
+        });
+      } catch (_) {}
+      try {
+        logStage("client.google_v3.turn_stop_sent", { turnId: currentTurnId });
+      } catch (_) {}
+      currentTurnId = null;
+      speechSeenThisTurn = false;
+    }
     if (!speechSeenThisTurn && softDecision.vadLikelySpeech) {
       markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
+      const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
+      currentTurnId = turnIdCandidate && `${turnIdCandidate}`.length ? `${turnIdCandidate}` : allocateTurnId();
+      try {
+        prerollChunksToSend = ringBufferManager.drainAll();
+      } catch (_) {
+        prerollChunksToSend = [];
+      }
+      try {
+        safeSendJSON({
+          type: "client.turn_start",
+          lane: "mic",
+          turn_id: currentTurnId,
+          pre_roll_ms: preSpeechBufferMs,
+        });
+      } catch (_) {}
+      try {
+        logStage("client.google_v3.turn_start_sent", { turnId: currentTurnId, preRollMs: preSpeechBufferMs });
+      } catch (_) {}
     }
     if (!softDecision.shouldSend) {
       recordPcmFrameOutcome({ droppedSoft: chunkCount });
@@ -1440,6 +1476,11 @@ export function createWsAudioRuntime(options = {}) {
       sr ||
       metaSampleRate ||
       (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
+
+    if (prerollChunksToSend) {
+      sendPrerollAndChunk(prerollChunksToSend, chunk, effectiveSampleRate);
+      return;
+    }
 
     if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
       try {
