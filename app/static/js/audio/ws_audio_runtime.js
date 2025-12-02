@@ -2081,6 +2081,7 @@ export function createWsAudioRuntime(options = {}) {
         console.log("client.pcm_sender.state", {
           enabled: shouldSend,
           reason,
+          signatureChanged,
           wsPhase,
           wsPhaseKnown,
           ws_ready: wsReadyForAudio,
@@ -2090,6 +2091,7 @@ export function createWsAudioRuntime(options = {}) {
         logStage("client.pcm_sender.state", {
           enabled: shouldSend,
           reason,
+          signatureChanged,
           senderPaused,
           asrReady,
           wsPhase,
