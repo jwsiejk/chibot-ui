@@ -648,6 +648,7 @@ class AdapterContext:
     asr_ready_suppressed_logged: bool = False
     asr_ready_after_greet_logged: bool = False
     conversation_ready_logged: bool = False
+    asr_ready_skip_no_turn_logged: bool = False
     outbound_queue_depth: int = 0
     backpressure_state: Literal["off", "on"] = "off"
     outbox: asyncio.Queue[Dict[str, Any]] | None = None
@@ -873,6 +874,7 @@ class ChatV2Adapter:
         ctx.turn_start_ts_ms = None
         ctx.bytes_from_client_this_turn = 0
         ctx.audio_ignored_no_turn_logged = False
+        ctx.asr_ready_skip_no_turn_logged = False
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -1367,9 +1369,15 @@ class ChatV2Adapter:
         label: str,
     ) -> None:
         if not ctx.current_turn_open:
-            _log.debug(
-                "evt=asr_ready_skip_no_turn sid=%s where=%s", ctx.sid, label
-            )
+            # In Google Flow V3, _ensure_asr_ready may still be called around greet/tts_end,
+            # but we only care once that there was "no turn" at that time. Avoid spamming logs.
+            if not ctx.asr_ready_skip_no_turn_logged:
+                ctx.asr_ready_skip_no_turn_logged = True
+                _log.debug(
+                    "evt=asr_ready_skip_no_turn sid=%s where=%s",
+                    ctx.sid,
+                    label,
+                )
             return
         # Canonical ASR readiness path: this function decides whether to schedule
         # `_open_asr`, waits for the open task to complete, and emits the
