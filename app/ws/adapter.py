@@ -4411,9 +4411,27 @@ class ChatV2Adapter:
         except Exception:
             _log.exception("evt=client_turn_stop_close_failed sid=%s", ctx.sid)
 
+    def _log_audio_frame_ingest(
+        self,
+        ctx: AdapterContext,
+        decision: str,
+        byte_count: int,
+        reason: str | None = None,
+    ) -> None:
+        meta: Dict[str, object] = {"byte_count": byte_count}
+        if reason:
+            meta["reason"] = reason
+        _log.debug(
+            "evt=google_v3.audio_frame_ingest sid=%s turn_id=%s decision=%s",
+            ctx.sid,
+            ctx.current_turn_id,
+            decision,
+            extra={"meta": meta},
+        )
+
     async def _handle_binary(
         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
-    ) -> _HandleResult:
+        ) -> _HandleResult:
         byte_count = len(data)
         ctx.last_client_activity_ms = int(time.time() * 1000)
         self._cancel_no_audio_watchdog(ctx)
@@ -4428,6 +4446,9 @@ class ChatV2Adapter:
 
         # During greet (greet_completed == False), incoming PCM must not be fed to ASR.
         if not ctx.greet_completed:
+            self._log_audio_frame_ingest(
+                ctx, "rejected_greet_in_progress", byte_count, "greet_not_completed"
+            )
             meta = {
                 "byte_count": byte_count,
                 "error": "audio_not_expected",
@@ -4440,6 +4461,12 @@ class ChatV2Adapter:
             return self._HandleResult(False, 1003, "audio_not_expected")
 
         if not ctx.current_turn_open or not ctx.accepting_audio:
+            self._log_audio_frame_ingest(
+                ctx,
+                "ignored_no_turn",
+                byte_count,
+                f"current_turn_open={ctx.current_turn_open},accepting_audio={ctx.accepting_audio}",
+            )
             if not ctx.audio_ignored_no_turn_logged:
                 ctx.audio_ignored_no_turn_logged = True
                 _log.info(
@@ -4448,10 +4475,13 @@ class ChatV2Adapter:
                     ctx.current_turn_open,
                     ctx.accepting_audio,
                     ctx.current_turn_id,
-                )
+            )
             return self._HandleResult(True)
 
         if byte_count > self.binary_limit_bytes:
+            self._log_audio_frame_ingest(
+                ctx, "rejected_frame_too_large", byte_count
+            )
             await self._publish(
                 EVT_WS_AUDIO_RECV,
                 ctx.sid,
@@ -4474,6 +4504,9 @@ class ChatV2Adapter:
             except Exception:
                 frame_obj = None
             if isinstance(frame_obj, Mapping) and isinstance(frame_obj.get("type"), str):
+                self._log_audio_frame_ingest(
+                    ctx, "routed_to_text_control", byte_count, "msgpack_control_frame"
+                )
                 json_payload = json.dumps(frame_obj, separators=(",", ":"))
                 return await self._handle_text(
                     json_payload,
@@ -4485,6 +4518,9 @@ class ChatV2Adapter:
                 )
 
         if ctx.client_turn_closed:
+            self._log_audio_frame_ingest(
+                ctx, "ignored_after_client_turn_stop", byte_count
+            )
             await self._publish(
                 EVT_WS_AUDIO_RECV,
                 ctx.sid,
@@ -4494,6 +4530,12 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         if not ctx.client_capture_armed:
+            self._log_audio_frame_ingest(
+                ctx,
+                "rejected_client_capture_not_armed",
+                byte_count,
+                "client_capture_not_armed",
+            )
             _log.debug(
                 "evt=audio_drop_before_asr sid=%s bytes=%s reason=%s asr_state=%s",
                 ctx.sid,
@@ -4551,9 +4593,21 @@ class ChatV2Adapter:
                             "audio_not_expected",
                             "asr not ready",
                         )
+                        self._log_audio_frame_ingest(
+                            ctx,
+                            "rejected_asr_not_ready",
+                            byte_count,
+                            "asr_not_ready",
+                        )
                         return self._HandleResult(False, 1003, "audio_not_expected")
 
         if ctx.session.asr_state != "open" and not (ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR):
+            self._log_audio_frame_ingest(
+                ctx,
+                "ignored_asr_session_not_open",
+                byte_count,
+                f"state={ctx.session.asr_state}",
+            )
             drop_meta = {
                 "reason": "not_open",
                 "byte_count": byte_count,
@@ -4567,6 +4621,12 @@ class ChatV2Adapter:
             return self._HandleResult(True)
 
         if not ctx.accepting_audio:
+            self._log_audio_frame_ingest(
+                ctx,
+                "rejected_not_accepting_audio",
+                byte_count,
+                f"violations={ctx.audio_violation_count + 1}",
+            )
             ctx.audio_violation_count += 1
             violation_meta = {
                 "byte_count": byte_count,
@@ -4666,6 +4726,12 @@ class ChatV2Adapter:
             and ctx.audio_chunks_recv == 0
             and data.startswith(b"\x1A\x45\xDF\xA3")
         ):
+            self._log_audio_frame_ingest(
+                ctx,
+                "rejected_container_mismatch",
+                byte_count,
+                "unexpected_container",
+            )
             meta = {
                 "byte_count": byte_count,
                 "error": "unexpected_container",
@@ -4691,6 +4757,11 @@ class ChatV2Adapter:
             if ctx.current_turn_open and not ctx.asr_open and ctx.asr_open_task is None:
                 await self._ensure_previous_turn_closed(ctx, "pcm_first_chunk")
                 self._schedule_asr_open(ctx)
+                self._log_audio_frame_ingest(
+                    ctx,
+                    "pre_open_asr_scheduled",
+                    byte_count,
+                )
                 sample_rate = self._resolve_asr_sample_rate(ctx)
                 language_config = self._resolve_asr_config(ctx)
                 language_code = (
@@ -4709,6 +4780,9 @@ class ChatV2Adapter:
                 )
                 await self._invoke_engine("on_asr_open", ctx.sid, ctx.current_turn_id)
             else:
+                self._log_audio_frame_ingest(
+                    ctx, "ignored_pre_open_no_stream", byte_count
+                )
                 return self._HandleResult(True)
 
         if ctx.audio_highest_seq < 0:
@@ -4776,6 +4850,12 @@ class ChatV2Adapter:
                 ctx.audio_bytes_recv,
             )
 
+        self._log_audio_frame_ingest(
+            ctx,
+            "accepted_to_bridge",
+            byte_count,
+            None,
+        )
         await self._ingest_audio_chunk(ctx, bytes(data), seq)
         return self._HandleResult(True)
 
