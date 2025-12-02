@@ -818,6 +818,11 @@ export function createWsAudioRuntime(options = {}) {
     }
   }
 
+  function resetSilenceSuppression() {
+    // Phase 1 (Google Flow V3): silence pause reasons are removed. This stub remains
+    // for API compatibility with previous implementations and test helpers.
+  }
+
   function sendAudioKeepaliveChunk(now) {
     const sampleRate = 16000;
     const samples = Math.max(
