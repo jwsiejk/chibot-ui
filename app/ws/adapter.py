@@ -640,6 +640,7 @@ class AdapterContext:
     audio_meta: Optional[Dict[str, Any]] = None
     audio_meta_req_id: Optional[str] = None
     accepting_audio: bool = True
+    audio_ignored_no_turn_logged: bool = False
     audio_violation_count: int = 0
     client_turn_closed: bool = False
     awaiting_asr_ready: bool = False
@@ -871,6 +872,7 @@ class ChatV2Adapter:
         ctx.current_turn_open = False
         ctx.turn_start_ts_ms = None
         ctx.bytes_from_client_this_turn = 0
+        ctx.audio_ignored_no_turn_logged = False
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -3505,6 +3507,7 @@ class ChatV2Adapter:
             ctx.turn_start_ts_ms = self._now_ms()
             ctx.bytes_from_client_this_turn = 0
             ctx.accepting_audio = True
+            ctx.audio_ignored_no_turn_logged = False
             self._refresh_no_audio_safety_net(ctx)
 
             _log.info(
@@ -3588,6 +3591,7 @@ class ChatV2Adapter:
             ctx.bytes_from_client_this_turn = 0
             ctx.current_turn_open = False
             ctx.accepting_audio = False
+            ctx.audio_ignored_no_turn_logged = False
             self._cancel_no_audio_safety_net(ctx)
 
             return self._HandleResult(True)
@@ -4428,12 +4432,15 @@ class ChatV2Adapter:
             return self._HandleResult(False, 1003, "audio_not_expected")
 
         if not ctx.current_turn_open or not ctx.accepting_audio:
-            _log.info(
-                "evt=google_v3.audio_ignored_no_turn sid=%s turn_open=%s accepting=%s",
-                ctx.sid,
-                ctx.current_turn_open,
-                ctx.accepting_audio,
-            )
+            if not ctx.audio_ignored_no_turn_logged:
+                ctx.audio_ignored_no_turn_logged = True
+                _log.info(
+                    "evt=google_v3.audio_ignored_no_turn sid=%s turn_open=%s accepting=%s turn_id=%s",
+                    ctx.sid,
+                    ctx.current_turn_open,
+                    ctx.accepting_audio,
+                    ctx.current_turn_id,
+                )
             return self._HandleResult(True)
 
         if byte_count > self.binary_limit_bytes:
@@ -7589,6 +7596,8 @@ class ChatV2Adapter:
         self, ctx: AdapterContext, loop: asyncio.AbstractEventLoop
     ) -> None:
         self._cancel_no_audio_safety_net(ctx)
+        if not ctx.current_turn_open:
+            return
         ctx.mic_open_timeout_seconds = self._mic_open_timeout_seconds(ctx)
         safety_timeout = self._no_audio_safety_net_seconds(ctx)
 
@@ -7618,10 +7627,16 @@ class ChatV2Adapter:
                     "_set_state", ctx.sid, "Ready", reason="no_audio_safety_net"
                 )
             )
+            _log.debug(
+                "evt=google_v3.asr_no_audio_engine_reset sid=%s",
+                ctx.sid,
+            )
             ctx.current_turn_open = False
             ctx.current_turn_id = None
             ctx.bytes_from_client_this_turn = 0
             ctx.turn_start_ts_ms = None
+            ctx.accepting_audio = False
+            ctx.audio_ignored_no_turn_logged = False
 
         try:
             ctx.no_audio_safety_net = loop.call_later(safety_timeout, _fire)
@@ -7629,6 +7644,8 @@ class ChatV2Adapter:
             ctx.no_audio_safety_net = None
 
     def _refresh_no_audio_safety_net(self, ctx: AdapterContext) -> None:
+        if not ctx.current_turn_open:
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -8592,6 +8609,7 @@ class ChatV2Adapter:
         ctx.current_turn_id = None
         ctx.turn_start_ts_ms = None
         ctx.bytes_from_client_this_turn = 0
+        ctx.audio_ignored_no_turn_logged = False
         self._end_user_turn(ctx)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
         # - deciding whether to keep listening vs close ASR, and

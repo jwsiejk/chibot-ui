@@ -720,10 +720,27 @@ class EngineV2:
 
         session = self._ensure_session(sid)
         if session.state not in {READY, RESPONDING}:
+            _log.debug(
+                "evt=google_v3.engine_asr_open_ignored sid=%s state=%s turn_id=%s",
+                sid,
+                session.state,
+                turn_id,
+            )
             return
         self._set_state(sid, LISTENING, reason="asr_open")
         session = self._ensure_session(sid)
-        if session.state == LISTENING and isinstance(turn_id, str) and turn_id:
+        if session.state != LISTENING:
+            return
+
+        _log.info(
+            "evt=google_v3.engine_asr_open sid=%s state=%s turn_id=%s",
+            sid,
+            session.state,
+            turn_id,
+        )
+        if session.turn_started_ms is None:
+            session.turn_started_ms = _now_ms()
+        if isinstance(turn_id, str) and turn_id:
             session.turn_id = turn_id
 
     def on_asr_partial(
