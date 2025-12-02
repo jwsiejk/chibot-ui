@@ -35,6 +35,17 @@ const WS_AUDIO_DROP_LOG_LIMIT = 5;
 
 const primedSessionIds = new Set();
 
+function phaseAllowsAudioSend(phase) {
+  if (typeof phase !== "string") return true;
+  return (
+    phase === "conversation_ready" ||
+    phase === "user_turn" ||
+    phase === "conversation" ||
+    phase === VOICE_PHASE.ConversationReady ||
+    phase === VOICE_PHASE.UserTurn
+  );
+}
+
 let pcmWarm = false;
 function markPcmWarm() {
   pcmWarm = true;
@@ -983,13 +994,7 @@ export function createWsAudioRuntime(options = {}) {
 
   function computeHardGateSnapshot({ wsPhase, appPhase, serverHold, fatalError }) {
     const wsReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
-    const appReady = typeof appPhase === "string"
-      ? (appPhase === "conversation_ready" ||
-        appPhase === "conversation" ||
-        appPhase === VOICE_PHASE.ConversationReady ||
-        appPhase === VOICE_PHASE.UserTurn ||
-        appPhase === "user_turn")
-      : true;
+    const appReady = phaseAllowsAudioSend(appPhase);
     let allowed = wsReady && appReady && !serverHold && !fatalError;
     let reason = "ok";
     if (!wsReady) {
@@ -1009,6 +1014,7 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   let lastHardGateLogged = null;
+  let lastPcmGateLoggedSignature = null;
   function maybeLogHardGate(snapshot, { wsPhase, appPhase }) {
     const signature = snapshot ? `${snapshot.allowed}:${snapshot.reason}` : "none";
     if (lastHardGateLogged === signature) return;
@@ -1713,13 +1719,7 @@ export function createWsAudioRuntime(options = {}) {
     );
     const fatalError = Boolean(gumFailed);
     const phaseValue = typeof stateSnapshot?.phase === "string" ? stateSnapshot.phase : null;
-    const phaseAllowsSend = phaseValue
-      ? phaseValue === "conversation_ready" ||
-        phaseValue === "user_turn" ||
-        phaseValue === "conversation" ||
-        phaseValue === VOICE_PHASE.ConversationReady ||
-        phaseValue === VOICE_PHASE.UserTurn
-      : true;
+    const phaseAllowsSend = phaseAllowsAudioSend(phaseValue);
     const wsPhase = typeof stateSnapshot?.wsPhase === "string" ? stateSnapshot.wsPhase : null;
     const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
     const wsReadyForAudio = wsPhaseKnown ? WS_READY_PHASES.has(wsPhase) : true;
@@ -1847,6 +1847,19 @@ export function createWsAudioRuntime(options = {}) {
       senderPaused,
       canCapture: captureAllowed,
     };
+    const gateSignature = [
+      phaseValue || "null",
+      wsPhase || "null",
+      baseGate ? "B1" : "B0",
+      hasStream ? "S1" : "S0",
+      shouldSend ? "E1" : "E0",
+      decisionReason || "null",
+    ].join("|");
+    const signatureChanged = gateSignature !== lastPcmGateLoggedSignature;
+
+    if (signatureChanged) {
+      lastPcmGateLoggedSignature = gateSignature;
+    }
 
     try {
       logStage("client.pcm_sender_state.update", {
@@ -1864,57 +1877,58 @@ export function createWsAudioRuntime(options = {}) {
       console.log("AskChip pcm_sender.gates", { reason, ...gates });
     } catch (_) {}
 
-    // Always log the raw inputs on every call
-    try {
-      logStage("client.audio_stream_state_inputs", {
-        reason,
-        shouldSend,
-        base_enabled: baseGate,
-        hasStream,
-        force_pcm_send: FORCE_PCM_SEND,
-        isAudioStreaming: audioStreaming,
-        senderPaused: gates.senderPaused,
-        canCaptureNow: gates.canCapture,
-        asrReady: gates.asrReady,
-        ttsActive: gates.ttsActive,
-        micPerm: gates.micPerm,
-        turnActive,
-        serverHold,
-        fatalError,
-        hasPcmSender: !!pcmSender,
-        baseEnabledReason,
-        phase: phaseValue,
-        phase_allows_send: phaseAllowsSend,
-        wsPhase,
-        wsPhaseKnown,
-        ws_ready: wsReadyForAudio,
-      });
-    } catch (_) {}
-    try {
-      console.log("[ws_audio_runtime] updatePcmSenderState.inputs", {
-        reason,
-        shouldSend,
-        base_enabled: baseGate,
-        hasStream,
-        force_pcm_send: FORCE_PCM_SEND,
-        isAudioStreaming: audioStreaming,
-        senderPaused: gates.senderPaused,
-        canCaptureNow: gates.canCapture,
-        asrReady: gates.asrReady,
-        ttsActive: gates.ttsActive,
-        micPerm: gates.micPerm,
-        turnActive,
-        serverHold,
-        fatalError,
-        hasPcmSender: !!pcmSender,
-        baseEnabledReason,
-        phase: phaseValue,
-        phase_allows_send: phaseAllowsSend,
-        wsPhase,
-        wsPhaseKnown,
-        ws_ready: wsReadyForAudio,
-      });
-    } catch (_) {}
+    if (signatureChanged) {
+      try {
+        logStage("client.audio_stream_state_inputs", {
+          reason,
+          shouldSend,
+          base_enabled: baseGate,
+          hasStream,
+          force_pcm_send: FORCE_PCM_SEND,
+          isAudioStreaming: audioStreaming,
+          senderPaused: gates.senderPaused,
+          canCaptureNow: gates.canCapture,
+          asrReady: gates.asrReady,
+          ttsActive: gates.ttsActive,
+          micPerm: gates.micPerm,
+          turnActive,
+          serverHold,
+          fatalError,
+          hasPcmSender: !!pcmSender,
+          baseEnabledReason,
+          phase: phaseValue,
+          phase_allows_send: phaseAllowsSend,
+          wsPhase,
+          wsPhaseKnown,
+          ws_ready: wsReadyForAudio,
+        });
+      } catch (_) {}
+      try {
+        console.log("[ws_audio_runtime] updatePcmSenderState.inputs", {
+          reason,
+          shouldSend,
+          base_enabled: baseGate,
+          hasStream,
+          force_pcm_send: FORCE_PCM_SEND,
+          isAudioStreaming: audioStreaming,
+          senderPaused: gates.senderPaused,
+          canCaptureNow: gates.canCapture,
+          asrReady: gates.asrReady,
+          ttsActive: gates.ttsActive,
+          micPerm: gates.micPerm,
+          turnActive,
+          serverHold,
+          fatalError,
+          hasPcmSender: !!pcmSender,
+          baseEnabledReason,
+          phase: phaseValue,
+          phase_allows_send: phaseAllowsSend,
+          wsPhase,
+          wsPhaseKnown,
+          ws_ready: wsReadyForAudio,
+        });
+      } catch (_) {}
+    }
 
     const socket = resolveSocket();
     const socketReady = socket
@@ -1923,31 +1937,33 @@ export function createWsAudioRuntime(options = {}) {
         : socket.readyState === 1)
       : false;
 
-    const summary = {
-      reason,
-      phase: phaseValue,
-      hasStream,
-      wsConnected: socketReady,
-      senderPaused,
-      vadGateOpen: captureAllowed,
-      wsPhase,
-      wsPhaseKnown,
-      wsReadyForAudio,
-      shouldSend,
-      base_enabled: baseGate,
-      enabled: shouldSend,
-      isAudioStreaming: audioStreaming,
-      baseEnabledReason,
-      serverHold,
-      fatalError,
-    };
+    if (signatureChanged) {
+      const summary = {
+        reason,
+        phase: phaseValue,
+        hasStream,
+        wsConnected: socketReady,
+        senderPaused,
+        vadGateOpen: captureAllowed,
+        wsPhase,
+        wsPhaseKnown,
+        wsReadyForAudio,
+        shouldSend,
+        base_enabled: baseGate,
+        enabled: shouldSend,
+        isAudioStreaming: audioStreaming,
+        baseEnabledReason,
+        serverHold,
+        fatalError,
+      };
 
-    try {
-      logStage("client.audio_stream_state_summary", summary);
-    } catch (_) {}
-    try {
-      console.log("[ws_audio_runtime] pcm_sender_state_summary", summary);
-    } catch (_) {}
+      try {
+        logStage("client.audio_stream_state_summary", summary);
+      } catch (_) {}
+      try {
+        console.log("[ws_audio_runtime] pcm_sender_state_summary", summary);
+      } catch (_) {}
+    }
 
     if (!pcmSender || typeof pcmSender.setEnabled !== "function") {
       logSenderDecision({
@@ -2042,17 +2058,24 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
       const gateOpened = previousState !== true && shouldSend === true;
       if (gateOpened) {
+        const appState = getAppState();
+        const gateSid = sid || appState?.sid || appState?.sessionId || null;
         try {
           logStage("client.google_v3.sender_gate_opened", {
-          phase: phaseValue,
-          wsPhase,
-          baseEnabled,
-          hasStream,
-          serverHold,
-          asrReady,
-        });
-      } catch (_) {}
-    }
+            sid: gateSid,
+            phase: phaseValue,
+            wsPhase,
+            baseEnabled,
+            hasStream,
+            serverHold,
+            fatalError,
+            asrReady,
+            isAudioStreaming: audioStreaming,
+            ctxState,
+            decisionReason,
+          });
+        } catch (_) {}
+      }
       pcmSenderStateLast = shouldSend;
       try {
         console.log("client.pcm_sender.state", {
