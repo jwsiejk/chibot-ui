@@ -1364,6 +1364,11 @@ class ChatV2Adapter:
         ctx: AdapterContext,
         label: str,
     ) -> None:
+        if not ctx.current_turn_open:
+            _log.debug(
+                "evt=asr_ready_skip_no_turn sid=%s where=%s", ctx.sid, label
+            )
+            return
         # Canonical ASR readiness path: this function decides whether to schedule
         # `_open_asr`, waits for the open task to complete, and emits the
         # `asr.ready` + `input.start` + `start_listening` bundle via
@@ -3499,6 +3504,8 @@ class ChatV2Adapter:
             ctx.current_turn_open = True
             ctx.turn_start_ts_ms = self._now_ms()
             ctx.bytes_from_client_this_turn = 0
+            ctx.accepting_audio = True
+            self._refresh_no_audio_safety_net(ctx)
 
             _log.info(
                 "evt=google_v3.turn_start",
@@ -3560,8 +3567,28 @@ class ChatV2Adapter:
                 },
             )
 
+            if ctx.session.asr_state == "open" or ctx.asr_open:
+                await self._flush_audio_buffer(ctx)
+                await self._close_asr(
+                    ctx,
+                    reason="turn_stop",
+                )
+                _log.info(
+                    "evt=google_v3.asr_close",
+                    extra={
+                        "sid": ctx.sid,
+                        "turn_id": ctx.current_turn_id or normalized_turn_id,
+                        "bytes_from_client": ctx.bytes_from_client_this_turn,
+                        "reason": "turn_stop",
+                    },
+                )
+
             ctx.current_turn_id = None
             ctx.turn_start_ts_ms = None
+            ctx.bytes_from_client_this_turn = 0
+            ctx.current_turn_open = False
+            ctx.accepting_audio = False
+            self._cancel_no_audio_safety_net(ctx)
 
             return self._HandleResult(True)
 
@@ -4400,6 +4427,15 @@ class ChatV2Adapter:
             )
             return self._HandleResult(False, 1003, "audio_not_expected")
 
+        if not ctx.current_turn_open or not ctx.accepting_audio:
+            _log.info(
+                "evt=google_v3.audio_ignored_no_turn sid=%s turn_open=%s accepting=%s",
+                ctx.sid,
+                ctx.current_turn_open,
+                ctx.accepting_audio,
+            )
+            return self._HandleResult(True)
+
         if byte_count > self.binary_limit_bytes:
             await self._publish(
                 EVT_WS_AUDIO_RECV,
@@ -4637,7 +4673,28 @@ class ChatV2Adapter:
             return self._HandleResult(False, 1003, "unexpected_container")
 
         if ctx.asr_stream_id is None:
-            return self._HandleResult(True)
+            if ctx.current_turn_open and not ctx.asr_open and ctx.asr_open_task is None:
+                await self._ensure_previous_turn_closed(ctx, "pcm_first_chunk")
+                self._schedule_asr_open(ctx)
+                sample_rate = self._resolve_asr_sample_rate(ctx)
+                language_config = self._resolve_asr_config(ctx)
+                language_code = (
+                    language_config.get("language")
+                    if isinstance(language_config, Mapping)
+                    else None
+                ) or getattr(config, "GCP_STT_DEFAULT_LANGUAGE", "en-US")
+                _log.info(
+                    "evt=google_v3.asr_open",
+                    extra={
+                        "sid": ctx.sid,
+                        "turn_id": ctx.current_turn_id,
+                        "sample_rate": sample_rate,
+                        "language": language_code,
+                    },
+                )
+                await self._invoke_engine("on_asr_open", ctx.sid, ctx.current_turn_id)
+            else:
+                return self._HandleResult(True)
 
         if ctx.audio_highest_seq < 0:
             ctx.audio_expected_seq = ctx.audio_seq
@@ -4667,6 +4724,7 @@ class ChatV2Adapter:
         ctx.turn_audio_chunks += 1
         if ctx.current_turn_open:
             ctx.bytes_from_client_this_turn += byte_count
+            self._refresh_no_audio_safety_net(ctx)
         if ctx.first_audio_received_ms is None:
             now_ms = self._now_ms()
             # First audio this turn: record timestamp and move the guards
@@ -7536,7 +7594,34 @@ class ChatV2Adapter:
 
         def _fire() -> None:
             ctx.no_audio_safety_net = None
-            self._handle_mic_open_timeout(ctx)
+            if not ctx.current_turn_open:
+                return
+            turn_start_ms = ctx.turn_start_ts_ms or self._now_ms()
+            ms_since_turn_start = max(0, self._now_ms() - turn_start_ms)
+            _log.warning(
+                "evt=google_v3.asr_no_audio_safety_net_fired",
+                extra={
+                    "sid": ctx.sid,
+                    "turn_id": ctx.current_turn_id,
+                    "ms_since_turn_start": ms_since_turn_start,
+                },
+            )
+            try:
+                if ctx.session.asr_state == "open" or ctx.asr_open:
+                    loop.create_task(
+                        self._close_asr(ctx, reason="no_audio_safety_net")
+                    )
+            except Exception:
+                _log.exception("evt=no_audio_safety_net_close_failed sid=%s", ctx.sid)
+            loop.create_task(
+                self._invoke_engine(
+                    "_set_state", ctx.sid, "Ready", reason="no_audio_safety_net"
+                )
+            )
+            ctx.current_turn_open = False
+            ctx.current_turn_id = None
+            ctx.bytes_from_client_this_turn = 0
+            ctx.turn_start_ts_ms = None
 
         try:
             ctx.no_audio_safety_net = loop.call_later(safety_timeout, _fire)
@@ -8492,6 +8577,21 @@ class ChatV2Adapter:
 
         _log_llm_turn_decision("llm_turn", "non_empty_user_final")
         await self._invoke_engine("on_asr_final", ctx.sid, text, req_id_final)
+        if ctx.session.asr_state == "open" or ctx.asr_open:
+            await self._close_asr(ctx, reason="normal_final")
+            _log.info(
+                "evt=google_v3.asr_close",
+                extra={
+                    "sid": ctx.sid,
+                    "turn_id": ctx.current_turn_id,
+                    "bytes_from_client": ctx.bytes_from_client_this_turn,
+                    "reason": "normal_final",
+                },
+            )
+        ctx.current_turn_open = False
+        ctx.current_turn_id = None
+        ctx.turn_start_ts_ms = None
+        ctx.bytes_from_client_this_turn = 0
         self._end_user_turn(ctx)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
         # - deciding whether to keep listening vs close ASR, and
