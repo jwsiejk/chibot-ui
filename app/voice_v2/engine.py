@@ -454,12 +454,6 @@ class EngineV2:
         session = self._ensure_session(sid)
         if session.tts_mask_phase != "off":
             self._publish_tts_mask(sid, "off")
-        if session.state == READY:
-            self._set_state(sid, LISTENING, reason="audio_rx")
-            session = self._ensure_session(sid)
-        elif session.state == RESPONDING:
-            self._set_state(sid, LISTENING, reason="audio_rx")
-            session = self._ensure_session(sid)
         if session.state != LISTENING:
             _log.warning(
                 "evt=audio_ignored state=%s", session.state, extra={"sid": sid}
@@ -720,6 +714,17 @@ class EngineV2:
             )
 
         self._set_state(sid, THINKING, reason="asr_final")
+
+    def on_asr_open(self, sid: str, turn_id: str | None = None) -> None:
+        """Transition into listening when the ASR stream opens for a turn."""
+
+        session = self._ensure_session(sid)
+        if session.state not in {READY, RESPONDING}:
+            return
+        self._set_state(sid, LISTENING, reason="asr_open")
+        session = self._ensure_session(sid)
+        if session.state == LISTENING and isinstance(turn_id, str) and turn_id:
+            session.turn_id = turn_id
 
     def on_asr_partial(
         self,
