@@ -381,6 +381,8 @@ _ALLOWED_TEXT_FRAME_TYPES = {
     "chat.user",
     "client.diag",
     "client.idle",
+    "client.turn_start",
+    "client.turn_stop",
     "client.log",
     "client.autostart",
     "client.telemetry",
@@ -769,6 +771,10 @@ class AdapterContext:
     first_audio_received_ms: Optional[int] = None
     turn_audio_bytes: int = 0
     turn_audio_chunks: int = 0
+    current_turn_id: Optional[str] = None
+    current_turn_open: bool = False
+    turn_start_ts_ms: Optional[int] = None
+    bytes_from_client_this_turn: int = 0
     awaiting_client_mic_ready: bool = False
     client_mic_ready_ms: Optional[int] = None
     no_audio_timeout_started_ms: Optional[int] = None
@@ -859,6 +865,12 @@ class ChatV2Adapter:
             phase,
             extra={"meta": meta},
         )
+
+    def _reset_client_turn_state(self, ctx: AdapterContext) -> None:
+        ctx.current_turn_id = None
+        ctx.current_turn_open = False
+        ctx.turn_start_ts_ms = None
+        ctx.bytes_from_client_this_turn = 0
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -2969,6 +2981,7 @@ class ChatV2Adapter:
         mode = ctx.audio_pipeline_mode or "pcm16"
         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
         ctx.ws_send = send
+        self._reset_client_turn_state(ctx)
         self._ensure_ingress_tick_timer(ctx)
 
         token = current_sid.set(ctx.sid)
@@ -3111,6 +3124,7 @@ class ChatV2Adapter:
                     meta={"close_code": close_code, "close_reason": close_reason},
                     source="ws.close",
                 )
+                self._reset_client_turn_state(ctx)
                 ctx.ws_send = None
         finally:
             current_sid.reset(token)
@@ -3426,6 +3440,129 @@ class ChatV2Adapter:
                 }
             )
             await self._publish_json_recv(ctx, meta, frame_payload)
+            return self._HandleResult(True)
+
+        if frame_type == "client.turn_start":
+            lane = frame.get("lane")
+            if lane is not None and not isinstance(lane, str):
+                meta["error"] = "schema_invalid"
+                await self._publish_json_recv(ctx, meta, frame_payload)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.turn_start lane must be a string if provided",
+                )
+                return self._HandleResult(True)
+
+            raw_turn_id = frame.get("turn_id")
+            if not isinstance(raw_turn_id, str) or not raw_turn_id.strip():
+                meta["error"] = "schema_invalid"
+                await self._publish_json_recv(ctx, meta, frame_payload)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.turn_start turn_id must be a non-empty string",
+                )
+                return self._HandleResult(True)
+
+            pre_roll_value = frame.get("pre_roll_ms")
+            if pre_roll_value is not None and (
+                not isinstance(pre_roll_value, (int, float))
+                or isinstance(pre_roll_value, bool)
+            ):
+                meta["error"] = "schema_invalid"
+                await self._publish_json_recv(ctx, meta, frame_payload)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.turn_start pre_roll_ms must be a number if provided",
+                )
+                return self._HandleResult(True)
+
+            await self._publish_json_recv(ctx, meta, frame_payload)
+
+            normalized_turn_id = raw_turn_id.strip()
+            if ctx.current_turn_open:
+                logger.warning(
+                    "evt=google_v3.turn_start_overlap",
+                    extra={
+                        "sid": ctx.sid,
+                        "turn_id": ctx.current_turn_id,
+                        "new_turn_id": normalized_turn_id,
+                    },
+                )
+
+            ctx.current_turn_id = normalized_turn_id
+            ctx.current_turn_open = True
+            ctx.turn_start_ts_ms = self._now_ms()
+            ctx.bytes_from_client_this_turn = 0
+
+            logger.info(
+                "evt=google_v3.turn_start",
+                extra={
+                    "sid": ctx.sid,
+                    "turn_id": ctx.current_turn_id,
+                    "pre_roll_ms": pre_roll_value,
+                },
+            )
+
+            return self._HandleResult(True)
+
+        if frame_type == "client.turn_stop":
+            lane = frame.get("lane")
+            if lane is not None and not isinstance(lane, str):
+                meta["error"] = "schema_invalid"
+                await self._publish_json_recv(ctx, meta, frame_payload)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.turn_stop lane must be a string if provided",
+                )
+                return self._HandleResult(True)
+
+            raw_turn_id = frame.get("turn_id")
+            if not isinstance(raw_turn_id, str) or not raw_turn_id.strip():
+                meta["error"] = "schema_invalid"
+                await self._publish_json_recv(ctx, meta, frame_payload)
+                await self._send_error(
+                    send,
+                    ctx.sid,
+                    "schema_invalid",
+                    "client.turn_stop turn_id must be a non-empty string",
+                )
+                return self._HandleResult(True)
+
+            await self._publish_json_recv(ctx, meta, frame_payload)
+
+            normalized_turn_id = raw_turn_id.strip()
+            if ctx.current_turn_id and ctx.current_turn_id != normalized_turn_id:
+                logger.warning(
+                    "evt=google_v3.turn_stop_mismatch",
+                    extra={
+                        "sid": ctx.sid,
+                        "expected_turn_id": ctx.current_turn_id,
+                        "turn_id": normalized_turn_id,
+                    },
+                )
+
+            ctx.current_turn_open = False
+
+            logger.info(
+                "evt=google_v3.turn_stop",
+                extra={
+                    "sid": ctx.sid,
+                    "turn_id": ctx.current_turn_id or normalized_turn_id,
+                    "bytes_from_client": ctx.bytes_from_client_this_turn,
+                },
+            )
+
+            ctx.current_turn_id = None
+            ctx.turn_start_ts_ms = None
+
             return self._HandleResult(True)
 
         if frame_type == "client.ping":
@@ -4528,6 +4665,8 @@ class ChatV2Adapter:
         ctx.audio_bytes_recv += byte_count
         ctx.turn_audio_bytes += byte_count
         ctx.turn_audio_chunks += 1
+        if ctx.current_turn_open:
+            ctx.bytes_from_client_this_turn += byte_count
         if ctx.first_audio_received_ms is None:
             now_ms = self._now_ms()
             # First audio this turn: record timestamp and move the guards
