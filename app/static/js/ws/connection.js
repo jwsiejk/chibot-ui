@@ -919,6 +919,11 @@ export function createWsConnection({
   }
 
   function sendBinary(payload, opts = {}) {
+    console.log("[WSDEBUG] sendBinary.enter", {
+      hasSocket: !!socket,
+      readyState: socket ? socket.readyState : null,
+      byteLength: payload?.byteLength || null,
+    });
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       try {
         console.log("ws.connection.send.queue", {
@@ -938,16 +943,26 @@ export function createWsConnection({
         });
       } catch {}
       queueFrame(payload, true, opts && typeof opts === "object" ? { ...opts } : undefined);
+      console.log("[WSDEBUG] sendBinary.exit", { result: false });
       return false;
     }
     if (payload instanceof Blob) {
       return payload.arrayBuffer().then((buf) => {
         const jsonCandidate = handleBinaryJsonPayload(buf, { source: "ws.connection.binary_blob" });
         if (jsonCandidate === false) {
+          console.log("[WSDEBUG] sendBinary.exit", { result: false });
           return false;
         }
         if (jsonCandidate) {
-          return send(jsonCandidate, { binary: false });
+          const sendResult = send(jsonCandidate, { binary: false });
+          if (sendResult && typeof sendResult.then === "function") {
+            return sendResult.then((value) => {
+              console.log("[WSDEBUG] sendBinary.exit", { result: value !== false });
+              return value;
+            });
+          }
+          console.log("[WSDEBUG] sendBinary.exit", { result: sendResult !== false });
+          return sendResult;
         }
         try {
           wsDiag("ws_send", {
@@ -959,15 +974,25 @@ export function createWsConnection({
           console.warn("ws.connection binary send failed", err);
           throw err;
         }
+        console.log("[WSDEBUG] sendBinary.exit", { result: true });
         return true;
       });
     }
     const jsonCandidate = handleBinaryJsonPayload(payload, { source: "ws.connection.binary" });
     if (jsonCandidate === false) {
+      console.log("[WSDEBUG] sendBinary.exit", { result: false });
       return false;
     }
     if (jsonCandidate) {
-      return send(jsonCandidate, { binary: false });
+      const sendResult = send(jsonCandidate, { binary: false });
+      if (sendResult && typeof sendResult.then === "function") {
+        return sendResult.then((value) => {
+          console.log("[WSDEBUG] sendBinary.exit", { result: value !== false });
+          return value;
+        });
+      }
+      console.log("[WSDEBUG] sendBinary.exit", { result: sendResult !== false });
+      return sendResult;
     }
     try {
       wsDiag("ws_send", {
@@ -987,8 +1012,10 @@ export function createWsConnection({
       } catch {}
     } catch (err) {
       console.warn("ws.connection binary send failed", err);
+      console.log("[WSDEBUG] sendBinary.exit", { result: false });
       return false;
     }
+    console.log("[WSDEBUG] sendBinary.exit", { result: true });
     return true;
   }
 
