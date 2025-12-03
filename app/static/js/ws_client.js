@@ -488,14 +488,17 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     if (getPhase() === PHASE.Greet) {
       return;
     }
+    clearConversationStartTimer();
     resetMicAndPcmReady("greet_start");
     resetConversationAsrReady("greet_start");
     wsDiag("greet_start", { utt_id: frame?.utt_id });
-    hasOpenedAsrForConversation = false;
-    firstPostGreetMicStarted = false;
     conversationStartPlanned = false;
     conversationStartCommitted = false;
-    clearConversationStartTimer();
+    conversationBlockedLogged = false;
+    conversationDelayedLogged = false;
+    lastConversationAttemptLog = 0;
+    firstPostGreetMicStarted = false;
+    hasOpenedAsrForConversation = false;
     try {
       const audioCtx = getPlaybackAudioContext();
       if (audioCtx) {
@@ -1174,6 +1177,13 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         conversationStartWatchdog = null;
         if (!conversationStartCommitted && conversationStartPlanned) {
           try {
+            logStage("client.conversation.begin.watchdog_fire", {
+              source,
+              phase: getPhase(),
+              wsPhase: AppState?.wsPhase || null,
+              planned: conversationStartPlanned,
+              committed: conversationStartCommitted,
+            });
             enterConversationAfterGreet(`${source}_watchdog`);
           } catch (_) {}
         }
