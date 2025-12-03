@@ -4457,11 +4457,31 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       options.chunkCount = Number(options.chunkCount);
     }
     options.lane = lane;
-    const result = connection.sendBinary(arrayBuffer, options);
-    if (result && typeof result.then === "function") {
-      return result;
+    try {
+      const readyState = socket ? socket.readyState : null;
+      console.log("[WSDEBUG] sendAudioChunk.attempt", {
+        lane: options.lane,
+        reqId: options.reqId,
+        sampleRateHz: options.sampleRateHz,
+        readyState,
+      });
+
+      const result = connection.sendBinary(arrayBuffer, options);
+
+      console.log("[WSDEBUG] sendAudioChunk.result", {
+        lane: options.lane,
+        reqId: options.reqId,
+        result,
+      });
+
+      if (result && typeof result.then === "function") {
+        return result;
+      }
+      return result !== false;
+    } catch (err) {
+      console.warn("[WSDEBUG] sendAudioChunk.error", err);
+      throw err;
     }
-    return result !== false;
   };
 
   WSClient.open = function wsClientOpen(options = {}, protocolsOverride) {
