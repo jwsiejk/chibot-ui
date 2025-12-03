@@ -349,6 +349,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let __secondGreetingTraceStartMs = 0;
   let __secondGreetingStartChunkCount = 0;
   let conversationStartTimer = null;
+  let conversationStartWatchdog = null;
   let conversationBlockedLogged = false;
   let conversationDelayedLogged = false;
   let conversationStartPlanned = false;
@@ -608,6 +609,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     if (conversationStartTimer) {
       clearTimeout(conversationStartTimer);
       conversationStartTimer = null;
+    }
+    if (conversationStartWatchdog) {
+      clearTimeout(conversationStartWatchdog);
+      conversationStartWatchdog = null;
     }
   }
 
@@ -1162,6 +1167,17 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         }
         enterConversationAfterGreet(source);
       }, delayMs);
+    }
+    if (!conversationStartWatchdog) {
+      const watchdogDelay = Math.max(delayMs + 500, 700);
+      conversationStartWatchdog = setTimeout(() => {
+        conversationStartWatchdog = null;
+        if (!conversationStartCommitted && conversationStartPlanned) {
+          try {
+            enterConversationAfterGreet(`${source}_watchdog`);
+          } catch (_) {}
+        }
+      }, watchdogDelay);
     }
     try {
       // we’re actually scheduling now – reset the spam guard
