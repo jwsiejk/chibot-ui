@@ -1017,7 +1017,7 @@ export function createWsAudioRuntime(options = {}) {
       allowed = false;
       reason = "fatal_error";
     }
-    return { allowed, reason, wsPhase, appPhase };
+    return { allowed, reason, wsPhase, appPhase, wsReadyState };
   }
 
   let lastHardGateLogged = null;
@@ -1032,6 +1032,7 @@ export function createWsAudioRuntime(options = {}) {
         reason: snapshot?.reason || "unknown",
         wsPhase,
         appPhase,
+        wsReadyState: typeof snapshot?.wsReadyState === "number" ? snapshot.wsReadyState : null,
       });
     } catch (_) {}
   }
@@ -1059,7 +1060,7 @@ export function createWsAudioRuntime(options = {}) {
       state === "voice" ||
       (state && state !== "silence" && state !== "quiet")
     );
-    if (!speechSeenThisTurn && vadLikelySpeech) {
+    if (!speechSeen && vadLikelySpeech) {
       speechStartSeen = true;
     }
     const shouldSend = speechSeen ? Boolean(turnActive) : vadLikelySpeech;
@@ -1091,6 +1092,7 @@ export function createWsAudioRuntime(options = {}) {
 
   const pcmSummaryWindowMs = 2000;
   let pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
+  let pcmSummaryGateReady = false;
   let lastPcmSummaryAt = 0;
 
   const policyHookLogLimitPerReason = 3;
@@ -1127,9 +1129,11 @@ export function createWsAudioRuntime(options = {}) {
         framesSent: pcmSummaryCounters.framesSent,
         framesDroppedHardGate: pcmSummaryCounters.framesDroppedHardGate,
         framesDroppedSoftGate: pcmSummaryCounters.framesDroppedSoftGate,
+        gateReady: pcmSummaryGateReady,
       });
     } catch (_) {}
     pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
+    pcmSummaryGateReady = false;
   }
 
   function recordPcmFrameOutcome({ sent = 0, droppedHard = 0, droppedSoft = 0 }) {
@@ -1478,10 +1482,11 @@ export function createWsAudioRuntime(options = {}) {
       fatalError: gumFailed,
       wsReadyState,
     });
+    pcmSummaryGateReady = pcmSummaryGateReady || Boolean(hardGate?.allowed);
     maybeLogHardGate(hardGate, { wsPhase, appPhase: phaseValue });
     if (!hardGate.allowed) {
       recordPcmFrameOutcome({ droppedHard: chunkCount });
-      emitPolicyHook("hard_gate_drop", { reason: hardGate.reason, wsReadyState });
+      emitPolicyHook("hard_gate_drop", { reason: hardGate.reason, wsPhase, appPhase: phaseValue, wsReadyState });
       return;
     }
 
@@ -1530,7 +1535,7 @@ export function createWsAudioRuntime(options = {}) {
 
     if (!shouldSendNow) {
       recordPcmFrameOutcome({ droppedSoft: chunkCount });
-      emitPolicyHook("soft_gate_drop", { reason: "vad_silence", wsPhase, appPhase: phaseValue });
+      emitPolicyHook("soft_gate_drop", { reason: "vad_silence", wsPhase, appPhase: phaseValue, wsReadyState });
       return;
     }
 
