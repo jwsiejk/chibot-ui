@@ -754,6 +754,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   async function safeStartRecorderStreaming(policy, source) {
     // Architectural rule: recorder may only start in ConversationReady/UserTurn.
     // No warm-ups in Greet/Boot; see ASKCHIP_CONVERSATIONAL_FLOW_REPORT.
+    const effectivePolicy = policy || AppState?.policy || {};
     const phase = voicePhaseController?.getPhase?.() || null;
     const allowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     try {
@@ -782,6 +783,11 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       return false;
     }
     try {
+      if (typeof ensureTurnAudioReqId === "function") {
+        ensureTurnAudioReqId(effectivePolicy);
+      }
+    } catch (_) {}
+    try {
       logStage("client.mic.start_proceed", {
         source,
         phase,
@@ -790,9 +796,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     } catch (_) {}
     let recorderStart = null;
     if (typeof WSClient?.startRecorderStreaming === "function") {
-      recorderStart = WSClient.startRecorderStreaming(policy, source);
+      recorderStart = WSClient.startRecorderStreaming(effectivePolicy, source);
     } else if (typeof orchestratedStartCapture === "function") {
-      recorderStart = orchestratedStartCapture(policy, source);
+      recorderStart = orchestratedStartCapture(effectivePolicy, source);
     }
 
     if (!recorderStart) {
@@ -2460,18 +2466,28 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     return currentTurnAudioReqId;
   }
 
-  function resetTurnAudioContext() {
+  function resetAudioHeaderState(reason = "reset_audio_header_sent") {
+    lastPcmGateSnapshotKey = null;
+    __resetAudioHeaderSent();
+    try {
+      logStage("client.audio_header.reset", {
+        reason,
+        reqId: currentTurnAudioReqId || null,
+      });
+    } catch (_) {}
+  }
+
+  function resetTurnAudioContext(reason = "turn_end") {
     try {
       logStage("client.turn_audio_context.reset", {
         prevReqId: currentTurnAudioReqId || null,
+        reason,
       });
     } catch (_) {}
     currentTurnAudioReqId = null;
 
-    lastPcmGateSnapshotKey = null;
+    resetAudioHeaderState(reason);
 
-    // keep your existing audio-header state resets here (e.g. audioHeaderSent = false)
-    __resetAudioHeaderSent();
     // ... any other existing reset logic ...
     resetMicTurnState("turn_audio_context_reset");
   }
@@ -3549,7 +3565,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     getAudioStreaming: () => _audioStreaming,
     setAudioStreaming: (value) => { _audioStreaming = Boolean(value); },
     ensurePcmSender,
-    resetAudioHeaderSent: () => resetTurnAudioContext(),
+    resetAudioHeaderSent: () => resetAudioHeaderState("session_manager"),
     isTypedObjectPayload,
     validateOutboundPayload,
   });
@@ -3617,7 +3633,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       ensureTurnAudioReqId,
       sendAudioHeader,
       logPcmSenderGateSnapshot: emitPcmSenderGateSnapshot,
-      resetAudioHeaderSent: () => resetTurnAudioContext(),
+      resetAudioHeaderSent: () => resetAudioHeaderState("turn_runtime"),
       emitConsoleBusEvent,
       openTurnOnce,
       setWsPhase: connection && typeof connection.setWsPhase === "function"
