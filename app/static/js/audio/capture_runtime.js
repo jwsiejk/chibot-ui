@@ -323,6 +323,7 @@ export function createCaptureRuntime({
   resetTurnIntent = null,
   MIC_OUTCOME = {},
   onVadSilenceStop = null,
+  onVadSpeechStart = null,
   canAutoStopFromVad = null,
   onCaptureStop = null,
 }) {
@@ -622,6 +623,13 @@ export function createCaptureRuntime({
           schedulePartialWatchdog("vad_speech_start");
         }
       } catch {}
+      if (typeof onVadSpeechStart === "function") {
+        try {
+          onVadSpeechStart(payload || {});
+        } catch (err) {
+          try { console.warn("onVadSpeechStart handler failed", err); } catch {}
+        }
+      }
     } else if (event === "client.vad.speech_end") {
       const durationValue = Number(payload && payload.duration_ms);
       const durationMs = Number.isFinite(durationValue) ? Math.max(0, Math.round(durationValue)) : null;
