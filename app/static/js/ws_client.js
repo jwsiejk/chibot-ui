@@ -375,6 +375,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let turnStopSent = false;
   let speechSeenThisTurn = false;
   let vadSpeechTurnStartInFlight = false;
+  let vadSpeechStartPhaseSkipLogged = false;
+  let vadSpeechStartWsSkipLogged = false;
   let greetUtteranceId = null;
   let micDebugGreetEndLogged = false;
 
@@ -442,6 +444,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function resetSpeechFlag() {
     speechSeenThisTurn = false;
+    vadSpeechStartPhaseSkipLogged = false;
+    vadSpeechStartWsSkipLogged = false;
   }
 
   function frameSignalsGreetStart(frame) {
@@ -1224,17 +1228,31 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     const wsReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
 
     if (!phaseAllowed) {
+      if (!vadSpeechStartPhaseSkipLogged) {
+        try {
+          logStage("client.google_v3.speech_turn_start.skipped", {
+            source: "vad_speech_start",
+            phase,
+            wsPhase,
+            reason: "phase_not_allowed",
+          });
+        } catch (_) {}
+        vadSpeechStartPhaseSkipLogged = true;
+      }
       return;
     }
     if (!wsReady) {
-      try {
-        logStage("client.google_v3.speech_turn_start.skipped", {
-          source: "vad_speech_start",
-          phase,
-          wsPhase,
-          reason: "ws_not_ready",
-        });
-      } catch (_) {}
+      if (!vadSpeechStartWsSkipLogged) {
+        try {
+          logStage("client.google_v3.speech_turn_start.skipped", {
+            source: "vad_speech_start",
+            phase,
+            wsPhase,
+            reason: "ws_not_ready",
+          });
+        } catch (_) {}
+        vadSpeechStartWsSkipLogged = true;
+      }
       return;
     }
     if (speechSeenThisTurn || vadSpeechTurnStartInFlight) {
@@ -1244,6 +1262,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     vadSpeechTurnStartInFlight = true;
     const policy = AppState?.policy || {};
     let reqId = null;
+    let turnOpened = false;
+    let started = false;
 
     try {
       reqId = ensureTurnAudioReqId(policy);
@@ -1260,14 +1280,40 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     } catch (_) {}
 
     try {
-      await openTurnOnce("vad_speech_start");
-      const started = await safeStartRecorderStreaming(policy, "vad_speech_start");
+      turnOpened = await openTurnOnce("vad_speech_start");
+      if (turnOpened) {
+        started = await safeStartRecorderStreaming(policy, "vad_speech_start");
+      }
       if (started) {
-        speechSeenThisTurn = true;
         const resolvedReqId = (typeof getCurrentTurnReqId === "function"
           ? getCurrentTurnReqId()
           : null) || reqId || null;
         sendAudioHeader({ reqId: resolvedReqId });
+
+        if (!speechSeenThisTurn) {
+          speechSeenThisTurn = true;
+          try {
+            logStage("client.google_v3.speech_seen_this_turn", {
+              speechSeenThisTurn,
+              rmsAtTrigger: payload?.energyDb ?? payload?.rms ?? null,
+              vadFramesSinceGreet: payload?.framesSinceGreet ?? payload?.frameCount ?? null,
+              confidence: payload?.confidence ?? null,
+              energyDb: payload?.energyDb ?? null,
+              source: "vad_speech_start",
+              reqId: resolvedReqId,
+            });
+          } catch (_) {}
+        }
+      } else if (!started) {
+        try {
+          logStage("client.google_v3.speech_turn_start.error", {
+            source: "vad_speech_start",
+            phase,
+            wsPhase,
+            reason: turnOpened ? "mic_start_failed" : "turn_open_failed",
+          });
+        } catch (_) {}
+        speechSeenThisTurn = false;
       }
     } catch (err) {
       try { console.warn("handleVadSpeechStart failed", err); } catch (_) {}
@@ -2553,6 +2599,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
     // ... any other existing reset logic ...
     resetMicTurnState("turn_audio_context_reset");
+    resetSpeechFlag();
+    vadSpeechTurnStartInFlight = false;
+    turnStopSent = false;
   }
 
   // --- Begin: header idempotency + strict schema ---
