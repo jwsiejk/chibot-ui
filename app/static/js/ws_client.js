@@ -374,6 +374,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let partialWatchdogFirstTurn = true;
   let turnStopSent = false;
   let speechSeenThisTurn = false;
+  let vadSpeechTurnStartInFlight = false;
   let greetUtteranceId = null;
   let micDebugGreetEndLogged = false;
 
@@ -1216,6 +1217,65 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     return true;
   }
 
+  async function handleVadSpeechStart(payload = {}) {
+    const phase = getPhase();
+    const wsPhase = AppState?.wsPhase || null;
+    const phaseAllowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
+    const wsReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
+
+    if (!phaseAllowed) {
+      return;
+    }
+    if (!wsReady) {
+      try {
+        logStage("client.google_v3.speech_turn_start.skipped", {
+          source: "vad_speech_start",
+          phase,
+          wsPhase,
+          reason: "ws_not_ready",
+        });
+      } catch (_) {}
+      return;
+    }
+    if (speechSeenThisTurn || vadSpeechTurnStartInFlight) {
+      return;
+    }
+
+    vadSpeechTurnStartInFlight = true;
+    const policy = AppState?.policy || {};
+    let reqId = null;
+
+    try {
+      reqId = ensureTurnAudioReqId(policy);
+      logStage("client.google_v3.speech_turn_start", {
+        source: "vad_speech_start",
+        phase,
+        wsPhase,
+        reqId: reqId || null,
+      });
+    } catch (_) {}
+
+    try {
+      safeRequestAsrOpen("vad_speech_start");
+    } catch (_) {}
+
+    try {
+      await openTurnOnce("vad_speech_start");
+      const started = await safeStartRecorderStreaming(policy, "vad_speech_start");
+      if (started) {
+        speechSeenThisTurn = true;
+        const resolvedReqId = (typeof getCurrentTurnReqId === "function"
+          ? getCurrentTurnReqId()
+          : null) || reqId || null;
+        sendAudioHeader({ reqId: resolvedReqId });
+      }
+    } catch (err) {
+      try { console.warn("handleVadSpeechStart failed", err); } catch (_) {}
+    } finally {
+      vadSpeechTurnStartInFlight = false;
+    }
+  }
+
   async function handleVadSilenceStop(reason = "vad_silence") {
     const normalized = fallbackToReasonKey(reason) || "vad_silence";
 
@@ -2018,6 +2078,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     resetTurnIntent,
     MIC_OUTCOME,
     onVadSilenceStop: handleVadSilenceStop,
+    onVadSpeechStart: handleVadSpeechStart,
     canAutoStopFromVad: () => speechSeenThisTurn === true,
     onCaptureStop: handleCaptureStopTelemetry,
   });
