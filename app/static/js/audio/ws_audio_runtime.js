@@ -992,8 +992,15 @@ export function createWsAudioRuntime(options = {}) {
     return Math.sqrt(sumSq / int16.length);
   }
 
-  function computeHardGateSnapshot({ wsPhase, appPhase, serverHold, fatalError }) {
-    const wsReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
+  function computeHardGateSnapshot({ wsPhase, appPhase, serverHold, fatalError, wsReadyState }) {
+    const socketOpen = typeof wsReadyState === "number"
+      ? wsReadyState === WebSocket.OPEN
+      : true;
+
+    const normalizedPhase = wsPhase === "arming" ? "ready" : wsPhase;
+    const phaseReady = typeof normalizedPhase === "string" ? WS_READY_PHASES.has(normalizedPhase) : true;
+
+    const wsReady = socketOpen && phaseReady;
     const appReady = phaseAllowsAudioSend(appPhase);
     let allowed = wsReady && appReady && !serverHold && !fatalError;
     let reason = "ok";
@@ -1464,7 +1471,13 @@ export function createWsAudioRuntime(options = {}) {
       ? Boolean(AppState.turnActive)
       : true;
     const serverHold = Boolean(AppState?.server_hold || AppState?.serverHold || AppState?.system_hold || AppState?.systemHold);
-    const hardGate = computeHardGateSnapshot({ wsPhase, appPhase: phaseValue, serverHold, fatalError: gumFailed });
+    const hardGate = computeHardGateSnapshot({
+      wsPhase,
+      appPhase: phaseValue,
+      serverHold,
+      fatalError: gumFailed,
+      wsReadyState,
+    });
     maybeLogHardGate(hardGate, { wsPhase, appPhase: phaseValue });
     if (!hardGate.allowed) {
       recordPcmFrameOutcome({ droppedHard: chunkCount });
@@ -1513,7 +1526,9 @@ export function createWsAudioRuntime(options = {}) {
         logStage("client.google_v3.turn_start_sent", { turnId: currentTurnId, preRollMs: preSpeechBufferMs });
       } catch (_) {}
     }
-    if (!softDecision.shouldSend) {
+    const shouldSendNow = isKeepalive || softDecision.shouldSend || speechSeenThisTurn;
+
+    if (!shouldSendNow) {
       recordPcmFrameOutcome({ droppedSoft: chunkCount });
       emitPolicyHook("soft_gate_drop", { reason: "vad_silence", wsPhase, appPhase: phaseValue });
       return;
