@@ -2478,15 +2478,17 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   }
 
   function resetTurnAudioContext(reason = "turn_end") {
+    const prevReqId = currentTurnAudioReqId || null;
     try {
       logStage("client.turn_audio_context.reset", {
-        prevReqId: currentTurnAudioReqId || null,
+        prevReqId,
         reason,
       });
     } catch (_) {}
-    currentTurnAudioReqId = null;
 
     resetAudioHeaderState(reason);
+
+    currentTurnAudioReqId = null;
 
     // ... any other existing reset logic ...
     resetMicTurnState("turn_audio_context_reset");
