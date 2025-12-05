@@ -2449,7 +2449,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   }
 
   function getCurrentTurnReqId() {
-    return currentTurnAudioReqId;
+    // FIX: Auto-provision a Request ID if missing to prevent audio packet drops
+    return currentTurnAudioReqId || ensureTurnAudioReqId(AppState?.policy || {});
   }
 
   function ensureTurnAudioReqId(policy = AppState?.policy || {}) {
