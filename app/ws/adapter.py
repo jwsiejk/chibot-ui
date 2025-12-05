@@ -6102,42 +6102,26 @@ class ChatV2Adapter:
                 return
 
             mode = ctx.audio_pipeline_mode or "pcm16"
-            descriptor = dict(self._input_descriptor_for_mode(mode))
-            timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
-            ready_frame = {
-                "type": "asr.ready",
-                "input": dict(descriptor),
-            }
-            ready_frame["sid"] = ctx.sid
-            if isinstance(ctx.asr_vendor, str) and ctx.asr_vendor:
-                ready_frame["vendor"] = ctx.asr_vendor
-            capture = dict(descriptor)
-            capture["timeslice_ms"] = timeslice_ms
-            capture["manual_gate"] = False
             session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
-            input_start = {
-                "type": "input.start",
-                "capture": capture,
-            }
-            if session_policy:
-                input_start["policy"] = session_policy
 
-            _enqueue(ready_frame)
-            _enqueue(input_start)
+            if ctx.asr_ready_bundle_sent_ms is None and ctx.ws_send is not None:
+                await self._send_asr_ready_bundle(ctx.ws_send, ctx)
+                self._log_event("info", "asr_ready_emit", ctx.sid, where="listen_handoff")
+                self._publish_pending_start_listening(ctx, bus)
+            else:
+                start_payload: Dict[str, Any] = {"type": "start_listening"}
+                if session_policy:
+                    start_payload["policy"] = session_policy
+                ctx.pending_start_listening = dict(start_payload)
+                self._publish_pending_start_listening(ctx, bus)
+
             ctx.ingress_packets = 0
             ctx.ingress_bytes = 0
             ctx.first_ingress_ms = None
             mic_armed_now = int(time.time() * 1000)
             ctx.mic_armed_ms = mic_armed_now
-            ctx.asr_ready_bundle_sent_ms = mic_armed_now
             ctx.awaiting_asr_ready = True
             ctx.client_capture_armed = True
-            start_payload: Dict[str, Any] = {"type": "start_listening"}
-            if session_policy:
-                start_payload["policy"] = session_policy
-            ctx.pending_start_listening = dict(start_payload)
-            ctx.pending_start_listening_sent = True
-            _enqueue(start_payload)
 
             turn_begin_payload = self._prepare_asr_turn_begin(ctx, "ready_bundle")
             if turn_begin_payload is not None:
@@ -9161,6 +9145,11 @@ class ChatV2Adapter:
                 descriptor.get("mime", ""),
                 timeslice_ms,
                 vendor,
+            )
+            _log.info(
+                "evt=asr.ready_emit sid=%s turn_id=%s source=ready_bundle",
+                ctx.sid,
+                getattr(ctx.session, "turn_id", None),
             )
         except Exception:
             _log.warning("evt=asr_ready_bundle_send_failed sid=%s", ctx.sid, exc_info=True)
