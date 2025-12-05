@@ -2952,7 +2952,14 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       if (WSClient && typeof WSClient.sendJSON === "function") {
         return WSClient.sendJSON(frame);
       }
-      return connection.send(frame, { binary: false });
+
+      // FIX: Force asr.open to bypass phase checks (prevents deadlock in 'arming' phase)
+      const options = { binary: false };
+      if (frame && frame.type === "asr.open") {
+        options.skipPhaseCheck = true;
+      }
+
+      return connection.send(frame, options);
     } catch (err) {
       console.error("WSClient sendJson error", err);
       return false;
