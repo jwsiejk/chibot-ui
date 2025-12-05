@@ -1519,7 +1519,15 @@ export function createWsAudioRuntime(options = {}) {
         prerollChunksToSend = [];
       }
       try {
-        logStage("client.google_v3.turn_start_sent", { turnId: currentTurnId, preRollMs: preSpeechBufferMs });
+        safeSendJSON({
+          type: "client.turn_start",
+          lane: "mic",
+          turn_id: currentTurnId,
+          pre_roll_ms: 0,
+        });
+      } catch (_) {}
+      try {
+        logStage("client.google_v3.turn_start_sent", { turnId: currentTurnId, preRollMs: 0 });
       } catch (_) {}
     }
     const shouldSendNow = isKeepalive || softDecision.shouldSend || speechSeenThisTurn;
