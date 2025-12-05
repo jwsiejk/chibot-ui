@@ -4480,23 +4480,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         try { AppState?.hub?.log?.('client.audio.chunk_dropped_throttle', { ts, pause_ms: pauseMs }); } catch {}
         return true;
       }
-      const phase = getPhase();
-      const bargeInActive = isActiveBargeIn();
-      if (phase === PHASE.ConversationReady && !bargeInActive) {
-        const ts = Number.isFinite(options.ts) ? Number(options.ts) : now;
-        try { AppState?.hub?.log?.('client.audio.chunk_dropped_phase', { ts, phase, reason: 'await_user_turn' }); } catch {}
-        try {
-          logStage("client.audio.chunk_dropped_phase", {
-            ts,
-            phase,
-            lane,
-            reason: "await_user_turn",
-            barge_in_enabled: AppState?.barge_in_enabled ?? null,
-            tts_active: Boolean(AppState?.ttsActive),
-          });
-        } catch {}
-        return true;
-      }
     }
     const reqId = typeof options.reqId === "string" && options.reqId
       ? options.reqId
