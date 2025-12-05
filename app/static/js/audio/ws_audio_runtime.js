@@ -997,8 +997,7 @@ export function createWsAudioRuntime(options = {}) {
       ? wsReadyState === WebSocket.OPEN
       : true;
 
-    const normalizedPhase = wsPhase === "arming" ? "ready" : wsPhase;
-    const phaseReady = typeof normalizedPhase === "string" ? WS_READY_PHASES.has(normalizedPhase) : true;
+    const phaseReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
 
     const wsReady = socketOpen && phaseReady;
     const appReady = phaseAllowsAudioSend(appPhase);
