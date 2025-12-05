@@ -617,7 +617,8 @@ export function createWsConnection({
     const readyState = typeof ws?.readyState === "number" ? ws.readyState : -1;
     const phase = safeGetAppStatePhase();
     const payloadType = typeof data?.type === "string" ? data.type : "unknown";
-    const isControl = !binary && isControlFrame(data);
+    // FIX: Whitelist asr.open so it bypasses phase checks (e.g. during 'arming')
+    const isControl = !binary && (isControlFrame(data) || payloadType === "asr.open");
 
     if (payloadType === "audio.header") {
       try {
