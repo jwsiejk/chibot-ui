@@ -1519,14 +1519,6 @@ export function createWsAudioRuntime(options = {}) {
         prerollChunksToSend = [];
       }
       try {
-        safeSendJSON({
-          type: "client.turn_start",
-          lane: "mic",
-          turn_id: currentTurnId,
-          pre_roll_ms: preSpeechBufferMs,
-        });
-      } catch (_) {}
-      try {
         logStage("client.google_v3.turn_start_sent", { turnId: currentTurnId, preRollMs: preSpeechBufferMs });
       } catch (_) {}
     }
