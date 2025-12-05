@@ -611,13 +611,6 @@ export function createCaptureRuntime({
       try {
         ring = getPcmRing();
       } catch {}
-      if (typeof ring?.clear === "function") {
-        try {
-          ring.clear();
-        } catch (err) {
-          try { console.warn("pcmRing.clear failed", err); } catch (_) {}
-        }
-      }
       try {
         if (typeof schedulePartialWatchdog === "function") {
           schedulePartialWatchdog("vad_speech_start");
