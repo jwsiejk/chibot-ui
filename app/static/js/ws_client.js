@@ -1222,104 +1222,17 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   }
 
   async function handleVadSpeechStart(payload = {}) {
-    const phase = getPhase();
-    const wsPhase = AppState?.wsPhase || null;
-    const phaseAllowed = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
-    const wsReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
-
-    if (!phaseAllowed) {
-      if (!vadSpeechStartPhaseSkipLogged) {
-        try {
-          logStage("client.google_v3.speech_turn_start.skipped", {
-            source: "vad_speech_start",
-            phase,
-            wsPhase,
-            reason: "phase_not_allowed",
-          });
-        } catch (_) {}
-        vadSpeechStartPhaseSkipLogged = true;
-      }
-      return;
-    }
-    if (!wsReady) {
-      if (!vadSpeechStartWsSkipLogged) {
-        try {
-          logStage("client.google_v3.speech_turn_start.skipped", {
-            source: "vad_speech_start",
-            phase,
-            wsPhase,
-            reason: "ws_not_ready",
-          });
-        } catch (_) {}
-        vadSpeechStartWsSkipLogged = true;
-      }
-      return;
-    }
-    if (speechSeenThisTurn || vadSpeechTurnStartInFlight) {
-      return;
-    }
-
-    vadSpeechTurnStartInFlight = true;
-    const policy = AppState?.policy || {};
-    let reqId = null;
-    let turnOpened = false;
-    let started = false;
-
     try {
-      reqId = ensureTurnAudioReqId(policy);
-      logStage("client.google_v3.speech_turn_start", {
+      logStage("client.google_v3.vad_speech_start", {
         source: "vad_speech_start",
-        phase,
-        wsPhase,
-        reqId: reqId || null,
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        rmsAtTrigger: payload?.energyDb ?? payload?.rms ?? null,
+        vadFramesSinceGreet: payload?.framesSinceGreet ?? payload?.frameCount ?? null,
+        confidence: payload?.confidence ?? null,
+        energyDb: payload?.energyDb ?? null,
       });
     } catch (_) {}
-
-    try {
-      safeRequestAsrOpen("vad_speech_start");
-    } catch (_) {}
-
-    try {
-      turnOpened = await openTurnOnce("vad_speech_start");
-      if (turnOpened) {
-        started = await safeStartRecorderStreaming(policy, "vad_speech_start");
-      }
-      if (started) {
-        const resolvedReqId = (typeof getCurrentTurnReqId === "function"
-          ? getCurrentTurnReqId()
-          : null) || reqId || null;
-        sendAudioHeader({ reqId: resolvedReqId });
-
-        if (!speechSeenThisTurn) {
-          speechSeenThisTurn = true;
-          try {
-            logStage("client.google_v3.speech_seen_this_turn", {
-              speechSeenThisTurn,
-              rmsAtTrigger: payload?.energyDb ?? payload?.rms ?? null,
-              vadFramesSinceGreet: payload?.framesSinceGreet ?? payload?.frameCount ?? null,
-              confidence: payload?.confidence ?? null,
-              energyDb: payload?.energyDb ?? null,
-              source: "vad_speech_start",
-              reqId: resolvedReqId,
-            });
-          } catch (_) {}
-        }
-      } else if (!started) {
-        try {
-          logStage("client.google_v3.speech_turn_start.error", {
-            source: "vad_speech_start",
-            phase,
-            wsPhase,
-            reason: turnOpened ? "mic_start_failed" : "turn_open_failed",
-          });
-        } catch (_) {}
-        speechSeenThisTurn = false;
-      }
-    } catch (err) {
-      try { console.warn("handleVadSpeechStart failed", err); } catch (_) {}
-    } finally {
-      vadSpeechTurnStartInFlight = false;
-    }
   }
 
   async function handleVadSilenceStop(reason = "vad_silence") {
@@ -2124,7 +2037,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     resetTurnIntent,
     MIC_OUTCOME,
     onVadSilenceStop: handleVadSilenceStop,
-    onVadSpeechStart: handleVadSpeechStart,
     canAutoStopFromVad: () => speechSeenThisTurn === true,
     onCaptureStop: handleCaptureStopTelemetry,
   });
