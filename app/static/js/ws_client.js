@@ -4481,9 +4481,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         return true;
       }
     }
+    // FIX: Use ensureTurnAudioReqId to auto-heal missing IDs and prevent packet drops
     const reqId = typeof options.reqId === "string" && options.reqId
       ? options.reqId
-      : getCurrentTurnReqId();
+      : ensureTurnAudioReqId(AppState?.policy || {});
     if (reqId) {
       options.reqId = reqId;
     } else {
