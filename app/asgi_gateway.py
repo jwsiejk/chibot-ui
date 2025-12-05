@@ -42,11 +42,20 @@ from app.voice_v2.tts_runtime import TTSRuntime
 from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 
 
+def _silence_uvicorn_ws_frame_debug_logs() -> None:
+    """Silence verbose per-frame websocket logs unless explicitly enabled."""
+
+    if os.getenv("ASKCHIP_WS_TEXT_DEBUG", "").lower() in ("1", "true", "yes", "on"):
+        return
+
+    logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(
+        logging.INFO
+    )
+
+
 configure_logging()
 tune_logging_noise()
-logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(
-    logging.INFO
-)
+_silence_uvicorn_ws_frame_debug_logs()
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 install_bus_handler(
