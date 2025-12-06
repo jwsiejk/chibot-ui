@@ -4456,7 +4456,16 @@ class ChatV2Adapter:
             _log.debug("evt=audio_after_turn_stop_ignored sid=%s", ctx.sid)
             return self._HandleResult(True)
 
-        if not ctx.client_capture_armed:
+        allow_early_media = (
+            ctx.audio_profile is not None
+            and (
+                ctx.current_turn_open
+                or ctx.asr_open_task is not None
+                or ctx.session.asr_state == "opening"
+            )
+        )
+
+        if not ctx.client_capture_armed and not allow_early_media:
             self._log_audio_frame_ingest(
                 ctx,
                 "rejected_client_capture_not_armed",
@@ -4485,7 +4494,7 @@ class ChatV2Adapter:
         now = time.monotonic()
         awaiting_ready = ctx.awaiting_asr_ready and not ctx.asr_ready
         if not ctx.asr_ready:
-            if awaiting_ready:
+            if awaiting_ready or allow_early_media:
                 pass
             else:
                 grace_deadline = getattr(ctx, "asr_recovering_until", 0.0) or 0.0
