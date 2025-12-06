@@ -689,7 +689,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     const phase = voicePhaseController?.getPhase?.() || null;
     const phaseOk = phase === PHASE.ConversationReady || phase === PHASE.UserTurn;
     const wsReady = AppState?.wsPhase === "ready";
-    return phaseOk && wsReady && conversationAsrReady && micAndPcmReady;
+    return phaseOk && wsReady && micAndPcmReady;
   }
 
   function canBargeIn() {
@@ -844,6 +844,23 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
     const runPostGreetCleanup = (cleanupSource = source) => {
+      const wsReady = WS_READY_PHASES.has(AppState?.wsPhase);
+      const phaseBefore = getPhase();
+      const greetCompleted = phaseBefore === PHASE.ConversationReady || phaseBefore === PHASE.UserTurn;
+
+      if (!wsReady || !greetCompleted) {
+        try {
+          logStage("client.conversation.begin.skip_cleanup_until_ready", {
+            source: cleanupSource,
+            phase: phaseBefore,
+            wsPhase: AppState?.wsPhase || null,
+            wsReady,
+            greetCompleted,
+          });
+        } catch (_) {}
+        return;
+      }
+
       try {
         setSenderPauseReason("greet", false);
         applySenderPausedState();
@@ -854,12 +871,12 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         setBaseEnabled?.(true, "post_greet");
         logStage("client.conversation.begin.set_base_enabled", {
           source: cleanupSource,
-          phase: getPhase(),
+          phase: phaseBefore,
           wsPhase: AppState?.wsPhase || null,
           asrReady: Boolean(AppState?.asrReady),
           senderPaused: senderPausedSnapshot,
         });
-        if (getPhase() === PHASE.ConversationReady) {
+        if (phaseBefore === PHASE.ConversationReady) {
           logStage("client.conversation_ready.cleanup_snapshot", {
             source: cleanupSource,
             senderPaused: senderPausedSnapshot,
@@ -868,7 +885,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         }
         console.log("client.conversation.begin.set_base_enabled", {
           source: cleanupSource,
-          phase: getPhase(),
+          phase: phaseBefore,
           wsPhase: AppState?.wsPhase || null,
           asrReady: Boolean(AppState?.asrReady),
           senderPaused: senderPausedSnapshot,
@@ -951,7 +968,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       }
     }
 
-    const readyForUserTurn = wsReady && asrReady && micAndPcmReady && conversationAsrReady;
+    const readyForUserTurn = wsReady && micAndPcmReady;
 
     if (readyForUserTurn && !conversationStartCommitted) {
       conversationStartCommitted = true;
@@ -1195,7 +1212,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
               planned: conversationStartPlanned,
               committed: conversationStartCommitted,
             });
-            enterConversationAfterGreet(`${source}_watchdog`);
           } catch (_) {}
         }
       }, watchdogDelay);
