@@ -1427,6 +1427,7 @@ export function createWsAudioRuntime(options = {}) {
       return;
     }
     const isKeepalive = Boolean(meta.keepalive);
+    let effectiveSampleRate = meta?.sampleRate || meta?.sampleRateHz || null;
     let prerollChunksToSend = null;
     wsDiag("pcm_send_attempt", {
       bytes: chunk?.byteLength,
@@ -1513,11 +1514,19 @@ export function createWsAudioRuntime(options = {}) {
       markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
       const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
       currentTurnId = turnIdCandidate && `${turnIdCandidate}`.length ? `${turnIdCandidate}` : allocateTurnId();
+      // 1. Drain buffer and send audio FIRST
       try {
         prerollChunksToSend = ringBufferManager.drainAll();
+        if (prerollChunksToSend && prerollChunksToSend.length) {
+          const prerollSampleRate = effectiveSampleRate || asrRate;
+          effectiveSampleRate = effectiveSampleRate || prerollSampleRate;
+          sendPrerollChunks(prerollChunksToSend, prerollSampleRate, { turnId: currentTurnId, seq: pcmLastSeq });
+          prerollChunksToSend = null; // Prevent double sending
+        }
       } catch (_) {
         prerollChunksToSend = [];
       }
+      // 2. THEN send the control message
       try {
         safeSendJSON({
           type: "client.turn_start",
@@ -1546,18 +1555,10 @@ export function createWsAudioRuntime(options = {}) {
       pcmSampleRate = metaSampleRate;
     }
 
-    const effectiveSampleRate =
+    effectiveSampleRate =
       sr ||
       metaSampleRate ||
-      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
-
-    if (!isKeepalive && prerollChunksToSend) {
-      sendPrerollChunks(prerollChunksToSend, effectiveSampleRate, { turnId: currentTurnId, seq });
-    }
-
-    if (prerollChunksToSend) {
-      // Pre-roll chunks were already sent above. Continue to send the live chunk below.
-    }
+      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : effectiveSampleRate || asrRate);
 
     if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
       try {
