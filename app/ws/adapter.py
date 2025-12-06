@@ -227,7 +227,6 @@ class ClientLogAggregator:
         key = f"{label}:{level}"
         bucket["counts"][key] += 1
         bucket["total"] += 1
-
         if now_ms - bucket["window_start_ms"] >= self.window_ms:
             self.flush(sid)
 
@@ -248,6 +247,109 @@ class ClientLogAggregator:
     def flush_all(self) -> None:
         for sid in list(self._state.keys()):
             self.flush(sid)
+
+
+class TurnLifecycleRecorder:
+    @staticmethod
+    def _base_state(turn_id: Optional[str], turn_index: Optional[int], now_ms: int) -> Dict[str, Any]:
+        return {
+            "turn_id": turn_id,
+            "turn_index": turn_index,
+            "first_audio_ts": None,
+            "asr_open_ts": None,
+            "asr_first_audio_ts": None,
+            "asr_final_ts": None,
+            "asr_timeout": False,
+            "asr_timeout_reason": None,
+            "tts_start_ts": None,
+            "tts_end_ts": None,
+            "outcome": None,
+            "started_ts": now_ms,
+        }
+
+    @classmethod
+    def mark_turn_start(
+        cls, ctx: AdapterContext, now_ms: int, turn_id: Optional[str], turn_index: Optional[int]
+    ) -> None:
+        if getattr(ctx, "turn_lifecycle", None) is not None:
+            cls.finalize_and_log(ctx, outcome="dropped")
+        ctx.turn_lifecycle = cls._base_state(turn_id, turn_index, now_ms)
+
+    @staticmethod
+    def mark_first_audio(ctx: AdapterContext, now_ms: int) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle.setdefault("first_audio_ts", now_ms)
+
+    @staticmethod
+    def mark_asr_open(ctx: AdapterContext, now_ms: int) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle.setdefault("asr_open_ts", now_ms)
+
+    @staticmethod
+    def mark_asr_first_audio(ctx: AdapterContext, now_ms: int) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle.setdefault("asr_first_audio_ts", now_ms)
+
+    @staticmethod
+    def mark_asr_final(ctx: AdapterContext, now_ms: int) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle.setdefault("asr_final_ts", now_ms)
+
+    @staticmethod
+    def mark_asr_timeout(ctx: AdapterContext, now_ms: int, reason: Optional[str]) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle["asr_timeout"] = True
+        lifecycle["asr_timeout_reason"] = reason
+        lifecycle.setdefault("asr_final_ts", now_ms)
+
+    @staticmethod
+    def mark_tts_start(ctx: AdapterContext, now_ms: int) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle.setdefault("tts_start_ts", now_ms)
+
+    @staticmethod
+    def mark_tts_end(ctx: AdapterContext, now_ms: int) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle.setdefault("tts_end_ts", now_ms)
+
+    @classmethod
+    def finalize_and_log(cls, ctx: AdapterContext, outcome: str) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        lifecycle["outcome"] = outcome
+        _log.info(
+            "evt=turn_lifecycle_summary sid=%s turn_id=%s turn_index=%s outcome=%s "
+            "first_audio_ts=%s asr_open_ts=%s asr_first_audio_ts=%s asr_final_ts=%s "
+            "tts_start_ts=%s tts_end_ts=%s asr_timeout=%s timeout_reason=%s",
+            ctx.sid,
+            lifecycle.get("turn_id"),
+            lifecycle.get("turn_index"),
+            outcome,
+            lifecycle.get("first_audio_ts"),
+            lifecycle.get("asr_open_ts"),
+            lifecycle.get("asr_first_audio_ts"),
+            lifecycle.get("asr_final_ts"),
+            lifecycle.get("tts_start_ts"),
+            lifecycle.get("tts_end_ts"),
+            lifecycle.get("asr_timeout"),
+            lifecycle.get("asr_timeout_reason"),
+        )
+        ctx.turn_lifecycle = None
 
 
 # Reduce noisy tts_timeline logs by emitting at most once per window while counting
@@ -709,6 +811,7 @@ class AdapterContext:
     greet_completed_ms: Optional[int] = None
     mic_never_ready_warned: bool = False
     no_audio_safety_net: asyncio.TimerHandle | None = None
+    turn_lifecycle: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -802,6 +905,7 @@ class ChatV2Adapter:
         ctx.bytes_from_client_this_turn = 0
         ctx.audio_ignored_no_turn_logged = False
         ctx.asr_ready_skip_no_turn_logged = False
+        ctx.turn_lifecycle = None
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -1037,6 +1141,7 @@ class ChatV2Adapter:
             ctx.last_partial_for_turn,
             ctx.turn_audio_bytes,
         )
+        TurnLifecycleRecorder.mark_asr_timeout(ctx, self._now_ms(), reason)
         active_req_id = ctx.active_req_id
         if not active_req_id:
             return
@@ -1400,6 +1505,7 @@ class ChatV2Adapter:
         metrics["tts_active_utt_id"] = None
         metrics["tts_provider"] = None
         metrics["tts_timeline_logged"] = False
+        TurnLifecycleRecorder.mark_tts_start(ctx, self._now_ms())
         if isinstance(frame, Mapping):
             utt_id = frame.get("utt_id")
             if isinstance(utt_id, str) and utt_id:
@@ -1481,6 +1587,7 @@ class ChatV2Adapter:
             ctx.asr_ready_deadline_task = None
         metrics = getattr(ctx, "metrics", {})
         metrics["tts_completed_at"] = time.monotonic()
+        TurnLifecycleRecorder.mark_tts_end(ctx, self._now_ms())
         try:
             self._bus(
                 "tts.end",
@@ -1666,6 +1773,8 @@ class ChatV2Adapter:
                 _log.warning("evt=turn_begin_send_failed sid=%s", ctx.sid, exc_info=True)
             else:
                 ctx.turn_active = True
+
+        TurnLifecycleRecorder.finalize_and_log(ctx, outcome="ok")
 
     async def _arm_asr_ready_deadline(
         self,
@@ -4565,6 +4674,7 @@ class ChatV2Adapter:
             now_ms = self._now_ms()
             # First audio this turn: record timestamp and move the guards
             ctx.first_audio_received_ms = now_ms
+            TurnLifecycleRecorder.mark_first_audio(ctx, now_ms)
             self._cancel_no_audio_safety_net(ctx)
             try:
                 loop = asyncio.get_running_loop()
@@ -5156,6 +5266,7 @@ class ChatV2Adapter:
             else:
                 ctx.asr_bytes_sent += byte_count
                 if not ctx.session.first_chunk_sent:
+                    TurnLifecycleRecorder.mark_asr_first_audio(ctx, self._now_ms())
                     ctx.session.first_chunk_sent = True
                 now_mono = time.monotonic()
                 first_packet = ctx.asr_first_packet_monotonic
@@ -8351,6 +8462,7 @@ class ChatV2Adapter:
                 asr_stream_id=ctx.asr_stream_id,
                 asr_req_id=getattr(ctx, "asr_stream_req_id", None),
             )
+            TurnLifecycleRecorder.mark_asr_final(ctx, self._now_ms())
 
         meta: Dict[str, Any] = {"vendor": vendor}
         # Correlators
@@ -8494,7 +8606,11 @@ class ChatV2Adapter:
                     turn_index,
                     skip_reason,
                 )
+                outcome_label = "timeout_no_audio" if timeout and not stripped_text else "empty"
+                TurnLifecycleRecorder.finalize_and_log(ctx, outcome=outcome_label)
             _log_llm_turn_decision("skip", skip_reason)
+            if not is_empty_final:
+                TurnLifecycleRecorder.finalize_and_log(ctx, outcome=skip_reason)
             if not stripped_text:
                 self._end_user_turn(ctx)
             return
@@ -8556,6 +8672,10 @@ class ChatV2Adapter:
         ctx.last_asr_partial = None
 
         turn_index = self._next_turn_index(ctx)
+        now_ms = self._now_ms()
+        TurnLifecycleRecorder.mark_turn_start(
+            ctx, now_ms, ctx.current_turn_id, turn_index
+        )
         ctx.metrics = getattr(ctx, "metrics", {}) or {}
         ctx.metrics.update(
             {
@@ -8728,6 +8848,7 @@ class ChatV2Adapter:
         ctx.session.queued_arm = False
         mark(ctx.session, "open")
         ctx.asr_opened_ms = self._now_ms()
+        TurnLifecycleRecorder.mark_asr_open(ctx, ctx.asr_opened_ms)
         ctx.asr_close_reason = None
         ctx.session.first_chunk_sent = False
         ctx.asr_open = True
