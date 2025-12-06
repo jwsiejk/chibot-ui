@@ -280,28 +280,32 @@ class TurnLifecycleRecorder:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
-        lifecycle.setdefault("first_audio_ts", now_ms)
+        if lifecycle.get("first_audio_ts") is None:
+            lifecycle["first_audio_ts"] = now_ms
 
     @staticmethod
     def mark_asr_open(ctx: AdapterContext, now_ms: int) -> None:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
-        lifecycle.setdefault("asr_open_ts", now_ms)
+        if lifecycle.get("asr_open_ts") is None:
+            lifecycle["asr_open_ts"] = now_ms
 
     @staticmethod
     def mark_asr_first_audio(ctx: AdapterContext, now_ms: int) -> None:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
-        lifecycle.setdefault("asr_first_audio_ts", now_ms)
+        if lifecycle.get("asr_first_audio_ts") is None:
+            lifecycle["asr_first_audio_ts"] = now_ms
 
     @staticmethod
     def mark_asr_final(ctx: AdapterContext, now_ms: int) -> None:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
-        lifecycle.setdefault("asr_final_ts", now_ms)
+        if lifecycle.get("asr_final_ts") is None:
+            lifecycle["asr_final_ts"] = now_ms
 
     @staticmethod
     def mark_asr_timeout(ctx: AdapterContext, now_ms: int, reason: Optional[str]) -> None:
@@ -310,28 +314,33 @@ class TurnLifecycleRecorder:
             return
         lifecycle["asr_timeout"] = True
         lifecycle["asr_timeout_reason"] = reason
-        lifecycle.setdefault("asr_final_ts", now_ms)
+        if lifecycle.get("asr_final_ts") is None:
+            lifecycle["asr_final_ts"] = now_ms
 
     @staticmethod
     def mark_tts_start(ctx: AdapterContext, now_ms: int) -> None:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
-        lifecycle.setdefault("tts_start_ts", now_ms)
+        if lifecycle.get("tts_start_ts") is None:
+            lifecycle["tts_start_ts"] = now_ms
 
     @staticmethod
     def mark_tts_end(ctx: AdapterContext, now_ms: int) -> None:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
-        lifecycle.setdefault("tts_end_ts", now_ms)
+        if lifecycle.get("tts_end_ts") is None:
+            lifecycle["tts_end_ts"] = now_ms
 
     @classmethod
     def finalize_and_log(cls, ctx: AdapterContext, outcome: str) -> None:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
-        lifecycle["outcome"] = outcome
+
+        if lifecycle.get("outcome") is None:
+            lifecycle["outcome"] = outcome
         _log.info(
             "evt=turn_lifecycle_summary sid=%s turn_id=%s turn_index=%s outcome=%s "
             "first_audio_ts=%s asr_open_ts=%s asr_first_audio_ts=%s asr_final_ts=%s "
@@ -339,7 +348,7 @@ class TurnLifecycleRecorder:
             ctx.sid,
             lifecycle.get("turn_id"),
             lifecycle.get("turn_index"),
-            outcome,
+            lifecycle.get("outcome"),
             lifecycle.get("first_audio_ts"),
             lifecycle.get("asr_open_ts"),
             lifecycle.get("asr_first_audio_ts"),
