@@ -83,6 +83,7 @@ class TTSRuntime:
     def _handle_nlg_event(self, event: Dict[str, Any]) -> None:
         provider = self._provider
         if provider is None:
+            _log.info("evt=voice.tts_skipped sid=%s reason=provider_unavailable", event.get("sid"))
             return
 
         sid = event.get("sid")
@@ -112,6 +113,7 @@ class TTSRuntime:
         loop = self._ensure_loop()
         if loop is None:
             _log.warning("evt=tts_loop_missing sid=%s", sid)
+            _log.info("evt=voice.tts_skipped sid=%s reason=loop_missing", sid)
             return
 
         utt_id = self._next_utt_id(sid)
@@ -120,6 +122,7 @@ class TTSRuntime:
 
         if voice_id is None:
             _log.warning("evt=tts_voice_unresolved sid=%s utt_id=%s", sid, utt_id)
+            _log.info("evt=voice.tts_skipped sid=%s reason=voice_unresolved", sid)
             return
 
         self._cancel_state(sid, reason="superseded")
