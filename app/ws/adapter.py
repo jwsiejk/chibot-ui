@@ -4449,13 +4449,12 @@ class ChatV2Adapter:
             _log.debug("evt=audio_after_turn_stop_ignored sid=%s", ctx.sid)
             return self._HandleResult(True)
 
+        # FIX: Allow audio if the turn is logically open, even if ASR isn't ready yet.
+        # We do NOT check ctx.audio_profile here; we rely on _ensure_audio_meta defaults.
         allow_early_media = (
-            ctx.audio_profile is not None
-            and (
-                ctx.current_turn_open
-                or ctx.asr_open_task is not None
-                or ctx.session.asr_state == "opening"
-            )
+            ctx.current_turn_open
+            or ctx.asr_open_task is not None
+            or ctx.session.asr_state == "opening"
         )
 
         if not ctx.client_capture_armed and not allow_early_media:
