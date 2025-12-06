@@ -661,6 +661,29 @@ class EngineV2:
             )
             return
 
+        req_id_value = session.req_id
+        if not isinstance(req_id_value, str) or not req_id_value:
+            return
+
+        turn_index = getattr(session, "turn_index", 0)
+        if turn_index >= 1:
+            nlu_payload: Dict[str, Any] = {
+                "req_id": req_id_value,
+                "turn_id": session.turn_id
+                if isinstance(session.turn_id, str) and session.turn_id
+                else req_id_value,
+                "intent": "chitchat.fallback",
+                "entities": {},
+                "text": text,
+            }
+
+            try:
+                self._apply_policy_decision(sid, nlu_payload)
+            except Exception:
+                _log.exception(
+                    "evt=voice.policy_bridge_failed sid=%s req_id=%s", sid, req_id_value
+                )
+
         if session.turn_started_ms is not None:
             elapsed = _now_ms() - session.turn_started_ms
             if elapsed < 0:
