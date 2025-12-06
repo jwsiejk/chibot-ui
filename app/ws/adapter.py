@@ -528,6 +528,7 @@ class AdapterContext:
     audio_highest_seq: int = -1
     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
     audio_buffer_bytes: int = 0
+    audio_stale_drop_count: int = 0
     audio_backlog: Deque[tuple[int, bytes]] = field(default_factory=deque)
     audio_backlog_bytes: int = 0
     audio_window: int = AUDIO_SEQ_WINDOW
@@ -4654,6 +4655,29 @@ class ChatV2Adapter:
         )
         return self._HandleResult(False, RATE_LIMIT_CLOSE_CODE, "rate_limited")
 
+    def _resolve_bytes_per_sample(
+        self, profile: Optional[Mapping[str, Any]]
+    ) -> int:
+        bytes_per_sample = PCM_BYTES_PER_SAMPLE
+        if isinstance(profile, Mapping):
+            explicit = profile.get("bytes_per_sample") or profile.get("sample_width")
+            try:
+                parsed = int(explicit) if explicit is not None else None
+            except Exception:
+                parsed = None
+            if isinstance(parsed, int) and parsed > 0:
+                return parsed
+
+            encoding_raw = profile.get("encoding") or profile.get("format")
+            if isinstance(encoding_raw, str):
+                encoding = encoding_raw.strip().upper()
+                if encoding in {"PCMU", "MULAW", "ALAW"}:
+                    bytes_per_sample = 1
+                elif encoding in {"LINEAR16", "PCM16"}:
+                    bytes_per_sample = 2
+
+        return max(1, bytes_per_sample)
+
     def _mic_buffer_capacity_bytes(self, ctx: AdapterContext) -> int:
         profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
         sample_rate = self._resolve_asr_sample_rate(ctx)
@@ -4670,7 +4694,11 @@ class ChatV2Adapter:
             if isinstance(channel_value, int) and channel_value > 0:
                 channels = channel_value
 
-        capacity = max(1, sample_rate * PCM_BYTES_PER_SAMPLE * channels * self.MIC_BUFFER_MAX_SECONDS)
+        bytes_per_sample = self._resolve_bytes_per_sample(profile)
+
+        capacity = max(
+            1, sample_rate * bytes_per_sample * channels * self.MIC_BUFFER_MAX_SECONDS
+        )
         return capacity
 
     async def _ingest_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
@@ -4681,8 +4709,10 @@ class ChatV2Adapter:
         expected = ctx.audio_expected_seq
 
         if seq < expected - window:
+            self._log_stale_audio_drop(ctx, seq, expected, window, "below_window")
             return
         if seq < expected:
+            self._log_stale_audio_drop(ctx, seq, expected, window, "already_flushed")
             return
         if seq in ctx.audio_buffer:
             return
@@ -4735,6 +4765,22 @@ class ChatV2Adapter:
             )
 
         await self._flush_audio_buffer(ctx)
+
+    def _log_stale_audio_drop(
+        self, ctx: AdapterContext, seq: int, expected: int, window: int, reason: str
+    ) -> None:
+        ctx.audio_stale_drop_count += 1
+        if ctx.audio_stale_drop_count > 3 and ctx.audio_stale_drop_count % 10 != 0:
+            return
+        _log.info(
+            "evt=audio_stale_drop sid=%s seq=%d expected=%d window=%d reason=%s count=%d",
+            ctx.sid,
+            seq,
+            expected,
+            window,
+            reason,
+            ctx.audio_stale_drop_count,
+        )
 
     def _compute_audio_gap(self, ctx: AdapterContext) -> Optional[tuple[int, int]]:
         expected = ctx.audio_expected_seq
@@ -5046,8 +5092,11 @@ class ChatV2Adapter:
                 channels_value = None
             if isinstance(channels_value, int) and channels_value > 0:
                 channels = channels_value
-        expected_samples = int(round(sample_rate * (AUDIO_KEEPALIVE_CHUNK_MS / 1000.0))) * channels
-        expected_bytes = expected_samples * PCM_BYTES_PER_SAMPLE
+        expected_samples = int(
+            round(sample_rate * (AUDIO_KEEPALIVE_CHUNK_MS / 1000.0))
+        ) * channels
+        bytes_per_sample = self._resolve_bytes_per_sample(profile)
+        expected_bytes = expected_samples * bytes_per_sample
         if expected_bytes <= 0 or len(chunk) != expected_bytes:
             return False
         if isinstance(chunk, memoryview):
