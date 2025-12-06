@@ -265,8 +265,20 @@ export function emitClientLog(label, detail = {}) {
   }
 }
 
-export function logStage(label, detail = {}) {
+export function logStage(label, detail = {}, level = "info") {
   const payload = { trace_id: __turnTraceId || null, ...detail };
+
+  // LOCAL CONSOLE: Always log to browser console for debugging
+  try {
+    if (level === "error") console.error(label, payload);
+    else if (level === "warn") console.warn(label, payload);
+    else console.log(label, payload);
+  } catch (_) {}
+
+  // SERVER ECHO: Only send Errors/Warnings to server to save bandwidth
+  if (level !== "error" && level !== "warn" && label !== "client.mic.start_failed") {
+    return;
+  }
 
   // Preserve existing console/bus behaviour while guaranteeing emitClientLog runs
   // for client.* labels so they can be bridged over the hub/WebSocket path.
