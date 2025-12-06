@@ -1774,8 +1774,6 @@ class ChatV2Adapter:
             else:
                 ctx.turn_active = True
 
-        TurnLifecycleRecorder.finalize_and_log(ctx, outcome="ok")
-
     async def _arm_asr_ready_deadline(
         self,
         send: Callable[[dict], Awaitable[None]] | None,
@@ -8633,6 +8631,7 @@ class ChatV2Adapter:
         ctx.turn_start_ts_ms = None
         ctx.bytes_from_client_this_turn = 0
         ctx.audio_ignored_no_turn_logged = False
+        TurnLifecycleRecorder.finalize_and_log(ctx, outcome="ok")
         self._end_user_turn(ctx)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
         # - deciding whether to keep listening vs close ASR, and
