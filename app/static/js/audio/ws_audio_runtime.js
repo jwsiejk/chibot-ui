@@ -1427,7 +1427,6 @@ export function createWsAudioRuntime(options = {}) {
       return;
     }
     const isKeepalive = Boolean(meta.keepalive);
-    let effectiveSampleRate = meta?.sampleRate || meta?.sampleRateHz || null;
     let prerollChunksToSend = null;
     wsDiag("pcm_send_attempt", {
       bytes: chunk?.byteLength,
@@ -1522,11 +1521,11 @@ export function createWsAudioRuntime(options = {}) {
       try {
         prerollChunksToSend = ringBufferManager.drainAll();
         if (prerollChunksToSend && prerollChunksToSend.length) {
-          const effectiveSampleRate = meta?.sampleRate || meta?.sampleRateHz || asrRate;
+          const prerollRate = meta?.sampleRate || meta?.sampleRateHz || asrRate;
           // Send NOW to guarantee order on the wire
-          sendPrerollChunks(prerollChunksToSend, effectiveSampleRate, { turnId: currentTurnId, seq: pcmLastSeq });
-          // Clear it so we don't send it again later in this function
-          prerollChunksToSend = null;
+          sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq: pcmLastSeq });
+          // Clear it so we don't send it again later
+          prerollChunksToSend = null; 
         }
       } catch (_) {
         prerollChunksToSend = [];
@@ -1537,7 +1536,7 @@ export function createWsAudioRuntime(options = {}) {
           type: "client.turn_start",
           lane: "mic",
           turn_id: currentTurnId,
-          pre_roll_ms: 0,
+          pre_roll_ms: 0, 
         });
       } catch (_) {}
       try {
@@ -1545,7 +1544,7 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
     }
     const shouldSendNow = isKeepalive || softDecision.shouldSend || speechSeenThisTurn;
-
+    
     if (!shouldSendNow) {
       recordPcmFrameOutcome({ droppedSoft: chunkCount });
       emitPolicyHook("soft_gate_drop", { reason: "vad_silence", wsPhase, appPhase: phaseValue, wsReadyState });
@@ -1560,10 +1559,11 @@ export function createWsAudioRuntime(options = {}) {
       pcmSampleRate = metaSampleRate;
     }
 
-    effectiveSampleRate =
+    // Ensure this is declared as const
+    const effectiveSampleRate =
       sr ||
       metaSampleRate ||
-      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : effectiveSampleRate || asrRate);
+      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
 
     if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
       try {
