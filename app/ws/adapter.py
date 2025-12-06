@@ -3436,6 +3436,10 @@ class ChatV2Adapter:
                 },
             )
 
+            if not ctx.asr_open and ctx.asr_open_task is None:
+                self._schedule_asr_open(ctx)
+            asyncio.create_task(self._flush_audio_buffer(ctx))
+
             return self._HandleResult(True)
 
         if frame_type == "client.turn_stop":
@@ -4376,19 +4380,18 @@ class ChatV2Adapter:
             )
             return self._HandleResult(False, 1003, "audio_not_expected")
 
-        if not ctx.current_turn_open or not ctx.accepting_audio:
+        if not ctx.accepting_audio:
             self._log_audio_frame_ingest(
                 ctx,
                 "ignored_no_turn",
                 byte_count,
-                f"current_turn_open={ctx.current_turn_open},accepting_audio={ctx.accepting_audio}",
+                f"accepting_audio={ctx.accepting_audio}",
             )
             if not ctx.audio_ignored_no_turn_logged:
                 ctx.audio_ignored_no_turn_logged = True
                 _log.info(
-                    "evt=google_v3.audio_ignored_no_turn sid=%s turn_open=%s accepting=%s turn_id=%s",
+                    "evt=google_v3.audio_ignored_no_turn sid=%s accepting=%s turn_id=%s",
                     ctx.sid,
-                    ctx.current_turn_open,
                     ctx.accepting_audio,
                     ctx.current_turn_id,
             )
@@ -4876,6 +4879,10 @@ class ChatV2Adapter:
         return gap_from, next_available
 
     async def _flush_audio_buffer(self, ctx: AdapterContext) -> None:
+        if not ctx.current_turn_open:
+            return
+        if ctx.session.asr_state != "open" and not ALLOW_AUDIO_WITHOUT_ASR:
+            return
         while True:
             if not ctx.asr_ready and not ALLOW_AUDIO_WITHOUT_ASR:
                 return
@@ -8807,6 +8814,8 @@ class ChatV2Adapter:
         ctx.asr_close_reason = None
         ctx.session.first_chunk_sent = False
         ctx.asr_open = True
+
+        asyncio.create_task(self._flush_audio_buffer(ctx))
 
         try:
             loop = asyncio.get_running_loop()
