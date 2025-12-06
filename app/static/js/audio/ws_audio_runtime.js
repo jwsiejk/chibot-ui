@@ -1427,7 +1427,6 @@ export function createWsAudioRuntime(options = {}) {
       return;
     }
     const isKeepalive = Boolean(meta.keepalive);
-    let effectiveSampleRate = meta?.sampleRate || meta?.sampleRateHz || null;
     let prerollChunksToSend = null;
     wsDiag("pcm_send_attempt", {
       bytes: chunk?.byteLength,
