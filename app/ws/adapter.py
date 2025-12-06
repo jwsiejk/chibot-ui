@@ -804,6 +804,8 @@ class AdapterContext:
     _logged_final_req_id_mismatch: bool = False
     _logged_header_req_id_mismatch: bool = False
     _logged_asr_timeout: bool = False
+    asr_partial_req_id_mismatch_count: int = 0
+    asr_final_req_id_mismatch_count: int = 0
     asr_result_seen: bool = False
     asr_final_text: str | None = None
     diag_mode: bool = False
@@ -970,6 +972,8 @@ class ChatV2Adapter:
         ctx._logged_final_req_id_mismatch = False
         ctx._logged_header_req_id_mismatch = False
         ctx._logged_asr_timeout = False
+        ctx.asr_partial_req_id_mismatch_count = 0
+        ctx.asr_final_req_id_mismatch_count = 0
         ctx.first_audio_received_ms = None
         ctx.turn_audio_bytes = 0
         ctx.turn_audio_chunks = 0
@@ -1114,6 +1118,10 @@ class ChatV2Adapter:
         provided_req_id: Optional[str],
     ) -> None:
         if kind == "partial":
+            ctx.asr_partial_req_id_mismatch_count += 1
+        else:
+            ctx.asr_final_req_id_mismatch_count += 1
+        if kind == "partial":
             if ctx._logged_partial_req_id_mismatch:
                 return
             ctx._logged_partial_req_id_mismatch = True
@@ -1121,6 +1129,14 @@ class ChatV2Adapter:
             if ctx._logged_final_req_id_mismatch:
                 return
             ctx._logged_final_req_id_mismatch = True
+
+        _log.debug(
+            "evt=asr_%s_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s",
+            kind,
+            ctx.sid,
+            active_req_id,
+            provided_req_id,
+        )
         meta = {
             "active_req_id": active_req_id,
             "provided_req_id": provided_req_id,
@@ -4980,16 +4996,36 @@ class ChatV2Adapter:
         while True:
             if not ctx.asr_ready and not ALLOW_AUDIO_WITHOUT_ASR:
                 return
+
+            # GAP JUMP: if we have buffered audio but not at the expected sequence,
+            # advance expected_seq to the oldest available chunk so we don't stall.
+            if ctx.audio_buffer and ctx.audio_expected_seq not in ctx.audio_buffer:
+                oldest_seq = min(ctx.audio_buffer.keys())
+                if oldest_seq > ctx.audio_expected_seq:
+                    _log.warning(
+                        "evt=audio_buffer_gap_jump sid=%s expected=%s found=%s",
+                        ctx.sid,
+                        ctx.audio_expected_seq,
+                        oldest_seq,
+                    )
+                    ctx.audio_expected_seq = oldest_seq
+
             seq = ctx.audio_expected_seq
             chunk = ctx.audio_buffer.get(seq)
             if chunk is None:
                 break
+
             chunk = ctx.audio_buffer.pop(seq, None)
             if chunk is None:
                 break
+
+            # Maintain buffer accounting
             ctx.audio_buffer_bytes = max(0, ctx.audio_buffer_bytes - len(chunk))
+
             await self._emit_audio_chunk(ctx, chunk, seq)
             ctx.audio_expected_seq += 1
+
+        # Keep audio_highest_seq consistent with what's left in the buffer
         if ctx.audio_buffer:
             ctx.audio_highest_seq = max(ctx.audio_buffer)
         else:
