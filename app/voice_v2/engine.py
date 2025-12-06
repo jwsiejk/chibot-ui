@@ -544,6 +544,10 @@ class EngineV2:
         if is_greet:
             tts_meta["is_greet"] = True
             tts_meta["tts"]["is_greet"] = True
+
+        _log.info(
+            "TURN_METRICS stage=tts_start sid=%s utt_id=%s is_greet=%s", sid, utt_id, is_greet
+        )
         self._gate.set_reason(
             "tts_active",
             True,
@@ -622,6 +626,13 @@ class EngineV2:
 
     def on_asr_final(self, sid: str, text: str, req_id: str | None = None) -> None:
         """Observe the final ASR transcript for a turn."""
+
+        _log.info(
+            "evt=voice.on_asr_final sid=%s req_id=%s text_preview=%s",
+            sid,
+            req_id,
+            (text[:80] + "…") if isinstance(text, str) and len(text) > 80 else text,
+        )
 
         session = self._ensure_session(sid)
 
@@ -1674,6 +1685,14 @@ class EngineV2:
         if reason:
             payload["reason"] = reason
 
+        _log.info(
+            "TURN_METRICS stage=tts_end sid=%s utt_id=%s reason=%s is_greet=%s",
+            sid,
+            utt_id,
+            reason,
+            is_greet,
+        )
+
         event = self._envelope(sid, EVT_TTS_END, payload)
         self._publish(event)
 
@@ -1919,12 +1938,36 @@ class EngineV2:
         self._publish(policy_event)
         session.policy_emitted = True
 
+        gate_snapshot = self._gate.snapshot()
+        gate_reasons = gate_snapshot.get("reasons") if isinstance(gate_snapshot, Mapping) else {}
+        system_hold = bool(gate_reasons.get("system_hold")) if isinstance(gate_reasons, Mapping) else False
+        diag_mode = bool(snapshot.get("diag_mode")) if isinstance(snapshot, Mapping) else False
+
+        _log.info(
+            "evt=voice.policy_decision sid=%s req_id=%s action=%s intent=%s diag_mode=%s system_hold=%s",
+            sid,
+            req_id,
+            decision.get("action"),
+            nlu_payload.get("intent"),
+            diag_mode,
+            system_hold,
+        )
+
         # Policy drives the LLM (EVT_LLM_RESPONSE_START/END) and the synthesized
         # NLG/chat frames that ultimately reach the client for each ASR final.
 
         action = decision.get("action") or "respond"
 
         if action != "respond" or session.nlg_emitted:
+            _log.info(
+                "evt=voice.llm_turn_skipped sid=%s req_id=%s action=%s diag_mode=%s system_hold=%s nlg_emitted=%s",
+                sid,
+                req_id,
+                action,
+                diag_mode,
+                system_hold,
+                session.nlg_emitted,
+            )
             return
 
         intent = nlu_payload.get("intent")
@@ -1970,6 +2013,15 @@ class EngineV2:
         request_payload["max_tokens"] = _CONCISE_MAX_TOKENS
         if session.history_message_count:
             request_payload["history_messages"] = session.history_message_count
+
+        _log.info(
+            "evt=voice.llm_turn_start sid=%s req_id=%s intent=%s diag_mode=%s system_hold=%s",
+            sid,
+            req_id,
+            intent,
+            diag_mode,
+            system_hold,
+        )
 
         self._record_turn_timing(sid, session, "llm_start")
         self._emit_assistant_turn_begin(sid, session)
