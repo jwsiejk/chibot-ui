@@ -4365,39 +4365,6 @@ class ChatV2Adapter:
             source="ws.audio",
         )
 
-        # During greet (greet_completed == False), incoming PCM must not be fed to ASR.
-        if not ctx.greet_completed:
-            self._log_audio_frame_ingest(
-                ctx, "rejected_greet_in_progress", byte_count, "greet_not_completed"
-            )
-            meta = {
-                "byte_count": byte_count,
-                "error": "audio_not_expected",
-                "ws": {"dir": "in", "size": byte_count},
-            }
-            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-            await self._send_error(
-                send, ctx.sid, "audio_not_expected", "greet in progress"
-            )
-            return self._HandleResult(False, 1003, "audio_not_expected")
-
-        if not ctx.accepting_audio:
-            self._log_audio_frame_ingest(
-                ctx,
-                "ignored_no_turn",
-                byte_count,
-                f"accepting_audio={ctx.accepting_audio}",
-            )
-            if not ctx.audio_ignored_no_turn_logged:
-                ctx.audio_ignored_no_turn_logged = True
-                _log.info(
-                    "evt=google_v3.audio_ignored_no_turn sid=%s accepting=%s turn_id=%s",
-                    ctx.sid,
-                    ctx.accepting_audio,
-                    ctx.current_turn_id,
-            )
-            return self._HandleResult(True)
-
         if byte_count > self.binary_limit_bytes:
             self._log_audio_frame_ingest(
                 ctx, "rejected_frame_too_large", byte_count
@@ -4437,156 +4404,10 @@ class ChatV2Adapter:
                     predecoded=frame_obj,
                 )
 
-        if ctx.client_turn_closed:
-            self._log_audio_frame_ingest(
-                ctx, "ignored_after_client_turn_stop", byte_count
-            )
-            await self._publish(
-                EVT_WS_AUDIO_RECV,
-                ctx.sid,
-                {"byte_count": byte_count, "error": "audio_after_turn_stop"},
-            )
-            _log.debug("evt=audio_after_turn_stop_ignored sid=%s", ctx.sid)
-            return self._HandleResult(True)
-
-        # FIX: Allow audio if the turn is logically open, even if ASR isn't ready yet.
-        # We do NOT check ctx.audio_profile here; we rely on _ensure_audio_meta defaults.
-        allow_early_media = (
-            ctx.current_turn_open
-            or ctx.asr_open_task is not None
-            or ctx.session.asr_state == "opening"
-        )
-
-        if not ctx.client_capture_armed and not allow_early_media:
-            self._log_audio_frame_ingest(
-                ctx,
-                "rejected_client_capture_not_armed",
-                byte_count,
-                "client_capture_not_armed",
-            )
-            _log.debug(
-                "evt=audio_drop_before_asr sid=%s bytes=%s reason=%s asr_state=%s",
-                ctx.sid,
-                byte_count,
-                "client_capture_not_armed",
-                getattr(ctx.session, "asr_state", None),
-            )
-            if ALLOW_AUDIO_WITHOUT_ASR:
-                _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
-            else:
-                meta = {
-                    "byte_count": byte_count,
-                    "error": "audio_not_expected",
-                    "ws": {"dir": "in", "size": byte_count},
-                }
-                await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-                await self._send_error(send, ctx.sid, "audio_not_expected", "asr not ready")
-                return self._HandleResult(False, 1003, "audio_not_expected")
-
-        now = time.monotonic()
-        awaiting_ready = ctx.awaiting_asr_ready and not ctx.asr_ready
-        if not ctx.asr_ready:
-            if awaiting_ready or allow_early_media:
-                pass
-            else:
-                grace_deadline = getattr(ctx, "asr_recovering_until", 0.0) or 0.0
-                if grace_deadline and now <= grace_deadline:
-                    if not ctx.asr_recovering_audio_logged:
-                        remaining_ms = max(0, int((grace_deadline - now) * 1000.0))
-                        reason_label = ctx.asr_recovering_reason or "unspecified"
-                        _log.warning(
-                            "evt=asr_guard_grace sid=%s remaining_ms=%s reason=%s",
-                            ctx.sid,
-                            remaining_ms,
-                            reason_label,
-                        )
-                        ctx.asr_recovering_audio_logged = True
-                else:
-                    if grace_deadline:
-                        ctx.asr_recovering_until = 0.0
-                        ctx.asr_recovering_reason = None
-                        ctx.asr_recovering_audio_logged = False
-                    if ALLOW_AUDIO_WITHOUT_ASR:
-                        _log.warning("evt=asr_guard_bypassed sid=%s", ctx.sid)
-                    else:
-                        meta = {
-                            "byte_count": byte_count,
-                            "error": "audio_not_expected",
-                            "ws": {"dir": "in", "size": byte_count},
-                        }
-                        await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-                        await self._send_error(
-                            send,
-                            ctx.sid,
-                            "audio_not_expected",
-                            "asr not ready",
-                        )
-                        self._log_audio_frame_ingest(
-                            ctx,
-                            "rejected_asr_not_ready",
-                            byte_count,
-                            "asr_not_ready",
-                        )
-                        return self._HandleResult(False, 1003, "audio_not_expected")
-
-        if ctx.session.asr_state != "open" and not (ctx.asr_ready or ALLOW_AUDIO_WITHOUT_ASR):
-            self._log_audio_frame_ingest(
-                ctx,
-                "ignored_asr_session_not_open",
-                byte_count,
-                f"state={ctx.session.asr_state}",
-            )
-            drop_meta = {
-                "reason": "not_open",
-                "byte_count": byte_count,
-                "state": ctx.session.asr_state,
-            }
-            if isinstance(ctx.session.closed_at_ms, int):
-                drop_meta["after_close_ms"] = max(
-                    0, self._now_ms() - ctx.session.closed_at_ms
-                )
-            await self._publish(ASR_POST_CLOSE_DROP, ctx.sid, drop_meta)
-            return self._HandleResult(True)
-
-        if not ctx.accepting_audio:
-            self._log_audio_frame_ingest(
-                ctx,
-                "rejected_not_accepting_audio",
-                byte_count,
-                f"violations={ctx.audio_violation_count + 1}",
-            )
-            ctx.audio_violation_count += 1
-            violation_meta = {
-                "byte_count": byte_count,
-                "error": "audio_not_expected_close"
-                if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT
-                else "audio_not_expected",
-                "ws": {"dir": "in", "size": byte_count},
-                "violations": ctx.audio_violation_count,
-            }
-            _log.debug(
-                "evt=audio_not_expected sid=%s asr_state=%s asr_open=%s "
-                "asr_bytes_sent=%s turn_index=%s asr_final_emitted=%s",
-                ctx.sid,
-                getattr(ctx.session, "asr_state", None),
-                getattr(ctx, "asr_open", None),
-                getattr(ctx, "asr_bytes_sent", None),
-                getattr(ctx, "turn_index", None),
-                getattr(ctx, "asr_final_emitted", None),
-            )
-            _log.debug(
-                "evt=audio_drop_before_asr sid=%s bytes=%s reason=%s asr_state=%s",
-                ctx.sid,
-                byte_count,
-                "accepting_audio_false",
-                getattr(ctx.session, "asr_state", None),
-            )
-            await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, violation_meta)
-            await self._send_error(send, ctx.sid, "audio_not_expected", "engine not accepting audio")
-            if ctx.audio_violation_count >= _AUDIO_VIOLATION_LIMIT:
-                return self._HandleResult(False, 1003, "audio_not_expected")
-            return self._HandleResult(True)
-
+        # Conversation Core INV-1: Mailbox / Always-Buffer Rule. For the mic lane
+        # we always accept binary audio, update ingress metrics, and ingest into
+        # the bounded ring buffer. We never reject mic audio here based on
+        # conversational state; turn/ASR decisions happen after buffering.
         ctx.audio_violation_count = 0
         now_ms = int(time.time() * 1000)
         if ctx.ingress_packets <= 0:
@@ -4703,7 +4524,7 @@ class ChatV2Adapter:
                         "sid": ctx.sid,
                         "turn_id": ctx.current_turn_id,
                         "sample_rate": sample_rate,
-                        "language": language_code,
+                    "language": language_code,
                     },
                 )
                 await self._invoke_engine("on_asr_open", ctx.sid, ctx.current_turn_id)
@@ -4711,7 +4532,6 @@ class ChatV2Adapter:
                 self._log_audio_frame_ingest(
                     ctx, "ignored_pre_open_no_stream", byte_count
                 )
-                return self._HandleResult(True)
 
         if ctx.audio_highest_seq < 0:
             ctx.audio_expected_seq = ctx.audio_seq
