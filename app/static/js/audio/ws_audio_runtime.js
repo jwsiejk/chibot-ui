@@ -1514,19 +1514,24 @@ export function createWsAudioRuntime(options = {}) {
       markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
       const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
       currentTurnId = turnIdCandidate && `${turnIdCandidate}`.length ? `${turnIdCandidate}` : allocateTurnId();
-      // 1. Drain buffer and send audio FIRST
+      // 1. ARM: Wake up the server (allows buffering without immediate timeout)
+      try {
+        safeSendJSON({ type: "asr.open", reason: "vad_speech_start" });
+      } catch (_) {}
+      // 2. AUDIO: Send the pre-roll audio immediately to fill the server buffer
       try {
         prerollChunksToSend = ringBufferManager.drainAll();
         if (prerollChunksToSend && prerollChunksToSend.length) {
-          const prerollSampleRate = effectiveSampleRate || asrRate;
-          effectiveSampleRate = effectiveSampleRate || prerollSampleRate;
-          sendPrerollChunks(prerollChunksToSend, prerollSampleRate, { turnId: currentTurnId, seq: pcmLastSeq });
-          prerollChunksToSend = null; // Prevent double sending
+          const effectiveSampleRate = meta?.sampleRate || meta?.sampleRateHz || asrRate;
+          // Send NOW to guarantee order on the wire
+          sendPrerollChunks(prerollChunksToSend, effectiveSampleRate, { turnId: currentTurnId, seq: pcmLastSeq });
+          // Clear it so we don't send it again later in this function
+          prerollChunksToSend = null;
         }
       } catch (_) {
         prerollChunksToSend = [];
       }
-      // 2. THEN send the control message
+      // 3. START: Signal the official turn start (Server now has audio and won't panic)
       try {
         safeSendJSON({
           type: "client.turn_start",
@@ -1536,7 +1541,7 @@ export function createWsAudioRuntime(options = {}) {
         });
       } catch (_) {}
       try {
-        logStage("client.google_v3.turn_start_sent", { turnId: currentTurnId, preRollMs: 0 });
+        logStage("client.google_v3.turn_sequence_initiated", { turnId: currentTurnId });
       } catch (_) {}
     }
     const shouldSendNow = isKeepalive || softDecision.shouldSend || speechSeenThisTurn;
