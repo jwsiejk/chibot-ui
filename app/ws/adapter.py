@@ -7544,28 +7544,6 @@ class ChatV2Adapter:
                     "ms_since_turn_start": ms_since_turn_start,
                 },
             )
-            try:
-                if ctx.session.asr_state == "open" or ctx.asr_open:
-                    loop.create_task(
-                        self._close_asr(ctx, reason="no_audio_safety_net")
-                    )
-            except Exception:
-                _log.exception("evt=no_audio_safety_net_close_failed sid=%s", ctx.sid)
-            loop.create_task(
-                self._invoke_engine(
-                    "_set_state", ctx.sid, "Ready", reason="no_audio_safety_net"
-                )
-            )
-            _log.debug(
-                "evt=google_v3.asr_no_audio_engine_reset sid=%s",
-                ctx.sid,
-            )
-            ctx.current_turn_open = False
-            ctx.current_turn_id = None
-            ctx.bytes_from_client_this_turn = 0
-            ctx.turn_start_ts_ms = None
-            ctx.accepting_audio = False
-            ctx.audio_ignored_no_turn_logged = False
 
         try:
             ctx.no_audio_safety_net = loop.call_later(safety_timeout, _fire)
@@ -8674,8 +8652,13 @@ class ChatV2Adapter:
                 and effective_stream != ctx.asr_stream_id
             )
             is_open = ctx.session.asr_state == "open"
+            allow_final_while_closing = (
+                is_final
+                and not stream_mismatch
+                and ctx.session.asr_state in {"closing"}
+            )
 
-            if stream_mismatch or (not is_open) or ctx.asr_final_emitted:
+            if stream_mismatch or (not is_open and not allow_final_while_closing) or ctx.asr_final_emitted:
                 reasons: list[str] = []
                 if stream_mismatch:
                     reasons.append("stream_mismatch")
