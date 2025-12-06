@@ -654,12 +654,13 @@ class EngineV2:
             session.req_id = active_req_id
         elif provided_req_id is not None and provided_req_id != active_req_id:
             _log.debug(
-                "evt=asr_final_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s",
+                "evt=asr_final_req_id_mismatch sid=%s active_req_id=%s provided_req_id=%s (adopting_provided)",
                 sid,
                 active_req_id,
                 provided_req_id,
             )
-            return
+            active_req_id = provided_req_id
+            session.req_id = active_req_id
 
         req_id_value = session.req_id
         if not isinstance(req_id_value, str) or not req_id_value:
