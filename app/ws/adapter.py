@@ -645,6 +645,8 @@ class AdapterContext:
     audio_window: int = AUDIO_SEQ_WINDOW
     audio_chunks_recv: int = 0
     audio_bytes_recv: int = 0
+    audio_frame_ingest_count: int = 0
+    audio_frame_ingest_last_log_ms: Optional[int] = None
     audio_bridge_first_chunk_logged: bool = False
     ingress_packets: int = 0
     ingress_bytes: int = 0
@@ -821,6 +823,9 @@ class AdapterContext:
     mic_never_ready_warned: bool = False
     no_audio_safety_net: asyncio.TimerHandle | None = None
     turn_lifecycle: Optional[Dict[str, Any]] = None
+    audio_overflow_events: int = 0
+    audio_overflow_total_bytes: int = 0
+    audio_overflow_last_log_ms: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -915,6 +920,11 @@ class ChatV2Adapter:
         ctx.audio_ignored_no_turn_logged = False
         ctx.asr_ready_skip_no_turn_logged = False
         ctx.turn_lifecycle = None
+        ctx.audio_frame_ingest_count = 0
+        ctx.audio_frame_ingest_last_log_ms = None
+        ctx.audio_overflow_events = 0
+        ctx.audio_overflow_total_bytes = 0
+        ctx.audio_overflow_last_log_ms = None
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -4457,18 +4467,42 @@ class ChatV2Adapter:
         ctx: AdapterContext,
         decision: str,
         byte_count: int,
-        reason: str | None = None,
+        note: str | None = None,
     ) -> None:
-        meta: Dict[str, object] = {"byte_count": byte_count}
-        if reason:
-            meta["reason"] = reason
-        _log.info(
-            "evt=google_v3.audio_frame_ingest sid=%s turn_id=%s decision=%s",
-            ctx.sid,
-            ctx.current_turn_id,
-            decision,
-            extra={"meta": meta},
-        )
+        meta = {
+            "bytes": byte_count,
+            "note": note,
+            "asr_state": getattr(ctx.session, "asr_state", None),
+            "turn_id": ctx.current_turn_id,
+        }
+        count = getattr(ctx, "audio_frame_ingest_count", 0) + 1
+        ctx.audio_frame_ingest_count = count
+        now_ms = self._now_ms()
+        last_ms = getattr(ctx, "audio_frame_ingest_last_log_ms", None) or 0
+
+        log_this = False
+        if count <= 5:
+            log_this = True
+        elif count % 25 == 0 or (now_ms - last_ms) >= 1000:
+            log_this = True
+
+        if log_this:
+            ctx.audio_frame_ingest_last_log_ms = now_ms
+            _log.info(
+                "evt=google_v3.audio_frame_ingest sid=%s turn_id=%s decision=%s count=%d",
+                ctx.sid,
+                ctx.current_turn_id,
+                decision,
+                count,
+                extra={"meta": meta},
+            )
+        else:
+            _log.debug(
+                "evt=google_v3.audio_frame_ingest sid=%s turn_id=%s decision=%s (suppressed)",
+                ctx.sid,
+                ctx.current_turn_id,
+                decision,
+            )
 
     async def _handle_binary(
         self, data: bytes, ctx: AdapterContext, send: Callable[[dict], Awaitable[None]]
@@ -4860,17 +4894,34 @@ class ChatV2Adapter:
             else:
                 ctx.audio_expected_seq = max(ctx.audio_expected_seq, seq + 1)
                 ctx.audio_highest_seq = ctx.audio_expected_seq - 1
-            _log.info(
-                "evt=audio_buffer_overflow",
-                extra={
-                    "sid": ctx.sid,
-                    "turn_id": ctx.current_turn_id,
-                    "capacity_bytes": capacity,
-                    "dropped_bytes": dropped_bytes,
-                    "remaining_bytes": ctx.audio_buffer_bytes,
-                    "buffer_len": len(ctx.audio_buffer),
-                },
+            ctx.audio_overflow_events = getattr(ctx, "audio_overflow_events", 0) + 1
+            ctx.audio_overflow_total_bytes = (
+                getattr(ctx, "audio_overflow_total_bytes", 0) + dropped_bytes
             )
+            now_ms = self._now_ms()
+            last_ms = getattr(ctx, "audio_overflow_last_log_ms", None) or 0
+
+            should_log = False
+            if ctx.audio_overflow_events <= 3:
+                should_log = True
+            elif (now_ms - last_ms) >= 1000:
+                should_log = True
+
+            if should_log:
+                ctx.audio_overflow_last_log_ms = now_ms
+                _log.info(
+                    "evt=audio_buffer_overflow sid=%s turn_id=%s capacity_bytes=%s "
+                    "dropped_bytes=%s remaining_bytes=%s buffer_len=%s "
+                    "total_events=%s total_dropped_bytes=%s",
+                    ctx.sid,
+                    ctx.current_turn_id,
+                    capacity,
+                    dropped_bytes,
+                    ctx.audio_buffer_bytes,
+                    len(ctx.audio_buffer),
+                    ctx.audio_overflow_events,
+                    ctx.audio_overflow_total_bytes,
+                )
 
         gap = self._compute_audio_gap(ctx)
         if gap is not None:
@@ -8684,6 +8735,11 @@ class ChatV2Adapter:
         TurnLifecycleRecorder.mark_turn_start(
             ctx, now_ms, ctx.current_turn_id, turn_index
         )
+        ctx.audio_frame_ingest_count = 0
+        ctx.audio_frame_ingest_last_log_ms = None
+        ctx.audio_overflow_events = 0
+        ctx.audio_overflow_total_bytes = 0
+        ctx.audio_overflow_last_log_ms = None
         ctx.metrics = getattr(ctx, "metrics", {}) or {}
         ctx.metrics.update(
             {
