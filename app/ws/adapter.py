@@ -1589,6 +1589,7 @@ class ChatV2Adapter:
             )
         if not ctx.greet_completed and is_greet_tts:
             ctx.greet_completed = True
+            self.set_accepting_audio(ctx.sid, True)
             ctx.greet_completed_ms = self._now_ms()
             _log.info(
                 "evt=greet_completed sid=%s utt_id=%s reason=%s frame_type=%s has_greet_meta=%s",
@@ -1605,6 +1606,13 @@ class ChatV2Adapter:
                 source="tts",
             )
             greet_just_completed = True
+            if ctx.asr_ready_bundle_sent_ms and not ctx.conversation_ready_logged:
+                self._log(
+                    ctx,
+                    "server.conversation_ready",
+                    {"greet_utt_id": ctx.greet_utt_id},
+                )
+                ctx.conversation_ready_logged = True
             self._log(
                 ctx,
                 "server.greet_complete",
