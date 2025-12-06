@@ -677,6 +677,13 @@ class EngineV2:
                 "text": text,
             }
 
+            _log.info(
+                "evt=voice.policy_bridge_start sid=%s req_id=%s turn_index=%s",
+                sid,
+                req_id_value,
+                turn_index,
+            )
+
             try:
                 self._apply_policy_decision(sid, nlu_payload)
             except Exception:
