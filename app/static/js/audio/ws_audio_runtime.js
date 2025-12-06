@@ -1513,32 +1513,37 @@ export function createWsAudioRuntime(options = {}) {
       markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
       const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
       currentTurnId = turnIdCandidate && `${turnIdCandidate}`.length ? `${turnIdCandidate}` : allocateTurnId();
-      // 1. ARM: Wake up the server (allows buffering without immediate timeout)
-      try {
-        safeSendJSON({ type: "asr.open", reason: "vad_speech_start" });
-      } catch (_) {}
-      // 2. AUDIO: Send the pre-roll audio immediately to fill the server buffer
-      try {
-        prerollChunksToSend = ringBufferManager.drainAll();
-        if (prerollChunksToSend && prerollChunksToSend.length) {
-          const prerollRate = meta?.sampleRate || meta?.sampleRateHz || asrRate;
-          // Send NOW to guarantee order on the wire
-          sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq: pcmLastSeq });
-          // Clear it so we don't send it again later
-          prerollChunksToSend = null; 
-        }
-      } catch (_) {
-        prerollChunksToSend = [];
-      }
-      // 3. START: Signal the official turn start (Server now has audio and won't panic)
+      // 1. START: Wake up the server first
       try {
         safeSendJSON({
           type: "client.turn_start",
           lane: "mic",
           turn_id: currentTurnId,
-          pre_roll_ms: 0, 
+          pre_roll_ms: 0,
         });
       } catch (_) {}
+      // 2. PREPARE AUDIO
+      try {
+        prerollChunksToSend = ringBufferManager.drainAll();
+      } catch (_) {
+        prerollChunksToSend = [];
+      }
+      // 3. AUDIO "DOUBLE TAP": Send now, and send again shortly to beat the race condition
+      if (prerollChunksToSend && prerollChunksToSend.length) {
+        const prerollRate = meta?.sampleRate || meta?.sampleRateHz || asrRate;
+        const seq = pcmLastSeq;
+
+        // Burst 1: Immediate (might be dropped by race condition)
+        sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq });
+        // Burst 2: Delayed (guaranteed to arrive after server is armed)
+        setTimeout(() => {
+          if (currentTurnId) { // Only send if turn still active
+            sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq });
+          }
+        }, 50);
+
+        prerollChunksToSend = null; // Clear so we don't triple-send below
+      }
       try {
         logStage("client.google_v3.turn_sequence_initiated", { turnId: currentTurnId });
       } catch (_) {}
