@@ -527,6 +527,7 @@ class AdapterContext:
     audio_expected_seq: int = 0
     audio_highest_seq: int = -1
     audio_buffer: Dict[int, bytes] = field(default_factory=dict)
+    audio_buffer_bytes: int = 0
     audio_backlog: Deque[tuple[int, bytes]] = field(default_factory=deque)
     audio_backlog_bytes: int = 0
     audio_window: int = AUDIO_SEQ_WINDOW
@@ -752,6 +753,7 @@ class ChatV2Adapter:
     THROTTLE_BACKLOG_FRAMES = 6
     THROTTLE_BACKLOG_MS = 600
     THROTTLE_RING_BUFFER_MAX_BYTES = 16384
+    MIC_BUFFER_MAX_SECONDS = 5
 
     def __init__(
         self,
@@ -3980,6 +3982,7 @@ class ChatV2Adapter:
                 ctx.audio_expected_seq = ctx.audio_seq
                 ctx.audio_highest_seq = ctx.audio_seq - 1
                 ctx.audio_buffer.clear()
+                ctx.audio_buffer_bytes = 0
             audio_meta: Dict[str, Any] = {
                 "encoding": "LINEAR16",
                 "format": profile.get("format"),
@@ -4404,10 +4407,11 @@ class ChatV2Adapter:
                     predecoded=frame_obj,
                 )
 
-        # Conversation Core INV-1: Mailbox / Always-Buffer Rule. For the mic lane
-        # we always accept binary audio, update ingress metrics, and ingest into
-        # the bounded ring buffer. We never reject mic audio here based on
-        # conversational state; turn/ASR decisions happen after buffering.
+        # Conversation Core INV-1: Mailbox / Always-Buffer Rule. For the primary
+        # mic PCM lane we always accept binary audio, update ingress metrics,
+        # and ingest into the bounded ring buffer. We never reject mic audio here
+        # based on conversational state; turn/ASR decisions happen after
+        # buffering.
         ctx.audio_violation_count = 0
         now_ms = int(time.time() * 1000)
         if ctx.ingress_packets <= 0:
@@ -4427,13 +4431,7 @@ class ChatV2Adapter:
                 else None
             )
             ready_delta = (now_ms - ready_sent_ms) if ready_sent_ms is not None else None
-            buffer_bytes = 0
-            if ctx.audio_buffer:
-                buffer_bytes = sum(
-                    len(chunk)
-                    for chunk in ctx.audio_buffer.values()
-                    if isinstance(chunk, (bytes, bytearray, memoryview))
-                )
+            buffer_bytes = ctx.audio_buffer_bytes
             ready_delta_value = ready_delta if ready_delta is not None else -1
             _log.info(
                 "evt=ws_audio_ingress sid=%s first_chunk=1 bytes=%s first_chunk_ms_since_mic_armed=%s ms_since_asr_ready_bundle=%s buffer_bytes=%s",
@@ -4524,7 +4522,7 @@ class ChatV2Adapter:
                         "sid": ctx.sid,
                         "turn_id": ctx.current_turn_id,
                         "sample_rate": sample_rate,
-                    "language": language_code,
+                        "language": language_code,
                     },
                 )
                 await self._invoke_engine("on_asr_open", ctx.sid, ctx.current_turn_id)
@@ -4656,6 +4654,25 @@ class ChatV2Adapter:
         )
         return self._HandleResult(False, RATE_LIMIT_CLOSE_CODE, "rate_limited")
 
+    def _mic_buffer_capacity_bytes(self, ctx: AdapterContext) -> int:
+        profile = ctx.audio_profile if isinstance(ctx.audio_profile, Mapping) else None
+        sample_rate = self._resolve_asr_sample_rate(ctx)
+        channels = 1
+        if profile:
+            try:
+                profile_rate = int(profile.get("sample_rate"))
+            except Exception:
+                profile_rate = None
+            if isinstance(profile_rate, int) and profile_rate > 0:
+                sample_rate = profile_rate
+
+            channel_value = profile.get("channels")
+            if isinstance(channel_value, int) and channel_value > 0:
+                channels = channel_value
+
+        capacity = max(1, sample_rate * PCM_BYTES_PER_SAMPLE * channels * self.MIC_BUFFER_MAX_SECONDS)
+        return capacity
+
     async def _ingest_audio_chunk(self, ctx: AdapterContext, chunk: bytes, seq: int) -> None:
         if seq < 0:
             return
@@ -4670,9 +4687,43 @@ class ChatV2Adapter:
         if seq in ctx.audio_buffer:
             return
 
-        ctx.audio_buffer[seq] = bytes(chunk)
+        chunk_bytes = bytes(chunk)
+        ctx.audio_buffer[seq] = chunk_bytes
+        ctx.audio_buffer_bytes += len(chunk_bytes)
         if seq > ctx.audio_highest_seq:
             ctx.audio_highest_seq = seq
+
+        capacity = self._mic_buffer_capacity_bytes(ctx)
+        dropped_bytes = 0
+        while ctx.audio_buffer_bytes > capacity and ctx.audio_buffer:
+            oldest_seq = min(ctx.audio_buffer)
+            removed = ctx.audio_buffer.pop(oldest_seq, None)
+            if removed is None:
+                break
+            removed_len = len(removed)
+            ctx.audio_buffer_bytes -= removed_len
+            dropped_bytes += removed_len
+
+        if dropped_bytes:
+            if ctx.audio_buffer:
+                ctx.audio_expected_seq = max(
+                    ctx.audio_expected_seq, min(ctx.audio_buffer)
+                )
+                ctx.audio_highest_seq = max(ctx.audio_buffer)
+            else:
+                ctx.audio_expected_seq = max(ctx.audio_expected_seq, seq + 1)
+                ctx.audio_highest_seq = ctx.audio_expected_seq - 1
+            _log.info(
+                "evt=audio_buffer_overflow",
+                extra={
+                    "sid": ctx.sid,
+                    "turn_id": ctx.current_turn_id,
+                    "capacity_bytes": capacity,
+                    "dropped_bytes": dropped_bytes,
+                    "remaining_bytes": ctx.audio_buffer_bytes,
+                    "buffer_len": len(ctx.audio_buffer),
+                },
+            )
 
         gap = self._compute_audio_gap(ctx)
         if gap is not None:
@@ -4722,6 +4773,7 @@ class ChatV2Adapter:
             chunk = ctx.audio_buffer.pop(seq, None)
             if chunk is None:
                 break
+            ctx.audio_buffer_bytes = max(0, ctx.audio_buffer_bytes - len(chunk))
             await self._emit_audio_chunk(ctx, chunk, seq)
             ctx.audio_expected_seq += 1
         if ctx.audio_buffer:
@@ -5076,11 +5128,15 @@ class ChatV2Adapter:
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
         removed = False
+        removed_bytes = 0
         for key in list(ctx.audio_buffer):
             if key < threshold:
-                ctx.audio_buffer.pop(key, None)
+                chunk = ctx.audio_buffer.pop(key, None)
+                if chunk is not None:
+                    removed_bytes += len(chunk)
                 removed = True
         if removed:
+            ctx.audio_buffer_bytes = max(0, ctx.audio_buffer_bytes - removed_bytes)
             if ctx.audio_buffer:
                 ctx.audio_highest_seq = max(ctx.audio_buffer)
             else:
