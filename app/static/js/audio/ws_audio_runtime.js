@@ -592,21 +592,20 @@ export function createWsAudioRuntime(options = {}) {
         turnId: enrichedMeta.turnId || null,
       });
     } catch (_) {}
-    if (!currentReqId) {
-      if (!warnedMissingReqId) {
-        console.warn("ws_audio_runtime: audio chunk without active req_id; dropping");
-        warnedMissingReqId = true;
-      }
+    if (!currentReqId && !warnedMissingReqId) {
+      warnedMissingReqId = true;
       try {
-        logStage("client.audio_chunk_dropped", {
+        console.warn("ws_audio_runtime: audio chunk without active req_id; sending anyway");
+      } catch (_) {}
+      try {
+        logStage("client.audio_chunk_missing_req_id", {
           lane: enrichedMeta.lane || "mic",
           reqId: null,
           reason: "missing_reqId",
           turnId: enrichedMeta.turnId || null,
         });
       } catch (_) {}
-      return false;
-    } else {
+    } else if (currentReqId) {
       warnedMissingReqId = false;
       if (!enrichedMeta.reqId) {
         enrichedMeta.reqId = currentReqId;
@@ -1947,11 +1946,11 @@ export function createWsAudioRuntime(options = {}) {
           force_pcm_send: FORCE_PCM_SEND,
           gates: {
             asrReady: gates.asrReady,
-          micPerm: gates.micPerm,
-          senderPaused: gates.senderPaused,
-          canCapture: gates.canCapture,
-          fatalError,
-        },
+            micPerm: gates.micPerm,
+            senderPaused: gates.senderPaused,
+            canCapture: gates.canCapture,
+            fatalError,
+          },
           hasStream,
           phase: phaseValue,
           wsPhase,
