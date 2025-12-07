@@ -858,7 +858,7 @@ class _NullASREngine(ASREngine):
         sample_rate: int,
         language: str,
         sid: str,
-        on_result: Callable[[str, bool], Optional[Awaitable[None]]] | None = None,
+        on_result: Callable[[str, bool, Mapping[str, Any] | None], Optional[Awaitable[None]]] | None = None,
     ) -> None:
         del sample_rate, language, sid, on_result
         self._closed = False
@@ -8825,7 +8825,8 @@ class ChatV2Adapter:
         if is_final and stripped_text:
             ctx.asr_final_emitted = True
             ctx.empty_final_count = 0
-        elif is_final and not stripped_text:
+        elif is_final and not stripped_text and not timeout:
+            # Benign empty final (no timeout) → ignore and keep listening.
             ctx.empty_final_count += 1
             _log.info(
                 "evt=asr_empty_final_ignored sid=%s turn_index=%s count=%s",
@@ -8840,8 +8841,7 @@ class ChatV2Adapter:
                     turn_index,
                     ctx.empty_final_count,
                 )
-            if not timeout:
-                return
+            return
         is_empty_final = bool(
             is_final
             and promoted_final
@@ -9185,7 +9185,15 @@ class ChatV2Adapter:
                     ctx.asr_final_emitted,
                 )
                 return
-            await self._handle_asr_result(ctx, transcript, is_final)
+            promoted_final = bool(event.get("promoted_final")) if isinstance(event, Mapping) else False
+            timeout = bool(event.get("timeout")) if isinstance(event, Mapping) else False
+            await self._handle_asr_result(
+                ctx,
+                transcript,
+                is_final,
+                promoted_final=promoted_final,
+                timeout=timeout,
+            )
 
         try:
             _log.info(
