@@ -832,6 +832,8 @@ class AdapterContext:
     last_user_turn_event_key: Optional[str] = None
     last_user_turn_dedup_key: Optional[str] = None
     audio_turn_id_missing_logged: bool = False
+    turn_summary_logged: bool = False
+    last_turn_summary_index: int | None = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -918,6 +920,41 @@ class ChatV2Adapter:
             extra={"meta": meta},
         )
 
+    def _log_turn_summary(self, ctx: AdapterContext, outcome: str) -> None:
+        turn_index: Any = getattr(ctx, "turn_index", None)
+        if turn_index is None:
+            metrics = getattr(ctx, "metrics", {}) or {}
+            turn_index = metrics.get("turn_index")
+
+        try:
+            normalized_turn = int(turn_index)
+        except (TypeError, ValueError):
+            normalized_turn = None
+
+        if normalized_turn is None or normalized_turn <= 0:
+            return
+
+        if (
+            getattr(ctx, "turn_summary_logged", False)
+            and getattr(ctx, "last_turn_summary_index", None) == normalized_turn
+        ):
+            return
+
+        asr_bytes_from_client = getattr(ctx, "bytes_from_client_this_turn", None)
+        asr_bytes_to_vendor = getattr(ctx, "asr_bytes_sent", None)
+
+        _log.info(
+            "evt=turn_summary sid=%s turn_index=%s asr_bytes_from_client=%s asr_bytes_to_vendor=%s outcome=%s",
+            ctx.sid,
+            normalized_turn,
+            asr_bytes_from_client,
+            asr_bytes_to_vendor,
+            outcome,
+        )
+
+        ctx.turn_summary_logged = True
+        ctx.last_turn_summary_index = normalized_turn
+
     def _reset_client_turn_state(self, ctx: AdapterContext) -> None:
         ctx.current_turn_id = None
         ctx.current_turn_open = False
@@ -935,6 +972,8 @@ class ChatV2Adapter:
         ctx.last_user_turn_event_key = None
         ctx.last_user_turn_dedup_key = None
         ctx.audio_turn_id_missing_logged = False
+        ctx.turn_summary_logged = False
+        ctx.last_turn_summary_index = None
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -978,6 +1017,8 @@ class ChatV2Adapter:
         ctx.audio_meta_req_id = None
         ctx.last_partial_for_turn = None
         ctx._logged_missing_audio_meta = False
+        ctx.turn_summary_logged = False
+        ctx.last_turn_summary_index = None
         ctx._logged_partial_req_id_mismatch = False
         ctx._logged_final_req_id_mismatch = False
         ctx._logged_header_req_id_mismatch = False
@@ -8822,9 +8863,11 @@ class ChatV2Adapter:
                 )
                 outcome_label = "timeout_no_audio" if timeout and not stripped_text else "empty"
                 TurnLifecycleRecorder.finalize_and_log(ctx, outcome=outcome_label)
+                self._log_turn_summary(ctx, outcome_label)
             _log_llm_turn_decision("skip", skip_reason)
             if not is_empty_final:
                 TurnLifecycleRecorder.finalize_and_log(ctx, outcome=skip_reason)
+                self._log_turn_summary(ctx, skip_reason)
             if not stripped_text:
                 self._end_user_turn(ctx)
             return
@@ -8849,6 +8892,7 @@ class ChatV2Adapter:
         ctx.bytes_from_client_this_turn = 0
         ctx.audio_ignored_no_turn_logged = False
         TurnLifecycleRecorder.finalize_and_log(ctx, outcome="ok")
+        self._log_turn_summary(ctx, "ok")
         self._end_user_turn(ctx)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
         # - deciding whether to keep listening vs close ASR, and
