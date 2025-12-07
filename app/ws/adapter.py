@@ -828,6 +828,9 @@ class AdapterContext:
     audio_overflow_events: int = 0
     audio_overflow_total_bytes: int = 0
     audio_overflow_last_log_ms: Optional[int] = None
+    audio_bridge_turn_index: Optional[int] = None
+    last_user_turn_event_key: Optional[str] = None
+    audio_turn_id_missing_logged: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -927,6 +930,9 @@ class ChatV2Adapter:
         ctx.audio_overflow_events = 0
         ctx.audio_overflow_total_bytes = 0
         ctx.audio_overflow_last_log_ms = None
+        ctx.audio_bridge_turn_index = None
+        ctx.last_user_turn_event_key = None
+        ctx.audio_turn_id_missing_logged = False
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -964,6 +970,8 @@ class ChatV2Adapter:
         new_req_id = self._make_req_id(ctx)
         ctx.turn_req_id = new_req_id
         ctx.active_req_id = new_req_id
+        ctx.current_turn_id = ctx.current_turn_id or new_req_id
+        ctx.current_turn_open = True
         ctx.audio_meta = None
         ctx.audio_meta_req_id = None
         ctx.last_partial_for_turn = None
@@ -983,6 +991,100 @@ class ChatV2Adapter:
         ctx.no_audio_timeout_deadline_ms = None
         ctx.mic_never_ready_warned = False
         self._cancel_no_audio_safety_net(ctx)
+        ctx.last_user_turn_event_key = None
+        ctx.audio_turn_id_missing_logged = False
+
+    def _start_audio_bridge_turn(
+        self,
+        ctx: AdapterContext,
+        turn_index: Optional[int] = None,
+        profile: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        try:
+            session_turn = int(getattr(ctx.session, "audio_rx_turn_index", 0))
+        except Exception:
+            session_turn = 0
+
+        target_turn = (
+            turn_index
+            if isinstance(turn_index, int)
+            else max(session_turn, getattr(ctx, "turn_index", 0) or 0) + 1
+        )
+
+        if ctx.audio_bridge_turn_index == target_turn:
+            return
+
+        ctx.audio_bridge_turn_index = target_turn
+        try:
+            ctx.session.audio_rx_turn_index = target_turn
+            ctx.session.audio_rx_chunks = 0
+            ctx.session.audio_rx_bytes = 0
+            ctx.session.audio_rx_dropped = 0
+        except Exception:
+            pass
+
+        ctx.audio_bridge_first_chunk_logged = False
+        active_profile: Mapping[str, Any] | None
+        if profile is not None and isinstance(profile, Mapping):
+            active_profile = profile
+        elif isinstance(ctx.audio_profile, Mapping):
+            active_profile = ctx.audio_profile
+        elif isinstance(ctx.session.audio_profile, Mapping):
+            active_profile = ctx.session.audio_profile
+        else:
+            active_profile = None
+
+        codec = active_profile.get("codec") if isinstance(active_profile, Mapping) else None
+        rate_hz = (
+            active_profile.get("sample_rate") if isinstance(active_profile, Mapping) else None
+        )
+        channels = (
+            active_profile.get("channels") if isinstance(active_profile, Mapping) else None
+        )
+
+        _log.info(
+            "evt=audio_bridge_turn_start sid=%s turn=%s codec=%s rate_hz=%s ch=%s",
+            ctx.sid,
+            target_turn,
+            codec,
+            rate_hz,
+            channels,
+        )
+
+    async def _emit_user_turn_event(
+        self,
+        ctx: AdapterContext,
+        text: str,
+        turn_index: Optional[int],
+        req_id: Optional[str],
+    ) -> None:
+        turn_id = ctx.current_turn_id or req_id or ctx.turn_req_id
+        text_value = text.strip() if isinstance(text, str) else ""
+        key = f"{turn_id}|{text_value}" if turn_id or text_value else None
+        if key and key == ctx.last_user_turn_event_key:
+            _log.info(
+                "evt=user_turn_event_dedup sid=%s turn_id=%s turn_index=%s",
+                ctx.sid,
+                turn_id,
+                turn_index,
+            )
+            return
+
+        ctx.last_user_turn_event_key = key
+        payload = {
+            "type": "user.turn",
+            "sid": ctx.sid,
+            "req_id": req_id,
+            "turn_id": turn_id,
+            "turn_index": turn_index,
+            "text": text,
+            "source": "asr",
+        }
+        _log.info(
+            "evt=user_turn_event sid=%s turn_id=%s turn_index=%s", ctx.sid, turn_id, turn_index
+        )
+        if ctx.ws_send is not None:
+            await self._send_json(ctx.ws_send, ctx.sid, payload)
 
     def _ensure_greet_turn(self, ctx: AdapterContext) -> None:
         """Ensure greet metrics/turn_index are initialized before first TTS."""
@@ -4083,21 +4185,11 @@ class ChatV2Adapter:
                 self._emit_hub_log(ctx, "policy.violation", log_detail)
                 return self._HandleResult(False, 4400, "policy_violation")
             session = ctx.session
-            session.audio_rx_chunks = 0
-            session.audio_rx_bytes = 0
-            session.audio_rx_dropped = 0
-            session.audio_rx_turn_index += 1
-            ctx.audio_bridge_first_chunk_logged = False
-            _log.info(
-                "evt=audio_bridge_turn_start sid=%s turn=%s codec=%s rate_hz=%s ch=%s",
-                ctx.sid,
-                session.audio_rx_turn_index,
-                normalized_header.get("codec"),
-                normalized_header.get("sample_rate"),
-                normalized_header.get("channels"),
-            )
             ctx.audio_profile = profile
             ctx.session.audio_profile = profile
+            self._start_audio_bridge_turn(
+                ctx, getattr(ctx, "turn_index", None), normalized_header
+            )
             self._arm_no_audio_watchdog(ctx)
             if getattr(ctx, "await_user_vad_check_pending", False):
                 ctx.await_user_vad_check_pending = False
@@ -4485,6 +4577,15 @@ class ChatV2Adapter:
         byte_count: int,
         note: str | None = None,
     ) -> None:
+        if (
+            ctx.session.asr_state == "open"
+            and not ctx.current_turn_id
+            and not ctx.audio_turn_id_missing_logged
+        ):
+            ctx.audio_turn_id_missing_logged = True
+            _log.info(
+                "evt=audio_turn_id_missing sid=%s decision=%s", ctx.sid, decision
+            )
         meta = {
             "bytes": byte_count,
             "note": note,
@@ -8710,6 +8811,7 @@ class ChatV2Adapter:
             return
 
         _log_llm_turn_decision("llm_turn", "non_empty_user_final")
+        await self._emit_user_turn_event(ctx, text, turn_index, req_id_final)
         await self._invoke_engine("on_asr_final", ctx.sid, text, req_id_final)
         if ctx.session.asr_state == "open" or ctx.asr_open:
             await self._close_asr(ctx, reason="normal_final")
@@ -8771,6 +8873,7 @@ class ChatV2Adapter:
         TurnLifecycleRecorder.mark_turn_start(
             ctx, now_ms, ctx.current_turn_id, turn_index
         )
+        self._start_audio_bridge_turn(ctx, turn_index)
         ctx.audio_frame_ingest_count = 0
         ctx.audio_frame_ingest_last_log_ms = None
         ctx.audio_overflow_events = 0

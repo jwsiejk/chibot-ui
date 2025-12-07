@@ -7,6 +7,8 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
   const committedAssistantByReqId = new Map();
   const ASR_MATCH_WINDOW_MS = 4000;
   const lastUserBySid = new Map();
+  let lastAsrFinalKey = null;
+  let lastUserTurnKey = null;
   let provisionalSidCounter = 0;
 
   function generateProvisionalSid() {
@@ -39,13 +41,13 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
       const sid = (typeof frame.sid === "string" && frame.sid) || generateProvisionalSid();
       lastUserBySid.set(sid, { text: frame.text, ts: now });
       pruneStaleUserSids(now);
-      if (view && typeof view.upsertUser === "function") {
-        try {
-          view.upsertUser({ key: sid, text: frame.text, provisional: true });
-        } catch (err) {
-          console.warn("TranscriptView upsertUser error", err);
-        }
+      const reqId = typeof frame.req_id === "string" ? frame.req_id : typeof frame.reqId === "string" ? frame.reqId : null;
+      const turnId = typeof frame.turn_id === "string" ? frame.turn_id : null;
+      const key = `${reqId || turnId || ""}|${frame.text}`;
+      if (lastAsrFinalKey === key) {
+        return;
       }
+      lastAsrFinalKey = key;
     } else {
       pruneStaleUserSids(now);
     }
@@ -55,11 +57,41 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
     try {
       if (frame.type === "asr.partial" && typeof view.handlePartial === "function") {
         view.handlePartial(frame);
-      } else if (frame.type === "asr.final" && typeof view.handleFinal === "function") {
-        view.handleFinal(frame);
       }
     } catch (err) {
       console.warn("TranscriptView ASR handler error", err);
+    }
+  }
+
+  function deliverUserTurn(frame) {
+    if (!frame || typeof frame !== "object") {
+      return;
+    }
+    const text = typeof frame.text === "string" ? frame.text : "";
+    const reqId = typeof frame.req_id === "string" ? frame.req_id : typeof frame.reqId === "string" ? frame.reqId : null;
+    const turnId = typeof frame.turn_id === "string" && frame.turn_id
+      ? frame.turn_id
+      : reqId;
+    const key = `${reqId || ""}|${text}`;
+    if (lastUserTurnKey === key) {
+      return;
+    }
+    lastUserTurnKey = key;
+
+    const chatFrame = {
+      type: "chat.message",
+      role: "user",
+      text,
+      req_id: reqId || undefined,
+      turn_id: turnId || undefined,
+      turn_index: typeof frame.turn_index === "number" ? frame.turn_index : undefined,
+      ts: typeof frame.ts === "number" ? frame.ts : undefined,
+    };
+
+    if (transcriptFrameAllowed(chatFrame)) {
+      deliverChat(chatFrame);
+    } else {
+      logStage("ui_transcript_filter", { allow: false, type: "user.turn", role: "user" });
     }
   }
 
@@ -361,6 +393,7 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
 
   return {
     deliverAsr,
+    deliverUserTurn,
     deliverChat,
     handleChatHistoryFrame,
     transcriptFrameAllowed,
