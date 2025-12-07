@@ -3012,6 +3012,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   const {
     deliverAsr,
+    deliverUserTurn,
     deliverChat,
     handleChatHistoryFrame,
     transcriptFrameAllowed,
@@ -3190,6 +3191,15 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         schedulePartialWatchdog("asr.partial");
         if (transcriptFrameAllowed(frame)) {
           deliverAsr(frame);
+        } else {
+          logStage("ui_transcript_filter", { allow: false, type: frame.type });
+        }
+        handledByTranscriptDispatch = true;
+        break;
+
+      case "user.turn":
+        if (transcriptFrameAllowed(frame)) {
+          deliverUserTurn(frame);
         } else {
           logStage("ui_transcript_filter", { allow: false, type: frame.type });
         }
