@@ -975,6 +975,7 @@ class ChatV2Adapter:
         ctx.audio_turn_id_missing_logged = False
         ctx.turn_summary_logged = False
         ctx.last_turn_summary_index = None
+        ctx.auto_ready_probe_active = False
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -1645,9 +1646,12 @@ class ChatV2Adapter:
             # Ensure an open task exists
             if ctx.asr_open_task is None or ctx.asr_open_task.done():
                 await self._ensure_previous_turn_closed(ctx, "auto_ready")
-                self._schedule_asr_open(
-                    ctx, as_probe=self._is_first_user_turn(ctx)
-                )
+                turn_index = getattr(ctx.session, "turn_index", None)
+                ctx_turn_index = getattr(ctx, "turn_index", None)
+                effective_turn_index = ctx_turn_index or turn_index
+                as_probe = bool(ctx.greet_completed and not effective_turn_index)
+
+                self._schedule_asr_open(ctx, as_probe=as_probe)
 
             # Wait for the open task to complete before sending asr.ready
             task = ctx.asr_open_task
@@ -8640,6 +8644,11 @@ class ChatV2Adapter:
         metrics_map = getattr(ctx, "metrics", {})
         if not isinstance(metrics_map, Mapping):
             metrics_map = {}
+
+        if ctx.auto_ready_probe_active and is_final and (transcript or "").strip():
+            self._promote_probe_turn(ctx)
+            metrics_map = getattr(ctx, "metrics", {}) or {}
+
         turn_index = metrics_map.get("turn_index", getattr(ctx, "turn_index", None))
 
         # ASR finals flow through the policy -> LLM -> NLG path via engine.on_asr_final.
@@ -9044,6 +9053,12 @@ class ChatV2Adapter:
             asr_stream_id=getattr(ctx, "asr_stream_id", None),
         )
 
+        _log.info(
+            "evt=auto_ready_probe_promoted sid=%s turn_index=%s",
+            ctx.sid,
+            turn_index,
+        )
+
     async def _open_asr(self, ctx: AdapterContext) -> None:
         send = ctx.ws_send
         if send is None:
@@ -9080,15 +9095,16 @@ class ChatV2Adapter:
             config, "GCP_STT_DEFAULT_LANGUAGE", "en-US"
         )
 
-        self._log_turn_event(
-            ctx,
-            "turn_start",
-            asr_stream_id=stream_id,
-            asr_vendor="gcp",
-            sample_rate=sample_rate,
-            language=language,
-            turn_index=getattr(ctx, "turn_index", None),
-        )
+        if not ctx.auto_ready_probe_active:
+            self._log_turn_event(
+                ctx,
+                "turn_start",
+                asr_stream_id=stream_id,
+                asr_vendor="gcp",
+                sample_rate=sample_rate,
+                language=language,
+                turn_index=getattr(ctx, "turn_index", None),
+            )
 
         async def _on_result(
             transcript: str,
