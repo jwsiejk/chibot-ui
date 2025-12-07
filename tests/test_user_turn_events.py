@@ -114,6 +114,11 @@ def test_audio_bridge_alignment_and_user_turn(caplog: pytest.LogCaptureFixture) 
     summaries = [rec.message for rec in caplog.records if "audio_bridge_summary" in rec.message]
     assert summaries and all("rx_bytes=0" not in msg for msg in summaries)
 
+    turn_summaries = [rec.message for rec in caplog.records if "evt=turn_summary" in rec.message]
+    assert len(turn_summaries) == 2
+    assert any("turn_index=1" in msg for msg in turn_summaries)
+    assert any("turn_index=2" in msg for msg in turn_summaries)
+
     user_turns = [frame for frame in parsed_frames if frame.get("type") == "user.turn"]
     assert len(user_turns) == 2
     assert {frame.get("turn_index") for frame in user_turns} == {1, 2}
@@ -160,6 +165,8 @@ def test_user_turn_dedup_logs_once(caplog: pytest.LogCaptureFixture) -> None:
 
     emit_logs = [rec.message for rec in caplog.records if "evt=user_turn_event " in rec.message]
     dedup_logs = [rec.message for rec in caplog.records if "evt=user_turn_event_dedup" in rec.message]
+    turn_summaries = [rec.message for rec in caplog.records if "evt=turn_summary" in rec.message]
 
     assert len(emit_logs) == 1
     assert len(dedup_logs) == 1
+    assert len(turn_summaries) == 1

@@ -197,7 +197,10 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
     const type = typeof frame?.type === "string" ? frame.type : "";
     const role = typeof frame?.role === "string" ? frame.role : "";
     const allow = true;
-    try { logStage("ui_transcript_filter", { allow, type: type || "", role: role || "" }); } catch {}
+    const shouldLog = allow === false || type === "user.turn" || type === "chat.message";
+    if (shouldLog) {
+      try { logStage("ui_transcript_filter", { allow, type: type || "", role: role || "" }); } catch {}
+    }
     return allow;
   }
 
