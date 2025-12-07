@@ -377,3 +377,155 @@ def test_user_turn_dedup_logs_once(caplog: pytest.LogCaptureFixture) -> None:
     assert len(emit_logs) == 1
     assert len(dedup_logs) == 1
     assert len(turn_summaries) == 1
+
+
+def test_empty_final_then_real_final_same_stream(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    empty_turn_summaries: list[str] = []
+
+    async def _run() -> tuple[list[dict], AdapterContext, int, bool, bool]:
+        caplog.set_level(logging.INFO)
+        adapter = ChatV2Adapter()
+        ctx = AdapterContext(sid="sid-empty-then-real", headers={})
+
+        sent: list[dict] = []
+
+        async def _drain_tasks() -> None:
+            await asyncio.sleep(0)
+            pending = [
+                task
+                for task in asyncio.all_tasks()
+                if task is not asyncio.current_task()
+            ]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+        async def ws_send(message: dict) -> None:
+            sent.append(message)
+
+        ctx.ws_send = ws_send
+        ctx.client_mic_open = True
+        ctx.asr_ready = True
+
+        adapter._schedule_asr_open(ctx)
+        if ctx.asr_open_task:
+            await ctx.asr_open_task
+
+        engine = ctx.session.asr_engine
+        assert engine is not None
+
+        engine._handle_result("", True)
+        await _drain_tasks()
+
+        empty_turn_summaries.extend(
+            rec.message for rec in caplog.records if "evt=turn_summary" in rec.message
+        )
+
+        initial_final_already = len(
+            [rec for rec in caplog.records if "final_already_emitted" in rec.message]
+        )
+        empty_turn_open = ctx.current_turn_open
+        empty_final_emitted = ctx.asr_final_emitted
+
+        engine._handle_result("hello world", True)
+        await _drain_tasks()
+
+        engine._handle_result("ignored after real final", True)
+        await _drain_tasks()
+
+        return sent, ctx, initial_final_already, empty_turn_open, empty_final_emitted
+
+    sent_frames, ctx, initial_final_already, empty_turn_open, empty_final_emitted = asyncio.run(_run())
+    parsed_frames = [
+        json.loads(msg.get("text")) for msg in sent_frames if isinstance(msg, dict) and msg.get("text")
+    ]
+
+    user_turns = [frame for frame in parsed_frames if frame.get("type") == "user.turn"]
+    turn_summaries = [rec.message for rec in caplog.records if "evt=turn_summary" in rec.message]
+    decision_logs = [
+        rec.message for rec in caplog.records if "EVT_LLM_TURN_DECISION" in rec.message
+    ]
+    final_already_logs = [
+        rec.message for rec in caplog.records if "final_already_emitted" in rec.message
+    ]
+
+    assert empty_turn_summaries == []
+    assert empty_turn_open is True
+    assert empty_final_emitted is False
+    assert ctx.asr_final_emitted is True
+    assert ctx.current_turn_open is False
+
+    assert user_turns and user_turns[0].get("text") == "hello world"
+    assert any("decision=llm_turn" in msg for msg in decision_logs)
+    assert any("outcome=ok" in msg for msg in turn_summaries)
+
+    assert initial_final_already == 0
+
+
+def test_empty_final_timeout_flow(caplog: pytest.LogCaptureFixture) -> None:
+    async def _run() -> tuple[list[dict], AdapterContext]:
+        caplog.set_level(logging.INFO)
+        adapter = ChatV2Adapter()
+        ctx = AdapterContext(sid="sid-empty-timeout", headers={})
+
+        sent: list[dict] = []
+
+        async def _drain_tasks() -> None:
+            await asyncio.sleep(0)
+            pending = [
+                task
+                for task in asyncio.all_tasks()
+                if task is not asyncio.current_task()
+            ]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+        async def ws_send(message: dict) -> None:
+            sent.append(message)
+
+        ctx.ws_send = ws_send
+        ctx.client_mic_open = True
+        ctx.asr_ready = True
+
+        adapter._schedule_asr_open(ctx)
+        if ctx.asr_open_task:
+            await ctx.asr_open_task
+
+        engine = ctx.session.asr_engine
+        assert engine is not None
+
+        engine._handle_result("", True)
+        await _drain_tasks()
+        engine._handle_result("", True)
+        await _drain_tasks()
+
+        await adapter._handle_asr_result(
+            ctx, "", True, promoted_final=True, timeout=True
+        )
+
+        return sent, ctx
+
+    sent_frames, ctx = asyncio.run(_run())
+    parsed_frames = [
+        json.loads(msg.get("text")) for msg in sent_frames if isinstance(msg, dict) and msg.get("text")
+    ]
+
+    empty_logs = [
+        rec.message for rec in caplog.records if "evt=asr_empty_final_ignored" in rec.message
+    ]
+    repeat_logs = [
+        rec.message for rec in caplog.records if "evt=asr_empty_final_repeat" in rec.message
+    ]
+    turn_summaries = [rec.message for rec in caplog.records if "evt=turn_summary" in rec.message]
+    final_already_logs = [
+        rec.message for rec in caplog.records if "final_already_emitted" in rec.message
+    ]
+
+    assert len(empty_logs) >= 1
+    assert repeat_logs
+    assert any("outcome=timeout_no_audio" in msg for msg in turn_summaries)
+    assert not final_already_logs
+
+    assert not [frame for frame in parsed_frames if frame.get("type") == "user.turn"]
+    assert any(frame.get("type") == "turn.empty" for frame in parsed_frames)
