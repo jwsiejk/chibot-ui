@@ -183,6 +183,16 @@ if (typeof createWsAudioRuntime !== "function") {
 
 const AUDIO_KEEPALIVE_MS = 1000;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
+const DEFAULT_PARTIAL_WATCHDOG_DELAY_MS = 4000;
+
+const isProdEnv = (() => {
+  try {
+    const env = AppState?.env || AppState?.environment || AppState?.stage;
+    return env === "prod" || env === "production";
+  } catch (_) {
+    return false;
+  }
+})();
 
 const USER_INITIATED_STOP_REASONS_FALLBACK = new Set([
   "user_requested",
@@ -209,6 +219,16 @@ const fallbackToReasonKey = (value) => {
     }
   }
   return String(value).trim().toLowerCase();
+};
+
+const warnIfPartialWatchdogControl = (reason, action = "control") => {
+  const normalizedReason = fallbackToReasonKey(reason);
+  if (normalizedReason === "partial_watchdog_timeout" && !isProdEnv) {
+    try {
+      console.warn("partial_watchdog_timeout is telemetry-only; ignoring control path", { action });
+      logStage?.("client.watchdog.partial_timeout.control_warning", { action });
+    } catch (_) {}
+  }
 };
 
 const fallbackReasonLooksUserInitiated = (value) => {
@@ -1332,7 +1352,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         }
       } catch {}
 
-      // Telemetry-only: do not alter mic/ASR/turn state.
+      // Telemetry-only: do not alter mic/ASR/turn state. Any attempt to route
+      // this reason into control-plane helpers (e.g., stopRecorder) will emit
+      // a dev-only warning via warnIfPartialWatchdogControl.
     }, delay);
   }
 
@@ -1507,10 +1529,12 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   const POLICY_STATUS = POLICY?.ui?.status
     || (FEATURE_LEGACY_POLICY ? POLICY?.policy?.ui?.status : undefined);
   const WATCHDOG_FIRST_MS = Number(
-    POLICY_WATCHDOG?.partial_wait_ms_first_turn ?? 3500,
+    POLICY_WATCHDOG?.partial_wait_ms_first_turn
+      ?? POLICY_WATCHDOG?.partial_wait_ms
+      ?? DEFAULT_PARTIAL_WATCHDOG_DELAY_MS,
   );
   const WATCHDOG_SUBSEQUENT_MS = Number(
-    POLICY_WATCHDOG?.partial_wait_ms ?? 2500,
+    POLICY_WATCHDOG?.partial_wait_ms ?? DEFAULT_PARTIAL_WATCHDOG_DELAY_MS,
   );
   const SENDER_GATE_ON_TTS = Boolean(
     POLICY_VAD?.sender_gate_on_tts ?? true,
@@ -2244,6 +2268,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       fallbackToReasonKey(reason) ||
       fallbackToReasonKey(opts.fallbackReason) ||
       "unspecified";
+    // Telemetry-only guard: partial_watchdog_timeout must not drive control flows.
+    warnIfPartialWatchdogControl(normalized, "stopRecorder");
     const autoStop = opts.auto === true || opts.autoStop === true || opts.isAutoStop === true;
 
     // Only send a client-side input.stop when explicitly allowed by caller
