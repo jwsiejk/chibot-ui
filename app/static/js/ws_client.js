@@ -3027,7 +3027,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   const {
     deliverAsr,
-    deliverUserTurn,
     deliverChat,
     handleChatHistoryFrame,
     transcriptFrameAllowed,
@@ -3036,7 +3035,41 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     handleAssistantStreamingDelta,
     handleAssistantStreamingCommit,
     handleAssistantStreamingEnd,
-  } = transcriptBridge;
+  } = transcriptBridge || {};
+
+  let deliverUserTurn = null;
+
+  if (transcriptBridge && typeof transcriptBridge.deliverUserTurn === "function") {
+    // Normal path: use the bridge implementation.
+    deliverUserTurn = (frame) => transcriptBridge.deliverUserTurn(frame);
+  } else {
+    // Fallback: synthesize a chat.message so the user still sees their bubble.
+    deliverUserTurn = (frame) => {
+      if (!frame || typeof frame !== "object") return;
+      const text = typeof frame.text === "string" ? frame.text : "";
+      if (!text.trim()) return;
+
+      const chatFrame = {
+        type: "chat.message",
+        role: "user",
+        text,
+        req_id: typeof frame.req_id === "string" ? frame.req_id : undefined,
+        turn_id: typeof frame.turn_id === "string" ? frame.turn_id : undefined,
+        turn_index: typeof frame.turn_index === "number" ? frame.turn_index : undefined,
+        ts: typeof frame.ts === "number" ? frame.ts : undefined,
+      };
+
+      if (transcriptFrameAllowed && transcriptFrameAllowed(chatFrame)) {
+        try {
+          if (typeof deliverChat === "function") {
+            deliverChat(chatFrame);
+          }
+        } catch (err) {
+          console.warn("user.turn fallback deliverChat error", err);
+        }
+      }
+    };
+  }
 
   window.attachTranscriptView = function attachTranscriptViewGlobal(view) {
     attachTranscriptView(view);
@@ -3213,7 +3246,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         break;
 
       case "user.turn":
-        try { deliverUserTurn(frame); } catch (e) { console.warn("user.turn err", e); }
+        try { deliverUserTurn && deliverUserTurn(frame); } catch (e) { console.warn("user.turn err", e); }
         handledByTranscriptDispatch = true;
         break;
 
