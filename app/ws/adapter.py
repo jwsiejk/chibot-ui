@@ -8840,7 +8840,8 @@ class ChatV2Adapter:
                     turn_index,
                     ctx.empty_final_count,
                 )
-            return
+            if not timeout:
+                return
         is_empty_final = bool(
             is_final
             and promoted_final
