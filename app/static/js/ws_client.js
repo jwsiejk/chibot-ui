@@ -3198,11 +3198,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         break;
 
       case "user.turn":
-        if (transcriptFrameAllowed(frame)) {
-          deliverUserTurn(frame);
-        } else {
-          logStage("ui_transcript_filter", { allow: false, type: frame.type });
-        }
+        try { deliverUserTurn(frame); } catch (e) { console.warn("user.turn err", e); }
         handledByTranscriptDispatch = true;
         break;
 
