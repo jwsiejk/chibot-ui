@@ -1085,6 +1085,20 @@ export function createWsAudioRuntime(options = {}) {
     } catch (_) {}
   }
 
+  function resetTurnForNextUser() {
+    speechSeenThisTurn = false;
+    speechStartSeen = false;
+    speechNeverMarkedSeenLogged = false;
+    currentTurnId = null;
+    lastSpeechSeenReqId = null;
+    lastSoftGateTelemetryReason = null;
+    softGateTelemetryFrameCounter = 0;
+    try { setMicChunksValue(0); } catch (_) {}
+    try { setMicBytesValue(0); } catch (_) {}
+    try { resetFirstChunkTelemetry(); } catch (_) {}
+    try { updateState({ chunkCount: 0, lastChunkTs: null }); } catch (_) {}
+  }
+
   const pcmSummaryWindowMs = 2000;
   // framesDroppedSoftGate is deprecated: soft gate is telemetry-only and never drops frames.
   let pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
@@ -2242,6 +2256,7 @@ export function createWsAudioRuntime(options = {}) {
     setCaptureStreamProvider,
     setBaseEnabled,
     resetSilenceSuppression,
+    resetTurnForNextUser,
     updatePcmSenderState,
     scheduleAudioKeepalive,
     clearAudioKeepaliveTimer,

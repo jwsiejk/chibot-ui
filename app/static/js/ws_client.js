@@ -1950,6 +1950,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     scheduleAudioKeepalive: runtimeScheduleAudioKeepalive,
     clearAudioKeepaliveTimer: runtimeClearAudioKeepalive,
     sendAudioKeepaliveNow: runtimeSendAudioKeepaliveNow,
+    resetTurnForNextUser: runtimeResetTurnForNextUser,
   } = audioRuntime;
 
   updatePcmSenderState = typeof runtimeUpdatePcmSenderState === "function"
@@ -1978,6 +1979,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   sendAudioKeepaliveNowImpl = typeof runtimeSendAudioKeepaliveNow === "function"
     ? runtimeSendAudioKeepaliveNow
     : () => false;
+  const resetTurnForNextUser = typeof runtimeResetTurnForNextUser === "function"
+    ? runtimeResetTurnForNextUser
+    : () => {};
 
   function cloneClientVadPolicyRoot(root) {
     const safeRoot = root && typeof root === "object" ? root : {};
@@ -3268,6 +3272,18 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         handledByTranscriptDispatch = true;
         break;
 
+      case "turn.summary":
+      case "turn_lifecycle_summary":
+        if (typeof frame.turn_index === "number" && frame.turn_index >= 1) {
+          try {
+            resetTurnForNextUser();
+          } catch (err) {
+            console.warn("resetTurnForNextUser error", err);
+          }
+        }
+        dispatchFrame(frame);
+        return;
+
       case "asr.open":
         try {
           logStage("client.asr", {
@@ -3471,6 +3487,14 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         updatePcmSenderState();
       } catch (err) {
         try { console.warn("clear_soft_pause_on_tts_end_failed", err); } catch {}
+      }
+
+      if (typeof frame.turn_index === "number" && frame.turn_index >= 1) {
+        try {
+          resetTurnForNextUser();
+        } catch (err) {
+          try { console.warn("resetTurnForNextUser tts_end error", err); } catch {}
+        }
       }
 
       // Avoid hard-stopping the mic here so the ASR keep-alive stream remains intact.
