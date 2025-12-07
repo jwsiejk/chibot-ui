@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from array import array
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from google.api_core.exceptions import OutOfRange
 from google.cloud import speech
@@ -17,7 +17,7 @@ from app import config
 logger = logging.getLogger(__name__)
 
 
-ResultCallback = Callable[[str, bool], Optional[Awaitable[None]]]
+ResultCallback = Callable[[str, bool, Optional[Mapping[str, Any]]], Optional[Awaitable[None]]]
 
 _RMS_TARGET_FLOOR = 0.05  # Target normalized RMS (0.0 - 1.0) before gain.
 _RMS_MAX_AUTOMATIC_GAIN = 4.0  # Avoid aggressive amplification that could clip.
@@ -364,12 +364,15 @@ class GCPStreamingASREngine(ASREngine):
                         "summary": self._stats.to_summary("timeout") if self._stats else None,
                     },
                 )
-                if self._last_transcript is not None and not self._last_is_final:
-                    self._loop.call_soon_threadsafe(
-                        self._handle_result,
-                        self._last_transcript,
-                        True,
-                    )
+                if self._on_result is not None and not self._last_is_final:
+                    event = {"timeout": True, "promoted_final": True}
+                    transcript = self._last_transcript or ""
+                    try:
+                        maybe_coro = self._on_result(transcript, True, event)
+                        if asyncio.iscoroutine(maybe_coro):
+                            asyncio.create_task(maybe_coro)
+                    except Exception:
+                        logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
             else:
                 outcome = "error"
                 error_reason = exc.__class__.__name__
@@ -417,7 +420,9 @@ class GCPStreamingASREngine(ASREngine):
             # Ensure request generator exits.
             asyncio.run_coroutine_threadsafe(self._queue.put(None), self._loop)
 
-    def _handle_result(self, transcript: str, is_final: bool) -> None:
+    def _handle_result(
+        self, transcript: str, is_final: bool, event: Optional[Mapping[str, Any]] = None
+    ) -> None:
         if self._on_result is None:
             return
 
@@ -443,7 +448,7 @@ class GCPStreamingASREngine(ASREngine):
             self._stats.mark_partial(transcript)
 
         try:
-            maybe_coro = self._on_result(transcript, is_final)
+            maybe_coro = self._on_result(transcript, is_final, event)
             if asyncio.iscoroutine(maybe_coro):
                 asyncio.create_task(maybe_coro)
         except Exception:  # pragma: no cover - defensive
