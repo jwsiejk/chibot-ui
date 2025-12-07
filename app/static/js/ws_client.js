@@ -844,28 +844,28 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
     const runPostGreetCleanup = (cleanupSource = source) => {
-      const wsReady = WS_READY_PHASES.has(AppState?.wsPhase);
       const phaseBefore = getPhase();
       const greetCompleted = phaseBefore === PHASE.ConversationReady || phaseBefore === PHASE.UserTurn;
 
-      if (!wsReady || !greetCompleted) {
+      if (!greetCompleted) {
         try {
           logStage("client.conversation.begin.skip_cleanup_until_ready", {
             source: cleanupSource,
             phase: phaseBefore,
             wsPhase: AppState?.wsPhase || null,
-            wsReady,
             greetCompleted,
           });
         } catch (_) {}
         return;
       }
 
+      // Unpause mic/PCM for post-greet conversation
       try {
         setSenderPauseReason("greet", false);
         applySenderPausedState();
         updatePcmSenderState("post_greet_phase_change");
       } catch (_) {}
+
       try {
         const senderPausedSnapshot = Boolean(AppState?.senderPaused ?? senderPaused);
         setBaseEnabled?.(true, "post_greet");
@@ -999,6 +999,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
           phase: voicePhaseController?.getPhase?.() || null,
           wsPhase: AppState?.wsPhase || null,
         });
+      } catch (_) {}
+      try {
+        runPostGreetCleanup(source);
+        cleanupRan = true;
       } catch (_) {}
       ensureCleanup("user_turn_commit");
       return;
