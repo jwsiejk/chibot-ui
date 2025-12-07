@@ -1017,7 +1017,7 @@ export function createWsAudioRuntime(options = {}) {
   }
   function shouldSendFrameSoftGate({ vadState, speechSeen }) {
     if (!vadState) {
-      return { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null };
+      return { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null, reason: "no_vad_state" };
     }
     const state = typeof vadState?.state === "string" ? vadState.state : null;
     const vadLikelySpeech = Boolean(
@@ -1032,8 +1032,9 @@ export function createWsAudioRuntime(options = {}) {
       speechStartSeen = true;
     }
     const shouldSend = vadLikelySpeech;
+    const reason = vadLikelySpeech ? "vad_speech" : "vad_silence";
     const rmsAtTrigger = !speechSeen && vadLikelySpeech ? vadState?.rms ?? vadState?.rmsDb ?? null : null;
-    return { shouldSend, vadLikelySpeech, rmsAtTrigger };
+    return { shouldSend, vadLikelySpeech, rmsAtTrigger, reason };
   }
 
   function maybeLogSpeechNeverMarkedSeen() {
@@ -1454,7 +1455,7 @@ export function createWsAudioRuntime(options = {}) {
 
     const vadState = typeof getVadController === "function" ? getVadController()?.getState?.() || null : null;
     const softDecision = isKeepalive
-      ? { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null }
+      ? { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null, reason: "keepalive" }
       : shouldSendFrameSoftGate({ vadState, speechSeen: speechSeenThisTurn });
 
     if (!isKeepalive && !speechSeenThisTurn && softDecision.vadLikelySpeech) {
@@ -1496,13 +1497,14 @@ export function createWsAudioRuntime(options = {}) {
         logStage("client.google_v3.turn_sequence_initiated", { turnId: currentTurnId });
       } catch (_) {}
     }
-    const shouldSendNow = isKeepalive || softDecision.shouldSend || speechSeenThisTurn;
-    
-    if (!shouldSendNow) {
-      recordPcmFrameOutcome({ droppedSoft: chunkCount });
-      emitPolicyHook("soft_gate_drop", { reason: "vad_silence", wsPhase, appPhase: phaseValue, wsReadyState });
-      return;
-    }
+    emitPolicyHook("soft_gate_telemetry", {
+      reason: softDecision.reason || "unknown",
+      allowed: true,
+      vadLikelySpeech: Boolean(softDecision.vadLikelySpeech),
+      wsPhase,
+      appPhase: phaseValue,
+      wsReadyState,
+    });
 
     const sr = meta?.sampleRate || meta?.sampleRateHz || null;
     const sampledBytes = chunk.byteLength || 0;
