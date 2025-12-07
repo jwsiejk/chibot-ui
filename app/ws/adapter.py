@@ -729,6 +729,7 @@ class AdapterContext:
     asr_opened_ms: Optional[int] = None
     asr_close_reason: Optional[str] = None
     asr_final_emitted: bool = False
+    empty_final_count: int = 0
     asr_closed_ack_sent: bool = False
     asr_stream_id: Optional[str] = None
     asr_stream_req_id: Optional[str] = None
@@ -8774,7 +8775,6 @@ class ChatV2Adapter:
                 "meta": dict(meta),
                 "req_id": req_for_events,
             }
-            ctx.asr_final_emitted = True
 
         bus.publish(event_payload)
 
@@ -8820,6 +8820,26 @@ class ChatV2Adapter:
         )
         _log.debug("evt=asr.to_user_turn sid=%s transcript=%s", ctx.sid, text)
         stripped_text = text.strip()
+
+        if is_final and stripped_text:
+            ctx.asr_final_emitted = True
+            ctx.empty_final_count = 0
+        elif is_final and not stripped_text:
+            ctx.empty_final_count += 1
+            _log.info(
+                "evt=asr_empty_final_ignored sid=%s turn_index=%s count=%s",
+                ctx.sid,
+                turn_index,
+                ctx.empty_final_count,
+            )
+            if ctx.empty_final_count > 1:
+                _log.info(
+                    "evt=asr_empty_final_repeat sid=%s turn_index=%s count=%s",
+                    ctx.sid,
+                    turn_index,
+                    ctx.empty_final_count,
+                )
+            return
         is_empty_final = bool(
             is_final
             and promoted_final
@@ -8944,6 +8964,7 @@ class ChatV2Adapter:
             raise RuntimeError("websocket send unavailable for asr.open")
         # Reset per-stream flags before opening a new ASR stream
         ctx.asr_final_emitted = False
+        ctx.empty_final_count = 0
         ctx.asr_closed_ack_sent = False
         ctx.asr_result_seen = False
         ctx.asr_final_text = None
