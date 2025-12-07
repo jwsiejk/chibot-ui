@@ -1332,18 +1332,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         }
       } catch {}
 
-      try {
-        if (_audioStreaming) {
-          stopRecorder("partial_watchdog_timeout", { force: true, allowVadStop: true, auto: true });
-        } else {
-          resetMicTurnState("partial_watchdog_timeout");
-        }
-        awaitingTurnEndForRearm = false;
-        pendingRearmReason = null;
-        speechSeenThisTurn = false;
-        partialWatchdogFirstTurn = true;
-        promoteReadyPhase("partial_watchdog_timeout");
-      } catch {}
+      // Telemetry-only: do not alter mic/ASR/turn state.
     }, delay);
   }
 
