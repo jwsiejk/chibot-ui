@@ -834,6 +834,7 @@ class AdapterContext:
     audio_turn_id_missing_logged: bool = False
     turn_summary_logged: bool = False
     last_turn_summary_index: int | None = None
+    auto_ready_probe_active: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -1644,7 +1645,9 @@ class ChatV2Adapter:
             # Ensure an open task exists
             if ctx.asr_open_task is None or ctx.asr_open_task.done():
                 await self._ensure_previous_turn_closed(ctx, "auto_ready")
-                self._schedule_asr_open(ctx)
+                self._schedule_asr_open(
+                    ctx, as_probe=self._is_first_user_turn(ctx)
+                )
 
             # Wait for the open task to complete before sending asr.ready
             task = ctx.asr_open_task
@@ -4795,6 +4798,9 @@ class ChatV2Adapter:
                 ctx.ingress_packets,
                 ctx.ingress_bytes,
             )
+
+        if ctx.auto_ready_probe_active:
+            self._promote_probe_turn(ctx)
 
         if (
             ctx.asr_vendor == "gcp"
@@ -8838,6 +8844,29 @@ class ChatV2Adapter:
                 skip_reason = "empty_transcript"
 
             if is_empty_final:
+                if (
+                    skip_reason == "empty_final_first_turn_post_greet"
+                    or ctx.auto_ready_probe_active
+                ):
+                    _log.info(
+                        "evt=auto_ready_probe_timeout sid=%s reason=%s",
+                        ctx.sid,
+                        skip_reason,
+                    )
+                    if ctx.session.asr_state == "open" or ctx.asr_open:
+                        await self._close_asr(
+                            ctx, reason="auto_ready_probe_timeout"
+                        )
+                    ctx.auto_ready_probe_active = False
+                    ctx.current_turn_open = False
+                    ctx.current_turn_id = None
+                    ctx.turn_start_ts_ms = None
+                    ctx.bytes_from_client_this_turn = 0
+                    ctx.turn_audio_bytes = 0
+                    ctx.turn_audio_chunks = 0
+                    self._end_user_turn(ctx)
+                    return
+
                 empty_meta = {
                     "bytes_received": ctx.turn_audio_bytes,
                     "first_audio_ms": ctx.first_audio_received_ms,
@@ -8898,7 +8927,7 @@ class ChatV2Adapter:
         # - deciding whether to keep listening vs close ASR, and
         # - calling _close_asr(ctx, reason=...) and _end_user_turn(ctx) as appropriate.
 
-    def _schedule_asr_open(self, ctx: AdapterContext) -> None:
+    def _schedule_asr_open(self, ctx: AdapterContext, *, as_probe: bool = False) -> None:
         if ctx.ws_send is None:
             raise RuntimeError("websocket send unavailable for asr.open")
         # Reset per-stream flags before opening a new ASR stream
@@ -8917,6 +8946,7 @@ class ChatV2Adapter:
             return
 
         self._start_user_turn(ctx)
+        ctx.auto_ready_probe_active = as_probe
         mark(ctx.session, "opening")
         ctx.asr_bytes_sent = 0
         ctx.asr_opened_ms = None
@@ -8931,8 +8961,56 @@ class ChatV2Adapter:
         ctx.client_turn_closed = False
         ctx.last_asr_partial = None
 
+        if not ctx.auto_ready_probe_active:
+            turn_index = self._next_turn_index(ctx)
+            now_ms = self._now_ms()
+            TurnLifecycleRecorder.mark_turn_start(
+                ctx, now_ms, ctx.current_turn_id, turn_index
+            )
+            self._start_audio_bridge_turn(ctx, turn_index)
+            ctx.audio_frame_ingest_count = 0
+            ctx.audio_frame_ingest_last_log_ms = None
+            ctx.audio_overflow_events = 0
+            ctx.audio_overflow_total_bytes = 0
+            ctx.audio_overflow_last_log_ms = None
+            ctx.metrics = getattr(ctx, "metrics", {}) or {}
+            ctx.metrics.update(
+                {
+                    "turn_index": turn_index,
+                    "turn_started_at": time.monotonic(),
+                    "asr_started_at": None,
+                    "asr_final_at": None,
+                    "llm_started_at": None,
+                    "llm_completed_at": None,
+                    "tts_started_at": None,
+                    "tts_completed_at": None,
+                    "tts_active_utt_id": None,
+                    "tts_provider": None,
+                    "tts_timeline_emitted_key": None,
+                    "tts_timeline_logged": False,
+                }
+            )
+
+            self._log_turn_event(
+                ctx,
+                "turn_start",
+                asr_stream_id=getattr(ctx, "asr_stream_id", None),
+            )
+
+        try:
+            ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
+        except RuntimeError:
+            loop = asyncio.get_running_loop()
+            ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
+
+    def _promote_probe_turn(self, ctx: AdapterContext) -> None:
+        if not ctx.auto_ready_probe_active:
+            return
+
+        ctx.auto_ready_probe_active = False
         turn_index = self._next_turn_index(ctx)
         now_ms = self._now_ms()
+        ctx.turn_start_ts_ms = now_ms
         TurnLifecycleRecorder.mark_turn_start(
             ctx, now_ms, ctx.current_turn_id, turn_index
         )
@@ -8965,12 +9043,6 @@ class ChatV2Adapter:
             "turn_start",
             asr_stream_id=getattr(ctx, "asr_stream_id", None),
         )
-
-        try:
-            ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
-        except RuntimeError:
-            loop = asyncio.get_running_loop()
-            ctx.asr_open_task = loop.create_task(self._open_asr(ctx))
 
     async def _open_asr(self, ctx: AdapterContext) -> None:
         send = ctx.ws_send

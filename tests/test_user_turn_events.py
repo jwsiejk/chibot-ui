@@ -125,6 +125,95 @@ def test_audio_bridge_alignment_and_user_turn(caplog: pytest.LogCaptureFixture) 
     assert all(frame.get("text") for frame in user_turns)
 
 
+def test_post_greet_auto_ready_probe_timeout(caplog: pytest.LogCaptureFixture) -> None:
+    async def _run() -> list[dict]:
+        caplog.set_level(logging.INFO)
+        adapter = ChatV2Adapter()
+        ctx = AdapterContext(sid="sid-probe-timeout", headers={})
+
+        sent: list[dict] = []
+
+        async def ws_send(message: dict) -> None:
+            sent.append(message)
+
+        ctx.ws_send = ws_send
+        ctx.client_mic_open = True
+        ctx.asr_ready = True
+        ctx.greet_completed = True
+
+        adapter._schedule_asr_open(ctx, as_probe=True)
+        if ctx.asr_open_task:
+            await ctx.asr_open_task
+
+        await adapter._handle_asr_result(
+            ctx, "", True, promoted_final=True, timeout=True
+        )
+        return sent
+
+    sent_frames = asyncio.run(_run())
+    parsed_frames = [json.loads(msg.get("text")) for msg in sent_frames if isinstance(msg, dict) and msg.get("text")]
+
+    assert not [frame for frame in parsed_frames if frame.get("type") == "user.turn"]
+    assert not [frame for frame in parsed_frames if frame.get("type") == "turn.empty"]
+
+    probe_logs = [rec.message for rec in caplog.records if "auto_ready_probe_timeout" in rec.message]
+    turn_summaries = [rec.message for rec in caplog.records if "evt=turn_summary" in rec.message]
+    assert probe_logs
+    assert not turn_summaries
+
+
+def test_post_greet_probe_then_real_turn(caplog: pytest.LogCaptureFixture) -> None:
+    async def _run() -> list[dict]:
+        caplog.set_level(logging.INFO)
+        adapter = ChatV2Adapter()
+        ctx = AdapterContext(sid="sid-probe-then-real", headers={})
+
+        sent: list[dict] = []
+
+        async def ws_send(message: dict) -> None:
+            sent.append(message)
+
+        ctx.ws_send = ws_send
+        ctx.client_mic_open = True
+        ctx.asr_ready = True
+        ctx.greet_completed = True
+
+        adapter._schedule_asr_open(ctx, as_probe=True)
+        if ctx.asr_open_task:
+            await ctx.asr_open_task
+
+        await adapter._handle_asr_result(
+            ctx, "", True, promoted_final=True, timeout=True
+        )
+
+        adapter._schedule_asr_open(ctx)
+        if ctx.asr_open_task:
+            await ctx.asr_open_task
+
+        await adapter._ingest_audio_chunk(ctx, b"\x01\x02" * 50, seq=0)
+        ctx.session.audio_rx_bytes += len(b"\x01\x02" * 50)
+        ctx.session.audio_rx_chunks += 1
+        await adapter._handle_asr_result(ctx, "hello after greet", True)
+
+        return sent
+
+    sent_frames = asyncio.run(_run())
+    parsed_frames = [json.loads(msg.get("text")) for msg in sent_frames if isinstance(msg, dict) and msg.get("text")]
+
+    user_turns = [frame for frame in parsed_frames if frame.get("type") == "user.turn"]
+    assert len(user_turns) == 1
+    assert user_turns[0].get("turn_index") == 1
+    assert user_turns[0].get("text")
+
+    bridge_logs = [rec.message for rec in caplog.records if "audio_bridge_turn_start" in rec.message]
+    lifecycle_logs = [rec.message for rec in caplog.records if "turn_lifecycle" in rec.message]
+    turn_summaries = [rec.message for rec in caplog.records if "evt=turn_summary" in rec.message]
+
+    assert any("turn=1" in msg for msg in bridge_logs)
+    assert any("turn_index=1" in msg and "phase=turn_start" in msg for msg in lifecycle_logs)
+    assert len(turn_summaries) == 1
+
+
 def test_user_turn_dedup_logs_once(caplog: pytest.LogCaptureFixture) -> None:
     async def _run() -> list[dict]:
         caplog.set_level(logging.INFO)
