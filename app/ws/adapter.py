@@ -4638,11 +4638,11 @@ class ChatV2Adapter:
                     "evt=audio_turn_id_missing sid=%s decision=%s", ctx.sid, decision
                 )
             fallback_turn_id = (
-                ctx.turn_req_id
-                or ctx.active_req_id
-                or ctx.asr_stream_req_id
+                getattr(ctx, "turn_req_id", None)
+                or getattr(ctx, "active_req_id", None)
+                or getattr(ctx, "asr_stream_req_id", None)
+                or getattr(ctx, "asr_stream_id", None)
                 or ctx.current_turn_id
-                or None
             )
             if fallback_turn_id:
                 ctx.current_turn_id = fallback_turn_id
