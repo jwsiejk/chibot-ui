@@ -122,6 +122,13 @@ def test_audio_bridge_alignment_and_user_turn(caplog: pytest.LogCaptureFixture) 
     assert any("turn_index=1" in msg for msg in turn_summaries)
     assert any("turn_index=2" in msg for msg in turn_summaries)
 
+    turn_start_logs = [
+        rec
+        for rec in caplog.records
+        if "evt=turn_lifecycle" in rec.message and "phase=turn_start" in rec.message
+    ]
+    assert len(turn_start_logs) == 2
+
     user_turns = [frame for frame in parsed_frames if frame.get("type") == "user.turn"]
     assert len(user_turns) == 2
     assert {frame.get("turn_index") for frame in user_turns} == {1, 2}
@@ -266,6 +273,12 @@ def test_post_greet_probe_promoted_by_audio(caplog: pytest.LogCaptureFixture) ->
     assert any("turn=1" in msg for msg in bridge_logs)
     assert any("turn_index=1" in msg and "phase=turn_start" in msg for msg in lifecycle_logs)
     assert probe_logs
+    assert len(probe_logs) == 1
+    assert len([
+        rec
+        for rec in caplog.records
+        if "evt=turn_lifecycle" in rec.message and "phase=turn_start" in rec.message
+    ]) == 1
     assert len(turn_summaries) == 1
     assert any("turn_index=1" in msg and "outcome=ok" in msg for msg in turn_summaries)
 

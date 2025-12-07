@@ -835,6 +835,7 @@ class AdapterContext:
     turn_summary_logged: bool = False
     last_turn_summary_index: int | None = None
     auto_ready_probe_active: bool = False
+    auto_ready_probe_promotion_logged: bool = False
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -976,6 +977,7 @@ class ChatV2Adapter:
         ctx.turn_summary_logged = False
         ctx.last_turn_summary_index = None
         ctx.auto_ready_probe_active = False
+        ctx.auto_ready_probe_promotion_logged = False
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -1038,6 +1040,7 @@ class ChatV2Adapter:
         self._cancel_no_audio_safety_net(ctx)
         ctx.last_user_turn_event_key = None
         ctx.last_user_turn_dedup_key = None
+        ctx.auto_ready_probe_promotion_logged = False
         ctx.audio_turn_id_missing_logged = False
 
     def _start_audio_bridge_turn(
@@ -9053,11 +9056,19 @@ class ChatV2Adapter:
             asr_stream_id=getattr(ctx, "asr_stream_id", None),
         )
 
-        _log.info(
-            "evt=auto_ready_probe_promoted sid=%s turn_index=%s",
-            ctx.sid,
-            turn_index,
-        )
+        if not ctx.auto_ready_probe_promotion_logged:
+            _log.info(
+                "evt=auto_ready_probe_promoted sid=%s turn_index=%s",
+                ctx.sid,
+                turn_index,
+                extra={
+                    "meta": {
+                        "turn_index": turn_index,
+                        "asr_stream_id": getattr(ctx, "asr_stream_id", None),
+                    }
+                },
+            )
+            ctx.auto_ready_probe_promotion_logged = True
 
     async def _open_asr(self, ctx: AdapterContext) -> None:
         send = ctx.ws_send
@@ -9098,7 +9109,7 @@ class ChatV2Adapter:
         if not ctx.auto_ready_probe_active:
             self._log_turn_event(
                 ctx,
-                "turn_start",
+                "asr_stream_open",
                 asr_stream_id=stream_id,
                 asr_vendor="gcp",
                 sample_rate=sample_rate,
