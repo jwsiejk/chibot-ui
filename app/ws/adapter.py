@@ -979,6 +979,7 @@ class ChatV2Adapter:
         ctx.last_turn_summary_index = None
         ctx.auto_ready_probe_active = False
         ctx.auto_ready_probe_promotion_logged = False
+        ctx.empty_final_count = 0  # (optional safety reset)
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
