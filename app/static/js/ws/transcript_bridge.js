@@ -7,7 +7,9 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
   const committedAssistantByReqId = new Map();
   const ASR_MATCH_WINDOW_MS = 4000;
   const lastUserBySid = new Map();
+  // Vendor ASR finals can duplicate; keep a separate dedupe key from user.turn so we do not emit twice.
   let lastAsrFinalKey = null;
+  // user.turn is the canonical user bubble source; guard against back-to-back duplicates from the server.
   let lastUserTurnKey = null;
   let provisionalSidCounter = 0;
 
@@ -68,10 +70,16 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
       return;
     }
     const text = typeof frame.text === "string" ? frame.text : "";
+    if (!text.trim()) {
+      try { logStage("ui_transcript_filter", { allow: false, type: "user.turn", reason: "empty_text" }); } catch {}
+      return;
+    }
     const reqId = typeof frame.req_id === "string" ? frame.req_id : typeof frame.reqId === "string" ? frame.reqId : null;
     const turnId = typeof frame.turn_id === "string" && frame.turn_id
       ? frame.turn_id
       : reqId;
+    // Deduplicate user.turn frames defensively. Vendor finals can duplicate (server dedupes),
+    // and the client also guards against back-to-back identical user.turn frames.
     const key = `${reqId || ""}|${text}`;
     if (lastUserTurnKey === key) {
       return;
@@ -189,9 +197,7 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
     const type = typeof frame?.type === "string" ? frame.type : "";
     const role = typeof frame?.role === "string" ? frame.role : "";
     const allow = true;
-    try {
-      console.log(`evt=ui_transcript_filter allow=${allow} type=${type || ""} role=${role || ""}`);
-    } catch {}
+    try { logStage("ui_transcript_filter", { allow, type: type || "", role: role || "" }); } catch {}
     return allow;
   }
 

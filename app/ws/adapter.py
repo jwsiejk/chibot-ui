@@ -830,6 +830,7 @@ class AdapterContext:
     audio_overflow_last_log_ms: Optional[int] = None
     audio_bridge_turn_index: Optional[int] = None
     last_user_turn_event_key: Optional[str] = None
+    last_user_turn_dedup_key: Optional[str] = None
     audio_turn_id_missing_logged: bool = False
 
     def __post_init__(self) -> None:
@@ -932,6 +933,7 @@ class ChatV2Adapter:
         ctx.audio_overflow_last_log_ms = None
         ctx.audio_bridge_turn_index = None
         ctx.last_user_turn_event_key = None
+        ctx.last_user_turn_dedup_key = None
         ctx.audio_turn_id_missing_logged = False
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
@@ -992,6 +994,7 @@ class ChatV2Adapter:
         ctx.mic_never_ready_warned = False
         self._cancel_no_audio_safety_net(ctx)
         ctx.last_user_turn_event_key = None
+        ctx.last_user_turn_dedup_key = None
         ctx.audio_turn_id_missing_logged = False
 
     def _start_audio_bridge_turn(
@@ -1000,16 +1003,18 @@ class ChatV2Adapter:
         turn_index: Optional[int] = None,
         profile: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        try:
-            session_turn = int(getattr(ctx.session, "audio_rx_turn_index", 0))
-        except Exception:
-            session_turn = 0
-
-        target_turn = (
-            turn_index
-            if isinstance(turn_index, int)
-            else max(session_turn, getattr(ctx, "turn_index", 0) or 0) + 1
-        )
+        candidate_turn = turn_index
+        if not isinstance(candidate_turn, int):
+            try:
+                candidate_turn = int(getattr(ctx, "turn_index", 0))
+            except Exception:
+                candidate_turn = None
+        if not isinstance(candidate_turn, int) or candidate_turn <= 0:
+            try:
+                candidate_turn = int(getattr(ctx.session, "turn_index", 0) or 0)
+            except Exception:
+                candidate_turn = 0
+        target_turn = max(1, candidate_turn)
 
         if ctx.audio_bridge_turn_index == target_turn:
             return
@@ -1060,17 +1065,28 @@ class ChatV2Adapter:
     ) -> None:
         turn_id = ctx.current_turn_id or req_id or ctx.turn_req_id
         text_value = text.strip() if isinstance(text, str) else ""
-        key = f"{turn_id}|{text_value}" if turn_id or text_value else None
-        if key and key == ctx.last_user_turn_event_key:
+        if not text_value:
             _log.info(
-                "evt=user_turn_event_dedup sid=%s turn_id=%s turn_index=%s",
+                "evt=user_turn_event_skip_empty sid=%s turn_id=%s turn_index=%s",
                 ctx.sid,
                 turn_id,
                 turn_index,
             )
             return
+        key = f"{turn_id}|{text_value}" if turn_id or text_value else None
+        if key and key == ctx.last_user_turn_event_key:
+            if key != ctx.last_user_turn_dedup_key:
+                ctx.last_user_turn_dedup_key = key
+                _log.info(
+                    "evt=user_turn_event_dedup sid=%s turn_id=%s turn_index=%s",
+                    ctx.sid,
+                    turn_id,
+                    turn_index,
+                )
+            return
 
         ctx.last_user_turn_event_key = key
+        ctx.last_user_turn_dedup_key = None
         payload = {
             "type": "user.turn",
             "sid": ctx.sid,
@@ -4187,9 +4203,6 @@ class ChatV2Adapter:
             session = ctx.session
             ctx.audio_profile = profile
             ctx.session.audio_profile = profile
-            self._start_audio_bridge_turn(
-                ctx, getattr(ctx, "turn_index", None), normalized_header
-            )
             self._arm_no_audio_watchdog(ctx)
             if getattr(ctx, "await_user_vad_check_pending", False):
                 ctx.await_user_vad_check_pending = False
@@ -4577,15 +4590,21 @@ class ChatV2Adapter:
         byte_count: int,
         note: str | None = None,
     ) -> None:
-        if (
-            ctx.session.asr_state == "open"
-            and not ctx.current_turn_id
-            and not ctx.audio_turn_id_missing_logged
-        ):
-            ctx.audio_turn_id_missing_logged = True
-            _log.info(
-                "evt=audio_turn_id_missing sid=%s decision=%s", ctx.sid, decision
+        if ctx.session.asr_state == "open" and not ctx.current_turn_id:
+            if not ctx.audio_turn_id_missing_logged:
+                ctx.audio_turn_id_missing_logged = True
+                _log.info(
+                    "evt=audio_turn_id_missing sid=%s decision=%s", ctx.sid, decision
+                )
+            fallback_turn_id = (
+                ctx.turn_req_id
+                or ctx.active_req_id
+                or ctx.asr_stream_req_id
+                or ctx.current_turn_id
+                or None
             )
+            if fallback_turn_id:
+                ctx.current_turn_id = fallback_turn_id
         meta = {
             "bytes": byte_count,
             "note": note,
