@@ -421,8 +421,10 @@ class GCPStreamingASREngine(ASREngine):
         if self._on_result is None:
             return
 
+        stripped_transcript = transcript.strip()
+
         self._last_transcript = transcript
-        self._last_is_final = is_final
+        self._last_is_final = bool(stripped_transcript) and is_final
 
         if is_final:
             logger.info(
