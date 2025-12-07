@@ -460,7 +460,7 @@ logStage("client.google_v3.pcm_send_summary", {
   windowMs: 2000,
   framesSent,
   framesDroppedHardGate,
-  framesDroppedSoftGate,
+  framesDroppedSoftGate, // deprecated: soft gate is telemetry-only; expected to stay 0
 });
 
 

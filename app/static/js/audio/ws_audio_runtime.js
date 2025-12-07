@@ -1016,6 +1016,8 @@ export function createWsAudioRuntime(options = {}) {
     return String(nextTurnId++);
   }
   function shouldSendFrameSoftGate({ vadState, speechSeen }) {
+    // Soft gate is telemetry-only for the AskChip mic lane; ASR/TurnEngine decide
+    // end-of-speech and turn boundaries instead of client-side VAD drops.
     if (!vadState) {
       return { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null, reason: "no_vad_state" };
     }
@@ -1035,6 +1037,30 @@ export function createWsAudioRuntime(options = {}) {
     const reason = vadLikelySpeech ? "vad_speech" : "vad_silence";
     const rmsAtTrigger = !speechSeen && vadLikelySpeech ? vadState?.rms ?? vadState?.rmsDb ?? null : null;
     return { shouldSend, vadLikelySpeech, rmsAtTrigger, reason };
+  }
+
+  const softGateTelemetryIntervalFrames = 10;
+  let lastSoftGateTelemetryReason = null;
+  let softGateTelemetryFrameCounter = 0;
+
+  function maybeEmitSoftGateTelemetry({ reason, vadLikelySpeech, wsPhase, appPhase, wsReadyState }) {
+    const safeReason = reason || "unknown";
+    const reasonChanged = safeReason !== lastSoftGateTelemetryReason;
+    softGateTelemetryFrameCounter += 1;
+    const intervalHit = softGateTelemetryFrameCounter >= softGateTelemetryIntervalFrames;
+    if (!reasonChanged && !intervalHit) {
+      return;
+    }
+    lastSoftGateTelemetryReason = safeReason;
+    softGateTelemetryFrameCounter = 0;
+    emitPolicyHook("soft_gate_telemetry", {
+      reason: safeReason,
+      allowed: true,
+      vadLikelySpeech: Boolean(vadLikelySpeech),
+      wsPhase,
+      appPhase,
+      wsReadyState,
+    });
   }
 
   function maybeLogSpeechNeverMarkedSeen() {
@@ -1060,6 +1086,7 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   const pcmSummaryWindowMs = 2000;
+  // framesDroppedSoftGate is deprecated: soft gate is telemetry-only and never drops frames.
   let pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
   let pcmSummaryGateReady = false;
   let lastPcmSummaryAt = 0;
@@ -1097,6 +1124,7 @@ export function createWsAudioRuntime(options = {}) {
         windowMs: pcmSummaryWindowMs,
         framesSent: pcmSummaryCounters.framesSent,
         framesDroppedHardGate: pcmSummaryCounters.framesDroppedHardGate,
+        // Deprecated: remains at 0 because soft gate is telemetry-only.
         framesDroppedSoftGate: pcmSummaryCounters.framesDroppedSoftGate,
         gateReady: pcmSummaryGateReady,
       });
@@ -1497,9 +1525,9 @@ export function createWsAudioRuntime(options = {}) {
         logStage("client.google_v3.turn_sequence_initiated", { turnId: currentTurnId });
       } catch (_) {}
     }
-    emitPolicyHook("soft_gate_telemetry", {
+    // Telemetry-only soft gate: we always send PCM when the hard gate allows it.
+    maybeEmitSoftGateTelemetry({
       reason: softDecision.reason || "unknown",
-      allowed: true,
       vadLikelySpeech: Boolean(softDecision.vadLikelySpeech),
       wsPhase,
       appPhase: phaseValue,
