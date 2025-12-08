@@ -46,6 +46,14 @@ const {
   logStage,
 } = telemetryModule ?? {};
 
+try {
+  logStage("client.ws_modules_loaded", {
+    policyRuntime: !!createPolicyRuntime,
+    transcriptBridge: !!createTranscriptBridge,
+    telemetry: !!logStage,
+  });
+} catch (_) {}
+
 import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
 import { isTypedArray, toArrayBuffer } from "./utils/binary.js";
 import { createVoicePhaseController, PHASE } from "./voice/phase_controller.js";
