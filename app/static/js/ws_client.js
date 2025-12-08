@@ -5,17 +5,38 @@ import * as versionModule from "./version.js";
 const importV = typeof versionModule.importV === "function"
   ? versionModule.importV
   : async (path) => import(/* @vite-ignore */ path);
-import { createPolicyRuntime } from "./ws/policy_runtime.js";
-import { createWsConnection } from "./ws/connection.js";
-import { createTurnRuntime } from "./ws/turns.js";
-import { createBannerClient } from "./ws/banner_client.js";
-import { createTranscriptBridge } from "./ws/transcript_bridge.js";
-import { createSessionManager } from "./ws/session_manager.js";
-import { createFrameParser } from "./ws/frame_parser.js";
-import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
-import { isTypedArray, toArrayBuffer } from "./utils/binary.js";
-import { createVoicePhaseController, PHASE } from "./voice/phase_controller.js";
-import {
+const withVersion = typeof versionModule.withVersion === "function"
+  ? versionModule.withVersion
+  : (path) => path;
+
+const [
+  policyRuntimeModule,
+  wsConnectionModule,
+  turnRuntimeModule,
+  bannerClientModule,
+  transcriptBridgeModule,
+  sessionManagerModule,
+  frameParserModule,
+  telemetryModule,
+] = await Promise.all([
+  importV(withVersion("/static/js/ws/policy_runtime.js")),
+  importV(withVersion("/static/js/ws/connection.js")),
+  importV(withVersion("/static/js/ws/turns.js")),
+  importV(withVersion("/static/js/ws/banner_client.js")),
+  importV(withVersion("/static/js/ws/transcript_bridge.js")),
+  importV(withVersion("/static/js/ws/session_manager.js")),
+  importV(withVersion("/static/js/ws/frame_parser.js")),
+  importV(withVersion("/static/js/ws/telemetry.js")),
+]);
+
+const { createPolicyRuntime } = policyRuntimeModule ?? {};
+const { createWsConnection } = wsConnectionModule ?? {};
+const { createTurnRuntime } = turnRuntimeModule ?? {};
+const { createBannerClient } = bannerClientModule ?? {};
+const { createTranscriptBridge } = transcriptBridgeModule ?? {};
+const { createSessionManager } = sessionManagerModule ?? {};
+const { createFrameParser } = frameParserModule ?? {};
+const {
   MIC_OUTCOME,
   logMic,
   emitMicBreadcrumb,
@@ -23,7 +44,11 @@ import {
   recordLastError,
   recordClientBannerEvent,
   logStage,
-} from "./ws/telemetry.js";
+} = telemetryModule ?? {};
+
+import { encodeMessagePack, decodeMessagePack } from "./utils/msgpack.mjs";
+import { isTypedArray, toArrayBuffer } from "./utils/binary.js";
+import { createVoicePhaseController, PHASE } from "./voice/phase_controller.js";
 import { getMicAudioContext, getPlaybackAudioContext } from "./audio/audio_core.js";
 
 // Before any WS logic, confirm audio modules are loaded
