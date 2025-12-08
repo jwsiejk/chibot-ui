@@ -364,13 +364,17 @@ class GCPStreamingASREngine(ASREngine):
                         "summary": self._stats.to_summary("timeout") if self._stats else None,
                     },
                 )
-                if self._on_result is not None and not self._last_is_final:
+
+                if not self._last_is_final:
                     event = {"timeout": True, "promoted_final": True}
                     transcript = self._last_transcript or ""
                     try:
-                        maybe_coro = self._on_result(transcript, True, event)
-                        if asyncio.iscoroutine(maybe_coro):
-                            asyncio.create_task(maybe_coro)
+                        self._loop.call_soon_threadsafe(
+                            self._handle_result,
+                            transcript,
+                            True,
+                            event,
+                        )
                     except Exception:
                         logger.exception("evt=asr_error vendor=gcp sid=%s", self._sid)
             else:
