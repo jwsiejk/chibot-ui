@@ -8909,6 +8909,27 @@ class ChatV2Adapter:
                 }
                 if skip_reason:
                     empty_meta["variant"] = skip_reason
+
+                # Derive an explicit outcome and surface the timeout to the engine.
+                outcome_label = "timeout_no_audio" if (timeout and not stripped_text) else "empty"
+                if outcome_label == "timeout_no_audio":
+                    _log.info("evt=asr_timeout_signal_engine sid=%s", ctx.sid)
+                    try:
+                        await self._invoke_engine(
+                            "on_asr_timeout",
+                            ctx.sid,
+                            ctx.turn_req_id,
+                            {
+                                "turn_index": turn_index,
+                                "skip_reason": skip_reason,
+                                "bytes_received": ctx.turn_audio_bytes,
+                            },
+                        )
+                    except Exception:
+                        _log.exception(
+                            "evt=on_asr_timeout_dispatch_failed sid=%s", ctx.sid
+                        )
+
                 empty_frame = {
                     "type": "turn.empty",
                     "sid": ctx.sid,
@@ -8924,13 +8945,15 @@ class ChatV2Adapter:
                     turn_index,
                     skip_reason,
                 )
-                outcome_label = "timeout_no_audio" if timeout and not stripped_text else "empty"
+
                 TurnLifecycleRecorder.finalize_and_log(ctx, outcome=outcome_label)
-                self._log_turn_summary(ctx, outcome_label)
+                self._log_turn_summary(ctx, outcome=outcome_label)
             _log_llm_turn_decision("skip", skip_reason)
+
             if not is_empty_final:
                 TurnLifecycleRecorder.finalize_and_log(ctx, outcome=skip_reason)
                 self._log_turn_summary(ctx, skip_reason)
+
             if not stripped_text:
                 self._end_user_turn(ctx)
             return

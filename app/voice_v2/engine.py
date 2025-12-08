@@ -690,7 +690,7 @@ class EngineV2:
             except Exception:
                 _log.exception(
                     "evt=voice.policy_bridge_failed sid=%s req_id=%s", sid, req_id_value
-                )
+            )
 
         if session.turn_started_ms is not None:
             elapsed = _now_ms() - session.turn_started_ms
@@ -756,6 +756,52 @@ class EngineV2:
             )
 
         self._set_state(sid, THINKING, reason="asr_final")
+
+    async def on_asr_timeout(
+        self,
+        sid: str,
+        req_id: str | None,
+        meta: dict | None = None,
+    ) -> None:
+        """
+        Handle ASR timeouts with no recognized user text.
+        This is a semantic event (no user_text); decide whether to re-engage the user.
+        """
+
+        meta = meta or {}
+        session = self._ensure_session(sid)
+        effective_req_id = req_id if isinstance(req_id, str) and req_id else session.req_id
+        if not isinstance(effective_req_id, str) or not effective_req_id:
+            effective_req_id = f"req-{uuid.uuid4().hex}"
+        session.req_id = effective_req_id
+
+        turn_id = session.turn_id or f"turn-{uuid.uuid4().hex}"
+        session.turn_id = turn_id
+        _log.info(
+            "evt=voice.on_asr_timeout sid=%s req_id=%s meta=%s",
+            sid,
+            effective_req_id,
+            meta,
+        )
+
+        system_signal = {
+            "role": "system",
+            "content": "[SYSTEM_EVENT: User was silent or ASR timed out. Briefly re-engage or ask if they are still there.]",
+        }
+
+        await self._apply_policy_decision_async(
+            sid,
+            {
+                "req_id": effective_req_id,
+                "turn_id": turn_id,
+                "intent": "system.timeout_reengagement",
+                "entities": {},
+                "user_text": None,
+                "timeout": True,
+                "meta": meta,
+                "injected_messages": [system_signal],
+            },
+        )
 
     def on_asr_open(self, sid: str, turn_id: str | None = None) -> None:
         """Transition into listening when the ASR stream opens for a turn."""
@@ -1933,6 +1979,19 @@ class EngineV2:
             "user_text": (user_text or "").strip(),
         }
 
+    def _apply_policy_decision(
+        self, sid: str, nlu_payload: Mapping[str, Any]
+    ) -> None:
+        """Bridge NLU results into the policy/LLM pipeline."""
+
+        session = self._ensure_session(sid)
+        self._maybe_emit_policy_and_nlg(sid, session, nlu_payload)
+
+    async def _apply_policy_decision_async(
+        self, sid: str, nlu_payload: Mapping[str, Any]
+    ) -> None:
+        self._apply_policy_decision(sid, nlu_payload)
+
     def _maybe_emit_policy_and_nlg(
         self,
         sid: str,
@@ -2011,6 +2070,14 @@ class EngineV2:
         else:
             entity_payload = {}
 
+        injected_messages: Sequence[Mapping[str, Any]] | None = None
+        if intent == "system.timeout_reengagement":
+            candidate_injected = nlu_payload.get("injected_messages")
+            if isinstance(candidate_injected, Sequence) and not isinstance(
+                candidate_injected, (str, bytes)
+            ):
+                injected_messages = list(candidate_injected)
+
         plan_context = session.plan if isinstance(session.plan, Mapping) else None
         plan_mode = None
         if plan_context is not None:
@@ -2027,7 +2094,11 @@ class EngineV2:
         )
 
         self._prepare_llm_history(
-            sid, session, req_id, extra_system_instruction=extra_style_instruction
+            sid,
+            session,
+            req_id,
+            extra_system_instruction=extra_style_instruction,
+            injected_messages=injected_messages,
         )
 
         provider = getattr(self._llm, "_provider", None)
@@ -2287,6 +2358,7 @@ class EngineV2:
         req_id: str,
         *,
         extra_system_instruction: Optional[str] = None,
+        injected_messages: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> None:
         history: list[Mapping[str, Any]] = []
         try:
@@ -2313,6 +2385,19 @@ class EngineV2:
             instruction_text = extra_system_instruction.strip()
             if instruction_text:
                 sanitized.insert(0, {"role": "system", "text": instruction_text[:512]})
+
+        if injected_messages:
+            for message in injected_messages:
+                if not isinstance(message, Mapping):
+                    continue
+                role = message.get("role")
+                content = message.get("content")
+                if not isinstance(role, str) or not isinstance(content, str):
+                    continue
+                cleaned = content.strip()
+                if not cleaned:
+                    continue
+                sanitized.append({"role": role, "text": cleaned[:512]})
 
         session.history_message_count = len(sanitized)
 
