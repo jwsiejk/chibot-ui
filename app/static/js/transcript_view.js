@@ -347,6 +347,13 @@
       const normalized = typeof text === "string" ? text.trim() : "";
       if (!normalized) return null;
       const node = createMessage("user", normalized, { partial: false });
+      try {
+        logStage("client.addUserMessage", {
+          text: normalized,
+          client_msg_id: clientMsgId || null,
+          pending: Boolean(pending),
+        });
+      } catch (_) {}
       if (pending) {
         updateMeta(node, "user", { pending: true });
       }
@@ -442,21 +449,27 @@
       }
 
       let node = null;
+      let reuseReason = null;
 
       if (messageId && messageNodesById.has(messageId)) {
         node = messageNodesById.get(messageId);
+        reuseReason = "message_id";
       }
       if (!node && clientMsgId && messageNodesByClientId.has(clientMsgId)) {
         node = messageNodesByClientId.get(clientMsgId);
+        reuseReason = "client_msg_id";
       }
       if (!node && role === "user" && reqId && messageNodesByReqId.has(reqId)) {
         const entry = messageNodesByReqId.get(reqId);
         if (entry && entry.node) {
           if (!entry.role || entry.role === role) {
             node = entry.node;
+            reuseReason = "req_id";
           }
         }
       }
+
+      const willReuseExistingNode = Boolean(node);
 
       if (!node) {
         node = createMessage(role, text);
@@ -464,6 +477,19 @@
       } else {
         setNodeRole(node, role);
       }
+
+      try {
+        if (role === "user") {
+          logStage("client.handleChatMessage.user", {
+            text,
+            req_id: reqId || null,
+            message_id: messageId || null,
+            client_msg_id: clientMsgId || null,
+            reused: willReuseExistingNode,
+            reuse_reason: reuseReason,
+          });
+        }
+      } catch (_) {}
 
       node.classList.remove("partial");
       delete node.dataset.partial;

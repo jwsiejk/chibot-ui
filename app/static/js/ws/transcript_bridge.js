@@ -94,7 +94,18 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
       turn_id: turnId || undefined,
       turn_index: typeof frame.turn_index === "number" ? frame.turn_index : undefined,
       ts: typeof frame.ts === "number" ? frame.ts : undefined,
+      source: "user.turn",
     };
+
+    try {
+      logStage("client.user_turn_to_chat", {
+        text,
+        turn_index: chatFrame.turn_index ?? null,
+        req_id: chatFrame.req_id || null,
+        turn_id: chatFrame.turn_id || null,
+        source: "user.turn",
+      });
+    } catch (_) {}
 
     if (transcriptFrameAllowed(chatFrame)) {
       deliverChat(chatFrame);
@@ -171,6 +182,19 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
       }
     }
 
+    if (isUserChat) {
+      try {
+        logStage("client.deliverChat.user", {
+          text: frame.text,
+          req_id: frame.req_id || null,
+          turn_id: frame.turn_id || null,
+          message_id: frame.id || frame.message_id || null,
+          client_msg_id: frame.client_msg_id || null,
+          source: frame.source || "unknown",
+        });
+      } catch (_) {}
+    }
+
     try {
       view.handleChatMessage(frame);
     } catch (err) {
@@ -184,6 +208,9 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
       return;
     }
     for (const message of messages) {
+      if (message && typeof message === "object") {
+        message.source = message.source || "chat.history";
+      }
       deliverChat(message);
     }
   }
