@@ -246,7 +246,7 @@ def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
                 if not isinstance(primary, str) or not primary.strip():
                     raise ValueError("expected_string")
                 normalized = primary.strip().lower()
-                if normalized not in {"gcp"}:
+                if normalized not in {"deepgram"}:
                     raise ValueError("unsupported_vendor")
                 vendor_block["primary"] = normalized
             if "secondary" in vendor_value:
@@ -255,7 +255,7 @@ def _normalize_policy_asr(value: Any) -> Dict[str, Any]:
                     vendor_block["secondary"] = None
                 elif isinstance(secondary, str) and secondary.strip():
                     normalized_secondary = secondary.strip().lower()
-                    if normalized_secondary not in {"gcp"}:
+                    if normalized_secondary not in {"deepgram"}:
                         raise ValueError("unsupported_vendor")
                     vendor_block["secondary"] = normalized_secondary
                 else:

@@ -1296,7 +1296,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   async function handleVadSpeechStart(payload = {}) {
     try {
-      logStage("client.google_v3.vad_speech_start", {
+      logStage("client.asr_v3.vad_speech_start", {
         source: "vad_speech_start",
         phase: getPhase(),
         wsPhase: AppState?.wsPhase || null,

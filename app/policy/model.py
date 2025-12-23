@@ -31,7 +31,7 @@ class CapturePolicy:
 class ASRVendorPolicy:
     """Describe how ASR vendors should be selected at runtime."""
 
-    primary: str = "gcp"
+    primary: str = "deepgram"
     secondary: Optional[str] = None
 
 

@@ -13,23 +13,6 @@ if "jwt" not in sys.modules:
     )
 
 
-class _LenientNamespace(types.SimpleNamespace):
-    def __getattr__(self, name: str):  # pragma: no cover - test shim
-        value = _LenientNamespace()
-        setattr(self, name, value)
-        return value
-
-
-if "google" not in sys.modules:
-    google_stub = types.SimpleNamespace()
-    api_core = types.SimpleNamespace(exceptions=types.SimpleNamespace(OutOfRange=Exception))
-    speech_stub = _LenientNamespace()
-    sys.modules["google"] = google_stub
-    sys.modules["google.api_core"] = api_core
-    sys.modules["google.api_core.exceptions"] = api_core.exceptions
-    sys.modules["google.cloud"] = types.SimpleNamespace(speech=speech_stub)
-    sys.modules["google.cloud.speech"] = speech_stub
-
 from app.telemetry import bus
 from app.voice_v2 import EVT_WS_AUDIO_RECV
 from app.ws.adapter import AdapterContext, ChatV2Adapter, PCM_BYTES_PER_SAMPLE

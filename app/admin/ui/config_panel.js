@@ -8,7 +8,6 @@
   const API_ENDPOINT = '/api/v1/admin/settings';
   const ASR_VENDOR_OPTIONS = [
     { value: 'deepgram', label: 'Deepgram STT' },
-    { value: 'gcp', label: 'Google Cloud STT' },
   ];
 
   const ASR_VENDOR_SECONDARY_OPTIONS = [

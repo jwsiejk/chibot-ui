@@ -1,46 +1,5 @@
 import logging
-import sys
-import types
-
 import pytest
-
-if "google" not in sys.modules:
-    google_mod = types.ModuleType("google")
-    api_core = types.ModuleType("google.api_core")
-    api_core.exceptions = types.SimpleNamespace(OutOfRange=Exception)
-    cloud_mod = types.ModuleType("google.cloud")
-
-    class _DummySpeechClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-    class _DummyRecognitionConfig:
-        class AudioEncoding:
-            LINEAR16 = 1
-
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-    class _DummyStreamingRecognitionConfig:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-    class _DummyStreamingRecognizeRequest:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-    speech_mod = types.ModuleType("google.cloud.speech")
-    speech_mod.SpeechClient = _DummySpeechClient
-    speech_mod.RecognitionConfig = _DummyRecognitionConfig
-    speech_mod.StreamingRecognitionConfig = _DummyStreamingRecognitionConfig
-    speech_mod.StreamingRecognizeRequest = _DummyStreamingRecognizeRequest
-    speech_mod.RecognitionAudio = object
-
-    sys.modules["google"] = google_mod
-    sys.modules["google.api_core"] = api_core
-    sys.modules["google.api_core.exceptions"] = api_core.exceptions
-    sys.modules["google.cloud"] = cloud_mod
-    sys.modules["google.cloud.speech"] = speech_mod
 
 from app.services.asr.deepgram_engine import DeepgramStreamingASREngine
 

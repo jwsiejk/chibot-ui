@@ -52,30 +52,12 @@ def _env_int(name: str, default: int, *, minimum: Optional[int] = None) -> int:
     return candidate
 
 
-def _env_float(name: str, default: float, *, minimum: Optional[float] = None) -> float:
-    try:
-        candidate = float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return float(default)
-    if minimum is not None and candidate < minimum:
-        return minimum
-    return candidate
-
-
-GCP_STT_DEFAULT_SAMPLE_RATE = _env_int("GCP_STT_DEFAULT_SAMPLE_RATE", 16000, minimum=1)
-GCP_STT_DEFAULT_LANGUAGE = os.getenv("GCP_STT_DEFAULT_LANGUAGE", "en-US") or "en-US"
-GCP_STT_INPUT_GAIN = _env_float("GCP_STT_INPUT_GAIN", 1.0, minimum=0.0)
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-2") or "nova-2"
-DEEPGRAM_STT_LANGUAGE = (
-    os.getenv("DEEPGRAM_STT_LANGUAGE", GCP_STT_DEFAULT_LANGUAGE) or GCP_STT_DEFAULT_LANGUAGE
-)
-DEEPGRAM_STT_SAMPLE_RATE = _env_int(
-    "DEEPGRAM_STT_SAMPLE_RATE", GCP_STT_DEFAULT_SAMPLE_RATE, minimum=1
-)
+DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "en-US") or "en-US"
+DEEPGRAM_STT_SAMPLE_RATE = _env_int("DEEPGRAM_STT_SAMPLE_RATE", 16000, minimum=1)
 DEEPGRAM_STT_ENDPOINTING_MS = _env_int("DEEPGRAM_STT_ENDPOINTING_MS", 0, minimum=0)
 DEEPGRAM_STT_INTERIM_RESULTS = env_bool("DEEPGRAM_STT_INTERIM_RESULTS", True)
-DEEPGRAM_SHADOW_ENABLED = env_bool("DEEPGRAM_SHADOW_ENABLED", False)
 
 
 def get_env(name: str, default=None):
@@ -87,26 +69,13 @@ def get_env(name: str, default=None):
 
 _log = logging.getLogger(__name__)
 
-_GCP_CREDS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if _GCP_CREDS_PATH:
-    if os.path.exists(_GCP_CREDS_PATH):
-        _log.info(
-            "evt=gcp_auth_check status=FILE_FOUND path=%s",
-            _GCP_CREDS_PATH,
-        )
-    else:
-        _log.error(
-            "evt=gcp_auth_check status=FILE_NOT_FOUND path=%s",
-            _GCP_CREDS_PATH,
-        )
-
 _ADMIN_SETTINGS_LOCK = threading.RLock()
 _ADMIN_SETTINGS_CACHE: MutableMapping[str, Optional[Any]] = {}
 _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or sentinel
 _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
 
 _ALLOWED_ASR_INPUTS = {"pcm_16k"}
-_SUPPORTED_ASR_VENDORS = {"gcp", "deepgram"}
+_SUPPORTED_ASR_VENDORS = {"deepgram"}
 _AUDIO_PIPELINE_MODES = {"pcm16"}
 _CAPTURE_TIMESLICE_MIN_MS = 20
 

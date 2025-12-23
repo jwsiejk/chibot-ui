@@ -15,7 +15,6 @@ httpx>=0.27.0               # async+sync; use for OpenAI/ElevenLabs calls
 # --- Vendors ---
 openai>=1.30.0              # Chat Completions + Whisper
 elevenlabs>=1.6.1           # TTS + visemes client
-google-cloud-speech>=2.26.0 # GCP streaming speech recognition client
 
 # --- CORS (off by default; enable via env/flag if UI/API split) ---
 Flask-Cors>=4.0.0

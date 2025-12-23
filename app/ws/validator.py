@@ -126,38 +126,6 @@ def validate_audio_header_against_policy(
     rate = header.get("sample_rate")
     channels = header.get("channels")
 
-    if vendor == "gcp":
-        normalized_fmt = fmt
-        if normalized_fmt == "pcm":
-            normalized_fmt = "pcm16"
-        if normalized_fmt != "pcm16" or rate != 16000 or channels != 1:
-            if normalized_fmt != "pcm16":
-                _logger.info(
-                    "audio.header.reject reason=format got=%s want=pcm16",
-                    fmt,
-                )
-            elif rate != 16000:
-                _logger.info(
-                    "audio.header.reject reason=sample_rate got=%s want=16000",
-                    rate,
-                )
-            elif channels != 1:
-                _logger.info(
-                    "audio.header.reject reason=channels got=%s want=1",
-                    channels,
-                )
-            _logger.warning(
-                "audio.header_rejected reason=vendor_requires_pcm got_format=%s got_sr=%s got_ch=%s",
-                fmt,
-                rate,
-                channels,
-            )
-            _emit_validator_log(
-                "WARNING",
-                "audio.header_rejected reason=vendor_requires_pcm vendor=gcp",
-            )
-            return "gcp requires pcm@16k mono"
-
     if policy is None:
         return None
 

@@ -170,7 +170,7 @@ function createRingBufferManager(sampleRate) {
     if (statusSignature === lastStatus) return;
     lastStatus = statusSignature;
     try {
-      logStage("client.google_v3.ring_buffer_status", {
+      logStage("client.asr_v3.ring_buffer_status", {
         preSpeechBufferMs,
         capacityMs,
         framesStored,
@@ -996,7 +996,7 @@ export function createWsAudioRuntime(options = {}) {
     if (lastHardGateLogged === signature) return;
     lastHardGateLogged = signature;
     try {
-      logStage("client.google_v3.hard_gate_snapshot", {
+      logStage("client.asr_v3.hard_gate_snapshot", {
         allowed: snapshot?.allowed ?? false,
         reason: snapshot?.reason || "unknown",
         wsPhase,
@@ -1069,7 +1069,7 @@ export function createWsAudioRuntime(options = {}) {
     }
     speechNeverMarkedSeenLogged = true;
     try {
-      logStage("client.google_v3.speech_never_marked_seen", { turnId: currentTurnId || null });
+      logStage("client.asr_v3.speech_never_marked_seen", { turnId: currentTurnId || null });
     } catch (_) {}
   }
 
@@ -1077,7 +1077,7 @@ export function createWsAudioRuntime(options = {}) {
     speechSeenThisTurn = true;
     lastSpeechSeenReqId = reqId || lastSpeechSeenReqId || null;
     try {
-      logStage("client.google_v3.speech_seen_this_turn", {
+      logStage("client.asr_v3.speech_seen_this_turn", {
         speechSeenThisTurn: true,
         rmsAtTrigger,
         framesSinceGreet,
@@ -1134,7 +1134,7 @@ export function createWsAudioRuntime(options = {}) {
     }
     lastPcmSummaryAt = now;
     try {
-      logStage("client.google_v3.pcm_send_summary", {
+      logStage("client.asr_v3.pcm_send_summary", {
         windowMs: pcmSummaryWindowMs,
         framesSent: pcmSummaryCounters.framesSent,
         framesDroppedHardGate: pcmSummaryCounters.framesDroppedHardGate,
@@ -1159,7 +1159,7 @@ export function createWsAudioRuntime(options = {}) {
       return;
     }
     try {
-      logStage("client.google_v3.policy_hook", { reason, ...detail });
+      logStage("client.asr_v3.policy_hook", { reason, ...detail });
     } catch (_) {}
   }
 
@@ -1173,7 +1173,7 @@ export function createWsAudioRuntime(options = {}) {
     const turnId = baseMeta.turnId || null;
 
     try {
-      logStage("client.google_v3.preroll_flush", {
+      logStage("client.asr_v3.preroll_flush", {
         lane,
         turnId,
         chunks: prerollChunks.length,
@@ -1536,7 +1536,7 @@ export function createWsAudioRuntime(options = {}) {
         prerollChunksToSend = null; // Clear so we don't triple-send below
       }
       try {
-        logStage("client.google_v3.turn_sequence_initiated", { turnId: currentTurnId });
+        logStage("client.asr_v3.turn_sequence_initiated", { turnId: currentTurnId });
       } catch (_) {}
     }
     // Telemetry-only soft gate: we always send PCM when the hard gate allows it.
@@ -2023,7 +2023,7 @@ export function createWsAudioRuntime(options = {}) {
         const appState = getAppState();
         const gateSid = sid || appState?.sid || appState?.sessionId || null;
         try {
-          logStage("client.google_v3.sender_gate_opened", {
+          logStage("client.asr_v3.sender_gate_opened", {
             sid: gateSid,
             phase: phaseValue,
             wsPhase,
