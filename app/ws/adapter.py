@@ -3396,12 +3396,12 @@ class ChatV2Adapter:
         policy_snapshot = self._policy_snapshot() if FEATURE_LEGACY_POLICY else None
         legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
         session_policy_v2 = self._build_session_policy(legacy_hits=legacy_hits)
-        allowed_asr_vendors = self._allowed_asr_vendors(snapshot_mapping)
         snapshot_mapping: Mapping[str, Any] | None
         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, Mapping):
             snapshot_mapping = policy_snapshot
         else:
             snapshot_mapping = session_policy_v2 if isinstance(session_policy_v2, Mapping) else None
+        allowed_asr_vendors = self._allowed_asr_vendors(snapshot_mapping)
 
         provisional_ctx = AdapterContext(
             sid=sid,
