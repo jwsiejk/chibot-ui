@@ -59,6 +59,8 @@ export function createTranscriptBridge({ AppState, hubLog, logStage, dispatchFra
     try {
       if (frame.type === "asr.partial" && typeof view.handlePartial === "function") {
         view.handlePartial(frame);
+      } else if (frame.type === "asr.final" && typeof view.handleFinal === "function") {
+        view.handleFinal(frame);
       }
     } catch (err) {
       console.warn("TranscriptView ASR handler error", err);

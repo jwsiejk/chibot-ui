@@ -7,6 +7,7 @@
 
   const API_ENDPOINT = '/api/v1/admin/settings';
   const ASR_VENDOR_OPTIONS = [
+    { value: 'deepgram', label: 'Deepgram STT' },
     { value: 'gcp', label: 'Google Cloud STT' },
   ];
 
@@ -48,7 +49,7 @@
       commit_on_vad_silence: true,
       commit_silence_ms: 900,
       max_utterance_ms: 8000,
-      vendor: { primary: 'gcp', secondary: null },
+      vendor: { primary: 'deepgram', secondary: null },
     },
     policy_routing: {
       ws_version: 'v2',

@@ -241,7 +241,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
         harness = OutboundHarness(adapter, engine)
         await harness.start()
         try:
-            frame = {"type": "asr.ready", "vendor": "gcp"}
+            frame = {"type": "asr.ready", "vendor": "deepgram"}
             bus.publish({"type": EVT_WS_JSON_SEND, "sid": harness.sid, "frame": frame})
 
             delivered = await harness.wait_for_outbound(
@@ -400,7 +400,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
 
             await harness.wait_for(lambda: bool(ctx.pending_start_listening), timeout=2.0)
 
-            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "gcp"})
+            bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
 
             await harness.wait_for(lambda: ctx.pending_start_listening is None, timeout=2.0)
 
@@ -686,7 +686,7 @@ class TestAdapterOutboundBridge(unittest.TestCase):
                 bus.publish({"type": EVT_WS_JSON_SEND, "sid": sid, "payload": tts_end_payload})
 
                 bus.publish({"type": EVT_ASR_OPEN, "sid": sid})
-                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "gcp"})
+                bus.publish({"type": EVT_ASR_READY, "sid": sid, "vendor": "deepgram"})
 
                 frame = await harness.wait_for_outbound(
                     lambda data: data.get("type") == "start_listening"

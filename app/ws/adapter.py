@@ -928,6 +928,49 @@ class ChatV2Adapter:
         # (no-op if unused; helps explicitness)
         self._noop = None
 
+    @staticmethod
+    def _normalize_asr_vendor(value: Any) -> Optional[str]:
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+        return None
+
+    def _resolve_asr_vendor(
+        self, policy_mapping: Mapping[str, Any] | None = None
+    ) -> tuple[str, str]:
+        vendor_candidate: Optional[str] = None
+        if isinstance(policy_mapping, Mapping):
+            asr_block = policy_mapping.get("asr")
+            if isinstance(asr_block, Mapping):
+                vendor_block = asr_block.get("vendor")
+                if isinstance(vendor_block, Mapping):
+                    vendor_candidate = vendor_block.get("primary")
+                elif isinstance(vendor_block, str):
+                    vendor_candidate = vendor_block
+            if vendor_candidate is None:
+                nested_policy = policy_mapping.get("policy")
+                if isinstance(nested_policy, Mapping):
+                    nested_asr = nested_policy.get("asr")
+                    if isinstance(nested_asr, Mapping):
+                        vendor_block = nested_asr.get("vendor")
+                        if isinstance(vendor_block, Mapping):
+                            vendor_candidate = vendor_block.get("primary")
+                        elif isinstance(vendor_block, str):
+                            vendor_candidate = vendor_block
+
+        normalized = self._normalize_asr_vendor(vendor_candidate)
+        supported = getattr(config, "_SUPPORTED_ASR_VENDORS", {"gcp", "deepgram"})
+        if normalized and normalized in supported:
+            return normalized, "policy_primary"
+
+        config_vendor = self._normalize_asr_vendor(getattr(config, "ASR_VENDOR", None))
+        if not config_vendor or config_vendor not in supported:
+            config_vendor = "deepgram" if "deepgram" in supported else "gcp"
+        return config_vendor, "config_default"
+
+    def _allowed_asr_vendors(self, policy_mapping: Mapping[str, Any] | None = None) -> List[str]:
+        vendor, _ = self._resolve_asr_vendor(policy_mapping)
+        return [vendor]
+
     def _log_turn_event(self, ctx: AdapterContext, phase: str, **meta: object) -> None:
         """
         Log a high-level turn lifecycle event. Phase values are things like:
@@ -1230,7 +1273,9 @@ class ChatV2Adapter:
             ctx.ws_recv_count = 0
 
     def _shadow_enabled(self, ctx: AdapterContext) -> bool:
-        vendor = (ctx.asr_vendor or getattr(config, "ASR_VENDOR", "gcp") or "gcp").strip().lower()
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
         return bool(getattr(config, "DEEPGRAM_SHADOW_ENABLED", False)) and vendor == "gcp"
 
     def _reset_shadow_turn_state(self, ctx: AdapterContext) -> None:
@@ -1403,9 +1448,17 @@ class ChatV2Adapter:
                 parsed = None
             if isinstance(parsed, int) and parsed > 0:
                 return parsed
-        default_rate = getattr(
-            config, "GCP_STT_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ
-        )
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
+        if vendor == "deepgram":
+            default_rate = getattr(
+                config, "DEEPGRAM_STT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ
+            )
+        else:
+            default_rate = getattr(
+                config, "GCP_STT_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ
+            )
         try:
             parsed_default = int(default_rate)
         except (TypeError, ValueError):
@@ -3338,7 +3391,7 @@ class ChatV2Adapter:
         policy_snapshot = self._policy_snapshot() if FEATURE_LEGACY_POLICY else None
         legacy_hits: List[tuple[tuple[str, ...], tuple[str, ...]]] = []
         session_policy_v2 = self._build_session_policy(legacy_hits=legacy_hits)
-        allowed_asr_vendors = ["gcp"]
+        allowed_asr_vendors = self._allowed_asr_vendors(snapshot_mapping)
         snapshot_mapping: Mapping[str, Any] | None
         if FEATURE_LEGACY_POLICY and isinstance(policy_snapshot, Mapping):
             snapshot_mapping = policy_snapshot
@@ -3362,8 +3415,7 @@ class ChatV2Adapter:
         provisional_ctx.policy = dict(session_policy_v2)
         provisional_ctx.session.policy = provisional_ctx.policy
         provisional_ctx.allowed_asr_vendors = list(allowed_asr_vendors)
-        selected_vendor = "gcp"
-        selection_reason = "pcm16_only"
+        selected_vendor, selection_reason = self._resolve_asr_vendor(snapshot_mapping)
         if FEATURE_LEGACY_POLICY and policy_snapshot:
             self._log_policy_flags(sid, policy_snapshot)
         info_frame["policy"] = self._policy_for_client(session_policy_v2)
@@ -3408,7 +3460,7 @@ class ChatV2Adapter:
         )
         ctx.asr_vendor_logged = True
         ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(snapshot_mapping)
-        if ctx.asr_vendor == "gcp":
+        if ctx.asr_vendor in {"gcp", "deepgram"}:
             ctx.audio_pipeline_mode = "pcm16"
         mode = ctx.audio_pipeline_mode or "pcm16"
         ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
@@ -3516,7 +3568,10 @@ class ChatV2Adapter:
                 self._stop_asr_ready_tracker(ctx)
                 await self._invoke_engine("on_close", ctx.sid, close_code, close_reason)
                 vendor_meta = {
-                    "vendor": ctx.asr_vendor or "gcp",
+                    "vendor": self._normalize_asr_vendor(
+                        ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+                    )
+                    or "deepgram",
                     "bytes": ctx.asr_bytes_sent,
                 }
                 await self._publish(ASR_VENDOR_BYTES_TOTAL, ctx.sid, vendor_meta)
@@ -3662,7 +3717,7 @@ class ChatV2Adapter:
                 vendor_candidate = detail_payload.get("vendor")
                 if isinstance(vendor_candidate, str) and vendor_candidate.strip():
                     vendor_value = vendor_candidate.strip().lower()
-            if vendor_value == "gcp" and stage_value in {"ready", "started", "closed"}:
+            if vendor_value and stage_value in {"ready", "started", "closed"}:
                 bus.publish(
                     {
                         "type": EVT_WS_JSON_RECV_SUMMARY,
@@ -3671,7 +3726,7 @@ class ChatV2Adapter:
                         "source": "ws.adapter",
                         "meta": {
                             "kind": stage_value,
-                            "vendor": "gcp",
+                            "vendor": vendor_value,
                         },
                     }
                 )
@@ -4980,8 +5035,9 @@ class ChatV2Adapter:
         if ctx.auto_ready_probe_active:
             self._promote_probe_turn(ctx)
 
+        vendor = ctx.asr_vendor or "deepgram"
         if (
-            ctx.asr_vendor == "gcp"
+            vendor in {"gcp", "deepgram"}
             and ctx.audio_chunks_recv == 0
             and data.startswith(b"\x1A\x45\xDF\xA3")
         ):
@@ -4997,17 +5053,18 @@ class ChatV2Adapter:
                 "ws": {"dir": "in", "size": byte_count},
             }
             await self._publish(EVT_WS_AUDIO_RECV, ctx.sid, meta)
-            detail = "gcp streaming requires raw pcm audio"
+            detail = "streaming requires raw pcm audio"
             await self._send_error(send, ctx.sid, "audio_container_mismatch", detail)
             self._emit_session_step(
                 ctx.sid,
                 "audio.stream_closed",
                 summary="Closed audio stream due to unexpected container",
-                meta={"reason": "unexpected_container", "vendor": "gcp"},
+                meta={"reason": "unexpected_container", "vendor": vendor},
                 source="ws.audio",
             )
             _log.error(
-                "asr_stream_closed reason=unexpected_container vendor=gcp sid=%s",
+                "asr_stream_closed reason=unexpected_container vendor=%s sid=%s",
+                vendor,
                 ctx.sid,
             )
             return self._HandleResult(False, 1003, "unexpected_container")
@@ -5692,7 +5749,13 @@ class ChatV2Adapter:
                 await self._publish(
                     ASR_KEEPALIVE_PING,
                     ctx.sid,
-                    {"bytes": byte_count, "engine": ctx.asr_vendor or "gcp"},
+                    {
+                        "bytes": byte_count,
+                        "engine": self._normalize_asr_vendor(
+                            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+                        )
+                        or "deepgram",
+                    },
                 )
             except Exception:  # pragma: no cover - defensive logging
                 _log.exception("evt=asr_keepalive_telemetry_failed sid=%s", ctx.sid)
@@ -5747,9 +5810,10 @@ class ChatV2Adapter:
     ) -> None:
         if not isinstance(payload, Mapping):
             return
-        vendor = payload.get("vendor")
-        if not (isinstance(vendor, str) and vendor.strip().lower() == "gcp"):
+        vendor_value = payload.get("vendor")
+        if not (isinstance(vendor_value, str) and vendor_value.strip()):
             return
+        vendor = vendor_value.strip().lower()
         command_value = payload.get("command")
         if not isinstance(command_value, str):
             return
@@ -5812,8 +5876,9 @@ class ChatV2Adapter:
             normalized_rate = rate_value if rate_value is not None else 16000
             normalized_channels = channels_value if channels_value is not None else 1
             _log.info(
-                "evt=ws_json_send_summary sid=%s kind=start vendor=gcp format=%s rate=%d channels=%d",
+                "evt=ws_json_send_summary sid=%s kind=start vendor=%s format=%s rate=%d channels=%d",
                 sid,
+                vendor,
                 normalized_format,
                 normalized_rate,
                 normalized_channels,
@@ -5826,7 +5891,7 @@ class ChatV2Adapter:
                     "source": "ws.adapter",
                     "meta": {
                         "kind": "start",
-                        "vendor": "gcp",
+                        "vendor": vendor,
                         "format": normalized_format,
                         "rate": normalized_rate,
                         "channels": normalized_channels,
@@ -5835,8 +5900,9 @@ class ChatV2Adapter:
             )
         elif command == "stop":
             _log.info(
-                "evt=ws_json_send_summary sid=%s kind=stop vendor=gcp",
+                "evt=ws_json_send_summary sid=%s kind=stop vendor=%s",
                 sid,
+                vendor,
             )
             bus.publish(
                 {
@@ -5846,15 +5912,16 @@ class ChatV2Adapter:
                     "source": "ws.adapter",
                     "meta": {
                         "kind": "stop",
-                        "vendor": "gcp",
+                        "vendor": vendor,
                     },
                 }
             )
         elif command in {"ping", "pong"}:
             _log.info(
-                "evt=ws_json_send_summary sid=%s kind=%s vendor=gcp",
+                "evt=ws_json_send_summary sid=%s kind=%s vendor=%s",
                 sid,
                 command,
+                vendor,
             )
 
     async def _send_json(
@@ -6378,6 +6445,18 @@ class ChatV2Adapter:
                         )
                     return
 
+                vendor = self._normalize_asr_vendor(
+                    ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+                ) or "deepgram"
+                if ctx.asr_bytes_sent > 0 and not ctx.asr_final_emitted:
+                    _log.warning(
+                        "evt=asr_midstream_drop sid=%s vendor=%s reason=%s bytes_sent=%s",
+                        ctx.sid,
+                        vendor,
+                        ctx.asr_close_reason or "server_closed",
+                        ctx.asr_bytes_sent,
+                    )
+
                 turn_end_payload = self._prepare_asr_turn_end(ctx, "eos")
                 if turn_end_payload is not None:
                     _enqueue(turn_end_payload)
@@ -6451,11 +6530,10 @@ class ChatV2Adapter:
                 lower_reason = reason.lower() if isinstance(reason, str) else ""
                 lower_detail = detail_text.lower()
                 concurrency_likely = False
-                if ctx.asr_vendor == "gcp":
-                    if "concurrent_session" in lower_detail:
-                        concurrency_likely = True
-                    elif "concurrent_session" in lower_reason:
-                        concurrency_likely = True
+                if "concurrent_session" in lower_detail:
+                    concurrency_likely = True
+                elif "concurrent_session" in lower_reason:
+                    concurrency_likely = True
                 if concurrency_likely:
                     ctx.asr_recovering_until = time.monotonic() + 3.0
                     ctx.asr_recovering_reason = "concurrent_session"
@@ -7190,27 +7268,28 @@ class ChatV2Adapter:
                 else:
                     ctx.policy_snapshot = None
                 self._replace_policy(ctx, policy_payload)
-                ctx.allowed_asr_vendors = ["gcp"]
+                ctx.allowed_asr_vendors = self._allowed_asr_vendors(policy_payload)
                 if FEATURE_LEGACY_POLICY:
                     snapshot_mapping = policy_payload
                 else:
                     snapshot_mapping = (
                         ctx.policy if isinstance(ctx.policy, Mapping) else None
                     )
-                ctx.asr_vendor = "gcp"
+                ctx.asr_vendor, selection_reason = self._resolve_asr_vendor(policy_payload)
                 if not ctx.asr_vendor_logged:
                     allowed_display = ",".join(ctx.allowed_asr_vendors)
                     _log.info(
                         "asr_vendor_selected primary=%s allowed=%s reason=%s",
                         ctx.asr_vendor,
                         allowed_display,
-                        "pcm16_only",
+                        selection_reason,
                     )
                     ctx.asr_vendor_logged = True
                 ctx.audio_pipeline_mode = self._resolve_audio_pipeline_mode(
                     snapshot_mapping
                 )
-                ctx.audio_pipeline_mode = "pcm16"
+                if ctx.asr_vendor in {"gcp", "deepgram"}:
+                    ctx.audio_pipeline_mode = "pcm16"
                 mode = ctx.audio_pipeline_mode or "pcm16"
                 ctx.session_capture_policy = self._session_capture_policy_for_mode(mode)
         return normalized
@@ -7450,7 +7529,8 @@ class ChatV2Adapter:
             frame_type = payload.get("type")
             if frame_type in {"asr.partial", "asr.final"}:
                 vendor = payload.get("vendor")
-                if isinstance(vendor, str) and vendor.lower() == "gcp":
+                if isinstance(vendor, str) and vendor.strip():
+                    vendor_norm = vendor.strip().lower()
                     log_event = (
                         "evt=asr_partial_sent"
                         if frame_type == "asr.partial"
@@ -7458,7 +7538,12 @@ class ChatV2Adapter:
                     )
                     text_value = payload.get("text")
                     text_len = len(text_value) if isinstance(text_value, str) else 0
-                    _log.info("%s vendor=gcp chars=%d", log_event, text_len)
+                    _log.info(
+                        "%s vendor=%s chars=%d",
+                        log_event,
+                        vendor_norm,
+                        text_len,
+                    )
             await self._send_json(send, ctx.sid, payload)
 
     async def _send_audio_frame(
@@ -8087,14 +8172,22 @@ class ChatV2Adapter:
                 return
             turn_start_ms = ctx.turn_start_ts_ms or self._now_ms()
             ms_since_turn_start = max(0, self._now_ms() - turn_start_ms)
+            vendor = self._normalize_asr_vendor(
+                ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+            ) or "deepgram"
             _log.warning(
-                "evt=google_v3.asr_no_audio_safety_net_fired",
+                "evt=asr_no_audio_safety_net_fired",
                 extra={
                     "sid": ctx.sid,
                     "turn_id": ctx.current_turn_id,
                     "ms_since_turn_start": ms_since_turn_start,
+                    "vendor": vendor,
                 },
             )
+            try:
+                loop.create_task(self._handle_asr_timeout(ctx, "no_audio_timeout"))
+            except RuntimeError:
+                asyncio.create_task(self._handle_asr_timeout(ctx, "no_audio_timeout"))
 
         try:
             ctx.no_audio_safety_net = loop.call_later(safety_timeout, _fire)
@@ -8733,7 +8826,13 @@ class ChatV2Adapter:
             max_utterance_ms = 0
 
     def _resolve_asr_config(self, ctx: AdapterContext) -> Dict[str, Any]:
-        default_language = getattr(config, "GCP_STT_DEFAULT_LANGUAGE", "en-US")
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
+        if vendor == "deepgram":
+            default_language = getattr(config, "DEEPGRAM_STT_LANGUAGE", "en-US")
+        else:
+            default_language = getattr(config, "GCP_STT_DEFAULT_LANGUAGE", "en-US")
         language = default_language if isinstance(default_language, str) and default_language else "en-US"
         enable_partials = True
 
@@ -8774,7 +8873,17 @@ class ChatV2Adapter:
             if parsed == 16000:
                 return parsed
 
-        default_rate = getattr(config, "GCP_STT_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ)
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
+        if vendor == "deepgram":
+            default_rate = getattr(
+                config, "DEEPGRAM_STT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ
+            )
+        else:
+            default_rate = getattr(
+                config, "GCP_STT_DEFAULT_SAMPLE_RATE", _DEFAULT_GCP_SAMPLE_RATE_HZ
+            )
         try:
             fallback_rate = int(default_rate)
         except (TypeError, ValueError):
@@ -8786,13 +8895,18 @@ class ChatV2Adapter:
     def _create_asr_engine(self, ctx: AdapterContext) -> ASREngine:
         """Create the ASR engine for the session."""
 
+        vendor = "unknown"
         try:
-            vendor = (getattr(config, "ASR_VENDOR", "gcp") or "gcp").strip().lower()
+            vendor = self._normalize_asr_vendor(
+                ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+            ) or "deepgram"
             if vendor == "deepgram":
                 return DeepgramStreamingASREngine()
-            return GCPStreamingASREngine()
+            if vendor == "gcp":
+                return GCPStreamingASREngine()
+            raise ValueError(f"Unsupported ASR vendor: {vendor}")
         except Exception as exc:
-            if self._should_use_null_asr_engine():
+            if vendor != "deepgram" and self._should_use_null_asr_engine():
                 _log.warning(
                     "evt=asr_engine_fallback sid=%s reason=%s fallback=null_asr",
                     ctx.sid,
@@ -8889,7 +9003,9 @@ class ChatV2Adapter:
                 bool(ctx.ws_send),
             )
         text = transcript or ""
-        vendor = "gcp"
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
 
         if not isinstance(text, str):
             text = str(text)
@@ -9188,7 +9304,9 @@ class ChatV2Adapter:
         ctx.asr_first_packet_logged = False
         ctx.asr_silence_hold_logged = False
         ctx.asr_silence_eot_logged = False
-        ctx.asr_vendor = "gcp"
+        ctx.asr_vendor, _ = self._resolve_asr_vendor(
+            ctx.policy_snapshot if isinstance(ctx.policy_snapshot, Mapping) else ctx.policy
+        )
         ctx.deepgram_shadow_enabled = self._shadow_enabled(ctx)
         ctx.client_turn_closed = False
         ctx.last_asr_partial = None
@@ -9348,13 +9466,16 @@ class ChatV2Adapter:
             ctx.asr_open = False
             return
 
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
         engine = ctx.session.asr_engine
         if engine is not None and not getattr(engine, "_closed", True):
-            _log.info("evt=asr_open_dedup sid=%s vendor=gcp", ctx.sid)
+            _log.info("evt=asr_open_dedup sid=%s vendor=%s", ctx.sid, vendor)
             await self._publish(
                 ASR_OPEN_DEDUP,
                 ctx.sid,
-                {"state": ctx.session.asr_state, "vendor": "gcp"},
+                {"state": ctx.session.asr_state, "vendor": vendor},
             )
             ctx.asr_open_task = None
             return
@@ -9372,9 +9493,11 @@ class ChatV2Adapter:
 
         asr_config = self._resolve_asr_config(ctx)
         sample_rate = self._resolve_asr_sample_rate(ctx)
-        language = asr_config.get("language") or getattr(
-            config, "GCP_STT_DEFAULT_LANGUAGE", "en-US"
-        )
+        if vendor == "deepgram":
+            default_language = getattr(config, "DEEPGRAM_STT_LANGUAGE", "en-US")
+        else:
+            default_language = getattr(config, "GCP_STT_DEFAULT_LANGUAGE", "en-US")
+        language = asr_config.get("language") or default_language
         self._start_deepgram_shadow(
             ctx,
             sample_rate=sample_rate,
@@ -9387,7 +9510,7 @@ class ChatV2Adapter:
                 ctx,
                 "asr_stream_open",
                 asr_stream_id=stream_id,
-                asr_vendor="gcp",
+                asr_vendor=vendor,
                 sample_rate=sample_rate,
                 language=language,
                 turn_index=getattr(ctx, "turn_index", None),
@@ -9450,8 +9573,9 @@ class ChatV2Adapter:
 
         try:
             _log.info(
-                "evt=asr_open_begin sid=%s vendor=gcp sample_rate=%s language=%s",
+                "evt=asr_open_begin sid=%s vendor=%s sample_rate=%s language=%s",
                 ctx.sid,
+                vendor,
                 sample_rate,
                 language,
             )
@@ -9474,8 +9598,8 @@ class ChatV2Adapter:
             ctx.asr_open_task = None
             ctx.asr_open = False
             with contextlib.suppress(Exception):
-                await self._close_deepgram_shadow(ctx, reason="gcp_open_failed")
-            _log.exception("evt=asr_open_failed sid=%s vendor=gcp", ctx.sid)
+                await self._close_deepgram_shadow(ctx, reason=f"{vendor}_open_failed")
+            _log.exception("evt=asr_open_failed sid=%s vendor=%s", ctx.sid, vendor)
             self._log_turn_event(ctx, "turn_failed", error_reason="asr_open_failed")
             _log.error(
                 "evt=turn_error sid=%s turn_index=%s reason=%s",
@@ -9493,6 +9617,8 @@ class ChatV2Adapter:
                 ctx.sid,
                 {"state": "closed", "ok": False, "reason": "open_failed"},
             )
+            ctx.asr_final_emitted = True
+            self._end_user_turn(ctx)
             return
 
         ctx.asr_open_task = None
@@ -9516,14 +9642,14 @@ class ChatV2Adapter:
         await self._publish(
             ASR_SINGLE_STREAM_INVARIANT,
             ctx.sid,
-            {"state": "open", "ok": True, "vendor": "gcp"},
+            {"state": "open", "ok": True, "vendor": vendor},
         )
 
         self._emit_session_step(
             ctx.sid,
             "asr.open",
             summary="ASR engine opened",
-            meta={"vendor": "gcp", "sample_rate": sample_rate},
+            meta={"vendor": vendor, "sample_rate": sample_rate},
             source="asr",
         )
 
@@ -9534,7 +9660,7 @@ class ChatV2Adapter:
                     "sid": ctx.sid,
                     "who": "server",
                     "source": "ws.adapter",
-                    "vendor": "gcp",
+                    "vendor": vendor,
                 }
             )
             bus.publish(
@@ -9543,7 +9669,7 @@ class ChatV2Adapter:
                     "sid": ctx.sid,
                     "who": "server",
                     "source": "ws.adapter",
-                    "vendor": "gcp",
+                    "vendor": vendor,
                 }
             )
 
@@ -9564,6 +9690,9 @@ class ChatV2Adapter:
         engine = ctx.session.asr_engine
         ctx.session.asr_engine = None
         ctx.asr_open = False
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
 
         if ctx.session.asr_state in {"opening", "open"}:
             mark(ctx.session, "closing")
@@ -9572,7 +9701,9 @@ class ChatV2Adapter:
             try:
                 await engine.close()
             except Exception:
-                _log.warning("evt=asr_close_failed sid=%s vendor=gcp", ctx.sid, exc_info=True)
+                _log.warning(
+                    "evt=asr_close_failed sid=%s vendor=%s", ctx.sid, vendor, exc_info=True
+                )
 
         await self._close_deepgram_shadow(ctx, reason=reason or "closed")
 
@@ -9612,7 +9743,7 @@ class ChatV2Adapter:
         await self._publish(
             ASR_SINGLE_STREAM_INVARIANT,
             ctx.sid,
-            {"state": "closed", "ok": True, "reason": reason, "vendor": "gcp"},
+            {"state": "closed", "ok": True, "reason": reason, "vendor": vendor},
         )
 
         bus.publish(
@@ -9621,7 +9752,7 @@ class ChatV2Adapter:
                 "sid": ctx.sid,
                 "who": "server",
                 "source": "ws.adapter",
-                "vendor": "gcp",
+                "vendor": vendor,
             }
         )
 
@@ -9703,7 +9834,9 @@ class ChatV2Adapter:
         mode = ctx.audio_pipeline_mode or "pcm16"
         descriptor = dict(self._input_descriptor_for_mode(mode))
         timeslice_ms = self._resolve_capture_timeslice(ctx, mode)
-        vendor = ctx.asr_vendor or "gcp"
+        vendor = self._normalize_asr_vendor(
+            ctx.asr_vendor or getattr(config, "ASR_VENDOR", None)
+        ) or "deepgram"
         session_policy = ctx.session_capture_policy or self._session_capture_policy_for_mode(mode)
         now_ms = int(time.time() * 1000)
         input_payload = dict(descriptor)

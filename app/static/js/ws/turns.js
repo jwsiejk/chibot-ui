@@ -2,7 +2,7 @@
 // Encapsulates turn state, ASR control, and "can capture now?" logic.
 import { getMicAudioContext } from "../audio/audio_core.js";
 
-const DEFAULT_ASR_VENDOR = "gcp";
+const DEFAULT_ASR_VENDOR = "deepgram";
 const HARD_ASR_CLOSE_REASONS = new Set([
   "user_requested",
   "user_restart",
