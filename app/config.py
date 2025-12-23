@@ -110,8 +110,12 @@ _SUPPORTED_ASR_VENDORS = {"gcp", "deepgram"}
 _AUDIO_PIPELINE_MODES = {"pcm16"}
 _CAPTURE_TIMESLICE_MIN_MS = 20
 
-_ASR_VENDOR_ENV = (os.getenv("ASR_VENDOR", "gcp") or "gcp").strip().lower()
-ASR_VENDOR = _ASR_VENDOR_ENV if _ASR_VENDOR_ENV in _SUPPORTED_ASR_VENDORS else "gcp"
+_ASR_VENDOR_ENV = (os.getenv("ASR_VENDOR", "deepgram") or "deepgram").strip().lower()
+ASR_VENDOR = (
+    _ASR_VENDOR_ENV
+    if _ASR_VENDOR_ENV in _SUPPORTED_ASR_VENDORS
+    else "deepgram"
+)
 
 _DEFAULT_POLICY_MEDIA = {
     "asr_input": "pcm_16k",
@@ -139,7 +143,7 @@ _DEFAULT_POLICY_INPUT = {
 _DEFAULT_POLICY_ASR = {
     "prearm_on_tts_end": False,
     "keep_stream_warm_ms": 30000,
-    "vendor": {"primary": "gcp", "secondary": None},
+    "vendor": {"primary": "deepgram", "secondary": None},
     "commit_on_vad_silence": True,
     # Make VAD slightly more patient so we do not clip trailing speech.
     "commit_silence_ms": 900,

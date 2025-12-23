@@ -36,12 +36,12 @@ const DEFAULT_POLICY_FLAGS = {
     commit_on_vad_silence: true,
     commit_silence_ms: 900,
     max_utterance_ms: 8000,
-    vendor: { primary: "gcp", secondary: null },
+    vendor: { primary: "deepgram", secondary: null },
   },
   routing: { ws_version: "v2" },
   audio: { pipeline: { mode: "pcm16" }, keepalive_ms: 1000, keepalive_idle_ms: 30000 },
 };
-const ASR_VENDOR_OPTIONS = ["gcp"];
+const ASR_VENDOR_OPTIONS = ["deepgram", "gcp"];
 const AUDIO_PIPELINE_OPTIONS = ["pcm16"];
 
 const FEATURE_LEGACY_POLICY = Boolean(
@@ -315,7 +315,7 @@ export function createPolicyRuntime(AppState, options = {}) {
         maxUtterance = Math.round(parsed);
       }
     }
-    const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: "gcp", secondary: null };
+    const vendorDefaults = DEFAULT_POLICY_FLAGS.asr.vendor || { primary: "deepgram", secondary: null };
     const vendorBlock = asr && typeof asr.vendor === "object" ? asr.vendor : null;
     const vendor = { ...vendorDefaults };
     if (vendorBlock) {
