@@ -213,7 +213,7 @@ When VAD first sees speech, the client marks the turn and emits `client.turn_sta
         prerollChunksToSend = null; // Clear so we don't triple-send below
       }
       try {
-        logStage("client.google_v3.turn_sequence_initiated", { turnId: currentTurnId });
+        logStage("client.asr_v3.turn_sequence_initiated", { turnId: currentTurnId });
       } catch (_) {}
     }
     // Telemetry-only soft gate: we always send PCM when the hard gate allows it.
@@ -425,7 +425,7 @@ Per-frame logging includes turn and ASR state:
         }
         ...
             _log.info(
-                "evt=google_v3.audio_frame_ingest sid=%s turn_id=%s decision=%s count=%d",
+                "evt=asr_v3.audio_frame_ingest sid=%s turn_id=%s decision=%s count=%d",
                 ctx.sid,
                 ctx.current_turn_id,
                 decision,
@@ -596,7 +596,7 @@ Handling ASR results enforces non-empty finals, emits `user.turn`, and closes th
         if ctx.session.asr_state == "open" or ctx.asr_open:
             await self._close_asr(ctx, reason="normal_final")
             _log.info(
-                "evt=google_v3.asr_close",
+                "evt=asr_v3.asr_close",
                 extra={
                     "sid": ctx.sid,
                     "turn_id": ctx.current_turn_id,
@@ -653,51 +653,58 @@ Handling ASR results enforces non-empty finals, emits `user.turn`, and closes th
             await self._send_json(ctx.ws_send, ctx.sid, payload)
 ```
 
-### 3.4 GCP engine streaming loop (`app/services/asr/gcp_engine.py`)
+### 3.4 Deepgram engine streaming loop (`app/services/asr/deepgram_engine.py`)
 
-The streaming worker iterates vendor responses and forwards transcripts to the adapter callback `_on_result`. `_handle_result` now marks finals only when text is non-empty:
+The streaming worker iterates Deepgram responses and forwards transcripts to the adapter callback `_on_result`. `_handle_message` emits partials/finals and ignores duplicate finals:
 
 ```python
-# app/services/asr/gcp_engine.py (_handle_result)
-    def _handle_result(self, transcript: str, is_final: bool) -> None:
+# app/services/asr/deepgram_engine.py (_handle_message)
+    def _handle_message(self, payload: Mapping[str, Any]) -> None:
         if self._on_result is None:
             return
+        parsed = self._parse_result_message(payload)
+        if parsed is None:
+            return
+        transcript, is_final, event = parsed
 
-        stripped_transcript = transcript.strip()
-
-        self._last_transcript = transcript
-        self._last_is_final = bool(stripped_transcript) and is_final
+        if is_final and self._final_emitted:
+            logger.info(
+                "evt=asr_final_duplicate vendor=deepgram sid=%s",
+                self._sid,
+                extra={"sid": self._sid, "event": "asr_final_duplicate"},
+            )
+            return
 
         if is_final:
+            self._final_emitted = True
             logger.info(
-                "evt=asr_final vendor=gcp sid=%s",
+                "evt=asr_final vendor=deepgram sid=%s",
                 self._sid,
                 extra={"sid": self._sid, "event": "asr_final"},
             )
         else:
             logger.info(
-                "evt=asr_partial vendor=gcp sid=%s",
+                "evt=asr_partial vendor=deepgram sid=%s",
                 self._sid,
                 extra={"sid": self._sid, "event": "asr_partial"},
             )
 
         if self._stats is not None:
-            self._stats.mark_partial(transcript)
+            self._stats.mark_partial()
 
         try:
-            maybe_coro = self._on_result(transcript, is_final)
+            maybe_coro = self._on_result(transcript, is_final, event)
             if asyncio.iscoroutine(maybe_coro):
                 asyncio.create_task(maybe_coro)
         except Exception:  # pragma: no cover - defensive
             logger.exception(
-                "evt=asr_error vendor=gcp sid=%s",
+                "evt=asr_error vendor=deepgram sid=%s",
                 self._sid,
                 extra={"sid": self._sid, "event": "asr_error"},
             )
 ```
 
-* Empty finals set `_last_is_final = False`; the adapter ignores them unless timeout forces handling.
-* `_on_result` is provided by `ChatV2Adapter`, so `_handle_asr_result` enforces empty-final behavior (turn 1/turn 2 alike).
+* Empty/duplicate finals are dropped by the engine; the adapter still enforces final handling semantics per turn.
 
 ### 3.5 EngineV2 and policy bridge (`app/voice_v2/engine.py`)
 
@@ -769,7 +776,7 @@ When the adapter emits a non-empty `asr.final`, EngineV2 bridges into policy/LLM
 **Healthy second user turn (turn_index = 2):** Same as above, but `turn_index` increments in `_schedule_asr_open`; logs to expect:
 * `client.turn_start` (mic) for turn 2.
 * `audio_bridge_turn_start ... turn=2` (server).
-* `google_v3.audio_frame_ingest ... decision=... turn_id=...` for turn 2 frames.
+* `asr_v3.audio_frame_ingest ... decision=... turn_id=...` for turn 2 frames.
 * `asr_open_begin` (adapter `_open_asr`) and subsequent partial/final logs.
 * `asr_accepted_final` and `user_turn_event ... turn_index=2`.
 * `TURN_METRICS` / `turn_summary outcome=ok` for turn 2.

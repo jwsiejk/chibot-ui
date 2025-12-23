@@ -44,7 +44,7 @@
 **Smoke acceptance (minimal trace):**
 - On startup, log `EVT_ASR_READY {vendor}`.
 - Simulate a user turn: partials → `EVT_ASR_FINAL` (exactly once) → `EVT_NLU` (exactly once) → `EVT_POLICY_DECISION` → `EVT_NLG` (exactly once), all with the same `req_id`.
-- Switch `ASR_VENDOR` to `gcp` and observe identical event shapes with `vendor:"gcp"`.
+- Confirm `ASR_VENDOR` is `deepgram` and observe event shapes with `vendor:"deepgram"`.
 
 > "Return only diffs for the files listed above. Do not modify or create any other files."
 

@@ -14,58 +14,6 @@ if "jwt" not in sys.modules:
         encode=lambda *args, **kwargs: "", decode=lambda *args, **kwargs: {}, PyJWTError=Exception
     )
 
-if "google" not in sys.modules:
-    google_mod = types.ModuleType("google")
-    api_core = types.ModuleType("google.api_core")
-    api_core.exceptions = types.SimpleNamespace(OutOfRange=Exception)
-    cloud_mod = types.ModuleType("google.cloud")
-
-    class _DummyAudioEncoding:
-        LINEAR16 = 1
-
-    class _DummyRecognitionConfig:
-        AudioEncoding = _DummyAudioEncoding
-
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-    class _DummyStreamingRecognitionConfig:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-    class _DummyStreamingRecognizeRequest:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-    class _DummySpeechClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def streaming_recognize(self, *args, **kwargs):
-            async def _aiter():
-                if False:
-                    yield None
-                return
-
-            class _Wrapper:
-                def __aiter__(self_inner):
-                    return _aiter()
-
-            return _Wrapper()
-
-    speech_mod = types.ModuleType("google.cloud.speech")
-    speech_mod.SpeechClient = _DummySpeechClient
-    speech_mod.RecognitionConfig = _DummyRecognitionConfig
-    speech_mod.StreamingRecognitionConfig = _DummyStreamingRecognitionConfig
-    speech_mod.StreamingRecognizeRequest = _DummyStreamingRecognizeRequest
-    speech_mod.RecognitionAudio = object
-
-    sys.modules["google"] = google_mod
-    sys.modules["google.api_core"] = api_core
-    sys.modules["google.api_core.exceptions"] = api_core.exceptions
-    sys.modules["google.cloud"] = cloud_mod
-    sys.modules["google.cloud.speech"] = speech_mod
-
 from app.telemetry import bus
 from app.ws.adapter import AdapterContext, ChatV2Adapter
 from app.ws.state import mark

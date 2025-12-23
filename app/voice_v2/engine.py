@@ -809,7 +809,7 @@ class EngineV2:
         session = self._ensure_session(sid)
         if session.state not in {READY, RESPONDING}:
             _log.debug(
-                "evt=google_v3.engine_asr_open_ignored sid=%s state=%s turn_id=%s",
+                "evt=asr_v3.engine_asr_open_ignored sid=%s state=%s turn_id=%s",
                 sid,
                 session.state,
                 turn_id,
@@ -821,7 +821,7 @@ class EngineV2:
             return
 
         _log.info(
-            "evt=google_v3.engine_asr_open sid=%s state=%s turn_id=%s",
+            "evt=asr_v3.engine_asr_open sid=%s state=%s turn_id=%s",
             sid,
             session.state,
             turn_id,

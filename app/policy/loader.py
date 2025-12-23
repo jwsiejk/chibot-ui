@@ -46,7 +46,7 @@ _DEFAULT_INTERACTION_POLICY: InteractionPolicySnapshot = {
             "min_segment_ms": 800,
             "final_guard_ms": 250,
             "allow_word_finals": False,
-            "vendor": {"primary": "gcp", "secondary": None},
+            "vendor": {"primary": "deepgram", "secondary": None},
         },
         "routing": {
             "ws_version": "v2",

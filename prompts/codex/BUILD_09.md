@@ -1,10 +1,10 @@
 # BUILD 09 — QA / Acceptance Script (non-code)
 
 ## Context
-Everything above is wired: policies, env gates, vendor selection/logging, Google Cloud STT client, PCM recorder, validation, RMS probe, endpointing, and telemetry.
+Everything above is wired: policies, env gates, vendor selection/logging, Deepgram STT client, PCM recorder, validation, RMS probe, endpointing, and telemetry.
 
 ## Objective
-Validate the conversational flow when using the PCM16 audio pipeline with Google Cloud STT without requiring a redeploy.
+Validate the conversational flow when using the PCM16 audio pipeline with Deepgram STT without requiring a redeploy.
 
 ## Preconditions
 - Admin console is accessible.
@@ -13,18 +13,18 @@ Validate the conversational flow when using the PCM16 audio pipeline with Google
 
 ## Test Matrix
 
-### Google Cloud STT / PCM16 Happy Path
-1. In **Admin**, set **ASR Vendor** to `gcp` and **Audio Pipeline** to `pcm16`.
+### Deepgram STT / PCM16 Happy Path
+1. In **Admin**, confirm **ASR Vendor** is `deepgram` and **Audio Pipeline** is `pcm16`.
 2. Start a fresh session.
 3. Speak a single sentence, then stop.
 4. Confirm the following events appear (in order of occurrence) in both Live Tail and the Zip export:
-   - `asr_vendor_selected primary=gcp ...`
+   - `asr_vendor_selected primary=deepgram ...`
    - `sm_ws_open encoding=linear16 sr=16000 ch=1 interim=true lang=en`
    - `asr_probe rms_avg>0.01`
    - `asr_partial ...` within **300–800 ms** of speech onset.
    - `client.asr evt=commit reason=vad_silence dur_ms≈900`
    - `asr_final ...`, followed by a TTS reply.
-   - `asr_rollup vendor=gcp partials>0 finals>=1 bytes>0`
+   - `asr_rollup vendor=deepgram partials>0 finals>=1 bytes>0`
 
 ### Negative Scenarios
 1. **Talk over TTS response**

@@ -41,7 +41,7 @@ const DEFAULT_POLICY_FLAGS = {
   routing: { ws_version: "v2" },
   audio: { pipeline: { mode: "pcm16" }, keepalive_ms: 1000, keepalive_idle_ms: 30000 },
 };
-const ASR_VENDOR_OPTIONS = ["deepgram", "gcp"];
+const ASR_VENDOR_OPTIONS = ["deepgram"];
 const AUDIO_PIPELINE_OPTIONS = ["pcm16"];
 
 const FEATURE_LEGACY_POLICY = Boolean(

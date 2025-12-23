@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 from urllib.parse import urlencode
 
 from app import config
-from app.services.asr.gcp_engine import ASREngine, ResultCallback
+from app.services.asr.base_engine import ASREngine, ResultCallback
 
 logger = logging.getLogger(__name__)
 
