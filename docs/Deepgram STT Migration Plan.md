@@ -212,13 +212,150 @@
 **Rollback**
 - Re-enable GCP in config or revert deployment to previous build.
 
+## 6.5) Phase 2 Acceptance Metrics (Shsdow / Dual-Run)
+
+Purpose: Define objective, quantitative criteria for deciding when Deepgram STT is safe to promote beyond shadow mode.
+
+When running Deepgram in shadow or limited rollout mode, evaluate against the following metrics, computed per turn and aggregated per environment.
+
+Latency Metrics
+
+Measured from first PCM frame forwarded to vendor:
+
+Time to first partial
+
+p50 ≤ 300 ms
+
+p95 ≤ 700 ms
+
+Time to final transcript
+
+p50 ≤ 1200 ms
+
+p95 ≤ 2500 ms
+
+Stability Metrics
+
+Stream open failure rate: < 0.5% of turns
+
+Mid-stream disconnect rate: < 0.2% of turns
+
+No-audio / idle timeout events:
+
+Must not exceed baseline observed with GCP in equivalent traffic
+
+Transcript Quality Proxies
+
+Because automated WER may not be available initially:
+
+Empty final transcript rate: < 1% of turns
+
+Final after partial regression: < 0.5%
+(cases where final text is shorter or lower confidence than the last partial without policy justification)
+
+Promotion Rule
+
+Deepgram may advance from Phase 2 → Phase 3 when all of the above thresholds are met for:
+
+≥ 500 turns, and
+
+≥ 24 continuous hours without regressions.
+
 ## 7) WS Protocol / Event Schema Changes (If Any)
 
 **No protocol change required** for `/ws/v2/chat`. Existing messages (`client.turn_start`, `client.turn_stop`, `asr.ready`, `asr.partial`, `asr.final`) remain in place (`app/ws/adapter.py`, `app/static/js/audio/ws_audio_runtime.js`, `app/static/js/ws/transcript_bridge.js`).
 
 If Deepgram requires explicit turn boundaries beyond current `client.turn_start` / `client.turn_stop`, define new control frames in the same envelope:
 - `client.turn_start` (existing): `{ type, turn_id, lane, pre_roll_ms }`
-- `client.turn_stop` (existing): `{ type, turn_id, lane }`
+- `client.turn_stop` (existing): `{ type, turn_id, lane }
+
+## 7.1) Deepgram Streaming and Endpoint Semantics
+
+Goal: Make turn boundaries deterministic and prevent “double-final” or premature close issues.
+
+Interim Results
+
+Interim (partial) results: enabled by default
+
+Partial transcripts are treated as replace-latest, not append.
+
+Finalization Rules
+
+The system treats a turn as finalized when either condition occurs:
+
+Client-driven finalization
+
+client.turn_stop is received
+
+Adapter flushes audio and closes the Deepgram stream
+
+Vendor-driven finalization
+
+Deepgram emits a final transcript before client.turn_stop
+
+Adapter:
+
+emits asr.final
+
+marks turn finalized
+
+ignores subsequent vendor partials for that turn
+
+still accepts client.turn_stop as a no-op close
+
+Conflict Resolution
+
+If both happen:
+
+The first final wins
+
+Duplicate finals are logged and dropped:
+
+evt=asr_duplicate_final_dropped vendor=deepgram
+
+## 7.2) Transcription Normalization Rules
+
+Purpose: Ensure Deepgram transcripts behave identically to existing UI and policy assumptions.
+
+Normalization Pipeline
+
+All Deepgram transcripts must pass through the same normalization layer used by GCP results.
+
+Rules:
+
+Casing: sentence-case (first letter capitalized)
+
+Whitespace: trim leading/trailing whitespace
+
+Punctuation: preserve vendor punctuation; do not inject punctuation server-side
+
+Partials:
+
+overwrite previous partial for the same turn
+
+never appended
+
+Finals:
+
+replace any existing partial
+
+become immutable once emitted
+
+Empty finals:
+
+allowed only if user speech duration < silence threshold
+
+otherwise logged as:
+
+evt=asr_empty_final vendor=deepgram
+
+Confidence Handling
+
+If Deepgram confidence is available:
+
+Pass through as metadata
+
+Do not gate UI rendering on confidence during this migration
 
 ## 8) Observability / Logging Plan
 
@@ -237,6 +374,47 @@ Add structured logs (mirroring current GCP logs in `app/services/asr/gcp_engine.
   - `evt=asr_no_audio_before_timeout vendor=deepgram ...`
 - **Client log correlation**
   - Include `sid`, `turn_id`, `req_id` in logs as currently done in `_handle_asr_result` (`app/ws/adapter.py`).
+
+## 8.1) Deployment and Dependency Pre-Requisites
+Python Dependencies
+Choose one approach and document it explicitly in requirements.txt:
+
+Option A — Deepgram SDK
+
+Add:
+
+deepgram-sdk
+
+
+Option B — Raw WebSocket / HTTP
+
+Add:
+
+websockets
+httpx
+
+
+The adapter should abstract vendor transport so either option can be swapped without touching ChatV2Adapter.
+
+Network / Infra Requirements
+
+Outbound WebSocket or HTTPS access to Deepgram endpoints
+
+Ensure egress policies allow persistent streaming connections
+
+Validate proxy/load balancer idle timeout ≥ 90s
+
+Secrets Handling
+
+DEEPGRAM_API_KEY must be present in:
+
+local .env
+
+staging secrets
+
+production secrets
+
+No fallback to hard-coded values under any circumstances
 
 ## 9) Test Plan
 
@@ -276,3 +454,20 @@ Add structured logs (mirroring current GCP logs in `app/services/asr/gcp_engine.
 - [ ] Add WS integration test for audio streaming → ASR events.
 - [ ] Implement shadow mode (if feasible) and compare metrics.
 - [ ] Roll out behind feature flag and add rollback switch.
+
+## 10.1) Failure Modes and Fsllbsck Behavior
+Scenario	System Behavior	User Impact	Logging
+Deepgram stream open fails	Abort turn, emit recoverable error	User retries naturally	evt=asr_open_failed vendor=deepgram
+Deepgram drops mid-stream	Close turn, promote partial if present	Slight truncation possible	evt=asr_stream_dropped vendor=deepgram
+Vendor final arrives early	Finalize turn immediately	Faster response	evt=asr_final_early vendor=deepgram
+No audio after turn_start	Close turn safely	No transcript	evt=asr_no_audio vendor=deepgram
+Repeated vendor failures	Optional fallback to GCP (if enabled)	Transparent recovery	evt=asr_fallback_to_gcp
+Fallback Policy (Optional)
+
+If ASR_VENDOR_FALLBACK_ENABLED=true:
+
+After N consecutive Deepgram failures in a session:
+
+switch vendor to GCP for remainder of session
+
+log explicit vendor switch event
