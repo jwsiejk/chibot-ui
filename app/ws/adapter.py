@@ -1,4 +1,4 @@
-# // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus/Deepgram.
+# // CLEAN BUILD (2025-11-06): PCM16@16k mono ONLY; no MediaRecorder/WebM/Opus.
 """chat.v2 WebSocket adapter for AskChip."""
 from __future__ import annotations
 
@@ -86,6 +86,7 @@ from app.voice_v2 import (
     EVT_WS_JSON_RECV,
     EVT_WS_JSON_SEND,
 )
+from app.services.asr.deepgram_engine import DeepgramStreamingASREngine
 from app.services.asr.gcp_engine import ASREngine, GCPStreamingASREngine
 from app.ws.validator import validate_audio_header_against_policy, validate_frame
 from app.ws.state import SessionCtx, can_open, mark
@@ -8617,6 +8618,9 @@ class ChatV2Adapter:
         """Create the ASR engine for the session."""
 
         try:
+            vendor = (getattr(config, "ASR_VENDOR", "gcp") or "gcp").strip().lower()
+            if vendor == "deepgram":
+                return DeepgramStreamingASREngine()
             return GCPStreamingASREngine()
         except Exception as exc:
             if self._should_use_null_asr_engine():

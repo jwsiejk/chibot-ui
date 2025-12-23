@@ -35,10 +35,6 @@ def env_bool(name: str, default: bool = False) -> bool:
 # Feature flag to allow overriding the capture mode if WebRTC AEC must be disabled.
 FEATURE_WEBRTC_AEC = env_bool("FEATURE_WEBRTC_AEC", True)
 
-# DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-# ASR_DEEPGRAM_ENABLED = env_bool("ASR_DEEPGRAM_ENABLED", True)
-DEEPGRAM_API_KEY = None  # legacy placeholder to keep imports compiling
-ASR_DEEPGRAM_ENABLED = False  # legacy placeholder to keep imports compiling
 ASR_BACKPRESSURE_THRESHOLD_BYTES = int(
     os.getenv("ASR_BACKPRESSURE_THRESHOLD_BYTES", "1048576")
 )
@@ -69,6 +65,16 @@ def _env_float(name: str, default: float, *, minimum: Optional[float] = None) ->
 GCP_STT_DEFAULT_SAMPLE_RATE = _env_int("GCP_STT_DEFAULT_SAMPLE_RATE", 16000, minimum=1)
 GCP_STT_DEFAULT_LANGUAGE = os.getenv("GCP_STT_DEFAULT_LANGUAGE", "en-US") or "en-US"
 GCP_STT_INPUT_GAIN = _env_float("GCP_STT_INPUT_GAIN", 1.0, minimum=0.0)
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-2") or "nova-2"
+DEEPGRAM_STT_LANGUAGE = (
+    os.getenv("DEEPGRAM_STT_LANGUAGE", GCP_STT_DEFAULT_LANGUAGE) or GCP_STT_DEFAULT_LANGUAGE
+)
+DEEPGRAM_STT_SAMPLE_RATE = _env_int(
+    "DEEPGRAM_STT_SAMPLE_RATE", GCP_STT_DEFAULT_SAMPLE_RATE, minimum=1
+)
+DEEPGRAM_STT_ENDPOINTING_MS = _env_int("DEEPGRAM_STT_ENDPOINTING_MS", 0, minimum=0)
+DEEPGRAM_STT_INTERIM_RESULTS = env_bool("DEEPGRAM_STT_INTERIM_RESULTS", True)
 
 
 def get_env(name: str, default=None):
@@ -99,9 +105,12 @@ _ADMIN_SETTINGS_STORE: Any = None  # Lazily initialised AdminSettingsStore or se
 _RUNTIME_FLAGS: MutableMapping[str, Any] = {}
 
 _ALLOWED_ASR_INPUTS = {"pcm_16k"}
-_SUPPORTED_ASR_VENDORS = {"gcp"}
+_SUPPORTED_ASR_VENDORS = {"gcp", "deepgram"}
 _AUDIO_PIPELINE_MODES = {"pcm16"}
 _CAPTURE_TIMESLICE_MIN_MS = 20
+
+_ASR_VENDOR_ENV = (os.getenv("ASR_VENDOR", "gcp") or "gcp").strip().lower()
+ASR_VENDOR = _ASR_VENDOR_ENV if _ASR_VENDOR_ENV in _SUPPORTED_ASR_VENDORS else "gcp"
 
 _DEFAULT_POLICY_MEDIA = {
     "asr_input": "pcm_16k",
@@ -975,9 +984,14 @@ __all__ = [
     "ASR_TRACE",
     "ASR_DUP_FINAL_SUPPRESS_MS",
     "ASR_DEDUPE_NORMALIZE",
-    "ASR_DEEPGRAM_ENABLED",
+    "ASR_VENDOR",
     "AUDIO_GUARDRAILS",
     "DEEPGRAM_API_KEY",
+    "DEEPGRAM_STT_ENDPOINTING_MS",
+    "DEEPGRAM_STT_INTERIM_RESULTS",
+    "DEEPGRAM_STT_LANGUAGE",
+    "DEEPGRAM_STT_MODEL",
+    "DEEPGRAM_STT_SAMPLE_RATE",
     "DIAG_AUDIO_GUARD",
     "DIAG_CHUNK_SAMPLE_N",
     "DIAG_CLIENT_HUD",
