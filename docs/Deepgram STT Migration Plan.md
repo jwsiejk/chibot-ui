@@ -2,7 +2,7 @@
 
 ## 1) Executive Summary
 
-**Current STT vendor & approach (repo-derived):** AskChip uses Google Cloud Speech-to-Text streaming. The WebSocket adapter (`app/ws/adapter.py`) instantiates `GCPStreamingASREngine` (`app/services/asr/gcp_engine.py`) and streams PCM16 audio over a live GCP StreamingRecognize session. The ASR results are emitted as `asr.partial`/`asr.final` events and routed into the policy/engine and UI transcript bridge.
+**Current STT vendor & approach (repo-derived):** AskChip uses Google Cloud Speech-to-Text streaming. The WebSocket adapter (`app/ws/adapter.py`) instantiates `GCPStreamingASREngine` (`app/services/asr/gcp_engine.py`) and streams PCM16 audio over a live GCP StreamingRecognize session. The ASR results are emitted as `asr.partial`/`asr.final` events and routed into the policy/engine and UI transcript bridge.  Deepgram is adopted as the sole streaming STT provider, with no automatic fallback or vendor failover by design.
 
 **Target:** Deepgram Streaming STT.
 
@@ -90,6 +90,7 @@
 ### Non-Goals
 - No UI rework or transcript formatting changes in this migration phase.
 - No policy-engine changes to turn lifecycle beyond vendor selection/flagging.
+- This migration explicitly does not implement STT failover or fallback behavior. Supporting multiple live STT vendors in a single conversational flow increases state complexity, makes debugging ambiguous, and undermines confidence in metrics. Deepgram is treated as the single source of truth for STT once enabled.
 
 ### Expected changes (explicit)
 - **New vendor identifier** `vendor: "deepgram"` on emitted ASR events.
@@ -161,6 +162,10 @@
 - Disable Deepgram flag → revert to GCP.
 
 ### Phase 2 — Dual-Run / Shadow Mode (if feasible)
+
+Important: Shadow mode is strictly observational.
+Deepgram runs in parallel for metrics only and is never used to rescue or replace a failed primary STT turn. No transcript produced by Deepgram shadow runs is surfaced to the engine or UI.
+
 **Files to change**
 - `app/ws/adapter.py` (duplicate audio routing and result capture)
 - `app/services/asr/deepgram_engine.py`
@@ -211,6 +216,12 @@
 
 **Rollback**
 - Re-enable GCP in config or revert deployment to previous build.
+
+No code paths exist that automatically retry, switch, or proxy STT traffic to another vendor when Deepgram fails.
+
+All STT failures are attributable to a single vendor (vendor=deepgram) in logs.
+
+Operational dashboards show true Deepgram health, not blended vendor success.
 
 ## 6.5) Phase 2 Acceptance Metrics (Shsdow / Dual-Run)
 
@@ -455,19 +466,30 @@ No fallback to hard-coded values under any circumstances
 - [ ] Implement shadow mode (if feasible) and compare metrics.
 - [ ] Roll out behind feature flag and add rollback switch.
 
-## 10.1) Failure Modes and Fsllbsck Behavior
+10.1 Failure Modes & Explicit Non-Fallback Policy
+
+Design principle: This migration intentionally introduces no vendor failover or automatic fallback.
+If Deepgram fails for a turn, the turn fails visibly and cleanly. This is a deliberate choice to preserve architectural clarity and avoid hidden dual-path complexity.
+
+Failure Handling Matrix (Deepgram Only)
 Scenario	System Behavior	User Impact	Logging
-Deepgram stream open fails	Abort turn, emit recoverable error	User retries naturally	evt=asr_open_failed vendor=deepgram
-Deepgram drops mid-stream	Close turn, promote partial if present	Slight truncation possible	evt=asr_stream_dropped vendor=deepgram
-Vendor final arrives early	Finalize turn immediately	Faster response	evt=asr_final_early vendor=deepgram
-No audio after turn_start	Close turn safely	No transcript	evt=asr_no_audio vendor=deepgram
-Repeated vendor failures	Optional fallback to GCP (if enabled)	Transparent recovery	evt=asr_fallback_to_gcp
-Fallback Policy (Optional)
+Deepgram stream open fails	Abort current turn immediately	User must retry speaking	evt=asr_open_failed vendor=deepgram
+Deepgram drops mid-stream	Close turn and finalize if possible	Partial transcript may be truncated	evt=asr_stream_dropped vendor=deepgram
+Deepgram final arrives early	Finalize turn immediately	Faster-than-expected response	evt=asr_final_early vendor=deepgram
+No audio after turn_start	Close turn safely	No transcript produced	evt=asr_no_audio vendor=deepgram
+Repeated Deepgram errors	Session remains active but STT unavailable	User retries manually	evt=asr_repeated_failures vendor=deepgram
+Explicit Non-Goals
 
-If ASR_VENDOR_FALLBACK_ENABLED=true:
+No automatic vendor switching
 
-After N consecutive Deepgram failures in a session:
+No silent retries via alternate STT providers
 
-switch vendor to GCP for remainder of session
+No hidden “backup” STT path
 
-log explicit vendor switch event
+If Deepgram is unavailable or misconfigured, this should be:
+
+obvious in logs
+
+observable in metrics
+
+fixed operationally, not masked in code
