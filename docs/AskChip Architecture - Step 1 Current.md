@@ -4,13 +4,13 @@
 
 ### 1.1 What AskChip Is Today (per this repo)
 - Single-page web client served by a Python ASGI app that exposes HTTP auth/admin routes and a `/ws/v2/chat` WebSocket for streaming voice chat. 【F:app/asgi_gateway.py†L100-L176】
-- Voice assistant pipeline uses PCM16 mono audio over WebSocket, integrates streaming ASR (GCP), LLM-based NLU/NLG, policy-driven turn handling, and TTS output streamed back to clients. 【F:app/ws/adapter.py†L1-L175】【F:app/voice_v2/engine.py†L90-L174】
+- Voice assistant pipeline uses PCM16 mono audio over WebSocket, integrates streaming STT (Deepgram), LLM-based NLU/NLG, policy-driven turn handling, and TTS output streamed back to clients. 【F:app/ws/adapter.py†L1-L175】【F:app/voice_v2/engine.py†L90-L174】
 - Admin/debug utilities for logs, flow traces, and exported sessions, with client log aggregation. 【F:app/asgi_gateway.py†L312-L365】【F:app/asgi_gateway.py†L140-L176】
 
 ### 1.2 Major Components and Technologies
 - Server: Python ASGI (custom gateway), WebSocket handling via uvicorn protocols, policy/LLM/ASR/TTS modules. 【F:app/asgi_gateway.py†L45-L66】【F:app/ws/adapter.py†L94-L133】
 - Client: JavaScript modules loaded dynamically (`app.js` bootstraps), Web Audio for capture/playback, VAD, WS client, telemetry/logging. 【F:app/static/js/app.js†L45-L196】【F:app/static/js/audio/ws_audio_runtime.js†L1-L37】
-- External services referenced: Google Cloud STT (GCP), OpenAI/LLM adapters, TTS provider defaults (voice id alloy). 【F:app/config.py†L69-L144】【F:app/voice_v2/engine.py†L114-L138】
+- External services referenced: Deepgram streaming STT, OpenAI/LLM adapters, TTS provider defaults (voice id alloy). 【F:app/config.py†L69-L144】【F:app/voice_v2/engine.py†L114-L138】
 
 ## 2. Runtime & Deployment Today
 
@@ -21,7 +21,7 @@
 
 ### 2.2 Environment & Configuration
 - `.env` loaded if present; helpers for env bool/int/float. 【F:app/config.py†L14-L67】
-- Key envs: ASR sample rate/language (`GCP_STT_DEFAULT_SAMPLE_RATE`, `GCP_STT_DEFAULT_LANGUAGE`), input gain, ASR backpressure thresholds, feature flags (AEC, ASR trace). 【F:app/config.py†L35-L47】【F:app/config.py†L69-L139】
+- Key envs: ASR sample rate/language (`DEEPGRAM_STT_DEFAULT_SAMPLE_RATE`, `DEEPGRAM_STT_DEFAULT_LANGUAGE`), input gain, ASR backpressure thresholds, feature flags (AEC, ASR trace). 【F:app/config.py†L35-L47】【F:app/config.py†L69-L139】
 - Policy defaults include media capture (PCM16 @16k mono), capture gating, ASR behavior (max utterance, silence commit, keep-warm), audio pipeline flags. 【F:app/config.py†L101-L174】
 - WS adapter also reads feature flags (`FEATURE_LEGACY_POLICY`, `ALLOW_AUDIO_WITHOUT_ASR`) and ping/heartbeat timings. 【F:app/ws/adapter.py†L101-L150】【F:app/ws/adapter.py†L127-L150】
 
@@ -47,7 +47,7 @@
 ### 3.3 Audio Bridge & ASR Lifecycle
 - WS adapter receives PCM frames, validates headers against policy (`validate_audio_header_against_policy`) and per-frame size (`validate_frame`); PCM expected 16-bit mono at 16k. 【F:app/ws/adapter.py†L89-L150】
 - Audio throttling/backpressure thresholds (`QUEUE_ON_THRESHOLD`, `_AUDIO_THROTTLE_HINT_MS`) regulate queuing; telemetry events track audio summaries and vendor bytes. 【F:app/ws/adapter.py†L115-L125】【F:app/ws/adapter.py†L51-L67】
-- ASR engine uses GCP streaming; constants enforce single stream, open/close events, keepalive ping intervals; adapter tracks ASR readiness and mic-open timeouts. 【F:app/ws/adapter.py†L51-L70】【F:app/ws/adapter.py†L145-L150】
+- ASR engine uses Deepgram streaming STT; constants enforce single stream, open/close events, keepalive ping intervals; adapter tracks ASR readiness and mic-open timeouts. 【F:app/ws/adapter.py†L51-L70】【F:app/ws/adapter.py†L145-L150】
 - Keepalive audio chunks (20ms) and idle timers protect from silence timeouts; idle safety nets defined. 【F:app/ws/adapter.py†L113-L150】
 
 ### 3.5 Conversation, Greet, and ASR State Machine (Current)
@@ -68,7 +68,7 @@
     - on confirmation success → LISTENING; on rejection/timeout → READY. 【F:app/voice_v2/engine.py†L831-L880】【F:app/voice_v2/engine.py†L1314-L1384】
 - **WS greet hooks:** `ChatV2Adapter` tracks `greet_completed`, emits `tts.start`/`tts.end` from EngineV2; greet TTS uses `_ensure_greet_turn` with turn_index=0. 【F:app/ws/adapter.py†L675-L756】【F:app/ws/adapter.py†L8400-L8454】
 - **ASR streaming lifecycle (current):**
-  - **Open:** Triggered when `_start_user_turn` prepares ASR and schedules `_open_asr` after turning active; creates GCP stream with `_create_asr_engine` and `_resolve_asr_config` using current policy. 【F:app/ws/adapter.py†L736-L804】【F:app/ws/adapter.py†L8423-L8489】
+  - **Open:** Triggered when `_start_user_turn` prepares ASR and schedules `_open_asr` after turning active; creates Deepgram stream with `_create_asr_engine` and `_resolve_asr_config` using current policy. 【F:app/ws/adapter.py†L736-L804】【F:app/ws/adapter.py†L8423-L8489】
     - Preconditions: adapter context must have `ws_send` and policy snapshot; rejects duplicate open if engine already live (`asr_open_dedup`). 【F:app/ws/adapter.py†L8425-L8450】
     - Stream id (`asr_stream_id`) and req id (`asr_stream_req_id`) frozen per turn; ASR state marked `opening`/`open` via `mark`. 【F:app/ws/adapter.py†L8423-L8489】
   - **Audio ingress:** PCM frames forwarded from WebSocket through `on_audio_frame` to ASR engine; byte/seq accounting tracked (`asr_bytes_sent`, `asr_first_packet_logged`). 【F:app/ws/adapter.py†L1202-L1318】【F:app/ws/adapter.py†L642-L706】
@@ -147,7 +147,7 @@
 
 ## 6. Summary of Current Behavior and Constraints
 - On page load, app.js sets initial phase, patches console, ensures mic readiness; WS client connects and when in `connected/ready` phases audio runtime can stream PCM16 @16k mono batches with silence keepalives. 【F:app/static/js/app.js†L183-L196】【F:app/static/js/audio/ws_audio_runtime.js†L19-L37】
-- Server ASGI gateway routes `/ws/v2/chat` to ChatV2 adapter which validates policy, handles JWT, rate limits, and forwards PCM to GCP ASR; EngineV2 orchestrates turn states, LLM, and TTS responses streamed back over WS. 【F:app/asgi_gateway.py†L188-L235】【F:app/ws/adapter.py†L101-L185】【F:app/voice_v2/engine.py†L114-L174】
+- AskChip currently uses streaming STT (Deepgram) integrated via the WebSocket audio pipeline; the server ASGI gateway routes `/ws/v2/chat` to ChatV2 adapter which validates policy, handles JWT, rate limits, and forwards PCM to Deepgram streaming STT; EngineV2 orchestrates turn states, LLM, and TTS responses streamed back over WS. 【F:app/asgi_gateway.py†L188-L235】【F:app/ws/adapter.py†L101-L185】【F:app/voice_v2/engine.py†L114-L174】
 - Hard-coded constraints include PCM16 mono 16k requirement, ASR silence/utterance timing from config defaults, mic-open timeouts, heartbeat/ping intervals, and readiness via export directory writeability. 【F:app/config.py†L101-L144】【F:app/ws/adapter.py†L145-L150】【F:app/asgi_gateway.py†L258-L276】
 
 #### 6.1 Current Event Sequence: Greet + First User Turn
@@ -155,6 +155,6 @@
 2) Server emits policy/info frames; greet started (`tts.start` is_greet) and streamed to client. 【F:app/voice_v2/engine.py†L269-L304】【F:app/voice_v2/engine.py†L569-L604】
 3) Client keeps PCM gated until mic ready; baseEnabled flips true after capture and WS `ready`. 【F:app/static/js/audio/ws_audio_runtime.js†L19-L45】【F:app/static/js/audio/ws_audio_runtime.js†L2000-L2040】
 4) Greet completes (`tts.end` is_greet), adapter sets `greet_completed` and arms listen (`await_user_expected`). 【F:app/ws/adapter.py†L642-L756】【F:app/ws/adapter.py†L8489-L8545】
-5) First user speech: client VAD detects speech start → PCM batches flow; adapter marks `input.start`/ASR open, forwards frames to GCP. 【F:app/static/js/audio/ws_audio_runtime.js†L19-L39】【F:app/ws/adapter.py†L1202-L1318】【F:app/ws/adapter.py†L8423-L8489】
+5) First user speech: client VAD detects speech start → PCM batches flow; adapter marks `input.start`/ASR open, forwards frames to Deepgram. 【F:app/static/js/audio/ws_audio_runtime.js†L19-L39】【F:app/ws/adapter.py†L1202-L1318】【F:app/ws/adapter.py†L8423-L8489】
 6) ASR partial/final events transition EngineV2 LISTENING→THINKING; LLM/NLG run. 【F:app/voice_v2/engine.py†L722-L770】
 7) TTS begins (`tts.start`) → RESPONDING; on barge check possible CONFIRMING_BARGE; after `tts.end` state returns READY and ASR closes. 【F:app/voice_v2/engine.py†L569-L620】【F:app/voice_v2/engine.py†L813-L880】【F:app/ws/adapter.py†L8489-L8572】
