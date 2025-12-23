@@ -706,6 +706,24 @@ class AdapterContext:
     asr_final_subscription_token: Optional[str] = None
     asr_closed_subscription_token: Optional[str] = None
     asr_open: bool = False
+    deepgram_shadow_enabled: bool = False
+    deepgram_shadow_engine: DeepgramStreamingASREngine | None = None
+    deepgram_shadow_open_task: asyncio.Task[None] | None = None
+    deepgram_shadow_opened_monotonic: Optional[float] = None
+    deepgram_shadow_first_partial_ms: Optional[int] = None
+    deepgram_shadow_final_ms: Optional[int] = None
+    deepgram_shadow_partial_logged: bool = False
+    deepgram_shadow_final_logged: bool = False
+    deepgram_shadow_summary_logged: bool = False
+    deepgram_shadow_open: bool = False
+    deepgram_shadow_open_failures: int = 0
+    deepgram_shadow_disconnects: int = 0
+    deepgram_shadow_empty_finals: int = 0
+    deepgram_shadow_final_total: int = 0
+    deepgram_shadow_partial_latencies_ms: List[int] = field(default_factory=list)
+    deepgram_shadow_final_latencies_ms: List[int] = field(default_factory=list)
+    deepgram_shadow_stream_id: Optional[str] = None
+    deepgram_shadow_disconnected: bool = False
     asr_recovering_until: float = 0.0
     asr_recovering_reason: Optional[str] = None
     asr_recovering_audio_logged: bool = False
@@ -1045,6 +1063,7 @@ class ChatV2Adapter:
         ctx.last_user_turn_dedup_key = None
         ctx.auto_ready_probe_promotion_logged = False
         ctx.audio_turn_id_missing_logged = False
+        self._reset_shadow_turn_state(ctx)
 
     def _start_audio_bridge_turn(
         self,
@@ -1209,6 +1228,155 @@ class ChatV2Adapter:
             )
             ctx.ws_recv_last_log_ms = now
             ctx.ws_recv_count = 0
+
+    def _shadow_enabled(self, ctx: AdapterContext) -> bool:
+        vendor = (ctx.asr_vendor or getattr(config, "ASR_VENDOR", "gcp") or "gcp").strip().lower()
+        return bool(getattr(config, "DEEPGRAM_SHADOW_ENABLED", False)) and vendor == "gcp"
+
+    def _reset_shadow_turn_state(self, ctx: AdapterContext) -> None:
+        ctx.deepgram_shadow_enabled = self._shadow_enabled(ctx)
+        ctx.deepgram_shadow_opened_monotonic = None
+        ctx.deepgram_shadow_first_partial_ms = None
+        ctx.deepgram_shadow_final_ms = None
+        ctx.deepgram_shadow_partial_logged = False
+        ctx.deepgram_shadow_final_logged = False
+        ctx.deepgram_shadow_summary_logged = False
+        ctx.deepgram_shadow_open = False
+        ctx.deepgram_shadow_stream_id = None
+        ctx.deepgram_shadow_disconnected = False
+
+    @staticmethod
+    def _append_shadow_latency(target: List[int], value: int, limit: int = 200) -> None:
+        target.append(value)
+        if len(target) > limit:
+            target.pop(0)
+
+    @staticmethod
+    def _percentile(values: List[int], percentile: float) -> Optional[int]:
+        if not values:
+            return None
+        sorted_values = sorted(values)
+        if len(sorted_values) == 1:
+            return sorted_values[0]
+        index = int(math.ceil((percentile / 100.0) * (len(sorted_values) - 1)))
+        return sorted_values[min(index, len(sorted_values) - 1)]
+
+    def _log_shadow_partial(self, ctx: AdapterContext, latency_ms: int, transcript: str) -> None:
+        if ctx.deepgram_shadow_partial_logged:
+            return
+        ctx.deepgram_shadow_partial_logged = True
+        self._append_shadow_latency(ctx.deepgram_shadow_partial_latencies_ms, latency_ms)
+        _log.info(
+            "evt=asr_shadow_partial vendor=deepgram sid=%s stream=%s turn_index=%s ttfp_ms=%s chars=%d",
+            ctx.sid,
+            ctx.deepgram_shadow_stream_id,
+            getattr(ctx, "turn_index", None),
+            latency_ms,
+            len(transcript or ""),
+        )
+
+    def _log_shadow_final(self, ctx: AdapterContext, latency_ms: int, transcript: str) -> None:
+        if ctx.deepgram_shadow_final_logged:
+            return
+        ctx.deepgram_shadow_final_logged = True
+        self._append_shadow_latency(ctx.deepgram_shadow_final_latencies_ms, latency_ms)
+        empty_final = not (transcript or "").strip()
+        _log.info(
+            "evt=asr_shadow_final vendor=deepgram sid=%s stream=%s turn_index=%s ttf_ms=%s chars=%d empty_final=%s",
+            ctx.sid,
+            ctx.deepgram_shadow_stream_id,
+            getattr(ctx, "turn_index", None),
+            latency_ms,
+            len(transcript or ""),
+            str(empty_final).lower(),
+        )
+
+    def _maybe_log_shadow_summary(self, ctx: AdapterContext, *, reason: str) -> None:
+        if not ctx.deepgram_shadow_enabled:
+            return
+        if ctx.deepgram_shadow_summary_logged:
+            return
+        ctx.deepgram_shadow_summary_logged = True
+        p50_ttfp = self._percentile(ctx.deepgram_shadow_partial_latencies_ms, 50)
+        p95_ttfp = self._percentile(ctx.deepgram_shadow_partial_latencies_ms, 95)
+        p50_ttf = self._percentile(ctx.deepgram_shadow_final_latencies_ms, 50)
+        p95_ttf = self._percentile(ctx.deepgram_shadow_final_latencies_ms, 95)
+        empty_rate = (
+            ctx.deepgram_shadow_empty_finals / ctx.deepgram_shadow_final_total
+            if ctx.deepgram_shadow_final_total
+            else None
+        )
+        empty_rate_label = f"{empty_rate:.3f}" if empty_rate is not None else "n/a"
+        _log.info(
+            "evt=asr_shadow_summary vendor=deepgram sid=%s turn_index=%s reason=%s "
+            "p50_ttfp_ms=%s p95_ttfp_ms=%s p50_ttf_ms=%s p95_ttf_ms=%s "
+            "open_failures=%d disconnects=%d empty_final_rate=%s final_count=%d",
+            ctx.sid,
+            getattr(ctx, "turn_index", None),
+            reason,
+            p50_ttfp if p50_ttfp is not None else "n/a",
+            p95_ttfp if p95_ttfp is not None else "n/a",
+            p50_ttf if p50_ttf is not None else "n/a",
+            p95_ttf if p95_ttf is not None else "n/a",
+            ctx.deepgram_shadow_open_failures,
+            ctx.deepgram_shadow_disconnects,
+            empty_rate_label,
+            ctx.deepgram_shadow_final_total,
+        )
+
+    def _handle_shadow_result(self, ctx: AdapterContext, transcript: str, is_final: bool) -> None:
+        if not ctx.deepgram_shadow_enabled:
+            return
+        opened_at = ctx.deepgram_shadow_opened_monotonic
+        if opened_at is None:
+            return
+        latency_ms = int((time.monotonic() - opened_at) * 1000)
+        if is_final:
+            if ctx.deepgram_shadow_final_ms is None:
+                ctx.deepgram_shadow_final_ms = latency_ms
+            ctx.deepgram_shadow_final_total += 1
+            if not (transcript or "").strip():
+                ctx.deepgram_shadow_empty_finals += 1
+            self._log_shadow_final(ctx, latency_ms, transcript)
+        else:
+            if ctx.deepgram_shadow_first_partial_ms is None:
+                ctx.deepgram_shadow_first_partial_ms = latency_ms
+                self._log_shadow_partial(ctx, latency_ms, transcript)
+
+    async def _write_shadow_audio(self, ctx: AdapterContext, chunk: bytes) -> None:
+        if not ctx.deepgram_shadow_enabled or not ctx.deepgram_shadow_open:
+            return
+        engine = ctx.deepgram_shadow_engine
+        if engine is None:
+            return
+        try:
+            await engine.write(chunk)
+        except Exception:
+            if not ctx.deepgram_shadow_disconnected:
+                ctx.deepgram_shadow_disconnects += 1
+                ctx.deepgram_shadow_disconnected = True
+            ctx.deepgram_shadow_open = False
+            ctx.deepgram_shadow_engine = None
+
+    async def _close_deepgram_shadow(self, ctx: AdapterContext, *, reason: str) -> None:
+        task = ctx.deepgram_shadow_open_task
+        ctx.deepgram_shadow_open_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        engine = ctx.deepgram_shadow_engine
+        ctx.deepgram_shadow_engine = None
+        ctx.deepgram_shadow_open = False
+        if engine is not None:
+            try:
+                await engine.close()
+            except Exception:
+                if not ctx.deepgram_shadow_disconnected:
+                    ctx.deepgram_shadow_disconnects += 1
+                    ctx.deepgram_shadow_disconnected = True
+        self._maybe_log_shadow_summary(ctx, reason=reason)
 
     def _end_user_turn(self, ctx: AdapterContext) -> None:
         ctx.previous_turn_req_id = getattr(ctx, "turn_req_id", None)
@@ -5555,6 +5723,7 @@ class ChatV2Adapter:
                     else:
                         ctx.asr_first_packet_logged = True
                 ctx.asr_opened_ms = ctx.asr_opened_ms or self._now_ms()
+            await self._write_shadow_audio(ctx, chunk)
         await self._invoke_engine("on_audio", ctx.sid, chunk, seq)
 
     def _drop_buffer_before(self, ctx: AdapterContext, threshold: int) -> None:
@@ -9020,6 +9189,7 @@ class ChatV2Adapter:
         ctx.asr_silence_hold_logged = False
         ctx.asr_silence_eot_logged = False
         ctx.asr_vendor = "gcp"
+        ctx.deepgram_shadow_enabled = self._shadow_enabled(ctx)
         ctx.client_turn_closed = False
         ctx.last_asr_partial = None
 
@@ -9120,6 +9290,56 @@ class ChatV2Adapter:
             )
             ctx.auto_ready_probe_promotion_logged = True
 
+    def _start_deepgram_shadow(
+        self,
+        ctx: AdapterContext,
+        *,
+        sample_rate: int,
+        language: str,
+        stream_id: str,
+    ) -> None:
+        if not ctx.deepgram_shadow_enabled:
+            return
+        if ctx.deepgram_shadow_open_task and not ctx.deepgram_shadow_open_task.done():
+            return
+        ctx.deepgram_shadow_stream_id = stream_id
+        ctx.deepgram_shadow_opened_monotonic = time.monotonic()
+        ctx.deepgram_shadow_open = False
+        engine = DeepgramStreamingASREngine()
+        ctx.deepgram_shadow_engine = engine
+
+        def _on_shadow_result(
+            transcript: str,
+            is_final: bool,
+            event: Mapping[str, Any] | None = None,
+        ) -> None:
+            del event
+            self._handle_shadow_result(ctx, transcript, is_final)
+
+        async def _open_shadow() -> None:
+            try:
+                await engine.open(
+                    sample_rate=sample_rate,
+                    language=language,
+                    sid=ctx.sid,
+                    on_result=_on_shadow_result,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                ctx.deepgram_shadow_open_failures += 1
+                ctx.deepgram_shadow_engine = None
+                ctx.deepgram_shadow_open = False
+                self._maybe_log_shadow_summary(ctx, reason="open_failed")
+                return
+            ctx.deepgram_shadow_open = True
+
+        try:
+            ctx.deepgram_shadow_open_task = asyncio.create_task(_open_shadow())
+        except RuntimeError:
+            loop = asyncio.get_running_loop()
+            ctx.deepgram_shadow_open_task = loop.create_task(_open_shadow())
+
     async def _open_asr(self, ctx: AdapterContext) -> None:
         send = ctx.ws_send
         if send is None:
@@ -9154,6 +9374,12 @@ class ChatV2Adapter:
         sample_rate = self._resolve_asr_sample_rate(ctx)
         language = asr_config.get("language") or getattr(
             config, "GCP_STT_DEFAULT_LANGUAGE", "en-US"
+        )
+        self._start_deepgram_shadow(
+            ctx,
+            sample_rate=sample_rate,
+            language=language,
+            stream_id=stream_id,
         )
 
         if not ctx.auto_ready_probe_active:
@@ -9247,6 +9473,8 @@ class ChatV2Adapter:
             mark(ctx.session, "closed")
             ctx.asr_open_task = None
             ctx.asr_open = False
+            with contextlib.suppress(Exception):
+                await self._close_deepgram_shadow(ctx, reason="gcp_open_failed")
             _log.exception("evt=asr_open_failed sid=%s vendor=gcp", ctx.sid)
             self._log_turn_event(ctx, "turn_failed", error_reason="asr_open_failed")
             _log.error(
@@ -9345,6 +9573,8 @@ class ChatV2Adapter:
                 await engine.close()
             except Exception:
                 _log.warning("evt=asr_close_failed sid=%s vendor=gcp", ctx.sid, exc_info=True)
+
+        await self._close_deepgram_shadow(ctx, reason=reason or "closed")
 
         mark(ctx.session, "closed")
         ctx.session.first_chunk_sent = False

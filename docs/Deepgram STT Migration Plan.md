@@ -176,6 +176,13 @@ Deepgram runs in parallel for metrics only and is never used to rescue or replac
 - Keep GCP as primary; send audio to Deepgram in parallel (no user-visible events).
 - Compare transcript quality/latency metrics (log side-by-side without emitting to UI).
 
+**Shadow mode metrics (Phase 2)**
+- Enable with `DEEPGRAM_SHADOW_ENABLED=true` (keep `ASR_VENDOR=gcp`).
+- Metrics are logged server-side:
+  - `evt=asr_shadow_partial` (time-to-first-partial)
+  - `evt=asr_shadow_final` (time-to-final, empty-final flag)
+  - `evt=asr_shadow_summary` (p50/p95 + open failures, disconnects, empty-final rate)
+
 **Acceptance criteria**
 - Deepgram latency and transcript quality within target thresholds (define in metrics: time to first partial, final accuracy).
 - No increased error rates or regressions.
