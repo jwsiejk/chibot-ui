@@ -1,6 +1,6 @@
-# AskChip Architecture – Step 2: Target Design (Google Flow V3)
+# AskChip Architecture – Step 2: Target Design (Deepgram Flow V3)
 
-> **Scope:** This document defines the *target* architecture and conversational flow for AskChip’s Google-based speech pipeline (“Google Flow V3”).  
+> **Scope:** This document defines the *target* architecture and conversational flow for AskChip’s Deepgram-based speech pipeline (“Deepgram Flow V3”).  
 > It is intentionally **forward-looking** and describes how the system *should* behave, not how it behaves today.  
 > Step 1 (“Current State”) remains the source of truth for existing behavior.
 
@@ -11,7 +11,7 @@
 ### 1.1 Primary Goals
 
 1. **Eliminate ASR “no audio” timeouts by design**  
-   - Never open a Google streaming ASR session unless we already have real audio to send.
+   - Never open a Deepgram streaming STT session unless we already have real audio to send.
    - Vendor timeouts become rare error conditions, not part of normal UX.
 
 2. **Keep continuous audio into VAD, but not into ASR**  
@@ -44,7 +44,7 @@
 These are the things we want to be **true 100% of the time** in the V3 design:
 
 1. **Invariant A – No empty vendor streams**  
-   > If a Google streaming ASR session is open, it is receiving audio frames “close to real time.”
+   > If a Deepgram streaming STT session is open, it is receiving audio frames “close to real time.”
 
    - Corollary: We never open a vendor stream while the client is gated from sending PCM.
 
@@ -55,7 +55,7 @@ These are the things we want to be **true 100% of the time** in the V3 design:
    - VAD uses this continuous flow to maintain noise floor and speech detection.
 
 3. **Invariant C – Greet and vendor ASR are decoupled**  
-   > Greet TTS does **not** depend on a Google streaming session and cannot cause a vendor timeout on its own.
+   > Greet TTS does **not** depend on a Deepgram streaming session and cannot cause a vendor timeout on its own.
 
 4. **Invariant D – First utterance is fully captured**  
    > For each user turn, the stream sent to the vendor includes a small pre-roll (e.g., 500–800 ms) so the first word isn’t clipped.
@@ -65,27 +65,27 @@ These are the things we want to be **true 100% of the time** in the V3 design:
 
 ---
 
-## 2. High-Level Conceptual Overview (Google Flow V3)
+## 2. High-Level Conceptual Overview (Deepgram Flow V3)
 
-Under Google Flow V3, AskChip behaves like this:
+Under Deepgram Flow V3, AskChip behaves like this:
 
 - The **browser mic and audio graph come up once** and stay live.
 - VAD and a **ring buffer** continuously see PCM at the target ASR rate (e.g., 16 kHz mono).
 - When the user speaks:
   - VAD detects speech.
-  - We open a Google streaming session *at that moment*.
+  - We open a Deepgram streaming session *at that moment*.
   - We immediately send the buffered pre-roll (last 500–800 ms), then live frames.
 - When the user stops speaking:
   - We end the turn locally (silence-based or explicit stop).
-  - We send any final frames, then close the Google stream promptly.
+  - We send any final frames, then close the Deepgram stream promptly.
 - If the user **never speaks**:
-  - No Google streaming session is ever opened.
+  - No Deepgram streaming session is ever opened.
   - A local client/server timer triggers a single “hey, I’m ready when you are” nudge.
 
 The result is:
 
 - VAD sees continuous audio.
-- Google only sees real audio for actual utterances.
+- Deepgram only sees real audio for actual utterances.
 - Greet, nudges, and barge-in all ride on top of this clean lifecycle.
 
 ---
@@ -96,7 +96,7 @@ The result is:
 
 - **ASGI entrypoint**, HTTP routes, and `/ws/v2/chat` WebSocket endpoint remain the same externally.
 - **Auth, admin, static serving, and log export** behavior remain as defined in Step 1.
-- **Environment variables** and config model remain, but we introduce a small set of **new, explicit knobs** for Google Flow V3 (see §8).
+- **Environment variables** and config model remain, but we introduce a small set of **new, explicit knobs** for Deepgram Flow V3 (see §8).
 
 ### 3.2 Behavioral Changes at a High Level
 
@@ -119,7 +119,7 @@ The result is:
 
 ---
 
-## 4. Target Server-Side Design (Google Flow V3)
+## 4. Target Server-Side Design (Deepgram Flow V3)
 
 ### 4.1 Conversation & Turn States (Refinement of EngineV2)
 
@@ -131,7 +131,7 @@ We keep the existing high-level state machine:
 - `RESPONDING`
 - `CONFIRMING_BARGE`
 
-…but **we tighten the semantics for Google Flow V3**:
+…but **we tighten the semantics for Deepgram Flow V3**:
 
 - **READY**
   - No active vendor ASR stream.
@@ -156,11 +156,11 @@ We keep the existing high-level state machine:
 The **key change**:  
 In V3, *READINESS* to listen does not automatically imply **LISTENING (vendor streaming) has started**. LISTENING only begins when we have actual user speech plus pre-roll (see below).
 
-### 4.2 ASR Lifecycle (Google Flow V3)
+### 4.2 ASR Lifecycle (Deepgram Flow V3)
 
 #### 4.2.1 When we open a vendor stream
 
-In V3, the server opens a Google streaming ASR session **only when**:
+In V3, the server opens a Deepgram streaming STT session **only when**:
 
 1. A `user_turn_start` event is raised from the client (explicit or implicit), and  
 2. The event includes:
@@ -176,7 +176,7 @@ Conceptually:
 - Immediately following this message, the client starts sending PCM frames for Turn N.
 - On the first PCM for Turn N, the adapter:
   - verifies policy and session state,
-  - opens the Google stream,
+  - opens the Deepgram stream,
   - writes the initial frames (pre-roll + first live frames),
   - records `asr_stream_id` and sets state to `LISTENING`.
 
@@ -207,7 +207,7 @@ The server closes the stream when:
 
 On normal close:
 
-- Google stream is closed cleanly.
+- Deepgram stream is closed cleanly.
 - Engine transitions from LISTENING → THINKING → RESPONDING.
 - Metrics and logs are produced:
   - `asr_bytes_from_client`
@@ -232,7 +232,7 @@ On error close:
 
 ### 4.4 Barge-in (Server View)
 
-For Google Flow V3:
+For Deepgram Flow V3:
 
 - While in RESPONDING (TTS active), the server is willing to accept **barge-in** signals from the client:
   - A barge-in signal is raised when the client detects sustained speech over TTS and local policy permits interruption.
@@ -243,7 +243,7 @@ For Google Flow V3:
 
 ---
 
-## 5. Target Client-Side Design (Google Flow V3)
+## 5. Target Client-Side Design (Deepgram Flow V3)
 
 ### 5.1 Phases and State
 
@@ -491,7 +491,7 @@ Server opens ASR
 
 On receipt of Turn N’s first PCM frames, server:
 
-opens a Google streaming ASR session,
+opens a Deepgram streaming STT session,
 
 writes pre-roll + live frames,
 
@@ -567,11 +567,11 @@ Ring buffer, VAD, and three-layer gating model remain active throughout.
 
 Vendor ASR is opened and closed per turn, never left idle.
 
-7. Config Knobs and Defaults (Google Flow V3)
+7. Config Knobs and Defaults (Deepgram Flow V3)
 
 Introduce or formalize the following configuration knobs (names illustrative):
 
-GOOGLE_V3_PRE_SPEECH_BUFFER_MS
+DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS
 
 Default: 700 ms
 
@@ -579,31 +579,31 @@ Range: 300–1500 ms
 
 Controls ring buffer size for pre-roll.
 
-GOOGLE_V3_SPEECH_START_MIN_FRAMES
+DEEPGRAM_V3_SPEECH_START_MIN_FRAMES
 
 Default: 5 frames
 
 Minimum consecutive “speech” frames before we declare turn start.
 
-GOOGLE_V3_SILENCE_END_MS
+DEEPGRAM_V3_SILENCE_END_MS
 
 Default: 800 ms
 
 Silence duration after last speech before we auto-end the turn.
 
-GOOGLE_V3_GREET_SILENCE_NUDGE_MS
+DEEPGRAM_V3_GREET_SILENCE_NUDGE_MS
 
 Default: 7000 ms
 
 Time after greet end with no speech before we show nudge.
 
-GOOGLE_V3_BARGE_IN_ENABLED
+DEEPGRAM_V3_BARGE_IN_ENABLED
 
 Default: true
 
 Enables barge-in behavior as described.
 
-GOOGLE_V3_ENABLED
+DEEPGRAM_V3_ENABLED
 
 Master feature flag to keep current behavior available as fallback during rollout.
 
@@ -612,15 +612,15 @@ These can live alongside existing config values and gradually move from experime
 8. Observability & Acceptance Criteria
 8.1 Observability
 
-For Google Flow V3, we want explicit, low-noise instrumentation around:
+For Deepgram Flow V3, we want explicit, low-noise instrumentation around:
 
 ASR lifecycle events
 
-google_v3.asr_open
+deepgram_v3.asr_open
 
-google_v3.asr_close
+deepgram_v3.asr_close
 
-google_v3.asr_no_audio_safety_net_fired (should rarely be true)
+deepgram_v3.asr_no_audio_safety_net_fired (should rarely be true)
 
 Per-turn byte counts and timing.
 
@@ -634,21 +634,21 @@ Hard gate denies sending while VAD reports speech.
 
 Nudge events
 
-google_v3.nudge.greet_silence
+deepgram_v3.nudge.greet_silence
 
-google_v3.nudge.idle_conversation
+deepgram_v3.nudge.idle_conversation
 
 Barge-in
 
-google_v3.barge.requested
+deepgram_v3.barge.requested
 
-google_v3.barge.granted
+deepgram_v3.barge.granted
 
-google_v3.barge.denied
+deepgram_v3.barge.denied
 
 8.2 Acceptance Criteria
 
-Google Flow V3 is considered “done” when:
+Deepgram Flow V3 is considered “done” when:
 
 No more vendor “Audio Timeout Error” for quiet users
 
@@ -686,7 +686,7 @@ Optional follow-up nudges are controlled and rate-limited.
 
 9. Summary
 
-Google Flow V3 re-architects AskChip’s speech pipeline around three principles:
+Deepgram Flow V3 re-architects AskChip’s speech pipeline around three principles:
 
 Vendor streams are only open when we have audio to send.
 

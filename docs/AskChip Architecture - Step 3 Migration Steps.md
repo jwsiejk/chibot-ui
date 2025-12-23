@@ -1,6 +1,6 @@
-# AskChip Architecture – Step 3: Migration Plan (Google Flow V3)
+# AskChip Architecture – Step 3: Migration Plan (Deepgram Flow V3)
 
-> **Scope:** This document describes *how to get from* the current implementation (Step 1) *to* the target “Google Flow V3” design (Step 2).  
+> **Scope:** This document describes *how to get from* the current implementation (Step 1) *to* the target “Deepgram Flow V3” design (Step 2).  
 > It is organized by subsystem (server, client) and by rollout phase, with explicit guardrails and test plans.
 
 ---
@@ -9,7 +9,7 @@
 
 ### 1.1 Objectives
 
-1. Implement the **Google Flow V3** speech pipeline as defined in Step 2:
+1. Implement the **Deepgram Flow V3** speech pipeline as defined in Step 2:
    - Vendor ASR streams are opened only when we have audio to send.
    - VAD sees continuous PCM; ASR sees pre-roll + live audio per user turn.
    - Greet → ConversationReady → UserTurn is stable and predictable.
@@ -31,7 +31,7 @@
 
 ### 1.3 Cross-Cutting Constraints
 
-- All new work must be guarded behind a **feature flag** (e.g., `GOOGLE_V3_ENABLED`).
+- All new work must be guarded behind a **feature flag** (e.g., `DEEPGRAM_V3_ENABLED`).
 - Existing behavior (Step 1) must remain intact when the flag is disabled.
 - Logging for the new flow must be **low-noise but sufficient** to debug gate/ASR issues.
 
@@ -39,7 +39,7 @@
 
 ## 2. Rollout Strategy
 
-We will deliver Google Flow V3 in **four phases**:
+We will deliver Deepgram Flow V3 in **four phases**:
 
 1. **Phase 0 – Plumbing & Feature Flags**
    - Introduce the configuration scaffolding and no-op hooks on both client and server.
@@ -57,7 +57,7 @@ We will deliver Google Flow V3 in **four phases**:
    - Wire up full V3 nudge and barge-in behavior.
    - Harden observability and make V3 the default path once acceptance criteria are met.
 
-Each phase has its own **acceptance checklist** and can be rolled back by disabling `GOOGLE_V3_ENABLED`.
+Each phase has its own **acceptance checklist** and can be rolled back by disabling `DEEPGRAM_V3_ENABLED`.
 
 ---
 
@@ -67,24 +67,24 @@ Add new config entries (names illustrative; adjust to match your existing `confi
 
 ### 3.1 Server Config (config.py)
 
-- `GOOGLE_V3_ENABLED: bool = False`
-- `GOOGLE_V3_PRE_SPEECH_BUFFER_MS: int = 700`
-- `GOOGLE_V3_SPEECH_START_MIN_FRAMES: int = 5`
-- `GOOGLE_V3_SILENCE_END_MS: int = 800`
-- `GOOGLE_V3_GREET_SILENCE_NUDGE_MS: int = 7000`
-- `GOOGLE_V3_BARGE_IN_ENABLED: bool = True`
+- `DEEPGRAM_V3_ENABLED: bool = False`
+- `DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS: int = 700`
+- `DEEPGRAM_V3_SPEECH_START_MIN_FRAMES: int = 5`
+- `DEEPGRAM_V3_SILENCE_END_MS: int = 800`
+- `DEEPGRAM_V3_GREET_SILENCE_NUDGE_MS: int = 7000`
+- `DEEPGRAM_V3_BARGE_IN_ENABLED: bool = True`
 
 Add these to the policy/env loader in `app/config.py` and propagate into:
 
 - `app/ws/adapter.py` (ASR lifecycle),
 - `app/voice_v2/engine.py` (policy decisions, greet vs conversation),
-- possibly a dedicated `google_v3.py` config helper for clarity.
+- possibly a dedicated `deepgram_v3.py` config helper for clarity.
 
 ### 3.2 Client Config
 
 Expose a small, structured config object in JS, derived from server policy (e.g., included in the initial `policy.interaction` message):
 
-- `googleV3Enabled`
+- `deepgramV3Enabled`
 - `preSpeechBufferMs`
 - `speechStartMinFrames`
 - `silenceEndMs`
@@ -107,18 +107,18 @@ This keeps server and client in sync for thresholds and behaviors.
 
 **Tasks:**
 
-1. Add `GOOGLE_V3_ENABLED` and the other knobs to `config.py`.
+1. Add `DEEPGRAM_V3_ENABLED` and the other knobs to `config.py`.
 2. In `app/ws/adapter.py`, add helper methods / placeholders:
-   - `is_google_v3_enabled(session)`
-   - `google_v3_log(...)` (simple wrapper around telemetry/logging with a clear label).
+   - `is_deepgram_v3_enabled(session)`
+   - `deepgram_v3_log(...)` (simple wrapper around telemetry/logging with a clear label).
 3. In `EngineV2`, add a field in session state to record whether the current session is running V3 or legacy:
-   - `session.google_v3_enabled: bool`.
+   - `session.deepgram_v3_enabled: bool`.
 
 **Behavior:** No functional change yet; only plumbing and logging macros.
 
 **Acceptance Criteria:**
 
-- App boots and behaves identically with `GOOGLE_V3_ENABLED=false`.
+- App boots and behaves identically with `DEEPGRAM_V3_ENABLED=false`.
 - Logs confirm the new config keys can be read and included in policy bundles.
 
 ---
@@ -171,7 +171,7 @@ This phase refactors the client-side audio pipeline while still using the **curr
 
 3. **Compatibility Mode**
 
-   - When `googleV3Enabled === false`:
+   - When `deepgramV3Enabled === false`:
      - Continue to drive ASR open behavior as currently implemented (Step 1).
      - Still maintain ring buffer and additional logging, but do **not** send pre-roll or change control messages yet.
 
@@ -185,7 +185,7 @@ This phase refactors the client-side audio pipeline while still using the **curr
 
 ### 5.3 Acceptance Criteria
 
-- With `GOOGLE_V3_ENABLED=false`, behavior matches Step 1 (no regression).
+- With `DEEPGRAM_V3_ENABLED=false`, behavior matches Step 1 (no regression).
 - Logs clearly show:
   - Continuous ring buffer operation.
   - VAD events (speech start/end).
@@ -226,21 +226,21 @@ The important part is that the adapter can distinguish:
    - Add per-session fields:
      - `current_turn_id`
      - `current_turn_open` (bool)
-     - `google_v3_enabled` (copied from config/policy).
+     - `deepgram_v3_enabled` (copied from config/policy).
    - On `client.turn_start`:
      - Validate state (no active turn).
      - Record `turn_id` and mark `current_turn_open=true`.
 
 2. **ASR Open on First PCM (V3)**
 
-   For sessions with `google_v3_enabled=true`:
+   For sessions with `deepgram_v3_enabled=true`:
 
    - When the first PCM frames arrive for a given `turn_id`:
      - Check:
        - no vendor stream currently open,
        - session is in a state that allows LISTENING,
        - policy allows capture (no system hold, TTS gating).
-     - Open a Google streaming session:
+     - Open a Deepgram streaming session:
        - Use `pre_roll_ms` to decide how many buffered frames to send first.
        - Immediately send pre-roll + live frames.
      - Mark:
@@ -251,14 +251,14 @@ The important part is that the adapter can distinguish:
 
    - On `client.turn_stop`:
      - Stop accepting new PCM frames for that turn.
-     - Close the Google stream once buffered frames are flushed.
+     - Close the Deepgram stream once buffered frames are flushed.
    - On vendor final result (ASR final):
-     - Close Google stream if still open.
+     - Close Deepgram stream if still open.
      - Advance EngineV2 state to THINKING → RESPONDING.
 
 4. **No-Op for Legacy**
 
-   - For sessions with `google_v3_enabled=false`:
+   - For sessions with `deepgram_v3_enabled=false`:
      - Maintain the current Step 1 behavior (open after greet, keepalive, etc.).
      - Do not rely on `turn_start` / `turn_stop`.
 
@@ -266,7 +266,7 @@ The important part is that the adapter can distinguish:
 
    - Replace or tune `no_audio_timeout` to be specific to V3:
      - Only active when a V3 turn is marked open and we have expected PCM but none arrives.
-   - Log `google_v3.asr_no_audio_safety_net_fired` when this safety net closes a stream.
+   - Log `deepgram_v3.asr_no_audio_safety_net_fired` when this safety net closes a stream.
 
 ### 6.3 EngineV2 Integration (`app/voice_v2/engine.py`)
 
@@ -278,7 +278,7 @@ The important part is that the adapter can distinguish:
 
 2. Ensure that EngineV2:
 
-   - Does **not** implicitly open ASR at greet end when `google_v3_enabled=true`.
+   - Does **not** implicitly open ASR at greet end when `deepgram_v3_enabled=true`.
    - Waits for explicit V3 turn events from the adapter.
 
 3. Accept and act upon:
@@ -289,11 +289,11 @@ The important part is that the adapter can distinguish:
 
 ### 6.4 Acceptance Criteria
 
-- With `GOOGLE_V3_ENABLED=true` for a test user / environment:
+- With `DEEPGRAM_V3_ENABLED=true` for a test user / environment:
   - ASR streams are opened only after `client.turn_start` + first PCM frames.
   - No vendor “Audio Timeout Error” when the user does not speak after greet.
   - Pre-roll + live frames are confirmed in logs for each turn.
-- With `GOOGLE_V3_ENABLED=false`:
+- With `DEEPGRAM_V3_ENABLED=false`:
   - Behavior remains consistent with Step 1.
 
 ---
@@ -308,7 +308,7 @@ The important part is that the adapter can distinguish:
   - Start a timer at `conversation_ready`.
   - If `speechSeenThisTurn=false` and timer exceeds `greetSilenceNudgeMs`:
     - Show one nudge in the UI.
-    - Emit a `google_v3.nudge.greet_silence` log event.
+    - Emit a `deepgram_v3.nudge.greet_silence` log event.
 - Optionally implement a long-idle nudge for extended silence later in the session.
 
 **Server (optional):**
@@ -335,9 +335,9 @@ The important part is that the adapter can distinguish:
 
 ### 7.3 Default On
 
-Once Google Flow V3 has met the **acceptance criteria** (see Step 2 §8.2) in non-production / limited production:
+Once Deepgram Flow V3 has met the **acceptance criteria** (see Step 2 §8.2) in non-production / limited production:
 
-- Set `GOOGLE_V3_ENABLED=true` by default.
+- Set `DEEPGRAM_V3_ENABLED=true` by default.
 - Optionally keep a per-user override for debugging or phased rollout (`forceLegacyAudio` flag).
 
 ---
@@ -360,7 +360,7 @@ Once Google Flow V3 has met the **acceptance criteria** (see Step 2 §8.2) in no
 ### 8.2 Observability Checks
 
 - Dashboards or queries over session logs to verify:
-  - Ratio of `google_v3.asr_open` to actual user turns.
+  - Ratio of `deepgram_v3.asr_open` to actual user turns.
   - Absence of vendor “Audio Timeout” errors for V3 sessions.
   - Distribution of nudge events (no spam).
 
@@ -378,14 +378,14 @@ Once Google Flow V3 has met the **acceptance criteria** (see Step 2 §8.2) in no
   - **Mitigation:** Add explicit log when VAD detects speech but `bytesSentThisTurn == 0` after N ms; treat this as a high-priority bug.
 
 - **Risk:** Barge-in complicates state management.
-  - **Mitigation:** Keep barge-in optional (`GOOGLE_V3_BARGE_IN_ENABLED`), land it last, and test thoroughly on top of a stable V3 baseline.
+  - **Mitigation:** Keep barge-in optional (`DEEPGRAM_V3_BARGE_IN_ENABLED`), land it last, and test thoroughly on top of a stable V3 baseline.
 
 ---
 
 ## 10. Summary
 
 - **Step 1** describes the current AskChip implementation.
-- **Step 2** defines the target Google Flow V3 behavior.
+- **Step 2** defines the target Deepgram Flow V3 behavior.
 - **Step 3 (this document)** describes a staged, flag-driven path to get there:
   - Phase 0: plumbing and flags.
   - Phase 1: client audio refactor (ring buffer + gating).
@@ -406,7 +406,7 @@ Add rate-limited logStage / emitClientLog for:
 
 Ring buffer health
 
-logStage("client.google_v3.ring_buffer_status", {
+logStage("client.deepgram_v3.ring_buffer_status", {
   preSpeechBufferMs,
   framesStored,
   bytesStored,
@@ -423,7 +423,7 @@ Hard gate decisions
 
 When you compute the hard gate snapshot in ws_audio_runtime.js:
 
-logStage("client.google_v3.hard_gate_snapshot", {
+logStage("client.deepgram_v3.hard_gate_snapshot", {
   allowed: hardGate.allowed,
   reason: hardGate.reason,
   wsPhase,
@@ -443,7 +443,7 @@ Soft gate / speech detection
 
 When speechSeenThisTurn flips:
 
-logStage("client.google_v3.speech_seen_this_turn", {
+logStage("client.deepgram_v3.speech_seen_this_turn", {
   speechSeenThisTurn,
   rmsAtTrigger,
   vadFramesSinceGreet,
@@ -456,7 +456,7 @@ Send vs drop summary
 
 In the PCM send path, instead of logging every chunk, add a periodic summary:
 
-logStage("client.google_v3.pcm_send_summary", {
+logStage("client.deepgram_v3.pcm_send_summary", {
   windowMs: 2000,
   framesSent,
   framesDroppedHardGate,
@@ -492,7 +492,7 @@ Phase 1 server side is mostly “read-only” relative to V3, but you can still 
 
 When a new session starts, log:
 
-logger.info("evt=google_v3.phase1_session", extra={
+logger.info("evt=deepgram_v3.phase1_session", extra={
     "sid": sid,
     "note": "client gating refactor active"
 })
@@ -510,14 +510,14 @@ In app/ws/adapter.py, around the new turn + ASR logic, add structured logs like:
 
 Turn start / stop
 
-logger.info("evt=google_v3.turn_start", extra={
+logger.info("evt=deepgram_v3.turn_start", extra={
     "sid": sid,
     "turn_id": turn_id,
     "pre_roll_ms": pre_roll_ms,
     "ts_ms": now_ms(),
 })
 
-logger.info("evt=google_v3.turn_stop", extra={
+logger.info("evt=deepgram_v3.turn_stop", extra={
     "sid": sid,
     "turn_id": turn_id,
     "ts_ms": now_ms(),
@@ -528,7 +528,7 @@ ASR open / close
 
 At the moment you open the vendor stream:
 
-logger.info("evt=google_v3.asr_open", extra={
+logger.info("evt=deepgram_v3.asr_open", extra={
     "sid": sid,
     "turn_id": turn_id,
     "sample_rate": sample_rate,
@@ -538,7 +538,7 @@ logger.info("evt=google_v3.asr_open", extra={
 
 And on close:
 
-logger.info("evt=google_v3.asr_close", extra={
+logger.info("evt=deepgram_v3.asr_close", extra={
     "sid": sid,
     "turn_id": turn_id,
     "bytes_from_client": bytes_from_client,
@@ -551,7 +551,7 @@ No-audio safety net
 
 When your V3-style “no audio in an open turn” guard fires:
 
-logger.warning("evt=google_v3.asr_no_audio_safety_net_fired", extra={
+logger.warning("evt=deepgram_v3.asr_no_audio_safety_net_fired", extra={
     "sid": sid,
     "turn_id": turn_id,
     "ms_since_turn_start": delta_ms,
@@ -564,7 +564,7 @@ Vendor “Audio Timeout” stay
 
 Wherever you catch the vendor “Audio Timeout Error”:
 
-logger.error("evt=google_v3.vendor_audio_timeout", extra={
+logger.error("evt=deepgram_v3.vendor_audio_timeout", extra={
     "sid": sid,
     "turn_id": turn_id,
     "details": str(exc),
@@ -579,12 +579,12 @@ Once you wire turn_start / turn_stop from the client:
 
 Log when you send them:
 
-logStage("client.google_v3.turn_start_sent", {
+logStage("client.deepgram_v3.turn_start_sent", {
   turnId,
   preRollMs,
 });
 
-logStage("client.google_v3.turn_stop_sent", {
+logStage("client.deepgram_v3.turn_stop_sent", {
   turnId,
 });
 
@@ -597,27 +597,27 @@ For a “speak after greet” session:
 
 Sequence like:
 
-evt=google_v3.turn_start
+evt=deepgram_v3.turn_start
 
-evt=google_v3.asr_open
+evt=deepgram_v3.asr_open
 
-evt=google_v3.asr_close reason=normal_final
+evt=deepgram_v3.asr_close reason=normal_final
 
-evt=google_v3.turn_stop
+evt=deepgram_v3.turn_stop
 
 Client side:
 
-client.google_v3.turn_start_sent before ASR opened.
+client.deepgram_v3.turn_start_sent before ASR opened.
 
-client.google_v3.turn_stop_sent near when you stop talking.
+client.deepgram_v3.turn_stop_sent near when you stop talking.
 
 pcm_send_summary.framesSent > 0 during the turn.
 
 For a “silent after greet” session:
 
-No evt=google_v3.turn_start.
+No evt=deepgram_v3.turn_start.
 
-No evt=google_v3.asr_open.
+No evt=deepgram_v3.asr_open.
 
 No vendor timeout events.
 
@@ -626,25 +626,25 @@ No vendor timeout events.
 
 When you implement the greet-silence nudge:
 
-logStage("client.google_v3.nudge.greet_silence", {
+logStage("client.deepgram_v3.nudge.greet_silence", {
   msSinceGreetEnd,
 });
 
 
 Optional long-idle nudge:
 
-logStage("client.google_v3.nudge.idle_conversation", {
+logStage("client.deepgram_v3.nudge.idle_conversation", {
   msSinceLastTurnEnd,
 });
 
 
-You can easily grep for client.google_v3.nudge to see if you’re over-firing.
+You can easily grep for client.deepgram_v3.nudge to see if you’re over-firing.
 
 3.2 Barge-in logs (client + server)
 
 Client:
 
-logStage("client.google_v3.barge_request", {
+logStage("client.deepgram_v3.barge_request", {
   rms,
   speechFramesOverTts,
 });
@@ -654,7 +654,7 @@ Server:
 
 On receipt:
 
-logger.info("evt=google_v3.barge_request", extra={
+logger.info("evt=deepgram_v3.barge_request", extra={
     "sid": sid,
     "tts_active": tts_active,
 })
@@ -662,12 +662,12 @@ logger.info("evt=google_v3.barge_request", extra={
 
 On decision:
 
-logger.info("evt=google_v3.barge_granted", extra={
+logger.info("evt=deepgram_v3.barge_granted", extra={
     "sid": sid,
     "turn_id": new_turn_id,
 })
 # or
-logger.info("evt=google_v3.barge_denied", extra={
+logger.info("evt=deepgram_v3.barge_denied", extra={
     "sid": sid,
     "reason": "policy",  # or "no_tts_active"
 })
@@ -679,7 +679,7 @@ When you intentionally barge in:
 
 Client logs barge_request.
 
-Server logs evt=google_v3.barge_request → ...barge_granted.
+Server logs evt=deepgram_v3.barge_request → ...barge_granted.
 
 A new turn starts (you see turn_start / asr_open next).
 
@@ -691,10 +691,10 @@ If you want to update the Step 3 doc so future-you doesn’t have to remember al
 
 ### Phase 1 – Client (ws_audio_runtime.js)
 - Add:
-  - `client.google_v3.ring_buffer_status`
-  - `client.google_v3.hard_gate_snapshot`
-  - `client.google_v3.speech_seen_this_turn`
-  - `client.google_v3.pcm_send_summary`
+  - `client.deepgram_v3.ring_buffer_status`
+  - `client.deepgram_v3.hard_gate_snapshot`
+  - `client.deepgram_v3.speech_seen_this_turn`
+  - `client.deepgram_v3.pcm_send_summary`
 - Use these to verify:
   - Ring buffer is filling/draining correctly.
   - Hard gate opens after greet.
@@ -703,25 +703,25 @@ If you want to update the Step 3 doc so future-you doesn’t have to remember al
 
 ### Phase 2 – Server (adapter + EngineV2) and Client (turn control)
 - Add server logs:
-  - `evt=google_v3.turn_start`, `evt=google_v3.turn_stop`
-  - `evt=google_v3.asr_open`, `evt=google_v3.asr_close`
-  - `evt=google_v3.asr_no_audio_safety_net_fired`
-  - `evt=google_v3.vendor_audio_timeout`
+  - `evt=deepgram_v3.turn_start`, `evt=deepgram_v3.turn_stop`
+  - `evt=deepgram_v3.asr_open`, `evt=deepgram_v3.asr_close`
+  - `evt=deepgram_v3.asr_no_audio_safety_net_fired`
+  - `evt=deepgram_v3.vendor_audio_timeout`
 - Add client logs:
-  - `client.google_v3.turn_start_sent`
-  - `client.google_v3.turn_stop_sent`
+  - `client.deepgram_v3.turn_start_sent`
+  - `client.deepgram_v3.turn_stop_sent`
 - Use these to verify:
   - No ASR streams open when user stays silent after greet.
   - Each utterance has a clean turn_start → asr_open → asr_close → turn_stop chain.
 
 ### Phase 3 – Nudges & Barge-In
 - Add client logs:
-  - `client.google_v3.nudge.greet_silence`
-  - `client.google_v3.nudge.idle_conversation`
-  - `client.google_v3.barge_request`
+  - `client.deepgram_v3.nudge.greet_silence`
+  - `client.deepgram_v3.nudge.idle_conversation`
+  - `client.deepgram_v3.barge_request`
 - Add server logs:
-  - `evt=google_v3.barge_request`
-  - `evt=google_v3.barge_granted` / `evt=google_v3.barge_denied`
+  - `evt=deepgram_v3.barge_request`
+  - `evt=deepgram_v3.barge_granted` / `evt=deepgram_v3.barge_denied`
 - Use these to verify:
   - At most one greet-silence nudge per greet.
   - Barge-in events line up with actual user interruptions.
