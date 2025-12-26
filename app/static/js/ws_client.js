@@ -432,6 +432,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let vadSpeechStartWsSkipLogged = false;
   let greetUtteranceId = null;
   let micDebugGreetEndLogged = false;
+  let postGreetCleanupCompleted = false;
+  let postGreetCleanupSource = null;
+  let firstTurnBootstrapArmed = false;
+  let firstTurnBootstrapSent = false;
 
   function queueFrameUntilInfo(frame) {
     pendingInfoGateFrames.push(frame);
@@ -462,6 +466,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     try { connection?.setWsPhase?.(nextPhase); } catch {}
     try { setWsPhase?.(nextPhase); } catch {}
     try { updateState({ wsPhase: "ready", connectionState: "connected" }); } catch {}
+    maybeArmFirstTurnBootstrap("ws_phase_ready");
   }
 
   function shouldQueueDuringInfoGate(frame) {
@@ -499,6 +504,108 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     speechSeenThisTurn = false;
     vadSpeechStartPhaseSkipLogged = false;
     vadSpeechStartWsSkipLogged = false;
+  }
+
+  function resolvePostGreetBargeInEnabled() {
+    const policySetting = AppState?.policy?.barge_in_enabled;
+    if (typeof policySetting === "boolean") {
+      return policySetting;
+    }
+    return false;
+  }
+
+  function maybeArmFirstTurnBootstrap(source = "post_greet_cleanup") {
+    if (firstTurnBootstrapSent || firstTurnBootstrapArmed || !postGreetCleanupCompleted) {
+      return false;
+    }
+    if (!micAndPcmReady || AppState?.wsPhase !== "ready") {
+      return false;
+    }
+    if (!isConversationReadyPhase()) {
+      return false;
+    }
+    firstTurnBootstrapArmed = true;
+    try {
+      logStage("client.turn.bootstrap.armed", {
+        source,
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+      });
+    } catch (_) {}
+    return true;
+  }
+
+  function runPostGreetCleanupOnce(cleanupSource = "greet_end") {
+    if (postGreetCleanupCompleted) {
+      return false;
+    }
+    if (getPhase() === PHASE.Greet) {
+      voicePhaseController.markGreetEnd();
+      syncAppStatePhase({ force: true });
+    }
+    const phase = getPhase();
+    if (phase !== PHASE.ConversationReady && phase !== PHASE.UserTurn) {
+      return false;
+    }
+
+    const prevGateSnapshot = typeof getPcmSenderGateSnapshot === "function"
+      ? getPcmSenderGateSnapshot()
+      : null;
+    const prevSenderPaused = Boolean(AppState?.senderPaused ?? senderPaused);
+    const prevBaseEnabled = Boolean(prevGateSnapshot?.baseGate);
+
+    try {
+      setSenderPauseReason("greet", false);
+      applySenderPausedState();
+      updatePcmSenderState("post_greet_unpause");
+    } catch (_) {}
+
+    try {
+      setBaseEnabled?.(true, "post_greet");
+    } catch (_) {}
+
+    const nextGateSnapshot = typeof getPcmSenderGateSnapshot === "function"
+      ? getPcmSenderGateSnapshot()
+      : null;
+    const nextSenderPaused = Boolean(AppState?.senderPaused ?? senderPaused);
+    const nextBaseEnabled = Boolean(nextGateSnapshot?.baseGate);
+
+    const bargeInEnabled = resolvePostGreetBargeInEnabled();
+    try {
+      setAppStateValue?.("barge_in_enabled", bargeInEnabled);
+      if (AppState && typeof AppState === "object") {
+        AppState.barge_in_enabled = bargeInEnabled;
+      }
+    } catch (_) {}
+
+    postGreetCleanupCompleted = true;
+    postGreetCleanupSource = cleanupSource || postGreetCleanupSource;
+    try {
+      logStage("client.post_greet.unpause", {
+        source: postGreetCleanupSource,
+        phase,
+        wsPhase: AppState?.wsPhase || null,
+        prev: {
+          senderPaused: prevSenderPaused,
+          base_enabled: prevBaseEnabled,
+        },
+        next: {
+          senderPaused: nextSenderPaused,
+          base_enabled: nextBaseEnabled,
+        },
+        barge_in_enabled: bargeInEnabled,
+      });
+    } catch (_) {}
+
+    maybeArmFirstTurnBootstrap("post_greet_cleanup");
+    return true;
+  }
+
+  function requestPostGreetCleanup(source = "greet_end") {
+    if (source) {
+      postGreetCleanupSource = source;
+    }
+    return runPostGreetCleanupOnce(postGreetCleanupSource || source);
   }
 
   function frameSignalsGreetStart(frame) {
@@ -557,6 +664,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     lastConversationAttemptLog = 0;
     firstPostGreetMicStarted = false;
     hasOpenedAsrForConversation = false;
+    postGreetCleanupCompleted = false;
+    postGreetCleanupSource = null;
+    firstTurnBootstrapArmed = false;
+    firstTurnBootstrapSent = false;
     try {
       const audioCtx = getPlaybackAudioContext();
       if (audioCtx) {
@@ -664,6 +775,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       conversationStartPlanned = true;
       scheduleConversationStartAfterGreet("mark_greet_end");
     } catch (_) {}
+    requestPostGreetCleanup("mark_greet_end");
   }
 
   function clearConversationStartTimer() {
@@ -694,6 +806,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         reason,
       });
     } catch (_) {}
+    maybeArmFirstTurnBootstrap("mic_pcm_ready");
   }
 
   function resetMicAndPcmReady(reason = "mic_pcm_reset") {
@@ -896,63 +1009,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   }
 
   function enterConversationAfterGreet(source = "greet_tts_end") {
-    const runPostGreetCleanup = (cleanupSource = source) => {
-      const phaseBefore = getPhase();
-      const greetCompleted = phaseBefore === PHASE.ConversationReady || phaseBefore === PHASE.UserTurn;
-
-      if (!greetCompleted) {
-        try {
-          logStage("client.conversation.begin.skip_cleanup_until_ready", {
-            source: cleanupSource,
-            phase: phaseBefore,
-            wsPhase: AppState?.wsPhase || null,
-            greetCompleted,
-          });
-        } catch (_) {}
-        return;
-      }
-
-      // Unpause mic/PCM for post-greet conversation
-      try {
-        setSenderPauseReason("greet", false);
-        applySenderPausedState();
-        updatePcmSenderState("post_greet_phase_change");
-      } catch (_) {}
-
-      try {
-        const senderPausedSnapshot = Boolean(AppState?.senderPaused ?? senderPaused);
-        setBaseEnabled?.(true, "post_greet");
-        logStage("client.conversation.begin.set_base_enabled", {
-          source: cleanupSource,
-          phase: phaseBefore,
-          wsPhase: AppState?.wsPhase || null,
-          asrReady: Boolean(AppState?.asrReady),
-          senderPaused: senderPausedSnapshot,
-        });
-        if (phaseBefore === PHASE.ConversationReady) {
-          logStage("client.conversation_ready.cleanup_snapshot", {
-            source: cleanupSource,
-            senderPaused: senderPausedSnapshot,
-            wsPhase: AppState?.wsPhase || null,
-          });
-        }
-        console.log("client.conversation.begin.set_base_enabled", {
-          source: cleanupSource,
-          phase: phaseBefore,
-          wsPhase: AppState?.wsPhase || null,
-          asrReady: Boolean(AppState?.asrReady),
-          senderPaused: senderPausedSnapshot,
-        });
-      } catch (_) {}
-    };
-
-    let cleanupRequested = true;
-    let cleanupRan = false;
-    let cleanupSource = source;
-    const ensureCleanup = (nextSource = source) => {
-      cleanupRequested = true;
-      cleanupSource = nextSource || cleanupSource;
-    };
+    const ensureCleanup = (nextSource = source) => requestPostGreetCleanup(nextSource || source);
 
     try {
       if (!conversationStartPlanned || conversationStartCommitted) {
@@ -1054,8 +1111,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         });
       } catch (_) {}
       try {
-        runPostGreetCleanup(source);
-        cleanupRan = true;
+        requestPostGreetCleanup(source);
       } catch (_) {}
       ensureCleanup("user_turn_commit");
       return;
@@ -1189,17 +1245,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       });
     } catch (_) {}
     } finally {
-      if (cleanupRequested && !cleanupRan) {
-        cleanupRan = true;
-        try {
-          logStage("client.conversation.post_greet_cleanup.finally", {
-            cleanupSource,
-            phase: getPhase(),
-            wsPhase: AppState?.wsPhase || null,
-          });
-        } catch (_) {}
-        runPostGreetCleanup(cleanupSource);
-      }
+      ensureCleanup("post_greet_cleanup.finally");
     }
 
     // end enterConversationAfterGreet
@@ -1306,6 +1352,33 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         energyDb: payload?.energyDb ?? null,
       });
     } catch (_) {}
+
+    if (firstTurnBootstrapArmed && !firstTurnBootstrapSent) {
+      firstTurnBootstrapSent = true;
+      firstTurnBootstrapArmed = false;
+      const turnId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
+      try {
+        sendJson({
+          type: "client.turn_start",
+          lane: "mic",
+          turn_id: turnId || undefined,
+          source: "post_greet_bootstrap",
+        });
+      } catch (_) {}
+      try {
+        logStage("client.turn.bootstrap.turn_start_sent", {
+          source: postGreetCleanupSource || "post_greet_bootstrap",
+          turn_id: turnId || null,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+          asrReady: Boolean(AppState?.asrReady),
+          asrArmInFlight: Boolean(AppState?.asrArmInFlight),
+        });
+      } catch (_) {}
+      if (!AppState?.asrReady && !AppState?.asrArmInFlight) {
+        safeRequestAsrOpen("turn_bootstrap");
+      }
+    }
   }
 
   async function handleVadSilenceStop(reason = "vad_silence") {
@@ -2107,6 +2180,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     resetTurnIntent,
     MIC_OUTCOME,
     onVadSilenceStop: handleVadSilenceStop,
+    onVadSpeechStart: handleVadSpeechStart,
     canAutoStopFromVad: () => speechSeenThisTurn === true,
     onCaptureStop: handleCaptureStopTelemetry,
   });
