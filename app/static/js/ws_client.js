@@ -664,8 +664,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       return bootstrapTurnId;
     }
     try {
-      if (typeof crypto?.randomUUID === "function") {
-        bootstrapTurnId = crypto.randomUUID();
+      if (typeof globalThis?.crypto?.randomUUID === "function") {
+        bootstrapTurnId = globalThis.crypto.randomUUID();
         return bootstrapTurnId;
       }
     } catch (_) {}
