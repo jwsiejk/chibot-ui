@@ -776,6 +776,87 @@ export function createWsAudioRuntime(options = {}) {
     return localMicRecordingStartAt;
   };
 
+  const estimateChunkMs = (payload, sampleRateHz) => {
+    if (!Number.isFinite(sampleRateHz) || sampleRateHz <= 0) {
+      return null;
+    }
+    let samples = null;
+    if (payload instanceof Int16Array) {
+      samples = payload.length;
+    } else if (Number.isFinite(payload?.byteLength)) {
+      samples = payload.byteLength / Int16Array.BYTES_PER_ELEMENT;
+    } else if (Number.isFinite(payload?.length)) {
+      samples = payload.length;
+    }
+    if (!Number.isFinite(samples) || samples <= 0) {
+      return null;
+    }
+    const chunkMs = (samples / sampleRateHz) * 1000;
+    if (!Number.isFinite(chunkMs)) {
+      return null;
+    }
+    return { chunkMs, samples };
+  };
+
+  const trackChunkShape = (payload, meta) => {
+    if (!isTurnControlEnabled()) {
+      return;
+    }
+    const turnId = meta?.turnId || currentTurnId || null;
+    if (!turnId) {
+      return;
+    }
+    const sampleRateHz = Number.isFinite(meta?.sampleRateHz)
+      ? meta.sampleRateHz
+      : Number.isFinite(meta?.sampleRate)
+        ? meta.sampleRate
+        : null;
+    const chunkInfo = estimateChunkMs(payload, sampleRateHz);
+    if (!chunkInfo) {
+      return;
+    }
+    const { chunkMs, samples } = chunkInfo;
+    if (!pcmChunkStats.sampleRateHz && Number.isFinite(sampleRateHz)) {
+      pcmChunkStats.sampleRateHz = sampleRateHz;
+    }
+    pcmChunkStats.totalChunks += 1;
+    pcmChunkStats.totalChunkMs += chunkMs;
+    if (chunkMs > pcmChunkStats.maxChunkMs) {
+      pcmChunkStats.maxChunkMs = chunkMs;
+    }
+    if (chunkMs > 500 && !oversizedPcmChunkLogged) {
+      oversizedPcmChunkLogged = true;
+      try {
+        logStage("client.deepgram_v3.oversized_pcm_chunk", {
+          turn_id: turnId,
+          chunk_ms: chunkMs,
+          samples,
+          sample_rate_hz: sampleRateHz,
+          reason: "chunk_duration_exceeded",
+        });
+      } catch (_) {}
+    }
+    if (chunkMs < 10) {
+      const now = Date.now();
+      if (!tinyChunkWindowStartMs || now - tinyChunkWindowStartMs > 1000) {
+        tinyChunkWindowStartMs = now;
+        tinyChunkCount = 0;
+      }
+      tinyChunkCount += 1;
+      if (tinyChunkCount > 5 && now - lastTinyChunkLogMs > 1000) {
+        lastTinyChunkLogMs = now;
+        try {
+          logStage("client.deepgram_v3.tiny_pcm_chunks_detected", {
+            turn_id: turnId,
+            sample_rate_hz: sampleRateHz,
+            count: tinyChunkCount,
+            window_ms: now - tinyChunkWindowStartMs,
+          });
+        } catch (_) {}
+      }
+    }
+  };
+
   const safeSendAudioChunk = (payload, meta = {}) => {
     lastPcmSendDropReason = null;
     const currentReqId = typeof getCurrentTurnReqId === "function"
@@ -812,6 +893,7 @@ export function createWsAudioRuntime(options = {}) {
     if (!enrichedMeta.sampleRateHz && typeof enrichedMeta.sampleRate === "number") {
       enrichedMeta.sampleRateHz = enrichedMeta.sampleRate;
     }
+    trackChunkShape(payload, enrichedMeta);
     const socket = resolveSocket?.();
     const socketOpen = !!socket && socket.readyState === WebSocket.OPEN;
 
@@ -1374,6 +1456,16 @@ export function createWsAudioRuntime(options = {}) {
   let turnStopSent = false;
   let prerollSent = false;
   let turnStartSampleRateLogged = false;
+  let oversizedPcmChunkLogged = false;
+  let tinyChunkWindowStartMs = 0;
+  let tinyChunkCount = 0;
+  let lastTinyChunkLogMs = 0;
+  let pcmChunkStats = {
+    totalChunks: 0,
+    totalChunkMs: 0,
+    maxChunkMs: 0,
+    sampleRateHz: null,
+  };
 
   function allocateTurnId() {
     return String(nextTurnId++);
@@ -1543,6 +1635,7 @@ export function createWsAudioRuntime(options = {}) {
         phase: getAppStateSnapshot()?.phase || null,
         wsPhase: getAppStateSnapshot()?.wsPhase || null,
       });
+      maybeLogAudioShapeSummary();
       return true;
     } catch (_) {
       return false;
@@ -1567,12 +1660,41 @@ export function createWsAudioRuntime(options = {}) {
     turnStopSent = false;
     prerollSent = false;
     turnStartSampleRateLogged = false;
+    oversizedPcmChunkLogged = false;
+    tinyChunkWindowStartMs = 0;
+    tinyChunkCount = 0;
+    lastTinyChunkLogMs = 0;
+    pcmChunkStats = {
+      totalChunks: 0,
+      totalChunkMs: 0,
+      maxChunkMs: 0,
+      sampleRateHz: null,
+    };
     lastSoftGateTelemetryReason = null;
     softGateTelemetryFrameCounter = 0;
     try { setMicChunksValue(0); } catch (_) {}
     try { setMicBytesValue(0); } catch (_) {}
     try { resetFirstChunkTelemetry(); } catch (_) {}
     try { updateState({ chunkCount: 0, lastChunkTs: null }); } catch (_) {}
+  }
+
+  function maybeLogAudioShapeSummary() {
+    if (!isTurnControlEnabled()) {
+      return;
+    }
+    if (!pcmChunkStats.totalChunks || !currentTurnId) {
+      return;
+    }
+    const avgChunkMs = pcmChunkStats.totalChunkMs / pcmChunkStats.totalChunks;
+    try {
+      logStage("client.deepgram_v3.audio_shape_summary", {
+        turn_id: currentTurnId,
+        avg_chunk_ms: Number.isFinite(avgChunkMs) ? avgChunkMs : null,
+        max_chunk_ms: pcmChunkStats.maxChunkMs || 0,
+        sample_rate_hz: pcmChunkStats.sampleRateHz,
+        total_chunks: pcmChunkStats.totalChunks,
+      });
+    } catch (_) {}
   }
 
   const pcmSummaryWindowMs = 5000;
