@@ -4036,6 +4036,7 @@ class ChatV2Adapter:
             if isinstance(ts_value, int) and not isinstance(ts_value, bool):
                 idle_meta["ts"] = ts_value
 
+            ctx.last_client_activity_ms = now_ms
             bus.publish(
                 {
                     "schema_version": "1",

@@ -835,6 +835,7 @@ export function createWsAudioRuntime(options = {}) {
             sent: true,
           });
         } catch (_) {}
+        lastClientActivityAt = Date.now();
         return true;
       } catch (err) {
         console.warn("sendAudioChunk delegate failed", err);
@@ -857,6 +858,7 @@ export function createWsAudioRuntime(options = {}) {
             turnId: enrichedMeta.turnId || null,
           });
         } catch (_) {}
+        lastClientActivityAt = Date.now();
         return true;
       } catch (err) {
         console.warn("WSClient.sendAudioChunk failed", err);
@@ -1022,6 +1024,8 @@ export function createWsAudioRuntime(options = {}) {
   let micKeepaliveTimerId = null;
   let micLastChunkAt = 0;
   let lastRealAudioAt = 0;
+  let lastClientActivityAt = 0;
+  let lastIdleTimeoutSuppressedAt = 0;
   let lastPcmSendDropReason = null;
   localFirstChunkSeen = readFirstChunkSeen();
   localMicRecordingStartAt = readMicRecordingStartAt();
@@ -1139,6 +1143,8 @@ export function createWsAudioRuntime(options = {}) {
     try {
       const sent = safeSendJSON(payload);
       if (sent) {
+        lastClientActivityAt = payload.ts;
+        micLastChunkAt = payload.ts;
         logStage("client.deepgram_v3.idle_tick_sent", {
           lane: payload.lane,
           ts: payload.ts,
@@ -1166,9 +1172,30 @@ export function createWsAudioRuntime(options = {}) {
       return result;
     }
     let idleDuration = null;
-    if (Number.isFinite(audioKeepaliveIdleMs) && audioKeepaliveIdleMs > 0 && lastRealAudioAt > 0) {
-      idleDuration = now - lastRealAudioAt;
-      if (idleDuration >= audioKeepaliveIdleMs) {
+    if (Number.isFinite(audioKeepaliveIdleMs) && audioKeepaliveIdleMs > 0) {
+      if (isTurnControlEnabled()) {
+        const activityAt = lastClientActivityAt || lastRealAudioAt;
+        if (activityAt > 0) {
+          idleDuration = now - activityAt;
+        }
+        if (lastRealAudioAt > 0) {
+          const idleFromAudio = now - lastRealAudioAt;
+          if (idleFromAudio >= audioKeepaliveIdleMs && (idleDuration ?? 0) < audioKeepaliveIdleMs) {
+            if (now - lastIdleTimeoutSuppressedAt >= 30000) {
+              lastIdleTimeoutSuppressedAt = now;
+              try {
+                logStage("client.deepgram_v3.idle_timeout_suppressed", {
+                  idle_ms: idleFromAudio,
+                  reason: "v3_activity_seen",
+                });
+              } catch (_) {}
+            }
+          }
+        }
+      } else if (lastRealAudioAt > 0) {
+        idleDuration = now - lastRealAudioAt;
+      }
+      if (idleDuration !== null && idleDuration >= audioKeepaliveIdleMs) {
         setSenderPauseReason("idle_timeout", true);
         updatePcmSenderState();
         clearAudioKeepaliveTimer();
@@ -1201,6 +1228,7 @@ export function createWsAudioRuntime(options = {}) {
     }
     try {
       if (safeSendJSON({ type: "client.ping" })) {
+        lastClientActivityAt = now;
         logStage("client.ping", { lane: "mic", fallback: true });
       }
     } catch (err) {
