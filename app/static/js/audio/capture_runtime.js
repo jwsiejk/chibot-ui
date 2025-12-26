@@ -665,6 +665,10 @@ export function createCaptureRuntime({
   }
 
   function getVadSilenceTimeoutMs() {
+    const policySilenceMs = Number(AppState?.policy?.silenceEndMs);
+    if (Number.isFinite(policySilenceMs) && policySilenceMs > 0) {
+      return Math.round(policySilenceMs);
+    }
     const config = getClientVadPolicyConfig();
     const candidate = config && Object.prototype.hasOwnProperty.call(config, "max_gate_silence_ms")
       ? Number(config.max_gate_silence_ms)

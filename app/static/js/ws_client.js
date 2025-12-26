@@ -498,6 +498,34 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     return false;
   }
 
+  let deepgramV3SessionModeLogged = false;
+  function isDeepgramV3Enabled() {
+    return Boolean(AppState?.policy?.deepgramV3Enabled ?? AppState?.deepgramV3Enabled ?? false);
+  }
+
+  function isDeepgramV3TurnControlEnabled() {
+    return Boolean(AppState?.policy?.deepgramV3TurnControlEnabled ?? false) && isDeepgramV3Enabled();
+  }
+
+  function isDeepgramV3TelemetryEnabled() {
+    return Boolean(AppState?.policy?.deepgramV3TelemetryEnabled ?? true);
+  }
+
+  function logDeepgramV3SessionMode(source = "unknown") {
+    if (deepgramV3SessionModeLogged) {
+      return;
+    }
+    deepgramV3SessionModeLogged = true;
+    try {
+      logStage("client.deepgram_v3.session_mode", {
+        deepgramV3Enabled: isDeepgramV3Enabled(),
+        deepgramV3TurnControlEnabled: isDeepgramV3TurnControlEnabled(),
+        telemetryEnabled: isDeepgramV3TelemetryEnabled(),
+        source,
+      });
+    } catch (_) {}
+  }
+
   function maybePromoteReadyAfterMicAudio(reason = "mic_audio_post_greet") {
     const phase = getPhase();
     const ttsActive = Boolean(AppState?.ttsActive);
@@ -720,6 +748,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     if (firstTurnBootstrapSent || !firstTurnBootstrapArmed) {
       return false;
     }
+    if (isDeepgramV3TurnControlEnabled()) {
+      return false;
+    }
     if (!canSendBootstrapTurnStart()) {
       return false;
     }
@@ -777,6 +808,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function maybeArmFirstTurnBootstrap(source = "post_greet_cleanup") {
     if (firstTurnBootstrapSent || firstTurnBootstrapArmed || !postGreetCleanupCompleted) {
+      return false;
+    }
+    if (isDeepgramV3TurnControlEnabled()) {
       return false;
     }
     if (!micAndPcmReady || AppState?.wsPhase !== "ready") {
@@ -1611,6 +1645,15 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       return false;
     }
     const key = fallbackToReasonKey(reason) || "vad_silence";
+    if (isDeepgramV3TurnControlEnabled()) {
+      const sent = typeof audioRuntime?.finalizeTurn === "function"
+        ? audioRuntime.finalizeTurn(key)
+        : false;
+      if (sent) {
+        turnStopSent = true;
+      }
+      return sent;
+    }
     sendTurnStop(key);
     turnStopSent = true;
     return true;
@@ -1642,6 +1685,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
     if (postGreetSpeechWatchdogActive) {
       postGreetSpeechDetected = true;
+    }
+
+    if (isDeepgramV3TurnControlEnabled()) {
+      return;
     }
 
     if (firstTurnBootstrapArmed && !firstTurnBootstrapSent) {
@@ -3799,6 +3846,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       const sourcePolicy = frame && typeof frame === 'object' ? frame.policy : null;
       const appliedPolicy = applyPolicySnapshotFromSource(sourcePolicy, 'config.updated');
       applyAudioPolicy(appliedPolicy);
+      logDeepgramV3SessionMode("config.updated");
       const incomingType = typeof frame.type === 'string' ? frame.type : 'config.updated';
       if (incomingType !== 'config.updated') {
         dispatchFrame({ ...frame, policy: appliedPolicy, type: incomingType });
@@ -3813,6 +3861,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         'policy.interaction'
       );
       applyAudioPolicy(appliedPolicy);
+      logDeepgramV3SessionMode("policy.interaction");
       sanitized.policy = appliedPolicy;
       if (!userGestureSatisfied && !appliedPolicy.require_user_gesture_first_visit) {
         markUserGestureSatisfied('policy_update');
@@ -4651,6 +4700,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     if (frame && typeof frame.policy === 'object') {
       applyPolicySnapshotFromSource(frame.policy, 'info');
     }
+    logDeepgramV3SessionMode("info");
     logStage('client.ws', { outcome: 'auth_ok' });
     flushClientBannerQueue();
   }
