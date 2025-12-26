@@ -2207,9 +2207,9 @@ if (typeof window !== "undefined") {
     micRetryBanner.append(micRetryText, micRetryAction);
     document.body.appendChild(micRetryBanner);
 
-    function showMicRetryBanner() {
+    function showMicRetryBanner(inFlight = false) {
       micRetryBanner.style.display = 'flex';
-      micRetryAction.disabled = false;
+      micRetryAction.disabled = inFlight;
     }
 
     function hideMicRetryBanner() {
@@ -2219,26 +2219,27 @@ if (typeof window !== "undefined") {
 
     function updateMicRetryBanner(state) {
       if (state?.micUnavailable) {
-        showMicRetryBanner();
+        showMicRetryBanner(Boolean(state?.micReacquireInFlight));
         return;
       }
       hideMicRetryBanner();
     }
 
     micRetryAction.addEventListener('click', () => {
+      if (micRetryAction.disabled) {
+        return;
+      }
       micRetryAction.disabled = true;
       try {
         if (typeof window.__askchipRetryMic === 'function') {
           window.__askchipRetryMic();
         } else {
           console.warn('Mic retry handler unavailable');
+          micRetryAction.disabled = false;
         }
       } catch (err) {
         console.warn('Mic retry handler failed', err);
-      } finally {
-        setTimeout(() => {
-          micRetryAction.disabled = false;
-        }, 1200);
+        micRetryAction.disabled = false;
       }
     });
 

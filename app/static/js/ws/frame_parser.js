@@ -296,11 +296,23 @@ export function createFrameParser({
   let ttsExpectedDeadlineMs = 0;
   let ttsExpectedTimerId = null;
   let ttsFirstFrameLogged = false;
+  let ttsAutoOpenLoggedForUtt = false;
   let pendingAudioDescriptor = null;
   const AUDIO_DROP_LOG_LIMIT = 5;
   let audioDropLogCount = 0;
   const TTS_EXPECTED_WINDOW_MS = 3000;
 
+  /**
+   * Phase 0 invariants:
+   * - Greet MUST NOT open ASR or require ASR readiness.
+   * - First user speech after greet MUST emit exactly one client.turn_start.
+   * - TTS audio MUST only play when explicitly expected (bounded window).
+   * - Mic hard-fail MUST stop PCM send until user retry.
+   *
+   * If any of these change, Phase 0 assumptions are broken.
+   *
+   * Reference: AskChip Architecture – Step 3, Phase 0
+   */
   function resolvePhase() {
     try {
       return typeof getPhase === "function" ? getPhase() : null;
@@ -367,6 +379,7 @@ export function createFrameParser({
       ttsExpectedTimerId = null;
     }
     ttsFirstFrameLogged = false;
+    ttsAutoOpenLoggedForUtt = false;
     try {
       logGateTransition(prevState, ttsGateState, reason, ttsGateUtteranceId);
     } catch (_) {}
@@ -450,11 +463,13 @@ export function createFrameParser({
       type === "greet.begin" ||
       type === "greet"
     ) {
+      ttsAutoOpenLoggedForUtt = false;
       markTtsAudioExpected(uttId);
       openTtsGate(type, ttsGateUtteranceId);
       return;
     }
     if (type === "tts.start") {
+      ttsAutoOpenLoggedForUtt = false;
       markTtsAudioExpected(uttId);
       openTtsGate("tts.start", uttId || ttsGateUtteranceId);
     } else if (type === "tts.end" || type === "tts.cancel" || type === "tts.error") {
@@ -490,14 +505,17 @@ export function createFrameParser({
         ttsGateUtteranceId = null;
       }
       if (ttsAudioExpected && withinWindow) {
-        try {
-          logStage?.("client.tts_gate_auto_open", {
-            reason: "audio_first_frame",
-            within_window: withinWindow,
-            deadline_ms_remaining: Math.max(0, ttsExpectedDeadlineMs - now),
-            utt_id: ttsGateUtteranceId || null,
-          });
-        } catch (_) {}
+        if (!ttsAutoOpenLoggedForUtt) {
+          ttsAutoOpenLoggedForUtt = true;
+          try {
+            logStage?.("client.tts_gate_auto_open", {
+              reason: "audio_first_frame",
+              within_window: withinWindow,
+              deadline_ms_remaining: Math.max(0, ttsExpectedDeadlineMs - now),
+              utt_id: ttsGateUtteranceId || null,
+            });
+          } catch (_) {}
+        }
         openTtsGate("audio_first_frame", ttsGateUtteranceId);
       } else {
         logDroppedAudio("tts_gate_closed_no_recent_start", { size: buffer?.byteLength || null });
