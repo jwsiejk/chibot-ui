@@ -55,6 +55,7 @@ export function createFrameParser({
   handleErrorFrame,
   getAudioPlayer = () =>
     (typeof window !== "undefined" ? window.AudioPlayer : null),
+  getPhase = () => (typeof window !== "undefined" ? window.AppState?.phase || null : null),
   ignoredVendorMessages = DEFAULT_IGNORED_VENDOR_MESSAGES,
 }) {
   // --- Codec negotiation ----------------------------------------------------
@@ -289,9 +290,43 @@ export function createFrameParser({
   const AUDIO_WS_LOG_MAX = 5;
   let audioWsLogCount = 0;
   let ttsPlaybackGateOpen = false;
+  let ttsGateState = "closed";
+  let ttsGateUtteranceId = null;
+  let ttsAudioExpected = false;
+  let ttsFirstFrameLogged = false;
   let pendingAudioDescriptor = null;
   const AUDIO_DROP_LOG_LIMIT = 5;
   let audioDropLogCount = 0;
+
+  function resolvePhase() {
+    try {
+      return typeof getPhase === "function" ? getPhase() : null;
+    } catch (_) {
+      return typeof window !== "undefined" ? window.AppState?.phase || null : null;
+    }
+  }
+
+  function resolveUttId(frame) {
+    if (!frame || typeof frame !== "object") return null;
+    return (
+      frame.utt_id ||
+      frame.utterance_id ||
+      frame?.meta?.utt_id ||
+      frame?.meta?.utterance_id ||
+      null
+    );
+  }
+
+  function logGateTransition(prev, next, reason, uttId) {
+    try {
+      logStage?.("client.tts_gate_transition", {
+        prev,
+        next,
+        reason,
+        utt_id: uttId || null,
+      });
+    } catch (_) {}
+  }
 
   function logDroppedAudio(reason, meta = {}) {
     audioDropLogCount += 1;
@@ -301,7 +336,13 @@ export function createFrameParser({
       } catch (_) {}
     }
     try {
-      logStage?.("client.ws.audio_drop", { reason, ...meta });
+      logStage?.("client.tts_audio_drop", {
+        reason,
+        bytes: meta?.size || meta?.bytes || null,
+        utt_id: meta?.utt_id || ttsGateUtteranceId || null,
+        gate_state: ttsGateState,
+        phase: resolvePhase(),
+      });
     } catch (_) {}
     try {
       hubLog?.("client.ws.audio_drop", { reason, ...meta });
@@ -309,14 +350,19 @@ export function createFrameParser({
   }
 
   function resetTtsGate(reason = "reset", { clearDescriptor = false } = {}) {
+    const prevState = ttsGateState;
     ttsPlaybackGateOpen = false;
+    ttsGateState = "closed";
     audioDropLogCount = 0;
     if (clearDescriptor) {
       pendingAudioDescriptor = null;
     }
+    ttsAudioExpected = false;
+    ttsFirstFrameLogged = false;
     try {
-      logStage?.("client.tts_gate", { state: "closed", reason });
+      logGateTransition(prevState, ttsGateState, reason, ttsGateUtteranceId);
     } catch (_) {}
+    ttsGateUtteranceId = null;
   }
 
   function applyPendingDescriptor(audioPlayer) {
@@ -327,11 +373,17 @@ export function createFrameParser({
     }
   }
 
-  function openTtsGate(reason = "tts.start") {
+  function openTtsGate(reason = "tts.start", uttId = null) {
+    const prevState = ttsGateState;
     ttsPlaybackGateOpen = true;
+    ttsGateState = "open";
     audioDropLogCount = 0;
+    ttsFirstFrameLogged = false;
+    if (uttId) {
+      ttsGateUtteranceId = uttId;
+    }
     try {
-      logStage?.("client.tts_gate", { state: "open", reason });
+      logGateTransition(prevState, ttsGateState, reason, ttsGateUtteranceId);
     } catch (_) {}
     try {
       const audioPlayer = getAudioPlayer?.();
@@ -351,9 +403,37 @@ export function createFrameParser({
 
   function handleTtsGateFrame(frame) {
     const type = typeof frame?.type === "string" ? frame.type : null;
+    const uttId = resolveUttId(frame);
+    if (
+      type === "server.greet_start" ||
+      type === "server.tts_start" ||
+      type === "greet.start" ||
+      type === "greet.begin" ||
+      type === "greet"
+    ) {
+      ttsAudioExpected = true;
+      if (uttId) {
+        ttsGateUtteranceId = uttId;
+      }
+      openTtsGate(type, ttsGateUtteranceId);
+      return;
+    }
     if (type === "tts.start") {
-      openTtsGate("tts.start");
+      ttsAudioExpected = true;
+      openTtsGate("tts.start", uttId || ttsGateUtteranceId);
     } else if (type === "tts.end" || type === "tts.cancel" || type === "tts.error") {
+      const currentUttId = ttsGateUtteranceId;
+      if (uttId && currentUttId && uttId !== currentUttId) {
+        try {
+          logStage?.("client.tts_gate_transition", {
+            prev: ttsGateState,
+            next: ttsGateState,
+            reason: "utt_id_mismatch",
+            utt_id: currentUttId,
+          });
+        } catch (_) {}
+        return;
+      }
       resetTtsGate(type);
     }
   }
@@ -366,13 +446,24 @@ export function createFrameParser({
 
   function handleRawBinaryFrame(buffer) {
     if (!ttsPlaybackGateOpen) {
-      logDroppedAudio("tts_gate_closed", { size: buffer?.byteLength || null });
-      return;
+      if (ttsAudioExpected) {
+        openTtsGate("audio_first_frame", ttsGateUtteranceId);
+      } else {
+        logDroppedAudio("tts_gate_closed", { size: buffer?.byteLength || null });
+        return;
+      }
     }
     const audioPlayer = getAudioPlayer?.();
     if (audioPlayer && typeof audioPlayer.enqueueChunk === "function") {
       try {
         applyPendingDescriptor(audioPlayer);
+        if (!ttsFirstFrameLogged) {
+          ttsFirstFrameLogged = true;
+          logStage?.("client.tts_audio_first_frame", {
+            utt_id: ttsGateUtteranceId || null,
+            bytes: buffer?.byteLength || null,
+          });
+        }
         if (audioWsLogCount < AUDIO_WS_LOG_MAX) {
           audioWsLogCount += 1;
           try {
@@ -397,6 +488,7 @@ export function createFrameParser({
       rawBinaryDropLogged = true;
       console.warn("frame_parser received binary frame without audio handler; dropping");
     }
+    logDroppedAudio("no_audio_handler", { size: buffer?.byteLength || null });
   }
 
   function handleRawMessageData(data) {
@@ -430,7 +522,11 @@ export function createFrameParser({
         frame.type === "audio.end"
       )) {
         if (!ttsPlaybackGateOpen) {
-          logDroppedAudio("tts_gate_closed", { type: frame.type });
+          logDroppedAudio("tts_gate_closed", {
+            type: frame.type,
+            bytes: frame?.bytes || frame?.byteLength || null,
+            utt_id: resolveUttId(frame),
+          });
           return;
         }
       }
