@@ -436,6 +436,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let postGreetCleanupSource = null;
   let firstTurnBootstrapArmed = false;
   let firstTurnBootstrapSent = false;
+  let firstTurnInvariantOkLogged = false;
   let postGreetCleanupRetryTimer = null;
   let postGreetCleanupRetryStartedAt = 0;
   let postGreetCleanupRetryAttempts = 0;
@@ -715,6 +716,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   }
 
   function maybeSendBootstrapTurnStart(source = "post_greet_bootstrap") {
+    // Phase 0 invariant: greet never opens ASR; first user speech always starts a turn.
     if (firstTurnBootstrapSent || !firstTurnBootstrapArmed) {
       return false;
     }
@@ -757,6 +759,16 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         willRequestAsrOpen,
       });
     } catch (_) {}
+    if (!firstTurnInvariantOkLogged) {
+      firstTurnInvariantOkLogged = true;
+      try {
+        logStage("client.invariant_ok.first_turn_started", {
+          turn_id: turnId || null,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
+    }
     if (willRequestAsrOpen) {
       safeRequestAsrOpen("turn_bootstrap");
     }
@@ -1638,6 +1650,28 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         if (WS_READY_PHASES.has(AppState?.wsPhase)) {
           scheduleBootstrapTurnStartRetry(source);
         }
+      }
+    }
+
+    if (
+      speechSeenThisTurn &&
+      !firstTurnBootstrapArmed &&
+      !firstTurnBootstrapSent &&
+      !turnStopSent
+    ) {
+      const phase = getPhase();
+      if (phase === PHASE.ConversationReady || phase === PHASE.UserTurn) {
+        const gateSnapshot = typeof getPcmSenderGateSnapshot === "function"
+          ? getPcmSenderGateSnapshot()
+          : null;
+        try {
+          logStage("client.invariant_violation.speech_without_turn_start", {
+            phase,
+            wsPhase: AppState?.wsPhase || null,
+            postGreetCleanupCompleted,
+            gateSnapshot,
+          });
+        } catch (_) {}
       }
     }
   }
