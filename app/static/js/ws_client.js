@@ -436,6 +436,19 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let postGreetCleanupSource = null;
   let firstTurnBootstrapArmed = false;
   let firstTurnBootstrapSent = false;
+  let postGreetCleanupRetryTimer = null;
+  let postGreetCleanupRetryStartedAt = 0;
+  let postGreetCleanupRetryAttempts = 0;
+  let postGreetCleanupRetryLogged = false;
+  let firstTurnBootstrapRetryTimer = null;
+  let firstTurnBootstrapRetryAttempted = false;
+  let bootstrapTurnId = null;
+  let postGreetSpeechWatchdogTimer = null;
+  let postGreetSpeechWatchdogActive = false;
+  let postGreetSpeechDetected = false;
+  let postGreetTurnStartSent = false;
+  let postGreetAudioBytesAtCleanup = 0;
+  let postGreetAudioSent = false;
 
   function queueFrameUntilInfo(frame) {
     pendingInfoGateFrames.push(frame);
@@ -467,6 +480,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     try { setWsPhase?.(nextPhase); } catch {}
     try { updateState({ wsPhase: "ready", connectionState: "connected" }); } catch {}
     maybeArmFirstTurnBootstrap("ws_phase_ready");
+    if (firstTurnBootstrapArmed && !firstTurnBootstrapSent && !firstTurnBootstrapRetryAttempted) {
+      scheduleBootstrapTurnStartRetry("ws_phase_ready");
+    }
   }
 
   function shouldQueueDuringInfoGate(frame) {
@@ -514,6 +530,239 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     return false;
   }
 
+  function applyBargeInEnabled(value, source) {
+    const normalized = Boolean(value);
+    const policySetting = AppState?.policy?.barge_in_enabled;
+    if (typeof policySetting === "boolean" && normalized !== policySetting) {
+      try {
+        logStage("client.barge_in.policy_override", {
+          source: source || null,
+          desired: normalized,
+          policy: policySetting,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
+    }
+    try {
+      setAppStateValue?.("barge_in_enabled", normalized);
+      if (AppState && typeof AppState === "object") {
+        AppState.barge_in_enabled = normalized;
+      }
+    } catch (_) {}
+  }
+
+  function getGateSnapshotBaseEnabled(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") {
+      return false;
+    }
+    if (typeof snapshot.baseGate === "boolean") {
+      return snapshot.baseGate;
+    }
+    if (typeof snapshot.base_enabled === "boolean") {
+      return snapshot.base_enabled;
+    }
+    if (typeof snapshot.baseEnabled === "boolean") {
+      return snapshot.baseEnabled;
+    }
+    return false;
+  }
+
+  function getGateSnapshotShouldSend(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") {
+      return false;
+    }
+    return Boolean(snapshot.shouldSend);
+  }
+
+  function clearPostGreetCleanupRetry(reason = "clear") {
+    if (postGreetCleanupRetryTimer) {
+      clearTimeout(postGreetCleanupRetryTimer);
+      postGreetCleanupRetryTimer = null;
+    }
+    postGreetCleanupRetryStartedAt = 0;
+    postGreetCleanupRetryAttempts = 0;
+    postGreetCleanupRetryLogged = false;
+    if (reason === "greet_start") {
+      postGreetCleanupSource = null;
+    }
+  }
+
+  function schedulePostGreetCleanupRetry(source = "retry") {
+    if (postGreetCleanupCompleted || postGreetCleanupRetryTimer) {
+      return;
+    }
+    if (!postGreetCleanupRetryStartedAt) {
+      postGreetCleanupRetryStartedAt = Date.now();
+    }
+    if (!postGreetCleanupRetryLogged) {
+      postGreetCleanupRetryLogged = true;
+      try {
+        logStage("client.post_greet.unpause.retry_started", {
+          source,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
+    }
+    postGreetCleanupRetryTimer = setTimeout(() => {
+      postGreetCleanupRetryTimer = null;
+      const elapsedMs = postGreetCleanupRetryStartedAt
+        ? Date.now() - postGreetCleanupRetryStartedAt
+        : 0;
+      if (elapsedMs > 3000 || postGreetCleanupCompleted || getPhase() === PHASE.Greet) {
+        return;
+      }
+      postGreetCleanupRetryAttempts += 1;
+      requestPostGreetCleanup(source);
+    }, 120);
+  }
+
+  function clearPostGreetSpeechWatchdog() {
+    if (postGreetSpeechWatchdogTimer) {
+      clearTimeout(postGreetSpeechWatchdogTimer);
+      postGreetSpeechWatchdogTimer = null;
+    }
+    postGreetSpeechWatchdogActive = false;
+    postGreetSpeechDetected = false;
+    postGreetTurnStartSent = false;
+    postGreetAudioSent = false;
+    postGreetAudioBytesAtCleanup = 0;
+  }
+
+  function startPostGreetSpeechWatchdog() {
+    clearPostGreetSpeechWatchdog();
+    postGreetSpeechWatchdogActive = true;
+    postGreetAudioBytesAtCleanup = Number.isFinite(__micBytes) ? __micBytes : 0;
+    postGreetSpeechWatchdogTimer = setTimeout(() => {
+      postGreetSpeechWatchdogTimer = null;
+      if (!postGreetSpeechWatchdogActive) {
+        return;
+      }
+      postGreetSpeechWatchdogActive = false;
+      const bytesNow = Number.isFinite(__micBytes) ? __micBytes : 0;
+      const bytesSent = bytesNow > postGreetAudioBytesAtCleanup || postGreetAudioSent;
+      if (postGreetSpeechDetected && !postGreetTurnStartSent && !bytesSent) {
+        const gateSnapshot = typeof getPcmSenderGateSnapshot === "function"
+          ? getPcmSenderGateSnapshot()
+          : null;
+        try {
+          logStage("client.alert.speech_but_no_turn_start", {
+            phase: getPhase(),
+            wsPhase: AppState?.wsPhase || null,
+            bytesSent,
+            turnStartSent: postGreetTurnStartSent,
+            gateSnapshot,
+          });
+        } catch (_) {}
+      }
+    }, 3000);
+  }
+
+  function generateBootstrapTurnId() {
+    if (bootstrapTurnId) {
+      return bootstrapTurnId;
+    }
+    try {
+      if (typeof globalThis?.crypto?.randomUUID === "function") {
+        bootstrapTurnId = globalThis.crypto.randomUUID();
+        return bootstrapTurnId;
+      }
+    } catch (_) {}
+    const nowPart = Date.now().toString(36);
+    const randPart = Math.random().toString(36).slice(2, 10);
+    bootstrapTurnId = `bootstrap-${nowPart}${randPart}`;
+    return bootstrapTurnId;
+  }
+
+  function resolveBootstrapTurnId() {
+    const turnId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
+    if (typeof turnId === "string" && turnId) {
+      bootstrapTurnId = turnId;
+      return turnId;
+    }
+    return generateBootstrapTurnId();
+  }
+
+  function clearBootstrapTurnStartRetry() {
+    if (firstTurnBootstrapRetryTimer) {
+      clearTimeout(firstTurnBootstrapRetryTimer);
+      firstTurnBootstrapRetryTimer = null;
+    }
+    firstTurnBootstrapRetryAttempted = false;
+  }
+
+  function canSendBootstrapTurnStart() {
+    if (!WS_READY_PHASES.has(AppState?.wsPhase)) {
+      return false;
+    }
+    const liveSocket = socket || WSClient?._ws || window.ws;
+    return Boolean(liveSocket && liveSocket.readyState === WebSocket.OPEN);
+  }
+
+  function scheduleBootstrapTurnStartRetry(reason = "post_greet_bootstrap_retry") {
+    if (firstTurnBootstrapRetryAttempted || firstTurnBootstrapRetryTimer) {
+      return;
+    }
+    firstTurnBootstrapRetryAttempted = true;
+    firstTurnBootstrapRetryTimer = setTimeout(() => {
+      firstTurnBootstrapRetryTimer = null;
+      if (!firstTurnBootstrapArmed || firstTurnBootstrapSent) {
+        return;
+      }
+      maybeSendBootstrapTurnStart(reason);
+    }, 150);
+  }
+
+  function maybeSendBootstrapTurnStart(source = "post_greet_bootstrap") {
+    if (firstTurnBootstrapSent || !firstTurnBootstrapArmed) {
+      return false;
+    }
+    if (!canSendBootstrapTurnStart()) {
+      return false;
+    }
+    const turnId = resolveBootstrapTurnId();
+    const sampleRateHz =
+      Number(AppState?.policy?.sample_rate_hz) ||
+      Number(AppState?.policy?.audio?.sample_rate_hz) ||
+      Number(AppState?.policy?.audio?.sample_rate) ||
+      Number(AppState?.targetSampleRate) ||
+      16000;
+    const payload = {
+      type: "client.turn_start",
+      lane: "mic",
+      turn_id: turnId || undefined,
+      source,
+      pre_roll_ms: 0,
+      sample_rate_hz: sampleRateHz,
+      phase: getPhase(),
+      wsPhase: AppState?.wsPhase || null,
+    };
+    try {
+      sendJson(payload);
+    } catch (_) {}
+    firstTurnBootstrapSent = true;
+    firstTurnBootstrapArmed = false;
+    clearBootstrapTurnStartRetry();
+    postGreetTurnStartSent = true;
+    const willRequestAsrOpen = !AppState?.asrReady && !AppState?.asrArmInFlight;
+    try {
+      logStage("client.turn.bootstrap.turn_start_sent", {
+        source,
+        turn_id: turnId || null,
+        phase: getPhase(),
+        wsPhase: AppState?.wsPhase || null,
+        asrReady: Boolean(AppState?.asrReady),
+        asrArmInFlight: Boolean(AppState?.asrArmInFlight),
+        willRequestAsrOpen,
+      });
+    } catch (_) {}
+    if (willRequestAsrOpen) {
+      safeRequestAsrOpen("turn_bootstrap");
+    }
+    return true;
+  }
+
   function maybeArmFirstTurnBootstrap(source = "post_greet_cleanup") {
     if (firstTurnBootstrapSent || firstTurnBootstrapArmed || !postGreetCleanupCompleted) {
       return false;
@@ -547,12 +796,19 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     if (phase !== PHASE.ConversationReady && phase !== PHASE.UserTurn) {
       return false;
     }
+    if (!WS_READY_PHASES.has(AppState?.wsPhase)) {
+      return false;
+    }
+    if (!captureRuntime && typeof startRecorderStreaming !== "function") {
+      return false;
+    }
 
     const prevGateSnapshot = typeof getPcmSenderGateSnapshot === "function"
       ? getPcmSenderGateSnapshot()
       : null;
     const prevSenderPaused = Boolean(AppState?.senderPaused ?? senderPaused);
-    const prevBaseEnabled = Boolean(prevGateSnapshot?.baseGate);
+    const prevBaseEnabled = getGateSnapshotBaseEnabled(prevGateSnapshot);
+    const prevShouldSend = getGateSnapshotShouldSend(prevGateSnapshot);
 
     try {
       setSenderPauseReason("greet", false);
@@ -568,15 +824,11 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       ? getPcmSenderGateSnapshot()
       : null;
     const nextSenderPaused = Boolean(AppState?.senderPaused ?? senderPaused);
-    const nextBaseEnabled = Boolean(nextGateSnapshot?.baseGate);
+    const nextBaseEnabled = getGateSnapshotBaseEnabled(nextGateSnapshot);
+    const nextShouldSend = getGateSnapshotShouldSend(nextGateSnapshot);
 
     const bargeInEnabled = resolvePostGreetBargeInEnabled();
-    try {
-      setAppStateValue?.("barge_in_enabled", bargeInEnabled);
-      if (AppState && typeof AppState === "object") {
-        AppState.barge_in_enabled = bargeInEnabled;
-      }
-    } catch (_) {}
+    applyBargeInEnabled(bargeInEnabled, "post_greet_cleanup");
 
     postGreetCleanupCompleted = true;
     postGreetCleanupSource = cleanupSource || postGreetCleanupSource;
@@ -588,15 +840,28 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         prev: {
           senderPaused: prevSenderPaused,
           base_enabled: prevBaseEnabled,
+          shouldSend: prevShouldSend,
         },
         next: {
           senderPaused: nextSenderPaused,
           base_enabled: nextBaseEnabled,
+          shouldSend: nextShouldSend,
         },
         barge_in_enabled: bargeInEnabled,
       });
     } catch (_) {}
 
+    if (postGreetCleanupRetryLogged) {
+      try {
+        logStage("client.post_greet.unpause.retry_succeeded", {
+          attempts: postGreetCleanupRetryAttempts,
+          phase: getPhase(),
+          wsPhase: AppState?.wsPhase || null,
+        });
+      } catch (_) {}
+    }
+    clearPostGreetCleanupRetry();
+    startPostGreetSpeechWatchdog();
     maybeArmFirstTurnBootstrap("post_greet_cleanup");
     return true;
   }
@@ -605,7 +870,11 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     if (source) {
       postGreetCleanupSource = source;
     }
-    return runPostGreetCleanupOnce(postGreetCleanupSource || source);
+    const completed = runPostGreetCleanupOnce(postGreetCleanupSource || source);
+    if (!completed && !postGreetCleanupCompleted) {
+      schedulePostGreetCleanupRetry("retry");
+    }
+    return completed;
   }
 
   function frameSignalsGreetStart(frame) {
@@ -654,6 +923,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       return;
     }
     clearConversationStartTimer();
+    clearPostGreetCleanupRetry("greet_start");
+    clearPostGreetSpeechWatchdog();
     resetMicAndPcmReady("greet_start");
     resetConversationAsrReady("greet_start");
     wsDiag("greet_start", { utt_id: frame?.utt_id });
@@ -668,6 +939,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     postGreetCleanupSource = null;
     firstTurnBootstrapArmed = false;
     firstTurnBootstrapSent = false;
+    clearBootstrapTurnStartRetry();
+    bootstrapTurnId = null;
     try {
       const audioCtx = getPlaybackAudioContext();
       if (audioCtx) {
@@ -722,10 +995,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       updatePcmSenderState("greet_start");
     } catch (_) {}
     try {
-      setAppStateValue?.("barge_in_enabled", false);
-      if (AppState && typeof AppState === "object") {
-        AppState.barge_in_enabled = false;
-      }
+      applyBargeInEnabled(resolvePostGreetBargeInEnabled(), "greet_start");
     } catch (_) {}
     try {
       if (typeof WSClient?.stopRecorderStreaming === "function") {
@@ -1225,12 +1495,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     } catch (_) {}
     ensureCleanup("post_begin");
     try {
-      setAppStateValue?.("barge_in_enabled", true);
-      if (AppState && typeof AppState === "object") {
-        AppState.barge_in_enabled = true;
-      }
-    } catch (_) {}
-    try {
       logStage("client.conversation.begin", {
         source,
         phase: getPhase(),
@@ -1353,30 +1617,27 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       });
     } catch (_) {}
 
-    if (firstTurnBootstrapArmed && !firstTurnBootstrapSent) {
-      firstTurnBootstrapSent = true;
-      firstTurnBootstrapArmed = false;
-      const turnId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
+    if (!speechSeenThisTurn) {
+      speechSeenThisTurn = true;
+      resetTurnStopFlag();
       try {
-        sendJson({
-          type: "client.turn_start",
-          lane: "mic",
-          turn_id: turnId || undefined,
-          source: "post_greet_bootstrap",
-        });
-      } catch (_) {}
-      try {
-        logStage("client.turn.bootstrap.turn_start_sent", {
-          source: postGreetCleanupSource || "post_greet_bootstrap",
-          turn_id: turnId || null,
+        logStage("client.vad.speech_seen_this_turn_set", {
           phase: getPhase(),
           wsPhase: AppState?.wsPhase || null,
-          asrReady: Boolean(AppState?.asrReady),
-          asrArmInFlight: Boolean(AppState?.asrArmInFlight),
         });
       } catch (_) {}
-      if (!AppState?.asrReady && !AppState?.asrArmInFlight) {
-        safeRequestAsrOpen("turn_bootstrap");
+    }
+
+    if (postGreetSpeechWatchdogActive) {
+      postGreetSpeechDetected = true;
+    }
+
+    if (firstTurnBootstrapArmed && !firstTurnBootstrapSent) {
+      const source = postGreetCleanupSource || "post_greet_bootstrap";
+      if (!maybeSendBootstrapTurnStart(source)) {
+        if (WS_READY_PHASES.has(AppState?.wsPhase)) {
+          scheduleBootstrapTurnStartRetry(source);
+        }
       }
     }
   }
@@ -1914,6 +2175,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         markTurnAudioChunk(detail?.bytes);
       }
     } catch {}
+    if (postGreetSpeechWatchdogActive && detail?.bytes) {
+      postGreetAudioSent = true;
+    }
     if (!__secondGreetingTraceActive || __secondGreetingTraceCompleted) {
       return;
     }
@@ -2579,7 +2843,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       wsPhase: gateSnapshot?.wsPhase || AppState?.wsPhase || null,
       voicePhase: gateSnapshot?.phase || voicePhase,
       asrReady: gateSnapshot?.asrReady,
-      base_enabled: gateSnapshot?.base_enabled,
+      base_enabled: getGateSnapshotBaseEnabled(gateSnapshot),
       hasStream: gateSnapshot?.hasStream,
       senderPaused: gateSnapshot?.senderPaused,
       shouldSend: gateSnapshot?.shouldSend,
@@ -3096,6 +3360,9 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function sendJson(frame) {
     try {
+      if (frame?.type === "client.turn_start") {
+        postGreetTurnStartSent = true;
+      }
       if (WSClient && typeof WSClient.sendJSON === "function") {
         return WSClient.sendJSON(frame);
       }
