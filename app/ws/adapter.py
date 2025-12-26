@@ -4110,26 +4110,15 @@ class ChatV2Adapter:
                 return self._HandleResult(True)
 
             sample_rate_value = frame.get("sample_rate_hz")
-            if not isinstance(sample_rate_value, (int, float)) or isinstance(
-                sample_rate_value, bool
-            ):
-                meta["error"] = "schema_invalid"
-                await self._publish_json_recv(ctx, meta, frame_payload)
-                await self._send_error(
-                    send,
-                    ctx.sid,
-                    "schema_invalid",
-                    "client.turn_start sample_rate_hz must be a number",
-                )
-                return self._HandleResult(True)
-
             await self._publish_json_recv(ctx, meta, frame_payload)
 
             normalized_turn_id = raw_turn_id.strip()
-            try:
-                parsed_rate = int(sample_rate_value)
-            except (TypeError, ValueError):
-                parsed_rate = None
+            parsed_rate = None
+            if isinstance(sample_rate_value, (int, float)) and not isinstance(
+                sample_rate_value, bool
+            ):
+                if not isinstance(sample_rate_value, float) or sample_rate_value.is_integer():
+                    parsed_rate = int(sample_rate_value)
             resolved_rate = parsed_rate
             if resolved_rate is None or resolved_rate < 8000 or resolved_rate > 48000:
                 fallback_rate = getattr(
@@ -4140,15 +4129,13 @@ class ChatV2Adapter:
                 except (TypeError, ValueError):
                     fallback_rate = _DEFAULT_SAMPLE_RATE_HZ
                 resolved_rate = fallback_rate
-                _log.warning(
-                    "evt=deepgram_v3.turn_sample_rate_invalid",
+                _log.info(
+                    "evt=deepgram_v3.sample_rate_clamped",
                     extra={
                         "sid": ctx.sid,
                         "turn_id": normalized_turn_id,
-                        "sample_rate_hz": sample_rate_value,
-                        "fallback_rate": resolved_rate,
-                        "bytes_from_client": ctx.bytes_from_client_this_turn,
-                        "bytes_to_vendor": ctx.asr_bytes_sent,
+                        "provided": sample_rate_value,
+                        "used": resolved_rate,
                     },
                 )
             if ctx.current_turn_open:
@@ -9821,6 +9808,15 @@ class ChatV2Adapter:
                 sample_rate,
                 language,
             )
+            if ctx.v3_enabled:
+                _log.debug(
+                    "evt=deepgram_v3.asr_open",
+                    extra={
+                        "sid": ctx.sid,
+                        "turn_id": ctx.current_turn_id,
+                        "sample_rate_hz": sample_rate,
+                    },
+                )
             metrics = getattr(ctx, "metrics", {})
             metrics["asr_started_at"] = time.monotonic()
             await engine.open(
