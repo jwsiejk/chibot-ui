@@ -293,10 +293,13 @@ export function createFrameParser({
   let ttsGateState = "closed";
   let ttsGateUtteranceId = null;
   let ttsAudioExpected = false;
+  let ttsExpectedDeadlineMs = 0;
+  let ttsExpectedTimerId = null;
   let ttsFirstFrameLogged = false;
   let pendingAudioDescriptor = null;
   const AUDIO_DROP_LOG_LIMIT = 5;
   let audioDropLogCount = 0;
+  const TTS_EXPECTED_WINDOW_MS = 3000;
 
   function resolvePhase() {
     try {
@@ -358,6 +361,11 @@ export function createFrameParser({
       pendingAudioDescriptor = null;
     }
     ttsAudioExpected = false;
+    ttsExpectedDeadlineMs = 0;
+    if (ttsExpectedTimerId) {
+      clearTimeout(ttsExpectedTimerId);
+      ttsExpectedTimerId = null;
+    }
     ttsFirstFrameLogged = false;
     try {
       logGateTransition(prevState, ttsGateState, reason, ttsGateUtteranceId);
@@ -401,6 +409,37 @@ export function createFrameParser({
     }
   }
 
+  function scheduleTtsExpectedDeadline() {
+    if (ttsExpectedTimerId) {
+      clearTimeout(ttsExpectedTimerId);
+      ttsExpectedTimerId = null;
+    }
+    if (!ttsAudioExpected || !ttsExpectedDeadlineMs) {
+      return;
+    }
+    const delayMs = Math.max(0, ttsExpectedDeadlineMs - Date.now());
+    ttsExpectedTimerId = setTimeout(() => {
+      ttsExpectedTimerId = null;
+      if (!ttsAudioExpected || !ttsExpectedDeadlineMs) {
+        return;
+      }
+      if (Date.now() >= ttsExpectedDeadlineMs) {
+        ttsAudioExpected = false;
+        ttsExpectedDeadlineMs = 0;
+        ttsGateUtteranceId = null;
+      }
+    }, delayMs);
+  }
+
+  function markTtsAudioExpected(uttId) {
+    ttsAudioExpected = true;
+    ttsExpectedDeadlineMs = Date.now() + TTS_EXPECTED_WINDOW_MS;
+    if (uttId) {
+      ttsGateUtteranceId = uttId;
+    }
+    scheduleTtsExpectedDeadline();
+  }
+
   function handleTtsGateFrame(frame) {
     const type = typeof frame?.type === "string" ? frame.type : null;
     const uttId = resolveUttId(frame);
@@ -411,15 +450,12 @@ export function createFrameParser({
       type === "greet.begin" ||
       type === "greet"
     ) {
-      ttsAudioExpected = true;
-      if (uttId) {
-        ttsGateUtteranceId = uttId;
-      }
+      markTtsAudioExpected(uttId);
       openTtsGate(type, ttsGateUtteranceId);
       return;
     }
     if (type === "tts.start") {
-      ttsAudioExpected = true;
+      markTtsAudioExpected(uttId);
       openTtsGate("tts.start", uttId || ttsGateUtteranceId);
     } else if (type === "tts.end" || type === "tts.cancel" || type === "tts.error") {
       const currentUttId = ttsGateUtteranceId;
@@ -446,10 +482,25 @@ export function createFrameParser({
 
   function handleRawBinaryFrame(buffer) {
     if (!ttsPlaybackGateOpen) {
-      if (ttsAudioExpected) {
+      const now = Date.now();
+      const withinWindow = ttsAudioExpected && now <= ttsExpectedDeadlineMs;
+      if (ttsAudioExpected && !withinWindow) {
+        ttsAudioExpected = false;
+        ttsExpectedDeadlineMs = 0;
+        ttsGateUtteranceId = null;
+      }
+      if (ttsAudioExpected && withinWindow) {
+        try {
+          logStage?.("client.tts_gate_auto_open", {
+            reason: "audio_first_frame",
+            within_window: withinWindow,
+            deadline_ms_remaining: Math.max(0, ttsExpectedDeadlineMs - now),
+            utt_id: ttsGateUtteranceId || null,
+          });
+        } catch (_) {}
         openTtsGate("audio_first_frame", ttsGateUtteranceId);
       } else {
-        logDroppedAudio("tts_gate_closed", { size: buffer?.byteLength || null });
+        logDroppedAudio("tts_gate_closed_no_recent_start", { size: buffer?.byteLength || null });
         return;
       }
     }
@@ -522,7 +573,7 @@ export function createFrameParser({
         frame.type === "audio.end"
       )) {
         if (!ttsPlaybackGateOpen) {
-          logDroppedAudio("tts_gate_closed", {
+          logDroppedAudio("tts_gate_closed_no_recent_start", {
             type: frame.type,
             bytes: frame?.bytes || frame?.byteLength || null,
             utt_id: resolveUttId(frame),

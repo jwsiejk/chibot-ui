@@ -263,6 +263,7 @@ export function createWsAudioRuntime(options = {}) {
   let pendingReacquireReason = null;
   let heartbeatMissingCount = 0;
   let firstPcmToWsLogged = false;
+  let lastPcmDisabledLogAt = 0;
 
   // Global diagnostics for debugging
   if (typeof window !== "undefined") {
@@ -275,6 +276,7 @@ export function createWsAudioRuntime(options = {}) {
         get lastTrackState() { return lastTrackState; },
         get lastConstraints() { return lastConstraints; },
       };
+      window.__askchipRetryMic = () => scheduleMicReacquire("user_retry", 0);
     } catch (_) {}
   }
 
@@ -318,7 +320,13 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function scheduleMicReacquire(reason = "gum_failed", debounceMs = 800) {
-    if (micHardFailed && reason !== "user_retry") {
+    if (reason === "user_retry") {
+      micHardFailed = false;
+      micReacquireFailures = 0;
+      try {
+        updateState({ micUnavailable: false });
+      } catch (_) {}
+    } else if (micHardFailed) {
       return;
     }
     if (micReacquireInFlight) {
@@ -1603,13 +1611,17 @@ export function createWsAudioRuntime(options = {}) {
     let prerollChunksToSend = null;
     if (gumFailed || micHardFailed) {
       try {
-        logStage("client.pcm_sender.disabled_for_gum_failed", {
-          gumFailed,
-          micHardFailed,
-          lastGumError,
-          lastErrorName,
-          lastTrackState,
-        });
+        const now = Date.now();
+        if (now - lastPcmDisabledLogAt >= 2000) {
+          lastPcmDisabledLogAt = now;
+          logStage("client.pcm_sender.disabled_for_gum_failed", {
+            gumFailed,
+            micHardFailed,
+            lastGumError,
+            lastErrorName,
+            lastTrackState,
+          });
+        }
       } catch (_) {}
       updatePcmSenderState("gum_failed_block_send");
       return;

@@ -2169,6 +2169,79 @@ if (typeof window !== "undefined") {
       });
     });
 
+    // --- Mic retry banner ---
+    const micRetryBanner = document.createElement('div');
+    micRetryBanner.setAttribute('role', 'status');
+    micRetryBanner.setAttribute('aria-live', 'polite');
+    micRetryBanner.style.position = 'fixed';
+    micRetryBanner.style.top = '64px';
+    micRetryBanner.style.right = '16px';
+    micRetryBanner.style.display = 'none';
+    micRetryBanner.style.alignItems = 'center';
+    micRetryBanner.style.gap = '12px';
+    micRetryBanner.style.padding = '10px 14px';
+    micRetryBanner.style.borderRadius = '10px';
+    micRetryBanner.style.background = 'rgba(162, 40, 40, 0.92)';
+    micRetryBanner.style.color = '#fff';
+    micRetryBanner.style.fontSize = '13px';
+    micRetryBanner.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.25)';
+    micRetryBanner.style.zIndex = '1000';
+    micRetryBanner.style.backdropFilter = 'blur(8px)';
+    micRetryBanner.style.webkitBackdropFilter = 'blur(8px)';
+
+    const micRetryText = document.createElement('span');
+    micRetryText.textContent = 'Microphone unavailable — click to retry.';
+
+    const micRetryAction = document.createElement('button');
+    micRetryAction.type = 'button';
+    micRetryAction.textContent = 'Retry mic';
+    micRetryAction.style.background = '#ffffff';
+    micRetryAction.style.color = '#8f1b1b';
+    micRetryAction.style.border = 'none';
+    micRetryAction.style.borderRadius = '6px';
+    micRetryAction.style.padding = '6px 10px';
+    micRetryAction.style.fontSize = '12px';
+    micRetryAction.style.cursor = 'pointer';
+    micRetryAction.style.fontWeight = '600';
+
+    micRetryBanner.append(micRetryText, micRetryAction);
+    document.body.appendChild(micRetryBanner);
+
+    function showMicRetryBanner() {
+      micRetryBanner.style.display = 'flex';
+      micRetryAction.disabled = false;
+    }
+
+    function hideMicRetryBanner() {
+      micRetryBanner.style.display = 'none';
+      micRetryAction.disabled = false;
+    }
+
+    function updateMicRetryBanner(state) {
+      if (state?.micUnavailable) {
+        showMicRetryBanner();
+        return;
+      }
+      hideMicRetryBanner();
+    }
+
+    micRetryAction.addEventListener('click', () => {
+      micRetryAction.disabled = true;
+      try {
+        if (typeof window.__askchipRetryMic === 'function') {
+          window.__askchipRetryMic();
+        } else {
+          console.warn('Mic retry handler unavailable');
+        }
+      } catch (err) {
+        console.warn('Mic retry handler failed', err);
+      } finally {
+        setTimeout(() => {
+          micRetryAction.disabled = false;
+        }, 1200);
+      }
+    });
+
     // --- Waveform visual inside the Chip window ---
     const Waveform = (() => {
       const canvas = document.getElementById('waveCanvas');
@@ -2623,6 +2696,7 @@ if (typeof window !== "undefined") {
         }
       }
       updateResumeBanner(state);
+      updateMicRetryBanner(state);
     });
 
     const asrRetry = { tries: 0, timer: null };
