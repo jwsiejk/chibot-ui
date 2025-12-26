@@ -839,6 +839,9 @@ class AdapterContext:
     current_turn_open: bool = False
     turn_start_ts_ms: Optional[int] = None
     bytes_from_client_this_turn: int = 0
+    v3_turn_sample_rate_hz: Optional[int] = None
+    v3_turn_summary_logged: bool = False
+    v3_turn_summary_turn_id: Optional[str] = None
     awaiting_client_mic_ready: bool = False
     client_mic_ready_ms: Optional[int] = None
     no_audio_timeout_started_ms: Optional[int] = None
@@ -856,6 +859,8 @@ class AdapterContext:
     audio_turn_id_missing_logged: bool = False
     turn_summary_logged: bool = False
     last_turn_summary_index: int | None = None
+    last_idle_tick_log_ms: Optional[int] = None
+    turn_watchdog_last_log_ms: Optional[int] = None
     auto_ready_probe_active: bool = False
     auto_ready_probe_promotion_logged: bool = False
 
@@ -1040,11 +1045,104 @@ class ChatV2Adapter:
         ctx.turn_summary_logged = True
         ctx.last_turn_summary_index = normalized_turn
 
+    def _log_deepgram_v3_turn_summary(
+        self, ctx: AdapterContext, close_reason: Optional[str]
+    ) -> None:
+        if not ctx.v3_enabled:
+            return
+        turn_id = ctx.current_turn_id
+        if not turn_id:
+            return
+        if ctx.v3_turn_summary_logged and ctx.v3_turn_summary_turn_id == turn_id:
+            return
+        start_ms = ctx.turn_start_ts_ms
+        ms_duration = (
+            max(0, self._now_ms() - start_ms) if isinstance(start_ms, int) else None
+        )
+        _log.info(
+            "evt=deepgram_v3.turn_summary",
+            extra={
+                "sid": ctx.sid,
+                "turn_id": turn_id,
+                "bytes_from_client": ctx.bytes_from_client_this_turn,
+                "bytes_to_vendor": ctx.asr_bytes_sent,
+                "ms_duration": ms_duration,
+                "close_reason": close_reason,
+            },
+        )
+        ctx.v3_turn_summary_logged = True
+        ctx.v3_turn_summary_turn_id = turn_id
+
+    def _resolve_v3_silence_end_ms(self, ctx: AdapterContext) -> int:
+        policy = ctx.policy if isinstance(ctx.policy, Mapping) else None
+        candidate = None
+        if isinstance(policy, Mapping):
+            candidate = policy.get("silenceEndMs")
+        try:
+            parsed = int(candidate) if candidate is not None else None
+        except (TypeError, ValueError):
+            parsed = None
+        if parsed is not None and parsed > 0:
+            return parsed
+        fallback = getattr(config, "DEEPGRAM_V3_SILENCE_END_MS", 800)
+        try:
+            parsed_fallback = int(fallback)
+        except (TypeError, ValueError):
+            parsed_fallback = 800
+        return max(0, parsed_fallback)
+
+    def _reset_v3_turn_state(self, ctx: AdapterContext) -> None:
+        ctx.current_turn_id = None
+        ctx.current_turn_open = False
+        ctx.turn_start_ts_ms = None
+        ctx.bytes_from_client_this_turn = 0
+        ctx.accepting_audio = False
+        ctx.audio_ignored_no_turn_logged = False
+        ctx.v3_turn_sample_rate_hz = None
+        ctx.v3_turn_summary_logged = False
+        ctx.v3_turn_summary_turn_id = None
+        ctx.turn_watchdog_last_log_ms = None
+        self._cancel_no_audio_safety_net(ctx)
+
+    async def _maybe_close_stalled_v3_turn(
+        self, ctx: AdapterContext, now_ms: int
+    ) -> None:
+        if not ctx.v3_enabled or not ctx.current_turn_open:
+            return
+        last_audio = ctx.last_audio_at_ms
+        if not isinstance(last_audio, int):
+            return
+        silence_end_ms = self._resolve_v3_silence_end_ms(ctx)
+        threshold_ms = silence_end_ms + 1500
+        if now_ms - last_audio <= threshold_ms:
+            return
+        last_log_ms = ctx.turn_watchdog_last_log_ms or 0
+        if last_log_ms and now_ms - last_log_ms < 5000:
+            return
+        ctx.turn_watchdog_last_log_ms = now_ms
+        if ctx.session.asr_state == "open" or ctx.asr_open:
+            await self._close_asr(ctx, reason="turn_watchdog_stalled_no_audio")
+        self._log_deepgram_v3_turn_summary(ctx, "stalled_no_audio")
+        _log.warning(
+            "evt=deepgram_v3.turn_watchdog_closed",
+            extra={
+                "sid": ctx.sid,
+                "turn_id": ctx.current_turn_id,
+                "bytes_from_client": ctx.bytes_from_client_this_turn,
+                "bytes_to_vendor": ctx.asr_bytes_sent,
+                "reason": "stalled_no_audio",
+            },
+        )
+        self._reset_v3_turn_state(ctx)
+
     def _reset_client_turn_state(self, ctx: AdapterContext) -> None:
         ctx.current_turn_id = None
         ctx.current_turn_open = False
         ctx.turn_start_ts_ms = None
         ctx.bytes_from_client_this_turn = 0
+        ctx.v3_turn_sample_rate_hz = None
+        ctx.v3_turn_summary_logged = False
+        ctx.v3_turn_summary_turn_id = None
         ctx.audio_ignored_no_turn_logged = False
         ctx.asr_ready_skip_no_turn_logged = False
         ctx.turn_lifecycle = None
@@ -1565,6 +1663,24 @@ class ChatV2Adapter:
         )
 
     async def _handle_asr_timeout(self, ctx: AdapterContext, reason: str) -> None:
+        if ctx.v3_enabled and reason == "no_audio_timeout":
+            if ctx.asr_open_task or ctx.asr_open or ctx.session.asr_state == "open":
+                await self._close_asr(ctx, reason="no_audio_timeout")
+            else:
+                self._cancel_no_audio_safety_net(ctx)
+            self._log_deepgram_v3_turn_summary(ctx, "no_audio_timeout")
+            _log.warning(
+                "evt=deepgram_v3.turn_aborted",
+                extra={
+                    "sid": ctx.sid,
+                    "turn_id": ctx.current_turn_id,
+                    "bytes_from_client": ctx.bytes_from_client_this_turn,
+                    "bytes_to_vendor": ctx.asr_bytes_sent,
+                    "reason": "no_audio_timeout",
+                },
+            )
+            self._reset_v3_turn_state(ctx)
+            return
         _log.warning(
             "evt=asr.timeout sid=%s last_partial=%s promoted_final=False bytes=%s",
             ctx.sid,
@@ -3930,6 +4046,21 @@ class ChatV2Adapter:
                     "meta": idle_meta,
                 }
             )
+            if ctx.v3_enabled:
+                last_log_ms = ctx.last_idle_tick_log_ms or 0
+                if now_ms - last_log_ms >= 10000:
+                    ctx.last_idle_tick_log_ms = now_ms
+                    _log.info(
+                        "evt=deepgram_v3.idle_tick_seen",
+                        extra={
+                            "sid": ctx.sid,
+                            "turn_id": ctx.current_turn_id,
+                            "bytes_from_client": ctx.bytes_from_client_this_turn,
+                            "bytes_to_vendor": ctx.asr_bytes_sent,
+                            "lane": lane if isinstance(lane, str) else None,
+                        },
+                    )
+                await self._maybe_close_stalled_v3_turn(ctx, now_ms)
             await self._publish_json_recv(ctx, meta, frame_payload)
             return self._HandleResult(True)
 
@@ -3994,17 +4125,46 @@ class ChatV2Adapter:
             await self._publish_json_recv(ctx, meta, frame_payload)
 
             normalized_turn_id = raw_turn_id.strip()
-            if ctx.current_turn_open:
+            try:
+                parsed_rate = int(sample_rate_value)
+            except (TypeError, ValueError):
+                parsed_rate = None
+            resolved_rate = parsed_rate
+            if resolved_rate is None or resolved_rate < 8000 or resolved_rate > 48000:
+                fallback_rate = getattr(
+                    config, "DEEPGRAM_STT_SAMPLE_RATE", _DEFAULT_SAMPLE_RATE_HZ
+                )
+                try:
+                    fallback_rate = int(fallback_rate)
+                except (TypeError, ValueError):
+                    fallback_rate = _DEFAULT_SAMPLE_RATE_HZ
+                resolved_rate = fallback_rate
                 _log.warning(
-                    "evt=asr_v3.turn_start_overlap",
+                    "evt=deepgram_v3.turn_sample_rate_invalid",
+                    extra={
+                        "sid": ctx.sid,
+                        "turn_id": normalized_turn_id,
+                        "sample_rate_hz": sample_rate_value,
+                        "fallback_rate": resolved_rate,
+                        "bytes_from_client": ctx.bytes_from_client_this_turn,
+                        "bytes_to_vendor": ctx.asr_bytes_sent,
+                    },
+                )
+            if ctx.current_turn_open:
+                if ctx.session.asr_state == "open" or ctx.asr_open:
+                    await self._close_asr(ctx, reason="turn_start_overlap")
+                self._log_deepgram_v3_turn_summary(ctx, "turn_overlap")
+                _log.warning(
+                    "evt=deepgram_v3.turn_overlap_recovered",
                     extra={
                         "sid": ctx.sid,
                         "turn_id": ctx.current_turn_id,
                         "new_turn_id": normalized_turn_id,
+                        "bytes_from_client": ctx.bytes_from_client_this_turn,
+                        "bytes_to_vendor": ctx.asr_bytes_sent,
                     },
                 )
-                if ctx.session.asr_state == "open" or ctx.asr_open:
-                    await self._close_asr(ctx, reason="turn_start_overlap")
+                self._reset_v3_turn_state(ctx)
 
             ctx.current_turn_id = normalized_turn_id
             ctx.current_turn_open = True
@@ -4012,6 +4172,10 @@ class ChatV2Adapter:
             ctx.bytes_from_client_this_turn = 0
             ctx.accepting_audio = True
             ctx.audio_ignored_no_turn_logged = False
+            ctx.v3_turn_sample_rate_hz = resolved_rate
+            ctx.v3_turn_summary_logged = False
+            ctx.v3_turn_summary_turn_id = None
+            ctx.turn_watchdog_last_log_ms = None
             self._refresh_no_audio_safety_net(ctx)
 
             _log.info(
@@ -4020,7 +4184,9 @@ class ChatV2Adapter:
                     "sid": ctx.sid,
                     "turn_id": ctx.current_turn_id,
                     "pre_roll_ms": pre_roll_value,
-                    "sample_rate_hz": sample_rate_value,
+                    "sample_rate_hz": resolved_rate,
+                    "bytes_from_client": ctx.bytes_from_client_this_turn,
+                    "bytes_to_vendor": ctx.asr_bytes_sent,
                 },
             )
 
@@ -4089,6 +4255,7 @@ class ChatV2Adapter:
                     "sid": ctx.sid,
                     "turn_id": ctx.current_turn_id or normalized_turn_id,
                     "bytes_from_client": ctx.bytes_from_client_this_turn,
+                    "bytes_to_vendor": ctx.asr_bytes_sent,
                     "reason": normalized_reason,
                 },
             )
@@ -4110,13 +4277,8 @@ class ChatV2Adapter:
                     },
                 )
 
-            ctx.current_turn_id = None
-            ctx.turn_start_ts_ms = None
-            ctx.bytes_from_client_this_turn = 0
-            ctx.current_turn_open = False
-            ctx.accepting_audio = False
-            ctx.audio_ignored_no_turn_logged = False
-            self._cancel_no_audio_safety_net(ctx)
+            self._log_deepgram_v3_turn_summary(ctx, normalized_reason)
+            self._reset_v3_turn_state(ctx)
 
             return self._HandleResult(True)
 
@@ -4240,8 +4402,14 @@ class ChatV2Adapter:
             if ctx.v3_enabled:
                 await self._publish_json_recv(ctx, meta, frame_payload)
                 _log.info(
-                    "evt=deepgram_v3.asr_open_ignored sid=%s reason=v3_enabled",
-                    ctx.sid,
+                    "evt=deepgram_v3.asr_open_ignored",
+                    extra={
+                        "sid": ctx.sid,
+                        "turn_id": ctx.current_turn_id,
+                        "bytes_from_client": ctx.bytes_from_client_this_turn,
+                        "bytes_to_vendor": ctx.asr_bytes_sent,
+                        "reason": "v3_enabled",
+                    },
                 )
                 return self._HandleResult(True)
             if not ctx.greet_completed:
@@ -5136,7 +5304,13 @@ class ChatV2Adapter:
                 ctx.audio_ignored_no_turn_logged = True
                 _log.info(
                     "evt=deepgram_v3.pcm_without_turn",
-                    extra={"sid": ctx.sid, "bytes": byte_count},
+                    extra={
+                        "sid": ctx.sid,
+                        "turn_id": ctx.current_turn_id,
+                        "bytes": byte_count,
+                        "bytes_from_client": ctx.bytes_from_client_this_turn,
+                        "bytes_to_vendor": ctx.asr_bytes_sent,
+                    },
                 )
             return self._HandleResult(True)
 
@@ -5163,6 +5337,8 @@ class ChatV2Adapter:
                         "turn_id": ctx.current_turn_id,
                         "sample_rate": sample_rate,
                         "language": language_code,
+                        "bytes_from_client": ctx.bytes_from_client_this_turn,
+                        "bytes_to_vendor": ctx.asr_bytes_sent,
                     },
                 )
                 await self._invoke_engine("on_asr_open", ctx.sid, ctx.current_turn_id)
@@ -6188,6 +6364,7 @@ class ChatV2Adapter:
                 while True:
                     await asyncio.sleep(interval)
                     now_ms = int(time.time() * 1000)
+                    await self._maybe_close_stalled_v3_turn(ctx, now_ms)
                     last_activity = ctx.last_client_activity_ms or 0
                     last_pong = ctx.last_client_pong_ms or 0
                     last_ping = ctx.last_server_ping_ms or 0
@@ -8261,6 +8438,8 @@ class ChatV2Adapter:
                         "turn_id": ctx.current_turn_id,
                         "ms_since_turn_start": ms_since_turn_start,
                         "vendor": vendor,
+                        "bytes_from_client": ctx.bytes_from_client_this_turn,
+                        "bytes_to_vendor": ctx.asr_bytes_sent,
                     },
                 )
             try:
@@ -8939,6 +9118,9 @@ class ChatV2Adapter:
         return config_map
 
     def _resolve_asr_sample_rate(self, ctx: AdapterContext) -> int:
+        v3_rate = getattr(ctx, "v3_turn_sample_rate_hz", None)
+        if ctx.v3_enabled and isinstance(v3_rate, int) and v3_rate > 0:
+            return v3_rate
         profile = getattr(ctx.session, "audio_profile", None)
         if isinstance(profile, Mapping):
             candidate = profile.get("sample_rate")
