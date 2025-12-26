@@ -1646,6 +1646,15 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     }
     const key = fallbackToReasonKey(reason) || "vad_silence";
     if (isDeepgramV3TurnControlEnabled()) {
+      const ws = WSClient?._ws || window.ws;
+      const wsOpen = ws && typeof WebSocket !== "undefined" && ws.readyState === WebSocket.OPEN;
+      if (!wsOpen) {
+        turnStopSent = true;
+        if (typeof audioRuntime?.resetTurnForNextUser === "function") {
+          audioRuntime.resetTurnForNextUser();
+        }
+        return true;
+      }
       const sent = typeof audioRuntime?.finalizeTurn === "function"
         ? audioRuntime.finalizeTurn(key)
         : false;
@@ -2377,9 +2386,13 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     const keepaliveIdleMs = (typeof audio.keepalive_idle_ms === "number" && audio.keepalive_idle_ms >= 0)
       ? audio.keepalive_idle_ms
       : AUDIO_KEEPALIVE_IDLE_MS;
+    const keepalivePcmEnabled = Boolean(
+      policy?.deepgramV3KeepalivePcmEnabled ?? audio?.deepgramV3KeepalivePcmEnabled ?? false
+    );
     try {
       audioRuntime?.setAudioKeepaliveMs?.(keepaliveMs);
       audioRuntime?.setAudioKeepaliveIdleMs?.(keepaliveIdleMs);
+      audioRuntime?.setDeepgramV3KeepalivePcmEnabled?.(keepalivePcmEnabled);
     } catch (err) {
       console.warn("applyAudioPolicy failed", err);
     }
@@ -2402,6 +2415,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     clearAudioKeepaliveTimer: runtimeClearAudioKeepalive,
     sendAudioKeepaliveNow: runtimeSendAudioKeepaliveNow,
     resetTurnForNextUser: runtimeResetTurnForNextUser,
+    setDeepgramV3KeepalivePcmEnabled: runtimeSetDeepgramV3KeepalivePcmEnabled,
   } = audioRuntime;
 
   updatePcmSenderState = typeof runtimeUpdatePcmSenderState === "function"

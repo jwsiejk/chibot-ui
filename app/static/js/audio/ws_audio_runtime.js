@@ -26,6 +26,7 @@ const AUDIO_KEEPALIVE_CHUNK_MS = 20;
 const AUDIO_KEEPALIVE_IDLE_MS = 30000;
 let audioKeepaliveMs = AUDIO_KEEPALIVE_MS;
 let audioKeepaliveIdleMs = AUDIO_KEEPALIVE_IDLE_MS;
+let deepgramV3KeepalivePcmEnabled = false;
 const PCM_SENDER_DEBUG = false;
 let __firstPcmFrameLogged = false;
 const WS_READY_PHASES = new Set(["connected", "ready"]);
@@ -1085,8 +1086,13 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   function sendAudioKeepaliveChunk(now) {
-    if (isTurnControlEnabled() && (!speechSeenThisTurn || turnStopSent)) {
-      return false;
+    if (isTurnControlEnabled()) {
+      if (!deepgramV3KeepalivePcmEnabled) {
+        return false;
+      }
+      if (!speechSeenThisTurn || turnStopSent) {
+        return false;
+      }
     }
     const sampleRate = 16000;
     const samples = Math.max(
@@ -1122,6 +1128,26 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
     }
     return sent;
+  }
+
+  function sendClientIdleTick(now) {
+    const payload = {
+      type: "client.idle",
+      lane: "mic",
+      ts: Number.isFinite(now) ? now : Date.now(),
+    };
+    try {
+      const sent = safeSendJSON(payload);
+      if (sent) {
+        logStage("client.deepgram_v3.idle_tick_sent", {
+          lane: payload.lane,
+          ts: payload.ts,
+        });
+      }
+      return sent;
+    } catch (_) {
+      return false;
+    }
   }
 
   function maybeSendAudioKeepalive(now) {
@@ -1161,6 +1187,14 @@ export function createWsAudioRuntime(options = {}) {
         idle_ms: idleDuration,
       });
     } catch (_) {}
+    if (isTurnControlEnabled()) {
+      const allowPcmKeepalive =
+        deepgramV3KeepalivePcmEnabled && speechSeenThisTurn && !turnStopSent;
+      if (!allowPcmKeepalive && sendClientIdleTick(now)) {
+        result.sentKeepalive = true;
+        return result;
+      }
+    }
     if (sendAudioKeepaliveChunk(now)) {
       result.sentKeepalive = true;
       return result;
@@ -1311,6 +1345,7 @@ export function createWsAudioRuntime(options = {}) {
   let turnStartSent = false;
   let turnStopSent = false;
   let prerollSent = false;
+  let turnStartSampleRateLogged = false;
 
   function allocateTurnId() {
     return String(nextTurnId++);
@@ -1440,6 +1475,16 @@ export function createWsAudioRuntime(options = {}) {
         phase: getAppStateSnapshot()?.phase || null,
         wsPhase: getAppStateSnapshot()?.wsPhase || null,
       });
+      if (!turnStartSampleRateLogged) {
+        turnStartSampleRateLogged = true;
+        logStage("client.deepgram_v3.turn_start_sample_rate", {
+          turn_id: turnId,
+          sample_rate_hz: sampleRateHz,
+          pcmHardwareSampleRate,
+          pcmSampleRate,
+          asrRate,
+        });
+      }
       return true;
     } catch (_) {
       return false;
@@ -1493,6 +1538,7 @@ export function createWsAudioRuntime(options = {}) {
     turnStartSent = false;
     turnStopSent = false;
     prerollSent = false;
+    turnStartSampleRateLogged = false;
     lastSoftGateTelemetryReason = null;
     softGateTelemetryFrameCounter = 0;
     try { setMicChunksValue(0); } catch (_) {}
@@ -1987,6 +2033,16 @@ export function createWsAudioRuntime(options = {}) {
       ? { shouldSend: true, vadLikelySpeech: false, rmsAtTrigger: null, reason: "keepalive" }
       : shouldSendFrameSoftGate({ vadState, speechSeen: speechSeenThisTurn });
 
+    const metaSampleRate = Number(meta.sampleRate);
+    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
+      pcmSampleRate = metaSampleRate;
+    }
+    const sr = meta?.sampleRate || meta?.sampleRateHz || null;
+    const effectiveSampleRate =
+      sr ||
+      metaSampleRate ||
+      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
+
     const turnControlEnabled = isTurnControlEnabled();
     if (turnControlEnabled && !isKeepalive && !speechSeenThisTurn && softDecision.vadLikelySpeech) {
       const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
@@ -1997,13 +2053,9 @@ export function createWsAudioRuntime(options = {}) {
         reqId: currentReqId,
         turnId: currentTurnId,
       });
-      const startSampleRate =
-        meta?.sampleRate ||
-        meta?.sampleRateHz ||
-        (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
       sendTurnStart({
         turnId: currentTurnId,
-        sampleRateHz: startSampleRate,
+        sampleRateHz: effectiveSampleRate,
         preRollMs: preSpeechBufferMs,
         vadState,
       });
@@ -2015,7 +2067,7 @@ export function createWsAudioRuntime(options = {}) {
           prerollChunksToSend = [];
         }
         if (prerollChunksToSend && prerollChunksToSend.length) {
-          sendPrerollChunks(prerollChunksToSend, startSampleRate, {
+          sendPrerollChunks(prerollChunksToSend, effectiveSampleRate, {
             turnId: currentTurnId,
             seq: pcmLastSeq,
           });
@@ -2052,19 +2104,8 @@ export function createWsAudioRuntime(options = {}) {
       }
     }
 
-    const sr = meta?.sampleRate || meta?.sampleRateHz || null;
     const sampledBytes = chunk.byteLength || 0;
     const seq = Number.isFinite(meta.seq) ? Number(meta.seq) : pcmLastSeq;
-    const metaSampleRate = Number(meta.sampleRate);
-    if (Number.isFinite(metaSampleRate) && metaSampleRate > 0) {
-      pcmSampleRate = metaSampleRate;
-    }
-
-    // Ensure this is declared as const
-    const effectiveSampleRate =
-      sr ||
-      metaSampleRate ||
-      (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
 
     if (sampledBytes > 0 && ((Math.random() * 50) | 0) === 0) {
       try {
@@ -2769,6 +2810,7 @@ export function createWsAudioRuntime(options = {}) {
     pcmLastBytes = null;
     pcmSampleRate = asrRate;
     pcmHardwareSampleRate = null;
+    deepgramV3KeepalivePcmEnabled = false;
     baseEnabled = false;
     baseEnabledReason = "reset";
     resetSilenceSuppression();
@@ -2808,6 +2850,10 @@ export function createWsAudioRuntime(options = {}) {
     audioKeepaliveIdleMs = next;
   }
 
+  function setDeepgramV3KeepalivePcmEnabled(value) {
+    deepgramV3KeepalivePcmEnabled = Boolean(value);
+  }
+
   return {
     ensurePcmSender,
     handlePcmFrame,
@@ -2830,6 +2876,7 @@ export function createWsAudioRuntime(options = {}) {
     sendAudioKeepaliveNow,
     setAudioKeepaliveMs,
     setAudioKeepaliveIdleMs,
+    setDeepgramV3KeepalivePcmEnabled,
     getAudioContext: () => audioCtx,
     getPcmWarm: () => pcmWarm,
     resetFirstChunkTelemetry,

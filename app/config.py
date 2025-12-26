@@ -65,6 +65,9 @@ DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS = _env_int(
 DEEPGRAM_V3_SILENCE_END_MS = _env_int(
     "DEEPGRAM_V3_SILENCE_END_MS", 800, minimum=0
 )
+DEEPGRAM_V3_KEEPALIVE_PCM_ENABLED = env_bool(
+    "DEEPGRAM_V3_KEEPALIVE_PCM_ENABLED", False
+)
 
 
 def get_env(name: str, default=None):
@@ -754,6 +757,7 @@ def build_session_policy(
     policy_v2["deepgramV3Enabled"] = DEEPGRAM_V3_ENABLED
     policy_v2["preSpeechBufferMs"] = DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS
     policy_v2["silenceEndMs"] = DEEPGRAM_V3_SILENCE_END_MS
+    policy_v2["deepgramV3KeepalivePcmEnabled"] = DEEPGRAM_V3_KEEPALIVE_PCM_ENABLED
 
     return policy_v2
 
