@@ -374,6 +374,9 @@ export function createWsAudioRuntime(options = {}) {
       return null;
     }
     micReacquireInFlight = true;
+    try {
+      updateState({ micReacquireInFlight: true });
+    } catch (_) {}
     micReacquireFailures += 1;
     let lastErrorMessage = null;
     let lastErrorNameLocal = null;
@@ -471,10 +474,10 @@ export function createWsAudioRuntime(options = {}) {
         });
       } catch (_) {}
       logMicState("reacquire_success");
-      updatePcmSenderState("mic_reacquire_success");
       try {
         updateState({ micUnavailable: false });
       } catch (_) {}
+      updatePcmSenderState("mic_reacquire_success");
       if (pendingReacquireReason) {
         const pending = pendingReacquireReason;
         pendingReacquireReason = null;
@@ -493,6 +496,9 @@ export function createWsAudioRuntime(options = {}) {
     } finally {
       if (micReacquireInFlight) {
         micReacquireInFlight = false;
+        try {
+          updateState({ micReacquireInFlight: false });
+        } catch (_) {}
         if (!reacquireSucceeded) {
           try {
             logStage("client.mic.reacquire.result", {
