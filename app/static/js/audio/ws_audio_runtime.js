@@ -1276,6 +1276,9 @@ export function createWsAudioRuntime(options = {}) {
     }
     lastHardGateLogged = signature;
     try {
+      // NOTE:
+      // - voicePhase: audio / gating lifecycle (VAD, sender, capture)
+      // - appPhase: UI / conversation lifecycle (greet, conversation_ready, user_turn)
       logStage("client.deepgram_v3.hard_gate_snapshot", {
         reason,
         allowed: hardGate.allowed ?? false,
@@ -1289,7 +1292,7 @@ export function createWsAudioRuntime(options = {}) {
         hasStream: gateSnapshot.hasStream,
         shouldSend: gateSnapshot.shouldSend,
         isAudioStreaming: gateSnapshot.isAudioStreaming,
-        appPhase: gateSnapshot.phaseValue || null,
+        appPhase: getAppStateSnapshot()?.phase || null,
       });
     } catch (_) {}
   }
