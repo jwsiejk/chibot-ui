@@ -162,6 +162,7 @@ class PcmRingBuffer {
   clear() {
     this.write = 0;
     this.filled = false;
+    this.lastOverflowed = false;
   }
 }
 
@@ -228,6 +229,7 @@ function createRingBufferManager(sampleRate) {
   function drainAll() {
     if (!ring) return [];
     const drained = ring.drainAll();
+    lastOverflowed = false;
     logStatus("drain", { draining: true, force: true });
     return drained;
   }
@@ -273,6 +275,16 @@ export function createWsAudioRuntime(options = {}) {
   } = options;
 
   const getAppState = () => resolveAppState(providedAppState);
+  const getAppStateSnapshot = () => {
+    const appState = getAppState();
+    return appState?.get?.() || appState?.getState?.() || appState || null;
+  };
+  const isTelemetryEnabled = () =>
+    Boolean(getAppStateSnapshot()?.policy?.deepgramV3TelemetryEnabled ?? true);
+  const isDeepgramV3Enabled = () =>
+    Boolean(getAppStateSnapshot()?.policy?.deepgramV3Enabled ?? getAppStateSnapshot()?.deepgramV3Enabled ?? false);
+  const isTurnControlEnabled = () =>
+    Boolean(getAppStateSnapshot()?.policy?.deepgramV3TurnControlEnabled ?? false) && isDeepgramV3Enabled();
 
   __firstPcmFrameLogged = false;
 
@@ -947,13 +959,6 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   const initialAppState = getAppState();
-  const telemetryEnabled = Boolean(initialAppState?.policy?.deepgramV3TelemetryEnabled ?? true);
-  const deepgramV3Enabled = Boolean(
-    initialAppState?.policy?.deepgramV3Enabled ?? initialAppState?.deepgramV3Enabled ?? false,
-  );
-  const deepgramV3TurnControlEnabled = Boolean(
-    initialAppState?.policy?.deepgramV3TurnControlEnabled ?? false,
-  ) && deepgramV3Enabled;
   const asrRate = Number.isFinite(initialAppState?.targetSampleRate)
     ? Number(initialAppState.targetSampleRate)
     : PCM_TARGET_SAMPLE_RATE;
@@ -965,16 +970,38 @@ export function createWsAudioRuntime(options = {}) {
   const ringStatusMinMs = 15000;
   const ringStatusMaxMs = 30000;
   let ringStatusTimerId = null;
+  let heartbeatIntervalId = null;
+  const clearRingStatusTimer = () => {
+    if (ringStatusTimerId) {
+      clearTimeout(ringStatusTimerId);
+      ringStatusTimerId = null;
+    }
+  };
+  const clearHeartbeatInterval = () => {
+    if (heartbeatIntervalId) {
+      clearInterval(heartbeatIntervalId);
+      heartbeatIntervalId = null;
+    }
+  };
+  const stopRuntimeTimers = () => {
+    clearRingStatusTimer();
+    clearHeartbeatInterval();
+  };
   const scheduleRingStatusLog = () => {
-    if (!telemetryEnabled) {
+    if (!isTelemetryEnabled()) {
       return;
     }
     const jitter = Math.floor(Math.random() * (ringStatusMaxMs - ringStatusMinMs + 1));
     const delay = ringStatusMinMs + jitter;
     ringStatusTimerId = setTimeout(() => {
       ringStatusTimerId = null;
+      if (!isTelemetryEnabled()) {
+        return;
+      }
       ringBufferManager.logStatus("interval");
-      scheduleRingStatusLog();
+      if (isTelemetryEnabled()) {
+        scheduleRingStatusLog();
+      }
     }, delay);
   };
   scheduleRingStatusLog();
@@ -999,8 +1026,11 @@ export function createWsAudioRuntime(options = {}) {
     ? initialAudioKeepaliveMs
     : AUDIO_KEEPALIVE_MS;
 
-  if (telemetryEnabled) {
-    setInterval(() => {
+  if (isTelemetryEnabled()) {
+    heartbeatIntervalId = setInterval(() => {
+      if (!isTelemetryEnabled()) {
+        return;
+      }
       const track = getCaptureStream?.()?.getAudioTracks?.()[0] || getCurrentTrack();
       try {
         const trackReadyState = track?.readyState || "missing";
@@ -1044,6 +1074,7 @@ export function createWsAudioRuntime(options = {}) {
       clearTimeout(micKeepaliveTimerId);
       micKeepaliveTimerId = null;
     }
+    stopRuntimeTimers();
   }
 
   function resetSilenceSuppression() {
@@ -1258,6 +1289,7 @@ export function createWsAudioRuntime(options = {}) {
         hasStream: gateSnapshot.hasStream,
         shouldSend: gateSnapshot.shouldSend,
         isAudioStreaming: gateSnapshot.isAudioStreaming,
+        appPhase: gateSnapshot.phaseValue || null,
       });
     } catch (_) {}
   }
@@ -1824,7 +1856,7 @@ export function createWsAudioRuntime(options = {}) {
         reqId: currentReqId,
         turnId: currentTurnId,
       });
-      if (deepgramV3TurnControlEnabled) {
+      if (isTurnControlEnabled()) {
         // 1. START: Wake up the server first
         try {
           safeSendJSON({
@@ -1976,6 +2008,45 @@ export function createWsAudioRuntime(options = {}) {
   function setBaseEnabled(enabled, reason = "manual") {
     baseEnabled = Boolean(enabled);
     baseEnabledReason = reason || baseEnabledReason || "manual";
+    if (baseEnabled && isTelemetryEnabled()) {
+      if (!heartbeatIntervalId) {
+        heartbeatIntervalId = setInterval(() => {
+          if (!isTelemetryEnabled()) {
+            return;
+          }
+          const track = getCaptureStream?.()?.getAudioTracks?.()[0] || getCurrentTrack();
+          try {
+            const trackReadyState = track?.readyState || "missing";
+            logStage("client.mic.heartbeat", {
+              trackReadyState,
+              enabled: track?.enabled,
+              muted: track?.muted,
+              audioCtxState: audioCtx?.state || "unknown",
+              isInterrupted: audioCtx?.state === "interrupted",
+              gumFailed,
+            });
+            logMicState("heartbeat");
+            if (trackReadyState === "missing") {
+              heartbeatMissingCount += 1;
+              if (heartbeatMissingCount > 1) {
+                scheduleMicReacquire("heartbeat_track_missing", 800);
+              }
+            } else {
+              heartbeatMissingCount = 0;
+            }
+            if (audioCtx?.state === "interrupted") {
+              try {
+                audioCtx.resume();
+                logStage("client.audio_context.recovered_from_interrupted", {});
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }, 5000);
+      }
+      if (!ringStatusTimerId) {
+        scheduleRingStatusLog();
+      }
+    }
     updatePcmSenderState(`set_base_enabled:${reason}`);
   }
 
