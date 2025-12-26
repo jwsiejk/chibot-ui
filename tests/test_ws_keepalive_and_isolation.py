@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import unittest
 import uuid
 from unittest.mock import patch
@@ -118,6 +119,9 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
     def test_multi_session_isolation(self) -> None:
         asyncio.run(self._test_multi_session_isolation())
 
+    def test_idle_tick_counts_as_activity(self) -> None:
+        asyncio.run(self._test_idle_tick_counts_as_activity())
+
     async def _test_server_keepalive_cadence(self) -> None:
         engine = LabelRecordingEngine()
         with patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "50"}, clear=False):
@@ -207,6 +211,42 @@ class TestWSKeepaliveAndIsolation(unittest.TestCase):
             finally:
                 await harness_a.close()
                 await harness_b.close()
+
+    async def _test_idle_tick_counts_as_activity(self) -> None:
+        engine = LabelRecordingEngine()
+        with (
+            patch.dict(os.environ, {"WS_PING_INTERVAL_MS": "20"}, clear=False),
+            patch("app.ws.adapter._HEARTBEAT_TIMEOUT_MS", 80),
+        ):
+            adapter = ChatV2Adapter(engine=engine)
+            harness = AdapterHarness(adapter, engine, label="idle")
+            await harness.start()
+            try:
+                for _ in range(6):
+                    ts_ms = int(time.time() * 1000)
+                    await harness._inbound.put(
+                        {
+                            "type": "websocket.receive",
+                            "text": json.dumps({"type": "client.idle", "lane": "mic", "ts": ts_ms}),
+                        }
+                    )
+                    await harness._inbound.put(
+                        {
+                            "type": "websocket.receive",
+                            "text": json.dumps({"type": "client.pong", "ts": ts_ms}),
+                        }
+                    )
+                    await asyncio.sleep(0.02)
+                await asyncio.sleep(0.03)
+                close_frames = [
+                    message
+                    for message in harness.sent
+                    if message.get("type") == "websocket.close"
+                    and message.get("reason") == "heartbeat_timeout"
+                ]
+                self.assertEqual(close_frames, [])
+            finally:
+                await harness.close()
 
 if __name__ == "__main__":  # pragma: no cover - convenience
     unittest.main()
