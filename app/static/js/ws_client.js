@@ -4065,6 +4065,7 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     hubLog: logStage,
     logStage,
     connection,
+    getPhase,
     handleMessageFrame: (frame) => {
       if (connection && typeof connection.handleParsedFrame === "function") {
         return connection.handleParsedFrame(frame);

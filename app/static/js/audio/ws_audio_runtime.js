@@ -253,9 +253,15 @@ export function createWsAudioRuntime(options = {}) {
   // It should NOT permanently poison the entire tab.
   let gumFailed = false;
   let lastGumError = null;
+  let lastErrorName = null;
   let lastTrackState = null;
   let lastConstraints = null;
-  let reacquireAttempted = false;
+  let micReacquireTimer = null;
+  let micReacquireInFlight = false;
+  let micReacquireFailures = 0;
+  let micHardFailed = false;
+  let pendingReacquireReason = null;
+  let heartbeatMissingCount = 0;
   let firstPcmToWsLogged = false;
 
   // Global diagnostics for debugging
@@ -265,15 +271,83 @@ export function createWsAudioRuntime(options = {}) {
       window.__askchipAudioDiag = {
         get gumFailed() { return gumFailed; },
         get lastGumError() { return lastGumError; },
+        get lastErrorName() { return lastErrorName; },
         get lastTrackState() { return lastTrackState; },
         get lastConstraints() { return lastConstraints; },
       };
     } catch (_) {}
   }
 
+  function getCurrentTrack() {
+    const stream = captureStreamResolved || pcmSender?.mediaStream || null;
+    return stream?.getAudioTracks?.()[0] || null;
+  }
+
+  function logMicState(reason = "heartbeat") {
+    const track = getCurrentTrack();
+    try {
+      logStage("client.mic.state", {
+        reason,
+        hasStream: Boolean(captureStreamResolved || pcmSender?.mediaStream),
+        trackReadyState: track?.readyState || "missing",
+        muted: track?.muted,
+        enabled: track?.enabled,
+        gumFailed,
+        lastErrorName: lastErrorName || null,
+      });
+    } catch (_) {}
+  }
+
+  function stopCaptureTracks(reason = "reacquire") {
+    const stream = captureStreamResolved || pcmSender?.mediaStream || null;
+    if (!stream) {
+      return;
+    }
+    try {
+      stream.getTracks?.().forEach((track) => {
+        try {
+          track.onended = null;
+        } catch (_) {}
+        try {
+          track.stop();
+        } catch (_) {}
+      });
+      logStage("client.mic.tracks_stopped", { reason });
+    } catch (_) {}
+    captureStreamResolved = null;
+  }
+
+  function scheduleMicReacquire(reason = "gum_failed", debounceMs = 800) {
+    if (micHardFailed && reason !== "user_retry") {
+      return;
+    }
+    if (micReacquireInFlight) {
+      pendingReacquireReason = reason;
+      return;
+    }
+    pendingReacquireReason = reason;
+    if (micReacquireTimer) {
+      clearTimeout(micReacquireTimer);
+    }
+    micReacquireTimer = setTimeout(() => {
+      micReacquireTimer = null;
+      const pendingReason = pendingReacquireReason || reason;
+      pendingReacquireReason = null;
+      try {
+        logStage("client.mic.reacquire.triggered", {
+          reason: pendingReason,
+          trackReadyState: getCurrentTrack()?.readyState || "missing",
+          audioCtxState: audioCtx?.state || "unknown",
+        });
+      } catch (_) {}
+      micReacquire(pendingReason);
+    }, debounceMs);
+  }
+
   function markGumFailed(reason, detail = {}) {
     gumFailed = true;
     lastGumError = detail?.error || detail?.message || null;
+    lastErrorName = detail?.errorName || detail?.name || lastErrorName;
     lastTrackState = detail?.trackState || lastTrackState;
     lastConstraints = detail?.constraints || lastConstraints;
     try {
@@ -284,39 +358,45 @@ export function createWsAudioRuntime(options = {}) {
         window.__gumFailed = gumFailed;
       } catch (_) {}
     }
-    if (!reacquireAttempted) {
-      reacquireAttempted = true;
-      micReacquire(reason);
-    }
+    scheduleMicReacquire(reason);
   }
 
   async function micReacquire(reason = "gum_failed") {
+    if (micReacquireInFlight) {
+      return null;
+    }
+    micReacquireInFlight = true;
+    micReacquireFailures += 1;
+    let lastErrorMessage = null;
+    let lastErrorNameLocal = null;
+    let reacquireSucceeded = false;
     try {
-      logStage("client.mic.reacquire.start", { reason });
-    } catch (_) {}
+      try {
+        logStage("client.mic.reacquire.start", { reason });
+      } catch (_) {}
 
-    gumFailed = false;
-    lastGumError = null;
-    lastTrackState = null;
-    lastConstraints = {
-      audio: {
-        channelCount: { ideal: 1 },
-        sampleRate: { ideal: 48000 },
-        echoCancellation: { ideal: true },
-        noiseSuppression: { ideal: true },
-        autoGainControl: { ideal: true },
-      },
-      video: false,
-    };
+      stopCaptureTracks("reacquire_start");
+      lastTrackState = null;
+      lastConstraints = {
+        audio: {
+          channelCount: { ideal: 1 },
+          sampleRate: { ideal: 48000 },
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+        },
+        video: false,
+      };
 
-    // Recreate MediaStream from shared mic hardware
-    let newStream = null;
-    try {
+      // Recreate MediaStream from shared mic hardware
+      let newStream = null;
       const ensureHardware = typeof window !== "undefined" ? window.ensureMicHardware : null;
       if (typeof ensureHardware === "function") {
         newStream = await ensureHardware(lastConstraints);
       }
       if (!newStream) {
+        lastErrorMessage = "hardware_unavailable";
+        lastErrorNameLocal = "NotFoundError";
         markGumFailed("hardware_unavailable_reacquire", { constraints: lastConstraints });
         return null;
       }
@@ -328,46 +408,109 @@ export function createWsAudioRuntime(options = {}) {
         track.enabled = true;
       }
       if (track?.readyState === "ended") {
+        lastErrorMessage = "track_ended";
+        lastErrorNameLocal = "TrackEndedError";
         markGumFailed("track_ended_immediately_reacquire", {
           trackState: track?.readyState || null,
           constraints: lastConstraints,
         });
         return null;
       }
+      if (track) {
+        try {
+          track.onended = () => {
+            scheduleMicReacquire("track_ended", 800);
+          };
+        } catch (_) {}
+      }
+
+      const attempts = micReacquireFailures;
+      captureStreamResolved = newStream;
+      gumFailed = false;
+      micHardFailed = false;
+      micReacquireFailures = 0;
+      lastGumError = null;
+      lastErrorName = null;
+      if (typeof window !== "undefined") window.__gumFailed = gumFailed;
+
+      // Replace PCM sender stream if exists
+      if (pcmSender && typeof pcmSender.replaceStream === "function") {
+        try {
+          pcmSender.replaceStream(newStream);
+          logStage("client.mic.reacquire.sender_replaced", {});
+        } catch (err) {
+          logStage("client.mic.reacquire.sender_replace_failed", { err: String(err) });
+        }
+      }
+
+      // Recreate AudioContext if suspended or closed
+      try {
+        if (audioCtx?.state === "suspended" || audioCtx?.state === "closed") {
+          logStage("client.mic.reacquire.recreate_audioctx", { prev: audioCtx?.state });
+          wsDiag("audio_warmup", { state: audioCtx?.state });
+          audioCtx = getMicAudioContext();
+        }
+      } catch (err) {
+        logStage("client.mic.reacquire.audioctx_failed", { err: String(err) });
+      }
+
+      try {
+        logStage("client.mic.reacquire.result", {
+          ok: true,
+          errorName: null,
+          errorMessage: null,
+          attempts,
+        });
+      } catch (_) {}
+      logMicState("reacquire_success");
+      updatePcmSenderState("mic_reacquire_success");
+      try {
+        updateState({ micUnavailable: false });
+      } catch (_) {}
+      if (pendingReacquireReason) {
+        const pending = pendingReacquireReason;
+        pendingReacquireReason = null;
+        scheduleMicReacquire(pending, 0);
+      }
+
+      reacquireSucceeded = true;
+      return newStream;
     } catch (err) {
+      lastErrorMessage = err?.message || String(err);
+      lastErrorNameLocal = err?.name || "gum_failed";
       gumFailed = true;
-      lastGumError = err?.message || String(err);
+      lastGumError = lastErrorMessage;
       logStage("client.mic.reacquire.failed", { err: String(err) });
       return null;
-    }
-
-    captureStreamResolved = newStream;
-    if (typeof window !== "undefined") window.__gumFailed = gumFailed;
-
-    // Replace PCM sender stream if exists
-    if (pcmSender && typeof pcmSender.replaceStream === "function") {
-      try {
-        pcmSender.replaceStream(newStream);
-        logStage("client.mic.reacquire.sender_replaced", {});
-      } catch (err) {
-        logStage("client.mic.reacquire.sender_replace_failed", { err: String(err) });
+    } finally {
+      if (micReacquireInFlight) {
+        micReacquireInFlight = false;
+        if (!reacquireSucceeded) {
+          try {
+            logStage("client.mic.reacquire.result", {
+              ok: false,
+              errorName: lastErrorNameLocal || lastErrorName || null,
+              errorMessage: lastErrorMessage || lastGumError || null,
+              attempts: micReacquireFailures,
+            });
+          } catch (_) {}
+          lastErrorName = lastErrorNameLocal || lastErrorName;
+          if (micReacquireFailures >= 3) {
+            micHardFailed = true;
+            gumFailed = true;
+            updatePcmSenderState("mic_reacquire_hard_failed");
+            recordClientBannerEvent("mic.unavailable", {
+              message: "Microphone unavailable — click to retry",
+              attempts: micReacquireFailures,
+            });
+            try {
+              updateState({ micUnavailable: true });
+            } catch (_) {}
+          }
+          logMicState("reacquire_failed");
+        }
       }
     }
-
-    // Recreate AudioContext if suspended or closed
-    try {
-      if (audioCtx?.state === "suspended" || audioCtx?.state === "closed") {
-        logStage("client.mic.reacquire.recreate_audioctx", { prev: audioCtx?.state });
-        wsDiag("audio_warmup", { state: audioCtx?.state });
-        audioCtx = getMicAudioContext();
-      }
-    } catch (err) {
-      logStage("client.mic.reacquire.audioctx_failed", { err: String(err) });
-    }
-
-    reacquireAttempted = false;
-
-    return newStream;
   }
 
   try {
@@ -787,16 +930,26 @@ export function createWsAudioRuntime(options = {}) {
     : AUDIO_KEEPALIVE_MS;
 
   setInterval(() => {
-    const track = getCaptureStream?.()?.getAudioTracks?.()[0];
+    const track = getCaptureStream?.()?.getAudioTracks?.()[0] || getCurrentTrack();
     try {
+      const trackReadyState = track?.readyState || "missing";
       logStage("client.mic.heartbeat", {
-        trackReadyState: track?.readyState || "missing",
+        trackReadyState,
         enabled: track?.enabled,
         muted: track?.muted,
         audioCtxState: audioCtx?.state || "unknown",
         isInterrupted: audioCtx?.state === "interrupted",
         gumFailed,
       });
+      logMicState("heartbeat");
+      if (trackReadyState === "missing") {
+        heartbeatMissingCount += 1;
+        if (heartbeatMissingCount > 1) {
+          scheduleMicReacquire("heartbeat_track_missing", 800);
+        }
+      } else {
+        heartbeatMissingCount = 0;
+      }
       if (audioCtx?.state === "interrupted") {
         try {
           audioCtx.resume();
@@ -805,6 +958,14 @@ export function createWsAudioRuntime(options = {}) {
       }
     } catch (_) {}
   }, 500);
+
+  if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
+    try {
+      navigator.mediaDevices.addEventListener("devicechange", () => {
+        scheduleMicReacquire("devicechange", 800);
+      });
+    } catch (_) {}
+  }
 
   function clearAudioKeepaliveTimer() {
     if (micKeepaliveTimerId) {
@@ -1440,6 +1601,19 @@ export function createWsAudioRuntime(options = {}) {
     }
     const isKeepalive = Boolean(meta.keepalive);
     let prerollChunksToSend = null;
+    if (gumFailed || micHardFailed) {
+      try {
+        logStage("client.pcm_sender.disabled_for_gum_failed", {
+          gumFailed,
+          micHardFailed,
+          lastGumError,
+          lastErrorName,
+          lastTrackState,
+        });
+      } catch (_) {}
+      updatePcmSenderState("gum_failed_block_send");
+      return;
+    }
     wsDiag("pcm_send_attempt", {
       bytes: chunk?.byteLength,
       gumFailed,
@@ -1452,21 +1626,6 @@ export function createWsAudioRuntime(options = {}) {
         turnId: currentTurnId,
       });
     } catch (_) {}
-    // Instead of hard abort, allow one retry per session.
-    if (gumFailed) {
-      try {
-        logStage("client.mic.capture_retry_due_to_gum_failed", {
-          gumFailed,
-          lastGumError,
-          lastTrackState,
-          lastConstraints,
-        });
-      } catch (_) {}
-      gumFailed = false;
-      if (typeof window !== "undefined") {
-        try { window.__gumFailed = gumFailed; } catch (_) {}
-      }
-    }
     const chunkCount = Number.isFinite(meta.chunkCount) ? Number(meta.chunkCount) : 1;
     const currentReqId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
     if (currentReqId && currentReqId !== lastSpeechSeenReqId) {
@@ -2118,6 +2277,13 @@ export function createWsAudioRuntime(options = {}) {
       if (track?.readyState === "ended") {
         markGumFailed("track_ended_immediately", { trackState: track.readyState });
         return null;
+      }
+      if (track) {
+        try {
+          track.onended = () => {
+            scheduleMicReacquire("track_ended", 800);
+          };
+        } catch (_) {}
       }
       updatePcmSenderState("ensure_sender_stream_resolved");
     }
