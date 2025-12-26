@@ -58,6 +58,13 @@ DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "en-US") or "en-US"
 DEEPGRAM_STT_SAMPLE_RATE = _env_int("DEEPGRAM_STT_SAMPLE_RATE", 16000, minimum=1)
 DEEPGRAM_STT_ENDPOINTING_MS = _env_int("DEEPGRAM_STT_ENDPOINTING_MS", 0, minimum=0)
 DEEPGRAM_STT_INTERIM_RESULTS = env_bool("DEEPGRAM_STT_INTERIM_RESULTS", True)
+DEEPGRAM_V3_ENABLED = env_bool("DEEPGRAM_V3_ENABLED", False)
+DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS = _env_int(
+    "DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS", 700, minimum=0
+)
+DEEPGRAM_V3_SILENCE_END_MS = _env_int(
+    "DEEPGRAM_V3_SILENCE_END_MS", 800, minimum=0
+)
 
 
 def get_env(name: str, default=None):
@@ -744,6 +751,10 @@ def build_session_policy(
             _log.info("capture_mode_override reason=webrtc_aec_disabled original=%r", capture_policy.get("mode"))
         capture_policy["mode"] = "pcm"
 
+    policy_v2["deepgramV3Enabled"] = DEEPGRAM_V3_ENABLED
+    policy_v2["preSpeechBufferMs"] = DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS
+    policy_v2["silenceEndMs"] = DEEPGRAM_V3_SILENCE_END_MS
+
     return policy_v2
 
 
@@ -966,6 +977,9 @@ __all__ = [
     "DEEPGRAM_STT_LANGUAGE",
     "DEEPGRAM_STT_MODEL",
     "DEEPGRAM_STT_SAMPLE_RATE",
+    "DEEPGRAM_V3_ENABLED",
+    "DEEPGRAM_V3_PRE_SPEECH_BUFFER_MS",
+    "DEEPGRAM_V3_SILENCE_END_MS",
     "DIAG_AUDIO_GUARD",
     "DIAG_CHUNK_SAMPLE_N",
     "DIAG_CLIENT_HUD",

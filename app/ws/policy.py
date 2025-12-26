@@ -26,6 +26,11 @@ DEPRECATED_KEYS = {
 
 SAFE_DEFAULTS_V2: dict[str, Any] = {
     "version": POLICY_VERSION,
+    "deepgramV3Enabled": False,
+    "deepgramV3TurnControlEnabled": False,
+    "deepgramV3TelemetryEnabled": True,
+    "preSpeechBufferMs": 700,
+    "silenceEndMs": 800,
     "asr": {
         "server_starts_input": True,
         "prearm_on_tts_end": True,
