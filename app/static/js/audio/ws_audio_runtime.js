@@ -171,7 +171,8 @@ function createRingBufferManager(sampleRate) {
   let capacityMs = DEFAULT_RING_CAPACITY_MS;
   let lastStatus = null;
   let lastStatusAt = 0;
-  const statusIntervalMs = 1000;
+  const statusIntervalMs = 15000;
+  let lastOverflowed = false;
 
   function logStatus(reason = "status", { draining = false, force = false } = {}) {
     if (!ring) return;
@@ -206,6 +207,7 @@ function createRingBufferManager(sampleRate) {
     capacityMs = Math.max(DEFAULT_RING_CAPACITY_MS, preSpeechBufferMs);
     const rate = Number.isFinite(sr) && sr > 0 ? sr : PCM_TARGET_SAMPLE_RATE;
     ring = new PcmRingBuffer({ millis: capacityMs, sampleRate: rate, channels: DEFAULT_PCM_CHANNELS });
+    lastOverflowed = false;
     logStatus("init", { force: true });
     return ring;
   }
@@ -214,6 +216,10 @@ function createRingBufferManager(sampleRate) {
     if (!ring) return;
     try {
       ring.push(frame);
+      if (ring.lastOverflowed && !lastOverflowed) {
+        logStatus("overflow", { force: true });
+      }
+      lastOverflowed = ring.lastOverflowed;
     } catch (err) {
       console.warn("ringBuffer.pushFrame failed", err);
     }
@@ -941,6 +947,13 @@ export function createWsAudioRuntime(options = {}) {
   }
 
   const initialAppState = getAppState();
+  const telemetryEnabled = Boolean(initialAppState?.policy?.deepgramV3TelemetryEnabled ?? true);
+  const deepgramV3Enabled = Boolean(
+    initialAppState?.policy?.deepgramV3Enabled ?? initialAppState?.deepgramV3Enabled ?? false,
+  );
+  const deepgramV3TurnControlEnabled = Boolean(
+    initialAppState?.policy?.deepgramV3TurnControlEnabled ?? false,
+  ) && deepgramV3Enabled;
   const asrRate = Number.isFinite(initialAppState?.targetSampleRate)
     ? Number(initialAppState.targetSampleRate)
     : PCM_TARGET_SAMPLE_RATE;
@@ -949,9 +962,22 @@ export function createWsAudioRuntime(options = {}) {
     ? initialAppState.preSpeechBufferMs
     : DEFAULT_PRE_SPEECH_BUFFER_MS;
   const pcmRing = ringBufferManager.init(preSpeechBufferMs, asrRate);
-  setInterval(() => {
-    ringBufferManager.logStatus("interval");
-  }, 1000);
+  const ringStatusMinMs = 15000;
+  const ringStatusMaxMs = 30000;
+  let ringStatusTimerId = null;
+  const scheduleRingStatusLog = () => {
+    if (!telemetryEnabled) {
+      return;
+    }
+    const jitter = Math.floor(Math.random() * (ringStatusMaxMs - ringStatusMinMs + 1));
+    const delay = ringStatusMinMs + jitter;
+    ringStatusTimerId = setTimeout(() => {
+      ringStatusTimerId = null;
+      ringBufferManager.logStatus("interval");
+      scheduleRingStatusLog();
+    }, delay);
+  };
+  scheduleRingStatusLog();
 
   let pcmSender = null;
   let pcmSenderInitPromise = null;
@@ -973,35 +999,37 @@ export function createWsAudioRuntime(options = {}) {
     ? initialAudioKeepaliveMs
     : AUDIO_KEEPALIVE_MS;
 
-  setInterval(() => {
-    const track = getCaptureStream?.()?.getAudioTracks?.()[0] || getCurrentTrack();
-    try {
-      const trackReadyState = track?.readyState || "missing";
-      logStage("client.mic.heartbeat", {
-        trackReadyState,
-        enabled: track?.enabled,
-        muted: track?.muted,
-        audioCtxState: audioCtx?.state || "unknown",
-        isInterrupted: audioCtx?.state === "interrupted",
-        gumFailed,
-      });
-      logMicState("heartbeat");
-      if (trackReadyState === "missing") {
-        heartbeatMissingCount += 1;
-        if (heartbeatMissingCount > 1) {
-          scheduleMicReacquire("heartbeat_track_missing", 800);
+  if (telemetryEnabled) {
+    setInterval(() => {
+      const track = getCaptureStream?.()?.getAudioTracks?.()[0] || getCurrentTrack();
+      try {
+        const trackReadyState = track?.readyState || "missing";
+        logStage("client.mic.heartbeat", {
+          trackReadyState,
+          enabled: track?.enabled,
+          muted: track?.muted,
+          audioCtxState: audioCtx?.state || "unknown",
+          isInterrupted: audioCtx?.state === "interrupted",
+          gumFailed,
+        });
+        logMicState("heartbeat");
+        if (trackReadyState === "missing") {
+          heartbeatMissingCount += 1;
+          if (heartbeatMissingCount > 1) {
+            scheduleMicReacquire("heartbeat_track_missing", 800);
+          }
+        } else {
+          heartbeatMissingCount = 0;
         }
-      } else {
-        heartbeatMissingCount = 0;
-      }
-      if (audioCtx?.state === "interrupted") {
-        try {
-          audioCtx.resume();
-          logStage("client.audio_context.recovered_from_interrupted", {});
-        } catch (_) {}
-      }
-    } catch (_) {}
-  }, 500);
+        if (audioCtx?.state === "interrupted") {
+          try {
+            audioCtx.resume();
+            logStage("client.audio_context.recovered_from_interrupted", {});
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }, 5000);
+  }
 
   if (typeof navigator !== "undefined" && navigator.mediaDevices?.addEventListener) {
     try {
@@ -1298,7 +1326,7 @@ export function createWsAudioRuntime(options = {}) {
     }
     speechNeverMarkedSeenLogged = true;
     try {
-      logStage("client.asr_v3.speech_never_marked_seen", { turnId: currentTurnId || null });
+      logStage("client.deepgram_v3.speech_never_marked_seen", { turnId: currentTurnId || null });
     } catch (_) {}
   }
 
@@ -1371,9 +1399,25 @@ export function createWsAudioRuntime(options = {}) {
     if (!force && now - lastPcmSummaryAt < pcmSummaryWindowMs) {
       return;
     }
-    if (!pcmSummaryCounters.framesAttempted && !pcmSummaryCounters.framesSent && !pcmSummaryCounters.framesDropped) {
+    if (pcmSummaryCounters.framesAttempted <= 0) {
       return;
     }
+    const dropReasons = pcmSummaryCounters.dropReasons || {};
+    const dropEntries = Object.entries(dropReasons)
+      .filter(([, count]) => Number.isFinite(count) && count > 0)
+      .sort((a, b) => b[1] - a[1]);
+    const topEntries = dropEntries.slice(0, 3);
+    const otherTotal = dropEntries.slice(3).reduce((sum, [, count]) => sum + count, 0);
+    const droppedByReason = {};
+    for (const [reason, count] of topEntries) {
+      droppedByReason[reason] = count;
+    }
+    if (otherTotal > 0) {
+      droppedByReason.other = otherTotal;
+    }
+    const summaryAppState = getAppState();
+    const summarySocket = resolveSocket();
+    const summaryWsReadyState = summarySocket?.readyState ?? null;
     lastPcmSummaryAt = now;
     try {
       logStage("client.deepgram_v3.pcm_send_summary", {
@@ -1381,8 +1425,11 @@ export function createWsAudioRuntime(options = {}) {
         framesAttempted: pcmSummaryCounters.framesAttempted,
         framesSent: pcmSummaryCounters.framesSent,
         framesDropped: pcmSummaryCounters.framesDropped,
-        droppedByReason: { ...pcmSummaryCounters.dropReasons },
+        droppedByReason,
         gateReady: pcmSummaryGateReady,
+        wsPhase: typeof summaryAppState?.wsPhase === "string" ? summaryAppState.wsPhase : null,
+        appPhase: typeof summaryAppState?.phase === "string" ? summaryAppState.phase : null,
+        wsReadyState: typeof summaryWsReadyState === "number" ? summaryWsReadyState : null,
       });
     } catch (_) {}
     pcmSummaryCounters = {
@@ -1410,7 +1457,7 @@ export function createWsAudioRuntime(options = {}) {
       return;
     }
     try {
-      logStage("client.asr_v3.policy_hook", { reason, ...detail });
+      logStage("client.deepgram_v3.policy_hook", { reason, ...detail });
     } catch (_) {}
   }
 
@@ -1424,7 +1471,7 @@ export function createWsAudioRuntime(options = {}) {
     const turnId = baseMeta.turnId || null;
 
     try {
-      logStage("client.asr_v3.preroll_flush", {
+      logStage("client.deepgram_v3.preroll_flush", {
         lane,
         turnId,
         chunks: prerollChunks.length,
@@ -1777,40 +1824,42 @@ export function createWsAudioRuntime(options = {}) {
         reqId: currentReqId,
         turnId: currentTurnId,
       });
-      // 1. START: Wake up the server first
-      try {
-        safeSendJSON({
-          type: "client.turn_start",
-          lane: "mic",
-          turn_id: currentTurnId,
-          pre_roll_ms: 0,
-        });
-      } catch (_) {}
-      // 2. PREPARE AUDIO
-      try {
-        prerollChunksToSend = ringBufferManager.drainAll();
-      } catch (_) {
-        prerollChunksToSend = [];
-      }
-      // 3. AUDIO "DOUBLE TAP": Send now, and send again shortly to beat the race condition
-      if (prerollChunksToSend && prerollChunksToSend.length) {
-        const prerollRate = meta?.sampleRate || meta?.sampleRateHz || asrRate;
-        const seq = pcmLastSeq;
+      if (deepgramV3TurnControlEnabled) {
+        // 1. START: Wake up the server first
+        try {
+          safeSendJSON({
+            type: "client.turn_start",
+            lane: "mic",
+            turn_id: currentTurnId,
+            pre_roll_ms: 0,
+          });
+        } catch (_) {}
+        // 2. PREPARE AUDIO
+        try {
+          prerollChunksToSend = ringBufferManager.drainAll();
+        } catch (_) {
+          prerollChunksToSend = [];
+        }
+        // 3. AUDIO "DOUBLE TAP": Send now, and send again shortly to beat the race condition
+        if (prerollChunksToSend && prerollChunksToSend.length) {
+          const prerollRate = meta?.sampleRate || meta?.sampleRateHz || asrRate;
+          const seq = pcmLastSeq;
 
-        // Burst 1: Immediate (might be dropped by race condition)
-        sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq });
-        // Burst 2: Delayed (guaranteed to arrive after server is armed)
-        setTimeout(() => {
-          if (currentTurnId) { // Only send if turn still active
-            sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq });
-          }
-        }, 50);
+          // Burst 1: Immediate (might be dropped by race condition)
+          sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq });
+          // Burst 2: Delayed (guaranteed to arrive after server is armed)
+          setTimeout(() => {
+            if (currentTurnId) { // Only send if turn still active
+              sendPrerollChunks(prerollChunksToSend, prerollRate, { turnId: currentTurnId, seq });
+            }
+          }, 50);
 
-        prerollChunksToSend = null; // Clear so we don't triple-send below
+          prerollChunksToSend = null; // Clear so we don't triple-send below
+        }
+        try {
+          logStage("client.deepgram_v3.turn_sequence_initiated", { turnId: currentTurnId });
+        } catch (_) {}
       }
-      try {
-        logStage("client.asr_v3.turn_sequence_initiated", { turnId: currentTurnId });
-      } catch (_) {}
     }
     // Telemetry-only soft gate: we always send PCM when the hard gate allows it.
     maybeEmitSoftGateTelemetry({
@@ -2312,7 +2361,7 @@ export function createWsAudioRuntime(options = {}) {
         const appState = getAppState();
         const gateSid = sid || appState?.sid || appState?.sessionId || null;
         try {
-          logStage("client.asr_v3.sender_gate_opened", {
+          logStage("client.deepgram_v3.sender_gate_opened", {
             sid: gateSid,
             phase: phaseValue,
             wsPhase,
