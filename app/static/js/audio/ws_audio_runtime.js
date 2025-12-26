@@ -95,6 +95,8 @@ class PcmRingBuffer {
     this.buf = new Int16Array(this.maxSamples);
     this.write = 0;
     this.filled = false;
+    this.overflowCount = 0;
+    this.lastOverflowed = false;
   }
 
   push(int16Chunk) {
@@ -104,6 +106,8 @@ class PcmRingBuffer {
       this.buf.set(data.subarray(n - this.maxSamples));
       this.write = 0;
       this.filled = true;
+      this.overflowCount += 1;
+      this.lastOverflowed = true;
       return;
     }
     const end = this.write + n;
@@ -113,6 +117,10 @@ class PcmRingBuffer {
       const first = this.maxSamples - this.write;
       this.buf.set(data.subarray(0, first), this.write);
       this.buf.set(data.subarray(first), 0);
+    }
+    this.lastOverflowed = this.filled || end > this.maxSamples;
+    if (this.lastOverflowed) {
+      this.overflowCount += 1;
     }
     this.write = (end % this.maxSamples);
     if (this.write === 0) this.filled = true;
@@ -162,19 +170,32 @@ function createRingBufferManager(sampleRate) {
   let preSpeechBufferMs = DEFAULT_PRE_SPEECH_BUFFER_MS;
   let capacityMs = DEFAULT_RING_CAPACITY_MS;
   let lastStatus = null;
+  let lastStatusAt = 0;
+  const statusIntervalMs = 1000;
 
-  function logStatus(reason = "status") {
+  function logStatus(reason = "status", { draining = false, force = false } = {}) {
     if (!ring) return;
+    const now = Date.now();
+    if (!force && now - lastStatusAt < statusIntervalMs) {
+      return;
+    }
     const framesStored = ring.filled ? ring.maxSamples : ring.write;
-    const statusSignature = `${reason}:${framesStored}`;
+    const statusSignature = `${reason}:${framesStored}:${draining ? "drain" : "idle"}`;
     if (statusSignature === lastStatus) return;
     lastStatus = statusSignature;
+    lastStatusAt = now;
     try {
-      logStage("client.asr_v3.ring_buffer_status", {
+      logStage("client.deepgram_v3.ring_buffer_status", {
         preSpeechBufferMs,
         capacityMs,
+        sampleRate: ring.sampleRate,
         framesStored,
+        samplesStored: framesStored,
         bytesStored: framesStored * Int16Array.BYTES_PER_ELEMENT,
+        filled: ring.filled,
+        overflowed: ring.lastOverflowed,
+        overflowCount: ring.overflowCount,
+        draining,
         reason,
       });
     } catch (_) {}
@@ -185,7 +206,7 @@ function createRingBufferManager(sampleRate) {
     capacityMs = Math.max(DEFAULT_RING_CAPACITY_MS, preSpeechBufferMs);
     const rate = Number.isFinite(sr) && sr > 0 ? sr : PCM_TARGET_SAMPLE_RATE;
     ring = new PcmRingBuffer({ millis: capacityMs, sampleRate: rate, channels: DEFAULT_PCM_CHANNELS });
-    logStatus("init");
+    logStatus("init", { force: true });
     return ring;
   }
 
@@ -201,7 +222,7 @@ function createRingBufferManager(sampleRate) {
   function drainAll() {
     if (!ring) return [];
     const drained = ring.drainAll();
-    logStatus("drain");
+    logStatus("drain", { draining: true, force: true });
     return drained;
   }
 
@@ -737,6 +758,7 @@ export function createWsAudioRuntime(options = {}) {
   };
 
   const safeSendAudioChunk = (payload, meta = {}) => {
+    lastPcmSendDropReason = null;
     const currentReqId = typeof getCurrentTurnReqId === "function"
       ? (getCurrentTurnReqId() || null)
       : null;
@@ -775,6 +797,7 @@ export function createWsAudioRuntime(options = {}) {
     const socketOpen = !!socket && socket.readyState === WebSocket.OPEN;
 
     if (!socketOpen || wsPhase === "closing" || wsPhase === "closed") {
+      lastPcmSendDropReason = "ws_not_open";
       logWsAudioDropOnce(enrichedMeta, "ws_not_open");
       return false;
     }
@@ -796,6 +819,7 @@ export function createWsAudioRuntime(options = {}) {
         return true;
       } catch (err) {
         console.warn("sendAudioChunk delegate failed", err);
+        lastPcmSendDropReason = "delegate_exception";
         logWsAudioDropOnce(enrichedMeta, "delegate_exception");
       }
     }
@@ -817,6 +841,7 @@ export function createWsAudioRuntime(options = {}) {
         return true;
       } catch (err) {
         console.warn("WSClient.sendAudioChunk failed", err);
+        lastPcmSendDropReason = "send_exception";
         logWsAudioDropOnce(enrichedMeta, "send_exception");
       }
     }
@@ -829,6 +854,7 @@ export function createWsAudioRuntime(options = {}) {
         turnId: enrichedMeta.turnId || null,
       });
     } catch (_) {}
+    lastPcmSendDropReason = lastPcmSendDropReason || "no_delegate";
     logWsAudioDropOnce(enrichedMeta, "no_delegate");
     return false;
   };
@@ -923,6 +949,9 @@ export function createWsAudioRuntime(options = {}) {
     ? initialAppState.preSpeechBufferMs
     : DEFAULT_PRE_SPEECH_BUFFER_MS;
   const pcmRing = ringBufferManager.init(preSpeechBufferMs, asrRate);
+  setInterval(() => {
+    ringBufferManager.logStatus("interval");
+  }, 1000);
 
   let pcmSender = null;
   let pcmSenderInitPromise = null;
@@ -937,6 +966,7 @@ export function createWsAudioRuntime(options = {}) {
   let micKeepaliveTimerId = null;
   let micLastChunkAt = 0;
   let lastRealAudioAt = 0;
+  let lastPcmSendDropReason = null;
   localFirstChunkSeen = readFirstChunkSeen();
   localMicRecordingStartAt = readMicRecordingStartAt();
   audioKeepaliveMs = Number.isFinite(initialAudioKeepaliveMs) && initialAudioKeepaliveMs > 0
@@ -1166,16 +1196,40 @@ export function createWsAudioRuntime(options = {}) {
 
   let lastHardGateLogged = null;
   let lastPcmGateLoggedSignature = null;
-  function maybeLogHardGate(snapshot, { wsPhase }) {
-    const signature = snapshot ? `${snapshot.allowed}:${snapshot.reason}` : "none";
-    if (lastHardGateLogged === signature) return;
+  function emitHardGateSnapshot({
+    hardGate,
+    gateSnapshot,
+    reason = "gate_change",
+    force = false,
+  } = {}) {
+    if (!hardGate || !gateSnapshot) return;
+    const signature = [
+      hardGate.allowed ? "A1" : "A0",
+      hardGate.reason || "unknown",
+      gateSnapshot.shouldSend ? "S1" : "S0",
+      gateSnapshot.baseGate ? "B1" : "B0",
+      gateSnapshot.hasStream ? "H1" : "H0",
+      gateSnapshot.senderPaused ? "P1" : "P0",
+      gateSnapshot.wsPhase || "null",
+    ].join("|");
+    if (!force && lastHardGateLogged === signature) {
+      return;
+    }
     lastHardGateLogged = signature;
     try {
-      logStage("client.asr_v3.hard_gate_snapshot", {
-        allowed: snapshot?.allowed ?? false,
-        reason: snapshot?.reason || "unknown",
-        wsPhase,
-        wsReadyState: typeof snapshot?.wsReadyState === "number" ? snapshot.wsReadyState : null,
+      logStage("client.deepgram_v3.hard_gate_snapshot", {
+        reason,
+        allowed: hardGate.allowed ?? false,
+        hard_gate_reason: hardGate.reason || "unknown",
+        voicePhase: gateSnapshot.phaseValue || null,
+        wsPhase: gateSnapshot.wsPhase || null,
+        wsReadyState: typeof hardGate.wsReadyState === "number" ? hardGate.wsReadyState : null,
+        asrReady: gateSnapshot.asrReady,
+        senderPaused: gateSnapshot.senderPaused,
+        base_enabled: gateSnapshot.baseGate,
+        hasStream: gateSnapshot.hasStream,
+        shouldSend: gateSnapshot.shouldSend,
+        isAudioStreaming: gateSnapshot.isAudioStreaming,
       });
     } catch (_) {}
   }
@@ -1248,14 +1302,23 @@ export function createWsAudioRuntime(options = {}) {
     } catch (_) {}
   }
 
-  function markSpeechSeen({ rmsAtTrigger = null, framesSinceGreet = null, reqId = null }) {
+  function markSpeechSeen({
+    rmsAtTrigger = null,
+    framesSinceGreet = null,
+    reqId = null,
+    turnId = null,
+  }) {
     speechSeenThisTurn = true;
     lastSpeechSeenReqId = reqId || lastSpeechSeenReqId || null;
     try {
-      logStage("client.asr_v3.speech_seen_this_turn", {
+      logStage("client.deepgram_v3.speech_seen_this_turn", {
         speechSeenThisTurn: true,
         rmsAtTrigger,
         framesSinceGreet,
+        reqId: lastSpeechSeenReqId,
+        turnId: turnId || currentTurnId || null,
+        ts_ms: Date.now(),
+        ts_mono_ms: typeof performance?.now === "function" ? performance.now() : null,
       });
     } catch (_) {}
   }
@@ -1274,9 +1337,13 @@ export function createWsAudioRuntime(options = {}) {
     try { updateState({ chunkCount: 0, lastChunkTs: null }); } catch (_) {}
   }
 
-  const pcmSummaryWindowMs = 2000;
-  // framesDroppedSoftGate is deprecated: soft gate is telemetry-only and never drops frames.
-  let pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
+  const pcmSummaryWindowMs = 5000;
+  let pcmSummaryCounters = {
+    framesAttempted: 0,
+    framesSent: 0,
+    framesDropped: 0,
+    dropReasons: {},
+  };
   let pcmSummaryGateReady = false;
   let lastPcmSummaryAt = 0;
 
@@ -1304,28 +1371,37 @@ export function createWsAudioRuntime(options = {}) {
     if (!force && now - lastPcmSummaryAt < pcmSummaryWindowMs) {
       return;
     }
-    if (!pcmSummaryCounters.framesSent && !pcmSummaryCounters.framesDroppedHardGate && !pcmSummaryCounters.framesDroppedSoftGate) {
+    if (!pcmSummaryCounters.framesAttempted && !pcmSummaryCounters.framesSent && !pcmSummaryCounters.framesDropped) {
       return;
     }
     lastPcmSummaryAt = now;
     try {
-      logStage("client.asr_v3.pcm_send_summary", {
+      logStage("client.deepgram_v3.pcm_send_summary", {
         windowMs: pcmSummaryWindowMs,
+        framesAttempted: pcmSummaryCounters.framesAttempted,
         framesSent: pcmSummaryCounters.framesSent,
-        framesDroppedHardGate: pcmSummaryCounters.framesDroppedHardGate,
-        // Deprecated: remains at 0 because soft gate is telemetry-only.
-        framesDroppedSoftGate: pcmSummaryCounters.framesDroppedSoftGate,
+        framesDropped: pcmSummaryCounters.framesDropped,
+        droppedByReason: { ...pcmSummaryCounters.dropReasons },
         gateReady: pcmSummaryGateReady,
       });
     } catch (_) {}
-    pcmSummaryCounters = { framesSent: 0, framesDroppedHardGate: 0, framesDroppedSoftGate: 0 };
+    pcmSummaryCounters = {
+      framesAttempted: 0,
+      framesSent: 0,
+      framesDropped: 0,
+      dropReasons: {},
+    };
     pcmSummaryGateReady = false;
   }
 
-  function recordPcmFrameOutcome({ sent = 0, droppedHard = 0, droppedSoft = 0 }) {
+  function recordPcmFrameOutcome({ attempted = 0, sent = 0, dropped = 0, dropReason = null }) {
+    pcmSummaryCounters.framesAttempted += attempted;
     pcmSummaryCounters.framesSent += sent;
-    pcmSummaryCounters.framesDroppedHardGate += droppedHard;
-    pcmSummaryCounters.framesDroppedSoftGate += droppedSoft;
+    pcmSummaryCounters.framesDropped += dropped;
+    if (dropReason) {
+      const key = String(dropReason);
+      pcmSummaryCounters.dropReasons[key] = (pcmSummaryCounters.dropReasons[key] || 0) + dropped;
+    }
     maybeLogPcmSummary(false);
   }
 
@@ -1370,8 +1446,13 @@ export function createWsAudioRuntime(options = {}) {
         turnId,
       });
       if (sent) {
-        recordPcmFrameOutcome({ sent: 1 });
+        recordPcmFrameOutcome({ attempted: 1, sent: 1 });
       } else {
+        recordPcmFrameOutcome({
+          attempted: 1,
+          dropped: 1,
+          dropReason: lastPcmSendDropReason || "preroll_send_failed",
+        });
         try {
           logStage("client.audio_preroll_send_failed", { lane, turnId });
         } catch (_) {}
@@ -1664,10 +1745,20 @@ export function createWsAudioRuntime(options = {}) {
       fatalError: gumFailed,
       wsReadyState,
     });
+    const gateSnapshot = computePcmGateSnapshot();
     pcmSummaryGateReady = pcmSummaryGateReady || Boolean(hardGate?.allowed);
-    maybeLogHardGate(hardGate, { wsPhase });
+    emitHardGateSnapshot({
+      hardGate,
+      gateSnapshot,
+      reason: hardGate.allowed ? "gate_check" : "hard_gate_drop",
+      force: !hardGate.allowed,
+    });
     if (!hardGate.allowed) {
-      recordPcmFrameOutcome({ droppedHard: chunkCount });
+      recordPcmFrameOutcome({
+        attempted: chunkCount,
+        dropped: chunkCount,
+        dropReason: `hard_gate:${hardGate.reason || "unknown"}`,
+      });
       emitPolicyHook("hard_gate_drop", { reason: hardGate.reason, wsPhase, appPhase: phaseValue, wsReadyState });
       return;
     }
@@ -1678,9 +1769,14 @@ export function createWsAudioRuntime(options = {}) {
       : shouldSendFrameSoftGate({ vadState, speechSeen: speechSeenThisTurn });
 
     if (!isKeepalive && !speechSeenThisTurn && softDecision.vadLikelySpeech) {
-      markSpeechSeen({ rmsAtTrigger: softDecision.rmsAtTrigger, framesSinceGreet: null, reqId: currentReqId });
       const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
       currentTurnId = turnIdCandidate && `${turnIdCandidate}`.length ? `${turnIdCandidate}` : allocateTurnId();
+      markSpeechSeen({
+        rmsAtTrigger: softDecision.rmsAtTrigger,
+        framesSinceGreet: null,
+        reqId: currentReqId,
+        turnId: currentTurnId,
+      });
       // 1. START: Wake up the server first
       try {
         safeSendJSON({
@@ -1780,6 +1876,11 @@ export function createWsAudioRuntime(options = {}) {
           turnId: currentTurnId,
         });
       } catch (_) {}
+      recordPcmFrameOutcome({
+        attempted: chunkCount,
+        dropped: chunkCount,
+        dropReason: lastPcmSendDropReason || "send_failed",
+      });
       return;
     }
 
@@ -1804,7 +1905,7 @@ export function createWsAudioRuntime(options = {}) {
     setMicChunksValue(nextChunkTotal);
     setMicBytesValue(nextByteTotal);
 
-    recordPcmFrameOutcome({ sent: chunkCount });
+    recordPcmFrameOutcome({ attempted: chunkCount, sent: chunkCount });
 
     if (pcmSampleRate && Number.isFinite(pcmSampleRate)) {
       const samplesPerMs = pcmSampleRate / 1000;
@@ -1995,6 +2096,13 @@ export function createWsAudioRuntime(options = {}) {
       trackState,
       ctxState,
     } = gateSnapshot;
+    const socket = resolveSocket();
+    const wsReadyState = socket?.readyState ?? null;
+    const hardGate = computeHardGateSnapshot({
+      wsPhase,
+      fatalError,
+      wsReadyState,
+    });
     if (maybeAutoUnpauseSender(gateSnapshot)) {
       return;
     }
@@ -2017,6 +2125,11 @@ export function createWsAudioRuntime(options = {}) {
 
     if (signatureChanged) {
       lastPcmGateLoggedSignature = gateSignature;
+      emitHardGateSnapshot({
+        hardGate,
+        gateSnapshot,
+        reason: "gate_change",
+      });
     }
 
     try {
@@ -2080,7 +2193,6 @@ export function createWsAudioRuntime(options = {}) {
       } catch (_) {}
     }
 
-    const socket = resolveSocket();
     const socketReady = socket
       ? (typeof WebSocket !== "undefined"
         ? socket.readyState === WebSocket.OPEN
