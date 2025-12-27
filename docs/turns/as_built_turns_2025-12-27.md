@@ -135,6 +135,14 @@ def _ensure_greet_turn(self, ctx: AdapterContext) -> None:
 ```
 **Behavioral notes**
 - Server turn identity is controlled by `_start_user_turn` (sets `current_turn_open` and request IDs) and `_next_turn_index` (increments `turn_index`).
+
+### Observability: TurnStateMachine (no behavior change)
+
+The server now mirrors turn lifecycle events through a lightweight `TurnStateMachine` (see `app/ws/turn_state_machine.py`). This is an **observability-only** layer: it does **not** change when turns start/stop or when ASR is opened/closed. Instead, it tracks the same lifecycle milestones already logged via `TurnLifecycleRecorder` and emits a per-turn state timeline in the `turn_lifecycle_summary` log line.
+
+Notes:
+- The canonical UI bubble source remains the `user.turn` event (see `askchip_voice_turns_debug.md`). The state machine is for logging/invariant visibility only.
+- Illegal transitions (e.g., ASR final after stop) are logged as warnings but do not throw or alter runtime behavior.
 - A greet “turn 0” is explicitly initialized via `_ensure_greet_turn`. (See excerpts above.)
 
 ---

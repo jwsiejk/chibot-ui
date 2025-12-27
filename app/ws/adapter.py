@@ -91,6 +91,7 @@ from app.services.asr.deepgram_engine import DeepgramStreamingASREngine
 from app.ws.validator import validate_audio_header_against_policy, validate_frame
 from app.ws.state import SessionCtx, can_open, mark
 from app.ws.policy import normalize_policy
+from app.ws.turn_state_machine import TurnEvent, TurnState, TurnStateMachine
 
 try:  # pragma: no cover - uvicorn is an optional dependency in tests
     from uvicorn.protocols.utils import ClientDisconnected
@@ -252,7 +253,12 @@ class ClientLogAggregator:
 
 class TurnLifecycleRecorder:
     @staticmethod
-    def _base_state(turn_id: Optional[str], turn_index: Optional[int], now_ms: int) -> Dict[str, Any]:
+    def _base_state(
+        turn_id: Optional[str],
+        turn_index: Optional[int],
+        now_ms: int,
+    ) -> Dict[str, Any]:
+        initial_state = TurnState.GREET if turn_index == 0 else TurnState.IDLE
         return {
             "turn_id": turn_id,
             "turn_index": turn_index,
@@ -266,6 +272,7 @@ class TurnLifecycleRecorder:
             "tts_end_ts": None,
             "outcome": None,
             "started_ts": now_ms,
+            "turn_state_machine": TurnStateMachine(initial_state=initial_state),
         }
 
     @classmethod
@@ -275,6 +282,18 @@ class TurnLifecycleRecorder:
         if getattr(ctx, "turn_lifecycle", None) is not None:
             cls.finalize_and_log(ctx, outcome="dropped")
         ctx.turn_lifecycle = cls._base_state(turn_id, turn_index, now_ms)
+        lifecycle = ctx.turn_lifecycle
+        if lifecycle is None:
+            return
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.TURN_START,
+                now_ms,
+                turn_id=turn_id,
+                turn_index=turn_index,
+                logger=_log,
+            )
 
     @staticmethod
     def mark_first_audio(ctx: AdapterContext, now_ms: int) -> None:
@@ -283,6 +302,15 @@ class TurnLifecycleRecorder:
             return
         if lifecycle.get("first_audio_ts") is None:
             lifecycle["first_audio_ts"] = now_ms
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.FIRST_AUDIO,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
 
     @staticmethod
     def mark_asr_open(ctx: AdapterContext, now_ms: int) -> None:
@@ -291,6 +319,15 @@ class TurnLifecycleRecorder:
             return
         if lifecycle.get("asr_open_ts") is None:
             lifecycle["asr_open_ts"] = now_ms
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.ASR_OPEN,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
 
     @staticmethod
     def mark_asr_first_audio(ctx: AdapterContext, now_ms: int) -> None:
@@ -299,6 +336,15 @@ class TurnLifecycleRecorder:
             return
         if lifecycle.get("asr_first_audio_ts") is None:
             lifecycle["asr_first_audio_ts"] = now_ms
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.ASR_FIRST_AUDIO,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
 
     @staticmethod
     def mark_asr_final(ctx: AdapterContext, now_ms: int) -> None:
@@ -307,6 +353,15 @@ class TurnLifecycleRecorder:
             return
         if lifecycle.get("asr_final_ts") is None:
             lifecycle["asr_final_ts"] = now_ms
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.ASR_FINAL,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
 
     @staticmethod
     def mark_asr_timeout(ctx: AdapterContext, now_ms: int, reason: Optional[str]) -> None:
@@ -317,6 +372,15 @@ class TurnLifecycleRecorder:
         lifecycle["asr_timeout_reason"] = reason
         if lifecycle.get("asr_final_ts") is None:
             lifecycle["asr_final_ts"] = now_ms
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.ASR_TIMEOUT,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
 
     @staticmethod
     def mark_tts_start(ctx: AdapterContext, now_ms: int) -> None:
@@ -325,6 +389,15 @@ class TurnLifecycleRecorder:
             return
         if lifecycle.get("tts_start_ts") is None:
             lifecycle["tts_start_ts"] = now_ms
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.TTS_START,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
 
     @staticmethod
     def mark_tts_end(ctx: AdapterContext, now_ms: int) -> None:
@@ -333,6 +406,30 @@ class TurnLifecycleRecorder:
             return
         if lifecycle.get("tts_end_ts") is None:
             lifecycle["tts_end_ts"] = now_ms
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.TTS_END,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
+
+    @staticmethod
+    def mark_turn_stop(ctx: AdapterContext, now_ms: int) -> None:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        if lifecycle is None:
+            return
+        machine = lifecycle.get("turn_state_machine")
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.TURN_STOP,
+                now_ms,
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
 
     @classmethod
     def finalize_and_log(cls, ctx: AdapterContext, outcome: str) -> None:
@@ -342,10 +439,22 @@ class TurnLifecycleRecorder:
 
         if lifecycle.get("outcome") is None:
             lifecycle["outcome"] = outcome
+        machine = lifecycle.get("turn_state_machine")
+        timeline = None
+        if isinstance(machine, TurnStateMachine):
+            machine.apply(
+                TurnEvent.TURN_FINALIZED,
+                int(time.time() * 1000),
+                turn_id=lifecycle.get("turn_id"),
+                turn_index=lifecycle.get("turn_index"),
+                logger=_log,
+            )
+            timeline = machine.timeline_summary()
         _log.info(
             "evt=turn_lifecycle_summary sid=%s turn_id=%s turn_index=%s outcome=%s "
             "first_audio_ts=%s asr_open_ts=%s asr_first_audio_ts=%s asr_final_ts=%s "
-            "tts_start_ts=%s tts_end_ts=%s asr_timeout=%s timeout_reason=%s",
+            "tts_start_ts=%s tts_end_ts=%s asr_timeout=%s timeout_reason=%s "
+            "state=%s timeline=%s",
             ctx.sid,
             lifecycle.get("turn_id"),
             lifecycle.get("turn_index"),
@@ -358,6 +467,8 @@ class TurnLifecycleRecorder:
             lifecycle.get("tts_end_ts"),
             lifecycle.get("asr_timeout"),
             lifecycle.get("asr_timeout_reason"),
+            machine.state.value if isinstance(machine, TurnStateMachine) else None,
+            timeline,
         )
         ctx.turn_lifecycle = None
 
@@ -4236,6 +4347,7 @@ class ChatV2Adapter:
 
             normalized_reason = reason_value.strip()
             ctx.current_turn_open = False
+            TurnLifecycleRecorder.mark_turn_stop(ctx, self._now_ms())
 
             _log.info(
                 "evt=deepgram_v3.turn_stop",
@@ -5057,6 +5169,7 @@ class ChatV2Adapter:
         _log.info(
             "evt=client_turn_stop sid=%s reason=%s frame_ts=%s", ctx.sid, reason_label, frame_ts
         )
+        TurnLifecycleRecorder.mark_turn_stop(ctx, self._now_ms())
 
         if not ctx.asr_open:
             return
