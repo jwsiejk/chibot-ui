@@ -44,6 +44,9 @@ const {
   recordLastError,
   recordClientBannerEvent,
   logStage,
+  emitClientLog,
+  shouldForwardClientLog,
+  rateLimitClientLog,
 } = telemetryModule ?? {};
 
 try {
@@ -80,18 +83,35 @@ try {
 // Global uncaught error diagnostics
 if (typeof window !== "undefined") {
   window.addEventListener("error", (e) => {
-    try { window.emitClientLog("js_error", { msg: e.message, stack: e.error?.stack || null }); } catch (_) {}
+    try {
+      if (typeof emitClientLog === "function") {
+        emitClientLog("js_error", { msg: e.message, stack: e.error?.stack || null }, { level: "error" });
+      } else {
+        window.emitClientLog?.("js_error", { msg: e.message, stack: e.error?.stack || null, level: "error" });
+      }
+    } catch (_) {}
   });
   window.addEventListener("unhandledrejection", (e) => {
-    try { window.emitClientLog("unhandled_promise", { reason: String(e.reason) }); } catch (_) {}
+    try {
+      if (typeof emitClientLog === "function") {
+        emitClientLog("unhandled_promise", { reason: String(e.reason) }, { level: "error" });
+      } else {
+        window.emitClientLog?.("unhandled_promise", { reason: String(e.reason), level: "error" });
+      }
+    } catch (_) {}
   });
 }
 
 function wsDiag(tag, detail = {}) {
   try {
     console.debug("[WS-DIAG]", tag, detail);
-    if (typeof window !== "undefined" && window.emitClientLog) {
-      window.emitClientLog("ws_diag", { tag, ...detail });
+    if (typeof emitClientLog === "function" && shouldForwardClientLog?.("debug", "ws_diag")) {
+      const rate = rateLimitClientLog?.("ws_diag", "debug");
+      if (!rate || rate.allowed) {
+        emitClientLog("ws_diag", { tag, ...detail }, { level: "debug", rateLimit: false });
+      } else if (rate.summary && shouldForwardClientLog?.("debug", "client.log_dropped")) {
+        emitClientLog("client.log_dropped", rate.summary, { level: "debug", rateLimit: false });
+      }
     }
   } catch (_) {}
 }

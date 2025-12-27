@@ -2,13 +2,19 @@
 // Encapsulates low-level WebSocket connection, queueing, and heartbeat logic.
 
 import { encodeMessagePack } from "../utils/msgpack.mjs";
+import { emitClientLog, rateLimitClientLog, shouldForwardClientLog } from "./telemetry.js";
 
 // Global WS diagnostics
 function wsDiag(tag, detail = {}) {
   try {
     console.debug("[WS-DIAG]", tag, detail);
-    if (typeof window !== "undefined" && window.emitClientLog) {
-      window.emitClientLog("ws_diag", { tag, ...detail });
+    if (typeof emitClientLog === "function" && shouldForwardClientLog?.("debug", "ws_diag")) {
+      const rate = rateLimitClientLog?.("ws_diag", "debug");
+      if (!rate || rate.allowed) {
+        emitClientLog("ws_diag", { tag, ...detail }, { level: "debug", rateLimit: false });
+      } else if (rate.summary && shouldForwardClientLog?.("debug", "client.log_dropped")) {
+        emitClientLog("client.log_dropped", rate.summary, { level: "debug", rateLimit: false });
+      }
     }
   } catch (_) {}
 }
@@ -43,6 +49,19 @@ const INFO_DEADLINE_MS = 20000;
 const TOKEN_EXPIRY_MS = 60 * 1000;
 const WS_READY_PHASES = new Set(["connected", "ready", "streaming"]);
 const WS_AUDIO_READY_PHASES = new Set(["connected", "ready", "streaming"]);
+const SEND_QUEUED_WARN_COOLDOWN_MS = 5000;
+const sendQueuedWarnState = new Map();
+
+function shouldLogSendQueued({ reason, phase, payloadType, readyState }) {
+  const now = Date.now();
+  const key = `${reason || "unknown"}:${phase || "unknown"}:${payloadType || "unknown"}:${readyState || "unknown"}`;
+  const lastLogged = sendQueuedWarnState.get(key) || 0;
+  if (now - lastLogged < SEND_QUEUED_WARN_COOLDOWN_MS) {
+    return false;
+  }
+  sendQueuedWarnState.set(key, now);
+  return true;
+}
 
 function detectControlFramesCodec() {
   const normalize = (value) => {
@@ -642,30 +661,33 @@ export function createWsConnection({
     }
 
     if (readyState === WebSocket.CONNECTING) {
-      console.warn("client.ws.send_queued", {
-        payloadType,
-        phase,
-        readyState,
-        hasWs: !!ws,
-        queueLength: connectionQueue.length,
-      });
-      try {
-        console.log("ws.connection.send.queue", {
+      const shouldLog = shouldLogSendQueued({ reason: "connecting", phase, payloadType, readyState });
+      if (shouldLog) {
+        console.warn("client.ws.send_queued", {
           payloadType,
-          reason: "connecting",
           phase,
           readyState,
-          binary: !!binary,
-          queueLength: connectionQueue.length + 1,
+          hasWs: !!ws,
+          queueLength: connectionQueue.length,
         });
-        console.log("client.ws_send.audio_queued_phase_not_ready", {
-          payloadType,
-          reason: "ws_connecting",
-          phase,
-          readyState,
-          queueLength: connectionQueue.length + 1,
-        });
-      } catch {}
+        try {
+          console.log("ws.connection.send.queue", {
+            payloadType,
+            reason: "connecting",
+            phase,
+            readyState,
+            binary: !!binary,
+            queueLength: connectionQueue.length + 1,
+          });
+          console.log("client.ws_send.audio_queued_phase_not_ready", {
+            payloadType,
+            reason: "ws_connecting",
+            phase,
+            readyState,
+            queueLength: connectionQueue.length + 1,
+          });
+        } catch {}
+      }
       queueFrame(data, !!binary);
       return true;
     }
@@ -725,44 +747,48 @@ export function createWsConnection({
             ts: Date.now(),
           });
         } catch {}
-        console.warn("client.ws.send_queued", {
-          payloadType,
-          phase,
-          readyState,
-          hasWs: !!ws,
-          queueLength: connectionQueue.length,
-        });
-        try {
-          console.warn("ws.connection.send queued (phase not ready)", {
-            phase,
-            frameType: payloadType,
-            wsReadyState: readyState,
-            queueLength: connectionQueue.length + 1,
-            phaseReady,
-            audioPhaseOk,
-          });
-        } catch {}
-        try {
-          console.log("ws.connection.send.queue", {
+        const shouldLog = shouldLogSendQueued({ reason: "phase_gate", phase, payloadType, readyState });
+        if (shouldLog) {
+          console.warn("client.ws.send_queued", {
             payloadType,
-            reason: "phase_gate",
             phase,
             readyState,
-            binary: !!binary,
-            queueLength: connectionQueue.length + 1,
-            phaseReady,
-            audioPhaseOk,
+            hasWs: !!ws,
+            queueLength: connectionQueue.length,
           });
-          console.log("client.ws_send.audio_queued_phase_not_ready", {
-            payloadType,
-            reason: "phase_gate",
-            phase,
-            readyState,
-            queueLength: connectionQueue.length + 1,
-            phaseReady,
-            audioPhaseOk,
-          });
-        } catch {}
+          try {
+            console.warn("ws.connection.send queued (phase not ready)", {
+              phase,
+              frameType: payloadType,
+              wsReadyState: readyState,
+              queueLength: connectionQueue.length + 1,
+              phaseReady,
+              audioPhaseOk,
+              reason: "phase_gate",
+            });
+          } catch {}
+          try {
+            console.log("ws.connection.send.queue", {
+              payloadType,
+              reason: "phase_gate",
+              phase,
+              readyState,
+              binary: !!binary,
+              queueLength: connectionQueue.length + 1,
+              phaseReady,
+              audioPhaseOk,
+            });
+            console.log("client.ws_send.audio_queued_phase_not_ready", {
+              payloadType,
+              reason: "phase_gate",
+              phase,
+              readyState,
+              queueLength: connectionQueue.length + 1,
+              phaseReady,
+              audioPhaseOk,
+            });
+          } catch {}
+        }
 
         if (GATING_DEBUG_MODE && isAudio) {
           try {

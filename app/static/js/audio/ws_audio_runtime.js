@@ -2,15 +2,25 @@
 // Encapsulates PCM ring buffer, PCM sender, and ASR priming helpers.
 
 import { isTypedArray, toArrayBuffer } from "../utils/binary.js";
-import { recordClientBannerEvent } from "../ws/telemetry.js";
-import { logStage } from "../ws/telemetry.js";
+import {
+  emitClientLog,
+  logStage,
+  rateLimitClientLog,
+  recordClientBannerEvent,
+  shouldForwardClientLog,
+} from "../ws/telemetry.js";
 import { getMicAudioContext } from "./audio_core.js";
 
 function wsDiag(tag, detail = {}) {
   try {
     console.debug("[WS-DIAG]", tag, detail);
-    if (typeof window !== "undefined" && window.emitClientLog) {
-      window.emitClientLog("ws_diag", { tag, ...detail });
+    if (typeof emitClientLog === "function" && shouldForwardClientLog?.("debug", "ws_diag")) {
+      const rate = rateLimitClientLog?.("ws_diag", "debug");
+      if (!rate || rate.allowed) {
+        emitClientLog("ws_diag", { tag, ...detail }, { level: "debug", rateLimit: false });
+      } else if (rate.summary && shouldForwardClientLog?.("debug", "client.log_dropped")) {
+        emitClientLog("client.log_dropped", rate.summary, { level: "debug", rateLimit: false });
+      }
     }
   } catch (_) {}
 }

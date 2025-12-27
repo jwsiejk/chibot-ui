@@ -6,6 +6,14 @@ const QUIET_CLIENT_LOG_LABELS = new Set([
   "client.pcm_sender.frame_received",
 ]);
 
+const CLIENT_LOG_DEBUG_PARAM = "clientLogs";
+const CLIENT_LOG_DEFAULT_RATE_LIMIT = {
+  maxPerWindow: 5,
+  windowMs: 10000,
+  summaryIntervalMs: 60000,
+};
+const clientLogRateState = new Map();
+
 const TOAST_STYLE_ID = "wsclient-toast-styles";
 const TOAST_STYLE_TEXT = "#toast-root.toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:12px;z-index:4000;pointer-events:none;}#toast-root .toast{pointer-events:auto;min-width:240px;max-width:340px;padding:14px 18px;border-radius:12px;background:rgba(220,38,38,0.92);color:#fff;box-shadow:0 18px 40px rgba(12,14,24,0.35);font-family:\"Inter\",system-ui,-apple-system,\"Segoe UI\",sans-serif;backdrop-filter:blur(12px);display:flex;flex-direction:column;gap:6px;transition:opacity 160ms ease,transform 160ms ease;}#toast-root .toast.toast-exit{opacity:0;transform:translateY(12px);}#toast-root .toast-body{font-size:0.88rem;line-height:1.4;}";
 
@@ -222,9 +230,126 @@ export function logMic(detail = {}) {
   } catch {}
 }
 
-export function emitClientLog(label, detail = {}) {
+function normalizeClientLogLevel(level, label) {
+  if (typeof level === "string" && level) {
+    return level.trim().toLowerCase();
+  }
+  if (typeof label === "string" && label.startsWith("console.")) {
+    return label.slice("console.".length).toLowerCase();
+  }
+  return "info";
+}
+
+function parseClientLogFlag(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return ["1", "true", "yes", "on", "debug"].includes(normalized);
+}
+
+export function isClientLogVerboseEnabled() {
+  try {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location?.search || "");
+      const paramValue = params.get(CLIENT_LOG_DEBUG_PARAM);
+      if (parseClientLogFlag(paramValue)) {
+        return true;
+      }
+      if (window.localStorage) {
+        const stored = window.localStorage.getItem(CLIENT_LOG_DEBUG_PARAM);
+        if (parseClientLogFlag(stored)) {
+          return true;
+        }
+      }
+    }
+  } catch (_) {}
+  return false;
+}
+
+export function shouldForwardClientLog(level, label) {
+  const normalizedLevel = normalizeClientLogLevel(level, label);
+  if (normalizedLevel === "warn" || normalizedLevel === "error") {
+    return true;
+  }
+  return isClientLogVerboseEnabled();
+}
+
+export function rateLimitClientLog(label, level, options = {}) {
+  const normalizedLevel = normalizeClientLogLevel(level, label);
+  if (normalizedLevel === "warn" || normalizedLevel === "error") {
+    return { allowed: true, summary: null };
+  }
+  const maxPerWindow = Number.isFinite(options.maxPerWindow)
+    ? options.maxPerWindow
+    : CLIENT_LOG_DEFAULT_RATE_LIMIT.maxPerWindow;
+  const windowMs = Number.isFinite(options.windowMs)
+    ? options.windowMs
+    : CLIENT_LOG_DEFAULT_RATE_LIMIT.windowMs;
+  const summaryIntervalMs = Number.isFinite(options.summaryIntervalMs)
+    ? options.summaryIntervalMs
+    : CLIENT_LOG_DEFAULT_RATE_LIMIT.summaryIntervalMs;
+  if (!Number.isFinite(maxPerWindow) || maxPerWindow <= 0 || !Number.isFinite(windowMs) || windowMs <= 0) {
+    return { allowed: true, summary: null };
+  }
+  const key = `${label || "unknown"}:${normalizedLevel || "info"}`;
+  const now = Date.now();
+  const existing = clientLogRateState.get(key) || {
+    windowStart: now,
+    count: 0,
+    droppedSinceSummary: 0,
+    lastSummaryAt: 0,
+  };
+  if (now - existing.windowStart >= windowMs) {
+    existing.windowStart = now;
+    existing.count = 0;
+  }
+  let allowed = false;
+  if (existing.count < maxPerWindow) {
+    existing.count += 1;
+    allowed = true;
+  } else {
+    existing.droppedSinceSummary += 1;
+  }
+  let summary = null;
+  if (!allowed && existing.droppedSinceSummary > 0 && now - existing.lastSummaryAt >= summaryIntervalMs) {
+    summary = {
+      label,
+      level: normalizedLevel,
+      dropped_count: existing.droppedSinceSummary,
+      window_ms: windowMs,
+      max_per_window: maxPerWindow,
+    };
+    existing.droppedSinceSummary = 0;
+    existing.lastSummaryAt = now;
+  }
+  clientLogRateState.set(key, existing);
+  return { allowed, summary };
+}
+
+export function resetClientLogRateLimiter() {
+  clientLogRateState.clear();
+}
+
+export function emitClientLog(label, detail = {}, options = {}) {
   if (typeof label !== "string" || !label) {
     return;
+  }
+  const levelHint = detail && typeof detail === "object" && typeof detail.level === "string"
+    ? detail.level
+    : options?.level;
+  const normalizedLevel = normalizeClientLogLevel(levelHint, label);
+  if (detail && typeof detail === "object" && normalizedLevel) {
+    detail.level = normalizedLevel;
+  }
+  if (options?.rateLimit !== false) {
+    const rateResult = rateLimitClientLog(label, normalizedLevel, options?.rateLimitOptions || {});
+    if (!rateResult.allowed) {
+      if (rateResult.summary && isClientLogVerboseEnabled()) {
+        emitClientLog("client.log_dropped", rateResult.summary, { level: "debug", rateLimit: false });
+      }
+      return;
+    }
   }
   const payload = detail && typeof detail === "object" ? { ...detail } : {};
   const frame = { type: "client.log", label, ts: Date.now(), detail: payload };
@@ -289,7 +414,7 @@ export function logStage(label, detail = {}, level = "info") {
   } catch (_) {}
 
   try {
-    emitClientLog(label, payload);
+    emitClientLog(label, payload, { level });
   } catch (_) {
     // never let logging break the main execution path
   }
@@ -828,4 +953,3 @@ if (typeof window !== "undefined") {
     });
   } catch {}
 }
-
