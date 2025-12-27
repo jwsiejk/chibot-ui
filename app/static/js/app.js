@@ -1,5 +1,6 @@
 import "./state.js";
 import { emitClientLog, getWsClientSocket, logStage } from "./ws/telemetry.js";
+import { initConsoleBridge } from "./console_bridge.js";
 import { ensureMicHardware } from "./audio/capture_runtime.js";
 import { getMicAudioContext, getPlaybackAudioContext } from "./audio/audio_core.js";
 import "./audio/guard_mic_monitor.js";
@@ -68,97 +69,6 @@ if (typeof window !== "undefined") {
       return dataAttr;
     }
     return document.querySelector?.('script[src*="/static/js/app.js"]') || null;
-  }
-
-  function initConsoleBridge() {
-    try {
-      const c = typeof console === "object" ? console : null;
-      if (!c || c.__askchip_patched) {
-        return;
-      }
-      const levels = ["log", "info", "warn", "error", "debug"];
-
-      const noisyConsoleLabels = new Set(["client.pcm_sender.frame_received"]);
-
-      const isNoisyConsoleMessage = (message, args) => {
-        if (noisyConsoleLabels.has(message)) {
-          return true;
-        }
-
-        for (const arg of args) {
-          if (typeof arg === "string" && noisyConsoleLabels.has(arg)) {
-            return true;
-          }
-
-          if (
-            arg &&
-            typeof arg === "object" &&
-            !Array.isArray(arg) &&
-            noisyConsoleLabels.has(arg.message)
-          ) {
-            return true;
-          }
-        }
-
-        return false;
-      };
-
-      const formatArg = (value) => {
-        if (typeof value === "string") {
-          return value;
-        }
-        try {
-          const serialized = JSON.stringify(value);
-          if (typeof serialized === "string") {
-            return serialized;
-          }
-        } catch (_) {}
-        try {
-          return String(value);
-        } catch (_) {
-          return "[unprintable]";
-        }
-      };
-
-      const buildMessage = (...args) => args.map((arg) => formatArg(arg)).join(" ");
-
-      levels.forEach((level) => {
-        const original = typeof c[level] === "function" ? c[level].bind(c) : () => {};
-        c[level] = (...args) => {
-          if (c.__askchip_console_bridge_active) {
-            return original(...args);
-          }
-
-          const message = buildMessage(...args);
-          const isNoisy = isNoisyConsoleMessage(message, args);
-          try {
-            c.__askchip_console_bridge_active = true;
-            if (!isNoisy) {
-              let sent = false;
-              try {
-                if (typeof sendClientLog === "function" && wsClientIsConnected(getWsClient())) {
-                  sent = sendClientLog(`console.${level}`, { message, level });
-                }
-              } catch (_) {}
-              if (!sent && typeof emitClientLog === "function") {
-                emitClientLog(`console.${level}`, { message, level });
-              }
-            }
-          } catch (_) {
-          } finally {
-            c.__askchip_console_bridge_active = false;
-          }
-
-          if (isNoisy) {
-            return;
-          }
-
-          return original(...args);
-        };
-      });
-
-      c.__askchip_patched = true;
-    } catch (_) {}
   }
 
   initConsoleBridge();
