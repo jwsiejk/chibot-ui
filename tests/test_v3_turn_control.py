@@ -13,6 +13,7 @@ if "jwt" not in sys.modules:
         encode=lambda *args, **kwargs: "", decode=lambda *args, **kwargs: {}, PyJWTError=Exception
     )
 
+from app.ws import adapter as adapter_module
 from app.ws.adapter import AdapterContext, ChatV2Adapter
 
 
@@ -77,6 +78,25 @@ def test_turn_start_before_pcm_is_idempotent() -> None:
     assert turn_index == 1
 
 
+def test_client_turn_id_preserved_on_pcm() -> None:
+    async def _run() -> tuple[str | None, int]:
+        adapter = ChatV2Adapter()
+        ctx = _make_v3_ctx()
+
+        payload = {
+            "type": "client.turn_start",
+            "turn_id": "client-turn-xyz",
+            "sample_rate_hz": 16000,
+        }
+        await adapter._handle_text(json.dumps(payload), ctx, _noop_send)
+        await adapter._handle_binary(b"\x00\x01", ctx, _noop_send)
+        return ctx.current_turn_id, ctx.turn_index
+
+    turn_id, turn_index = asyncio.run(_run())
+    assert turn_id == "client-turn-xyz"
+    assert turn_index == 1
+
+
 def test_turn_stop_before_final_keeps_lifecycle_clean(caplog: pytest.LogCaptureFixture) -> None:
     async def _run() -> None:
         adapter = ChatV2Adapter()
@@ -99,6 +119,34 @@ def test_turn_stop_before_final_keeps_lifecycle_clean(caplog: pytest.LogCaptureF
     ]
     assert summaries
     assert "illegal_count=0" in summaries[-1]
+
+
+def test_turn_stop_without_final_triggers_timeout(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _run() -> None:
+        adapter = ChatV2Adapter()
+        ctx = _make_v3_ctx()
+
+        payload = {"type": "client.turn_start", "turn_id": "client-turn-5"}
+        await adapter._handle_text(json.dumps(payload), ctx, _noop_send)
+        await adapter._handle_text(
+            json.dumps({"type": "client.turn_stop", "turn_id": "client-turn-5", "reason": "vad"}),
+            ctx,
+            _noop_send,
+        )
+        await asyncio.sleep(0.02)
+
+    monkeypatch.setattr(adapter_module, "STOP_FINALIZE_GRACE_MS", 10)
+    caplog.set_level(logging.INFO)
+    asyncio.run(_run())
+
+    close_logs = [rec for rec in caplog.records if "evt=turn_close" in rec.message]
+    summary_logs = [
+        rec for rec in caplog.records if "evt=turn_lifecycle_summary" in rec.message
+    ]
+    assert len(close_logs) == 1
+    assert len(summary_logs) == 1
 
 
 def test_duplicate_start_and_stop_are_idempotent(

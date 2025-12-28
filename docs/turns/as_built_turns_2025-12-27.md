@@ -135,6 +135,7 @@ def _ensure_greet_turn(self, ctx: AdapterContext) -> None:
 ```
 **Behavioral notes**
 - Server turn identity is controlled by `_start_user_turn` (sets `current_turn_open` and request IDs) and `_next_turn_index` (increments `turn_index`).
+- `client.turn_stop` is advisory; the server finalizes a turn on ASR final, but also enforces a bounded post-stop safety net to avoid zombie turns if no final arrives.
 
 ### Observability: TurnStateMachine (no behavior change)
 
