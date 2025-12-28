@@ -148,6 +148,7 @@ _DIAG_NO_AUDIO_CHECK_DELAY_SECONDS = 8.5
 _MIC_OPEN_TIMEOUT_SECONDS = 2.5
 _FIRST_TURN_MIC_OPEN_TIMEOUT_SECONDS = 5.0
 _NO_AUDIO_SAFETY_NET_DEFAULT_MS = 10_000
+STOP_FINALIZE_GRACE_MS = 2_000
 
 _OUTBOUND_ALLOWED_TYPES = {
     "policy.interaction",
@@ -992,6 +993,11 @@ class AdapterContext:
     auto_ready_probe_promotion_logged: bool = False
     last_turn_close_turn_id: Optional[str] = None
     last_turn_close_turn_index: Optional[int] = None
+    turn_finalized: bool = False
+    turn_finalized_turn_id: Optional[str] = None
+    turn_finalized_turn_index: Optional[int] = None
+    stop_received_ms: Optional[int] = None
+    post_stop_finalize_handle: asyncio.TimerHandle | None = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -1231,6 +1237,11 @@ class ChatV2Adapter:
         ctx.v3_turn_summary_logged = False
         ctx.v3_turn_summary_turn_id = None
         ctx.turn_watchdog_last_log_ms = None
+        ctx.turn_finalized = False
+        ctx.turn_finalized_turn_id = None
+        ctx.turn_finalized_turn_index = None
+        ctx.stop_received_ms = None
+        self._cancel_post_stop_finalize(ctx)
         self._cancel_no_audio_safety_net(ctx)
 
     async def _maybe_close_stalled_v3_turn(
@@ -1255,7 +1266,7 @@ class ChatV2Adapter:
         now_ms = self._now_ms()
         TurnLifecycleRecorder.mark_asr_timeout(ctx, now_ms, "stalled_no_audio")
         self._log_turn_close(ctx, "asr_timeout")
-        TurnLifecycleRecorder.finalize_and_log(ctx, now_ms, outcome="timeout_no_audio")
+        self._finalize_turn_once(ctx, now_ms, outcome="timeout_no_audio")
         _log.warning(
             "evt=deepgram_v3.turn_watchdog_closed",
             extra={
@@ -1293,6 +1304,11 @@ class ChatV2Adapter:
         ctx.auto_ready_probe_active = False
         ctx.auto_ready_probe_promotion_logged = False
         ctx.empty_final_count = 0  # (optional safety reset)
+        ctx.turn_finalized = False
+        ctx.turn_finalized_turn_id = None
+        ctx.turn_finalized_turn_index = None
+        ctx.stop_received_ms = None
+        self._cancel_post_stop_finalize(ctx)
 
     def _is_first_user_turn(self, ctx: AdapterContext, turn_index: int | None = None) -> bool:
         """
@@ -1353,6 +1369,11 @@ class ChatV2Adapter:
         ctx.no_audio_timeout_deadline_ms = None
         ctx.mic_never_ready_warned = False
         self._cancel_no_audio_safety_net(ctx)
+        self._cancel_post_stop_finalize(ctx)
+        ctx.stop_received_ms = None
+        ctx.turn_finalized = False
+        ctx.turn_finalized_turn_id = None
+        ctx.turn_finalized_turn_index = None
         ctx.last_user_turn_event_key = None
         ctx.last_user_turn_dedup_key = None
         ctx.auto_ready_probe_promotion_logged = False
@@ -1370,10 +1391,15 @@ class ChatV2Adapter:
         if ctx.current_turn_open:
             return ctx.current_turn_id
 
+        existing_turn_id = ctx.current_turn_id
         self._start_user_turn(ctx)
+        if existing_turn_id:
+            ctx.current_turn_id = existing_turn_id
         ctx.turn_start_ts_ms = now_ms
         ctx.bytes_from_client_this_turn = 0
-        ctx.accepting_audio = True
+        tts_active = getattr(ctx.session, "tts_active", False)
+        allow_capture = self._allow_capture_during_tts(ctx)
+        ctx.accepting_audio = (not tts_active) or allow_capture
         ctx.audio_ignored_no_turn_logged = False
         self._record_turn_start(ctx, now_ms, reason)
         return ctx.current_turn_id
@@ -1452,6 +1478,30 @@ class ChatV2Adapter:
             )
         ctx.last_turn_close_turn_id = turn_id
         ctx.last_turn_close_turn_index = turn_index
+
+    def _finalize_turn_once(self, ctx: AdapterContext, now_ms: int, outcome: str) -> bool:
+        lifecycle = getattr(ctx, "turn_lifecycle", None)
+        turn_id = None
+        turn_index = None
+        if isinstance(lifecycle, Mapping):
+            turn_id = lifecycle.get("turn_id")
+            turn_index = lifecycle.get("turn_index")
+        if turn_id is None:
+            turn_id = ctx.current_turn_id
+        if turn_index is None:
+            turn_index = getattr(ctx, "turn_index", None)
+
+        if (
+            ctx.turn_finalized
+            and ctx.turn_finalized_turn_id == turn_id
+            and ctx.turn_finalized_turn_index == turn_index
+        ):
+            return False
+        ctx.turn_finalized = True
+        ctx.turn_finalized_turn_id = turn_id
+        ctx.turn_finalized_turn_index = turn_index
+        TurnLifecycleRecorder.finalize_and_log(ctx, now_ms, outcome=outcome)
+        return True
 
     def _turn_active(self, ctx: AdapterContext) -> bool:
         return bool(ctx.current_turn_open or getattr(ctx, "turn_lifecycle", None))
@@ -1901,7 +1951,7 @@ class ChatV2Adapter:
             else:
                 self._cancel_no_audio_safety_net(ctx)
             self._log_turn_close(ctx, "asr_timeout")
-            TurnLifecycleRecorder.finalize_and_log(ctx, now_ms, outcome="timeout_no_audio")
+            self._finalize_turn_once(ctx, now_ms, outcome="timeout_no_audio")
             self._log_deepgram_v3_turn_summary(ctx, "no_audio_timeout")
             _log.warning(
                 "evt=deepgram_v3.turn_aborted",
@@ -4481,6 +4531,9 @@ class ChatV2Adapter:
                     "reason": normalized_reason,
                 },
             )
+            if ctx.current_turn_open or self._turn_active(ctx):
+                now_ms = self._now_ms()
+                self._schedule_post_stop_finalize(ctx, now_ms)
 
             return self._HandleResult(True)
 
@@ -8705,6 +8758,48 @@ class ChatV2Adapter:
         except Exception:
             pass
 
+    @staticmethod
+    def _cancel_post_stop_finalize(ctx: AdapterContext) -> None:
+        handle = ctx.post_stop_finalize_handle
+        ctx.post_stop_finalize_handle = None
+        if handle is None:
+            return
+        try:
+            handle.cancel()
+        except Exception:
+            pass
+
+    def _schedule_post_stop_finalize(self, ctx: AdapterContext, now_ms: int) -> None:
+        if STOP_FINALIZE_GRACE_MS <= 0:
+            return
+        self._cancel_post_stop_finalize(ctx)
+        ctx.stop_received_ms = now_ms
+        delay_s = STOP_FINALIZE_GRACE_MS / 1000.0
+
+        def _fire() -> None:
+            ctx.post_stop_finalize_handle = None
+            self._handle_post_stop_finalize(ctx, now_ms)
+
+        try:
+            loop = asyncio.get_running_loop()
+            ctx.post_stop_finalize_handle = loop.call_later(delay_s, _fire)
+        except RuntimeError:
+            ctx.post_stop_finalize_handle = None
+
+    def _handle_post_stop_finalize(self, ctx: AdapterContext, stop_received_ms: int) -> None:
+        if ctx.stop_received_ms != stop_received_ms:
+            return
+        if ctx.asr_final_emitted:
+            return
+        if not self._turn_active(ctx):
+            return
+        now_ms = self._now_ms()
+        TurnLifecycleRecorder.mark_asr_timeout(ctx, now_ms, "post_stop_no_final")
+        self._log_turn_close(ctx, "asr_timeout_post_stop")
+        self._finalize_turn_once(ctx, now_ms, outcome="timeout_post_stop_no_final")
+        ctx.stop_received_ms = None
+        self._reset_v3_turn_state(ctx)
+
     def _handle_mic_open_timeout(self, ctx: AdapterContext) -> None:
         if ctx.client_mic_open:
             return
@@ -9400,6 +9495,9 @@ class ChatV2Adapter:
                 len(transcript or ""),
             )
             return
+        if is_final:
+            self._cancel_post_stop_finalize(ctx)
+            ctx.stop_received_ms = None
 
         # ASR finals flow through the policy -> LLM -> NLG path via engine.on_asr_final.
         def _log_llm_turn_decision(decision: str, reason: str) -> None:
@@ -9695,14 +9793,14 @@ class ChatV2Adapter:
 
                 close_reason = "asr_timeout" if timeout else "asr_final"
                 self._log_turn_close(ctx, close_reason)
-                TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome=outcome_label)
+                self._finalize_turn_once(ctx, self._now_ms(), outcome=outcome_label)
                 self._log_turn_summary(ctx, outcome=outcome_label)
             _log_llm_turn_decision("skip", skip_reason)
 
             if not is_empty_final:
                 close_reason = "asr_timeout" if timeout else "asr_final"
                 self._log_turn_close(ctx, close_reason)
-                TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome=skip_reason)
+                self._finalize_turn_once(ctx, self._now_ms(), outcome=skip_reason)
                 self._log_turn_summary(ctx, skip_reason)
 
             if not stripped_text:
@@ -9729,7 +9827,7 @@ class ChatV2Adapter:
         ctx.turn_start_ts_ms = None
         ctx.bytes_from_client_this_turn = 0
         ctx.audio_ignored_no_turn_logged = False
-        TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome="ok")
+        self._finalize_turn_once(ctx, self._now_ms(), outcome="ok")
         self._log_turn_summary(ctx, "ok")
         self._end_user_turn(ctx)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
@@ -9792,7 +9890,12 @@ class ChatV2Adapter:
         ctx.auto_ready_probe_active = False
         now_ms = self._now_ms()
         ctx.turn_start_ts_ms = now_ms
-        self._record_turn_start(ctx, now_ms, "post_greet")
+        turn_index = self._record_turn_start(ctx, now_ms, "post_greet")
+        ctx.turn_index = turn_index
+        try:
+            ctx.session.turn_index = turn_index
+        except Exception:
+            pass
 
         if not ctx.auto_ready_probe_promotion_logged:
             _log.info(
