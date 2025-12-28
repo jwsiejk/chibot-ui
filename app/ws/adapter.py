@@ -990,6 +990,8 @@ class AdapterContext:
     turn_watchdog_last_log_ms: Optional[int] = None
     auto_ready_probe_active: bool = False
     auto_ready_probe_promotion_logged: bool = False
+    last_turn_close_turn_id: Optional[str] = None
+    last_turn_close_turn_index: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -1250,6 +1252,10 @@ class ChatV2Adapter:
         if ctx.session.asr_state == "open" or ctx.asr_open:
             await self._close_asr(ctx, reason="turn_watchdog_stalled_no_audio")
         self._log_deepgram_v3_turn_summary(ctx, "stalled_no_audio")
+        now_ms = self._now_ms()
+        TurnLifecycleRecorder.mark_asr_timeout(ctx, now_ms, "stalled_no_audio")
+        self._log_turn_close(ctx, "asr_timeout")
+        TurnLifecycleRecorder.finalize_and_log(ctx, now_ms, outcome="timeout_no_audio")
         _log.warning(
             "evt=deepgram_v3.turn_watchdog_closed",
             extra={
@@ -1351,7 +1357,104 @@ class ChatV2Adapter:
         ctx.last_user_turn_dedup_key = None
         ctx.auto_ready_probe_promotion_logged = False
         ctx.audio_turn_id_missing_logged = False
+        ctx.last_turn_close_turn_id = None
+        ctx.last_turn_close_turn_index = None
         self._reset_shadow_turn_state(ctx)
+
+    def ensure_turn_open(
+        self,
+        ctx: AdapterContext,
+        reason: str,
+        now_ms: int,
+    ) -> Optional[str]:
+        if ctx.current_turn_open:
+            return ctx.current_turn_id
+
+        self._start_user_turn(ctx)
+        ctx.turn_start_ts_ms = now_ms
+        ctx.bytes_from_client_this_turn = 0
+        ctx.accepting_audio = True
+        ctx.audio_ignored_no_turn_logged = False
+        self._record_turn_start(ctx, now_ms, reason)
+        return ctx.current_turn_id
+
+    def _record_turn_start(
+        self,
+        ctx: AdapterContext,
+        now_ms: int,
+        reason: str,
+    ) -> int:
+        if ctx.turn_start_ts_ms is None:
+            ctx.turn_start_ts_ms = now_ms
+        turn_index = self._next_turn_index(ctx)
+        TurnLifecycleRecorder.mark_turn_start(
+            ctx, now_ms, ctx.current_turn_id, turn_index
+        )
+        self._start_audio_bridge_turn(ctx, turn_index)
+        ctx.audio_frame_ingest_count = 0
+        ctx.audio_frame_ingest_last_log_ms = None
+        ctx.audio_overflow_events = 0
+        ctx.audio_overflow_total_bytes = 0
+        ctx.audio_overflow_last_log_ms = None
+        ctx.metrics = getattr(ctx, "metrics", {}) or {}
+        ctx.metrics.update(
+            {
+                "turn_index": turn_index,
+                "turn_started_at": time.monotonic(),
+                "asr_started_at": None,
+                "asr_final_at": None,
+                "llm_started_at": None,
+                "llm_completed_at": None,
+                "tts_started_at": None,
+                "tts_completed_at": None,
+                "tts_active_utt_id": None,
+                "tts_provider": None,
+                "tts_timeline_emitted_key": None,
+                "tts_timeline_logged": False,
+            }
+        )
+
+        self._log_turn_event(
+            ctx,
+            "turn_start",
+            asr_stream_id=getattr(ctx, "asr_stream_id", None),
+        )
+        _log.info(
+            "evt=turn_open sid=%s turn_id=%s turn_index=%s reason=%s",
+            ctx.sid,
+            ctx.current_turn_id,
+            turn_index,
+            reason,
+        )
+        return turn_index
+
+    def _log_turn_close(
+        self,
+        ctx: AdapterContext,
+        reason: str,
+    ) -> None:
+        turn_id = ctx.current_turn_id
+        turn_index = getattr(ctx, "turn_index", None)
+        if (
+            turn_id
+            and turn_index is not None
+            and ctx.last_turn_close_turn_id == turn_id
+            and ctx.last_turn_close_turn_index == turn_index
+        ):
+            return
+        if turn_id or turn_index:
+            _log.info(
+                "evt=turn_close sid=%s turn_id=%s turn_index=%s reason=%s",
+                ctx.sid,
+                turn_id,
+                turn_index,
+                reason,
+            )
+        ctx.last_turn_close_turn_id = turn_id
+        ctx.last_turn_close_turn_index = turn_index
+
+    def _turn_active(self, ctx: AdapterContext) -> bool:
+        return bool(ctx.current_turn_open or getattr(ctx, "turn_lifecycle", None))
 
     def _start_audio_bridge_turn(
         self,
@@ -1791,10 +1894,14 @@ class ChatV2Adapter:
 
     async def _handle_asr_timeout(self, ctx: AdapterContext, reason: str) -> None:
         if ctx.v3_enabled and reason == "no_audio_timeout":
+            now_ms = self._now_ms()
+            TurnLifecycleRecorder.mark_asr_timeout(ctx, now_ms, reason)
             if ctx.asr_open_task or ctx.asr_open or ctx.session.asr_state == "open":
                 await self._close_asr(ctx, reason="no_audio_timeout")
             else:
                 self._cancel_no_audio_safety_net(ctx)
+            self._log_turn_close(ctx, "asr_timeout")
+            TurnLifecycleRecorder.finalize_and_log(ctx, now_ms, outcome="timeout_no_audio")
             self._log_deepgram_v3_turn_summary(ctx, "no_audio_timeout")
             _log.warning(
                 "evt=deepgram_v3.turn_aborted",
@@ -4265,39 +4372,39 @@ class ChatV2Adapter:
                         "used": resolved_rate,
                     },
                 )
-            if ctx.current_turn_open:
-                if ctx.session.asr_state == "open" or ctx.asr_open:
-                    await self._close_asr(ctx, reason="turn_start_overlap")
-                self._log_deepgram_v3_turn_summary(ctx, "turn_overlap")
-                _log.warning(
-                    "evt=deepgram_v3.turn_overlap_recovered",
+            if ctx.current_turn_id and ctx.current_turn_id != normalized_turn_id:
+                _log.info(
+                    "evt=deepgram_v3.turn_start_mismatch",
                     extra={
                         "sid": ctx.sid,
                         "turn_id": ctx.current_turn_id,
-                        "new_turn_id": normalized_turn_id,
-                        "bytes_from_client": ctx.bytes_from_client_this_turn,
-                        "bytes_to_vendor": ctx.asr_bytes_sent,
+                        "client_turn_id": normalized_turn_id,
                     },
                 )
-                self._reset_v3_turn_state(ctx)
-
-            ctx.current_turn_id = normalized_turn_id
-            ctx.current_turn_open = True
-            ctx.turn_start_ts_ms = self._now_ms()
-            ctx.bytes_from_client_this_turn = 0
-            ctx.accepting_audio = True
-            ctx.audio_ignored_no_turn_logged = False
+            opened_by_client = False
+            if not ctx.current_turn_open:
+                if not ctx.current_turn_id:
+                    ctx.current_turn_id = normalized_turn_id
+                greet_ready = ctx.greet_completed
+                tts_active = getattr(ctx.session, "tts_active", False)
+                allow_capture = self._allow_capture_during_tts(ctx)
+                if greet_ready and (not tts_active or allow_capture):
+                    self.ensure_turn_open(
+                        ctx, "client_turn_start", self._now_ms()
+                    )
+                    opened_by_client = True
             ctx.v3_turn_sample_rate_hz = resolved_rate
-            ctx.v3_turn_summary_logged = False
-            ctx.v3_turn_summary_turn_id = None
-            ctx.turn_watchdog_last_log_ms = None
-            self._refresh_no_audio_safety_net(ctx)
+            if opened_by_client:
+                ctx.v3_turn_summary_logged = False
+                ctx.v3_turn_summary_turn_id = None
+                ctx.turn_watchdog_last_log_ms = None
+                self._refresh_no_audio_safety_net(ctx)
 
             _log.info(
                 "evt=deepgram_v3.turn_start",
                 extra={
                     "sid": ctx.sid,
-                    "turn_id": ctx.current_turn_id,
+                    "turn_id": ctx.current_turn_id or normalized_turn_id,
                     "pre_roll_ms": pre_roll_value,
                     "sample_rate_hz": resolved_rate,
                     "bytes_from_client": ctx.bytes_from_client_this_turn,
@@ -4362,7 +4469,6 @@ class ChatV2Adapter:
                 )
 
             normalized_reason = reason_value.strip()
-            ctx.current_turn_open = False
             TurnLifecycleRecorder.mark_turn_stop(ctx, self._now_ms())
 
             _log.info(
@@ -4375,26 +4481,6 @@ class ChatV2Adapter:
                     "reason": normalized_reason,
                 },
             )
-
-            if ctx.session.asr_state == "open" or ctx.asr_open:
-                await self._flush_audio_buffer(ctx)
-                await self._close_asr(
-                    ctx,
-                    reason=normalized_reason,
-                )
-                _log.info(
-                    "evt=deepgram_v3.asr_close",
-                    extra={
-                        "sid": ctx.sid,
-                        "turn_id": ctx.current_turn_id or normalized_turn_id,
-                        "bytes_from_client": ctx.bytes_from_client_this_turn,
-                        "bytes_to_vendor": ctx.asr_bytes_sent,
-                        "reason": normalized_reason,
-                    },
-                )
-
-            self._log_deepgram_v3_turn_summary(ctx, normalized_reason)
-            self._reset_v3_turn_state(ctx)
 
             return self._HandleResult(True)
 
@@ -5429,7 +5515,11 @@ class ChatV2Adapter:
                         "bytes_to_vendor": ctx.asr_bytes_sent,
                     },
                 )
-            return self._HandleResult(True)
+            greet_ready = ctx.greet_completed
+            tts_active = getattr(ctx.session, "tts_active", False)
+            allow_capture = self._allow_capture_during_tts(ctx)
+            if greet_ready and (not tts_active or allow_capture):
+                self.ensure_turn_open(ctx, "pcm_first_audio", now_ms)
 
         if ctx.asr_stream_id is None:
             if ctx.current_turn_open and not ctx.asr_open and ctx.asr_open_task is None:
@@ -9303,6 +9393,13 @@ class ChatV2Adapter:
             metrics_map = getattr(ctx, "metrics", {}) or {}
 
         turn_index = metrics_map.get("turn_index", getattr(ctx, "turn_index", None))
+        if is_final and not self._turn_active(ctx):
+            _log.info(
+                "evt=asr_final_ignored_no_active_turn sid=%s transcript_len=%s",
+                ctx.sid,
+                len(transcript or ""),
+            )
+            return
 
         # ASR finals flow through the policy -> LLM -> NLG path via engine.on_asr_final.
         def _log_llm_turn_decision(decision: str, reason: str) -> None:
@@ -9596,11 +9693,15 @@ class ChatV2Adapter:
                     skip_reason,
                 )
 
+                close_reason = "asr_timeout" if timeout else "asr_final"
+                self._log_turn_close(ctx, close_reason)
                 TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome=outcome_label)
                 self._log_turn_summary(ctx, outcome=outcome_label)
             _log_llm_turn_decision("skip", skip_reason)
 
             if not is_empty_final:
+                close_reason = "asr_timeout" if timeout else "asr_final"
+                self._log_turn_close(ctx, close_reason)
                 TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome=skip_reason)
                 self._log_turn_summary(ctx, skip_reason)
 
@@ -9622,6 +9723,7 @@ class ChatV2Adapter:
                     "reason": "normal_final",
                 },
             )
+        self._log_turn_close(ctx, "asr_final")
         ctx.current_turn_open = False
         ctx.current_turn_id = None
         ctx.turn_start_ts_ms = None
@@ -9653,7 +9755,8 @@ class ChatV2Adapter:
         if ctx.asr_open_task and not ctx.asr_open_task.done():
             return
 
-        self._start_user_turn(ctx)
+        if not ctx.current_turn_open:
+            self._start_user_turn(ctx)
         ctx.auto_ready_probe_active = as_probe
         mark(ctx.session, "opening")
         ctx.asr_bytes_sent = 0
@@ -9672,41 +9775,9 @@ class ChatV2Adapter:
         ctx.client_turn_closed = False
         ctx.last_asr_partial = None
 
-        if not ctx.auto_ready_probe_active:
-            turn_index = self._next_turn_index(ctx)
+        if not ctx.auto_ready_probe_active and ctx.turn_lifecycle is None:
             now_ms = self._now_ms()
-            TurnLifecycleRecorder.mark_turn_start(
-                ctx, now_ms, ctx.current_turn_id, turn_index
-            )
-            self._start_audio_bridge_turn(ctx, turn_index)
-            ctx.audio_frame_ingest_count = 0
-            ctx.audio_frame_ingest_last_log_ms = None
-            ctx.audio_overflow_events = 0
-            ctx.audio_overflow_total_bytes = 0
-            ctx.audio_overflow_last_log_ms = None
-            ctx.metrics = getattr(ctx, "metrics", {}) or {}
-            ctx.metrics.update(
-                {
-                    "turn_index": turn_index,
-                    "turn_started_at": time.monotonic(),
-                    "asr_started_at": None,
-                    "asr_final_at": None,
-                    "llm_started_at": None,
-                    "llm_completed_at": None,
-                    "tts_started_at": None,
-                    "tts_completed_at": None,
-                    "tts_active_utt_id": None,
-                    "tts_provider": None,
-                    "tts_timeline_emitted_key": None,
-                    "tts_timeline_logged": False,
-                }
-            )
-
-            self._log_turn_event(
-                ctx,
-                "turn_start",
-                asr_stream_id=getattr(ctx, "asr_stream_id", None),
-            )
+            self._record_turn_start(ctx, now_ms, "asr_open")
 
         try:
             ctx.asr_open_task = asyncio.create_task(self._open_asr(ctx))
@@ -9719,41 +9790,9 @@ class ChatV2Adapter:
             return
 
         ctx.auto_ready_probe_active = False
-        turn_index = self._next_turn_index(ctx)
         now_ms = self._now_ms()
         ctx.turn_start_ts_ms = now_ms
-        TurnLifecycleRecorder.mark_turn_start(
-            ctx, now_ms, ctx.current_turn_id, turn_index
-        )
-        self._start_audio_bridge_turn(ctx, turn_index)
-        ctx.audio_frame_ingest_count = 0
-        ctx.audio_frame_ingest_last_log_ms = None
-        ctx.audio_overflow_events = 0
-        ctx.audio_overflow_total_bytes = 0
-        ctx.audio_overflow_last_log_ms = None
-        ctx.metrics = getattr(ctx, "metrics", {}) or {}
-        ctx.metrics.update(
-            {
-                "turn_index": turn_index,
-                "turn_started_at": time.monotonic(),
-                "asr_started_at": None,
-                "asr_final_at": None,
-                "llm_started_at": None,
-                "llm_completed_at": None,
-                "tts_started_at": None,
-                "tts_completed_at": None,
-                "tts_active_utt_id": None,
-                "tts_provider": None,
-                "tts_timeline_emitted_key": None,
-                "tts_timeline_logged": False,
-            }
-        )
-
-        self._log_turn_event(
-            ctx,
-            "turn_start",
-            asr_stream_id=getattr(ctx, "asr_stream_id", None),
-        )
+        self._record_turn_start(ctx, now_ms, "post_greet")
 
         if not ctx.auto_ready_probe_promotion_logged:
             _log.info(

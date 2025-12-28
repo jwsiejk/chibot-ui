@@ -1566,13 +1566,14 @@ async def _emit_user_turn_event(
 
 ### C1) Required ordering and boundary expectations
 
-- **V3 requires `client.turn_start` before PCM is accepted**: the adapter ignores PCM when `ctx.v3_enabled` and `ctx.current_turn_open` is false, and it logs `deepgram_v3.pcm_without_turn`. (See `_handle_binary` excerpt above.)
+- **V3 accepts PCM before `client.turn_start`**: the adapter always buffers mic audio; the server opens the turn on the first post‑greet audio frame when it decides the turn is valid. `client.turn_start` is advisory and idempotent. (See `_handle_binary` + `ensure_turn_open` excerpts above.)
 - **`client.turn_start` must include a non‑empty `turn_id`**: schema validation enforces this; invalid frames receive errors. (See JSON handling excerpt above.)
 - **Non‑V3 input stops are expressed as `input.stop`**: the client sends `input.stop`, and the server handles it via `_handle_client_turn_stop`. (See `sendTurnStop` and `input.stop` handling excerpts above.)
 
 ### C2) Authority of identifiers (turn_id vs req_id)
 
-- **V3 turn_id is client‑provided**: `client.turn_start` requires `turn_id`, and the server uses that for `ctx.current_turn_id`. (See `client.turn_start` handling excerpt above.)
+- **Server is authoritative for turn open/close**: `client.turn_start`/`client.turn_stop` are advisory control frames; the server decides when a turn opens (first post‑greet PCM) and closes (ASR final/timeout). Use `turn_lifecycle_summary` (`timeline`, `transition_count`, `illegal_count`, `first_illegal`) to debug ordering issues.
+- **V3 turn_id is client‑provided**: `client.turn_start` requires `turn_id`, and the server may use it when the turn opens before any PCM. (See `client.turn_start` handling excerpt above.)
 - **Server req_id is generated for user turns**: `_start_user_turn` allocates a new request ID (`turn_req_id`) and sets `current_turn_open`. (See `_start_user_turn` excerpt above.)
 - **User turn events echo both `turn_id` and `req_id`**: `_emit_user_turn_event` includes both fields in the outbound frame. (See `_emit_user_turn_event` excerpt above.)
 
