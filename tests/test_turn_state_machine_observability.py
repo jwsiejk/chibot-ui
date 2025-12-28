@@ -43,6 +43,21 @@ class TurnStateMachineObservabilityTests(unittest.TestCase):
         self.assertEqual(transition.from_state, TurnState.IDLE)
         self.assertEqual(transition.to_state, TurnState.IDLE)
         self.assertTrue(transition.illegal)
+        self.assertEqual(machine.illegal_count, 1)
+        self.assertEqual(machine.transition_count, 1)
+        self.assertIs(machine.first_illegal, transition)
+
+    def test_turn_finalized_timestamp_is_monotonic(self) -> None:
+        machine = TurnStateMachine()
+        machine.apply(TurnEvent.TURN_START, 100)
+        machine.apply(TurnEvent.ASR_FINAL, 150)
+        machine.apply(TurnEvent.TURN_FINALIZED, 200)
+
+        timestamps = [entry.ts_ms for entry in machine.timeline]
+        self.assertEqual(timestamps, sorted(timestamps))
+
+    def test_asr_opening_state_removed(self) -> None:
+        self.assertNotIn("ASR_OPENING", TurnState.__members__)
 
     def test_timeline_summary_contains_events(self) -> None:
         machine = TurnStateMachine()
@@ -56,6 +71,28 @@ class TurnStateMachineObservabilityTests(unittest.TestCase):
         self.assertIn("asr_open:capturing->asr_open@120", summary)
         self.assertIn("asr_final:asr_open->finalizing@150", summary)
         self.assertIn("turn_finalized:finalizing->idle@200", summary)
+
+    def test_timeline_summary_is_compressed(self) -> None:
+        machine = TurnStateMachine()
+        events = [
+            TurnEvent.TURN_START,
+            TurnEvent.FIRST_AUDIO,
+            TurnEvent.ASR_OPEN,
+            TurnEvent.ASR_FIRST_AUDIO,
+            TurnEvent.ASR_FINAL,
+            TurnEvent.TURN_FINALIZED,
+            TurnEvent.TURN_START,
+            TurnEvent.TURN_STOP,
+            TurnEvent.TURN_STOP,
+            TurnEvent.TURN_FINALIZED,
+        ]
+        for idx, event in enumerate(events, start=1):
+            machine.apply(event, idx * 10)
+
+        summary = machine.timeline_summary(max_entries=6)
+        self.assertIn("…(4 suppressed)…", summary)
+        self.assertIn("turn_start:idle->capturing@10", summary)
+        self.assertIn("turn_finalized:interrupted->idle@100", summary)
 
 
 if __name__ == "__main__":

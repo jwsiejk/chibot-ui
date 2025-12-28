@@ -280,7 +280,7 @@ class TurnLifecycleRecorder:
         cls, ctx: AdapterContext, now_ms: int, turn_id: Optional[str], turn_index: Optional[int]
     ) -> None:
         if getattr(ctx, "turn_lifecycle", None) is not None:
-            cls.finalize_and_log(ctx, outcome="dropped")
+            cls.finalize_and_log(ctx, now_ms, outcome="dropped")
         ctx.turn_lifecycle = cls._base_state(turn_id, turn_index, now_ms)
         lifecycle = ctx.turn_lifecycle
         if lifecycle is None:
@@ -290,6 +290,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.TURN_START,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=turn_id,
                 turn_index=turn_index,
                 logger=_log,
@@ -307,6 +308,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.FIRST_AUDIO,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
@@ -324,6 +326,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.ASR_OPEN,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
@@ -341,6 +344,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.ASR_FIRST_AUDIO,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
@@ -358,6 +362,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.ASR_FINAL,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
@@ -377,6 +382,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.ASR_TIMEOUT,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
@@ -394,6 +400,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.TTS_START,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
@@ -411,6 +418,7 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.TTS_END,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
@@ -426,13 +434,14 @@ class TurnLifecycleRecorder:
             machine.apply(
                 TurnEvent.TURN_STOP,
                 now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
             )
 
     @classmethod
-    def finalize_and_log(cls, ctx: AdapterContext, outcome: str) -> None:
+    def finalize_and_log(cls, ctx: AdapterContext, now_ms: int, outcome: str) -> None:
         lifecycle = getattr(ctx, "turn_lifecycle", None)
         if lifecycle is None:
             return
@@ -444,17 +453,21 @@ class TurnLifecycleRecorder:
         if isinstance(machine, TurnStateMachine):
             machine.apply(
                 TurnEvent.TURN_FINALIZED,
-                int(time.time() * 1000),
+                now_ms,
+                sid=ctx.sid,
                 turn_id=lifecycle.get("turn_id"),
                 turn_index=lifecycle.get("turn_index"),
                 logger=_log,
             )
-            timeline = machine.timeline_summary()
+            timeline = machine.timeline_summary(max_entries=12)
+        first_illegal = None
+        if isinstance(machine, TurnStateMachine) and machine.first_illegal is not None:
+            first_illegal = TurnStateMachine._format_transition(machine.first_illegal)
         _log.info(
             "evt=turn_lifecycle_summary sid=%s turn_id=%s turn_index=%s outcome=%s "
             "first_audio_ts=%s asr_open_ts=%s asr_first_audio_ts=%s asr_final_ts=%s "
             "tts_start_ts=%s tts_end_ts=%s asr_timeout=%s timeout_reason=%s "
-            "state=%s timeline=%s",
+            "state=%s timeline=%s transition_count=%s illegal_count=%s first_illegal=%s",
             ctx.sid,
             lifecycle.get("turn_id"),
             lifecycle.get("turn_index"),
@@ -469,6 +482,9 @@ class TurnLifecycleRecorder:
             lifecycle.get("asr_timeout_reason"),
             machine.state.value if isinstance(machine, TurnStateMachine) else None,
             timeline,
+            machine.transition_count if isinstance(machine, TurnStateMachine) else None,
+            machine.illegal_count if isinstance(machine, TurnStateMachine) else None,
+            first_illegal,
         )
         ctx.turn_lifecycle = None
 
@@ -9580,12 +9596,12 @@ class ChatV2Adapter:
                     skip_reason,
                 )
 
-                TurnLifecycleRecorder.finalize_and_log(ctx, outcome=outcome_label)
+                TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome=outcome_label)
                 self._log_turn_summary(ctx, outcome=outcome_label)
             _log_llm_turn_decision("skip", skip_reason)
 
             if not is_empty_final:
-                TurnLifecycleRecorder.finalize_and_log(ctx, outcome=skip_reason)
+                TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome=skip_reason)
                 self._log_turn_summary(ctx, skip_reason)
 
             if not stripped_text:
@@ -9611,7 +9627,7 @@ class ChatV2Adapter:
         ctx.turn_start_ts_ms = None
         ctx.bytes_from_client_this_turn = 0
         ctx.audio_ignored_no_turn_logged = False
-        TurnLifecycleRecorder.finalize_and_log(ctx, outcome="ok")
+        TurnLifecycleRecorder.finalize_and_log(ctx, self._now_ms(), outcome="ok")
         self._log_turn_summary(ctx, "ok")
         self._end_user_turn(ctx)
         # NOTE: on_asr_final (or helpers it calls) is now responsible for:
