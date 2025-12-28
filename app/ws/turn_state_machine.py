@@ -34,8 +34,8 @@ _ILLEGAL_ACTION = "illegal_transition"
 
 
 _TRANSITIONS: dict[tuple[TurnState, TurnEvent], tuple[TurnState, tuple[str, ...]]] = {
-    (TurnState.GREET, TurnEvent.TURN_START): (TurnState.CAPTURING, ("greet_turn_start",)),
-    (TurnState.GREET, TurnEvent.TURN_STOP): (TurnState.GREET, ("duplicate_turn_stop",)),
+    (TurnState.GREET, TurnEvent.TTS_START): (TurnState.SPEAKING, ("tts_start",)),
+    (TurnState.GREET, TurnEvent.TTS_END): (TurnState.IDLE, ("tts_end",)),
     (TurnState.GREET, TurnEvent.TURN_FINALIZED): (TurnState.IDLE, ("finalized",)),
     (TurnState.IDLE, TurnEvent.TURN_START): (TurnState.CAPTURING, ("turn_started",)),
     (TurnState.IDLE, TurnEvent.TURN_STOP): (TurnState.IDLE, ("duplicate_turn_stop",)),
@@ -140,8 +140,10 @@ class TurnStateMachine:
     def timeline_summary(self, *, max_entries: int | None = None) -> str:
         if max_entries is None or len(self._timeline) <= max_entries:
             return ",".join(self._format_transition(entry) for entry in self._timeline)
-        head = self._timeline[:3]
-        tail = self._timeline[-3:]
+        head_count = max(2, (max_entries - 1) // 2)
+        tail_count = max(2, max_entries - head_count - 1)
+        head = self._timeline[:head_count]
+        tail = self._timeline[-tail_count:]
         suppressed = max(0, len(self._timeline) - len(head) - len(tail))
         parts = [self._format_transition(entry) for entry in head]
         parts.append(f"…({suppressed} suppressed)…")
