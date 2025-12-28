@@ -90,9 +90,19 @@ class TurnStateMachineObservabilityTests(unittest.TestCase):
             machine.apply(event, idx * 10)
 
         summary = machine.timeline_summary(max_entries=6)
-        self.assertIn("…(4 suppressed)…", summary)
+        entries = summary.split(",")
+        self.assertEqual(len(entries), 6)
+        self.assertIn("…(5 suppressed)…", summary)
         self.assertIn("turn_start:idle->capturing@10", summary)
         self.assertIn("turn_finalized:interrupted->idle@100", summary)
+
+    def test_greet_turn_start_is_illegal(self) -> None:
+        machine = TurnStateMachine(initial_state=TurnState.GREET)
+        transition = machine.apply(TurnEvent.TURN_START, 100)
+
+        self.assertEqual(transition.from_state, TurnState.GREET)
+        self.assertEqual(transition.to_state, TurnState.GREET)
+        self.assertTrue(transition.illegal)
 
 
 if __name__ == "__main__":
