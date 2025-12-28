@@ -142,7 +142,8 @@ The server now mirrors turn lifecycle events through a lightweight `TurnStateMac
 
 Notes:
 - The canonical UI bubble source remains the `user.turn` event (see `askchip_voice_turns_debug.md`). The state machine is for logging/invariant visibility only.
-- Illegal transitions (e.g., ASR final after stop) are logged as warnings but do not throw or alter runtime behavior.
+- Illegal transitions (e.g., ASR final after stop) are counted and summarized in the `turn_lifecycle_summary` rather than spamming warnings. They do not throw or alter runtime behavior.
+- The `turn_lifecycle_summary` timeline is compressed when it grows large (first 3 entries + suppressed marker + last 3 entries).
 - A greet “turn 0” is explicitly initialized via `_ensure_greet_turn`. (See excerpts above.)
 
 ---

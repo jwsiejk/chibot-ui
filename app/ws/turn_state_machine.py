@@ -11,7 +11,6 @@ class TurnState(str, Enum):
     GREET = "greet"
     IDLE = "idle"
     CAPTURING = "capturing"
-    ASR_OPENING = "asr_opening"
     ASR_OPEN = "asr_open"
     FINALIZING = "finalizing"
     SPEAKING = "speaking"
@@ -46,8 +45,6 @@ _TRANSITIONS: dict[tuple[TurnState, TurnEvent], tuple[TurnState, tuple[str, ...]
     (TurnState.CAPTURING, TurnEvent.ASR_FINAL): (TurnState.FINALIZING, ("final_without_open",)),
     (TurnState.CAPTURING, TurnEvent.ASR_TIMEOUT): (TurnState.FINALIZING, ("timeout_without_open",)),
     (TurnState.CAPTURING, TurnEvent.TURN_STOP): (TurnState.INTERRUPTED, ("turn_stop",)),
-    (TurnState.ASR_OPENING, TurnEvent.ASR_OPEN): (TurnState.ASR_OPEN, ("asr_open",)),
-    (TurnState.ASR_OPENING, TurnEvent.TURN_STOP): (TurnState.INTERRUPTED, ("turn_stop",)),
     (TurnState.ASR_OPEN, TurnEvent.ASR_FIRST_AUDIO): (TurnState.ASR_OPEN, ("asr_first_audio",)),
     (TurnState.ASR_OPEN, TurnEvent.ASR_FINAL): (TurnState.FINALIZING, ("asr_final",)),
     (TurnState.ASR_OPEN, TurnEvent.ASR_TIMEOUT): (TurnState.FINALIZING, ("asr_timeout",)),
@@ -80,6 +77,9 @@ class TurnStateMachine:
     def __init__(self, initial_state: TurnState = TurnState.IDLE) -> None:
         self._state = initial_state
         self._timeline: list[TurnStateTransition] = []
+        self.illegal_count = 0
+        self.transition_count = 0
+        self.first_illegal: TurnStateTransition | None = None
 
     @property
     def state(self) -> TurnState:
@@ -101,20 +101,13 @@ class TurnStateMachine:
         event: TurnEvent,
         ts_ms: int,
         *,
+        sid: str | None = None,
         turn_id: str | None = None,
         turn_index: int | None = None,
         logger: logging.Logger | None = None,
     ) -> TurnStateTransition:
         next_state, actions = self.transition(self._state, event)
         illegal = _ILLEGAL_ACTION in actions
-        if illegal:
-            (logger or _log).warning(
-                "evt=turn_state_illegal_transition state=%s event=%s turn_id=%s turn_index=%s",
-                self._state.value,
-                event.value,
-                turn_id,
-                turn_index,
-            )
         transition = TurnStateTransition(
             event=event,
             from_state=self._state,
@@ -123,12 +116,34 @@ class TurnStateMachine:
             actions=tuple(actions),
             illegal=illegal,
         )
+        self.transition_count += 1
+        if illegal:
+            self.illegal_count += 1
+            if self.first_illegal is None:
+                self.first_illegal = transition
+            (logger or _log).info(
+                "evt=turn_state_illegal_transition sid=%s state=%s event=%s turn_id=%s turn_index=%s",
+                sid,
+                self._state.value,
+                event.value,
+                turn_id,
+                turn_index,
+            )
         self._timeline.append(transition)
         self._state = next_state
         return transition
 
-    def timeline_summary(self) -> str:
-        return ",".join(
-            f"{entry.event.value}:{entry.from_state.value}->{entry.to_state.value}@{entry.ts_ms}"
-            for entry in self._timeline
-        )
+    @staticmethod
+    def _format_transition(entry: TurnStateTransition) -> str:
+        return f"{entry.event.value}:{entry.from_state.value}->{entry.to_state.value}@{entry.ts_ms}"
+
+    def timeline_summary(self, *, max_entries: int | None = None) -> str:
+        if max_entries is None or len(self._timeline) <= max_entries:
+            return ",".join(self._format_transition(entry) for entry in self._timeline)
+        head = self._timeline[:3]
+        tail = self._timeline[-3:]
+        suppressed = max(0, len(self._timeline) - len(head) - len(tail))
+        parts = [self._format_transition(entry) for entry in head]
+        parts.append(f"…({suppressed} suppressed)…")
+        parts.extend(self._format_transition(entry) for entry in tail)
+        return ",".join(parts)
