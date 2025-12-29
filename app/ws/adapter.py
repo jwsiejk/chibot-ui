@@ -998,6 +998,7 @@ class AdapterContext:
     turn_finalized_turn_index: Optional[int] = None
     stop_received_ms: Optional[int] = None
     post_stop_finalize_handle: asyncio.TimerHandle | None = None
+    last_barge_turn_start_turn_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.session = SessionCtx(sid=self.sid, policy=None)
@@ -4397,6 +4398,36 @@ class ChatV2Adapter:
             await self._publish_json_recv(ctx, meta, frame_payload)
 
             normalized_turn_id = raw_turn_id.strip()
+            # Phase 3: treat client.turn_start as deterministic barge-in intent
+            tts_active_now = bool(getattr(ctx.session, "tts_active", False))
+            barge_enabled = bool(self._policy(ctx).get("barge_in_enabled"))
+
+            if (
+               tts_active_now
+               and barge_enabled
+               and ctx.last_barge_turn_start_turn_id != normalized_turn_id
+            ):
+               ctx.last_barge_turn_start_turn_id = normalized_turn_id
+
+            self._emit_session_step(
+               ctx.sid,
+               "barge.detected",
+               summary="Client turn_start while TTS active; requesting barge-in",
+               meta={"turn_id": normalized_turn_id, "source": "client.turn_start"},
+               source="ws.adapter",
+            )
+
+    # Notify engine so it can cancel TTS and reset state
+    await self._invoke_engine(
+        "on_client_turn_start",
+        ctx.sid,
+        frame,
+    )
+
+    # After barge request, do not treat TTS as gating capture
+    tts_active_now = False
+
+            
             parsed_rate = None
             if isinstance(sample_rate_value, (int, float)) and not isinstance(
                 sample_rate_value, bool
@@ -4436,7 +4467,7 @@ class ChatV2Adapter:
                 if not ctx.current_turn_id:
                     ctx.current_turn_id = normalized_turn_id
                 greet_ready = ctx.greet_completed
-                tts_active = getattr(ctx.session, "tts_active", False)
+                tts_active = tts_active_now
                 allow_capture = self._allow_capture_during_tts(ctx)
                 if greet_ready and (not tts_active or allow_capture):
                     self.ensure_turn_open(
