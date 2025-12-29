@@ -454,22 +454,10 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
   let micDebugGreetEndLogged = false;
   let postGreetCleanupCompleted = false;
   let postGreetCleanupSource = null;
-  let firstTurnBootstrapArmed = false;
-  let firstTurnBootstrapSent = false;
-  let firstTurnInvariantOkLogged = false;
   let postGreetCleanupRetryTimer = null;
   let postGreetCleanupRetryStartedAt = 0;
   let postGreetCleanupRetryAttempts = 0;
   let postGreetCleanupRetryLogged = false;
-  let firstTurnBootstrapRetryTimer = null;
-  let firstTurnBootstrapRetryAttempted = false;
-  let bootstrapTurnId = null;
-  let postGreetSpeechWatchdogTimer = null;
-  let postGreetSpeechWatchdogActive = false;
-  let postGreetSpeechDetected = false;
-  let postGreetTurnStartSent = false;
-  let postGreetAudioBytesAtCleanup = 0;
-  let postGreetAudioSent = false;
 
   function queueFrameUntilInfo(frame) {
     pendingInfoGateFrames.push(frame);
@@ -500,10 +488,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     try { connection?.setWsPhase?.(nextPhase); } catch {}
     try { setWsPhase?.(nextPhase); } catch {}
     try { updateState({ wsPhase: "ready", connectionState: "connected" }); } catch {}
-    maybeArmFirstTurnBootstrap("ws_phase_ready");
-    if (firstTurnBootstrapArmed && !firstTurnBootstrapSent && !firstTurnBootstrapRetryAttempted) {
-      scheduleBootstrapTurnStartRetry("ws_phase_ready");
-    }
   }
 
   function shouldQueueDuringInfoGate(frame) {
@@ -667,188 +651,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     }, 120);
   }
 
-  function clearPostGreetSpeechWatchdog() {
-    if (postGreetSpeechWatchdogTimer) {
-      clearTimeout(postGreetSpeechWatchdogTimer);
-      postGreetSpeechWatchdogTimer = null;
-    }
-    postGreetSpeechWatchdogActive = false;
-    postGreetSpeechDetected = false;
-    postGreetTurnStartSent = false;
-    postGreetAudioSent = false;
-    postGreetAudioBytesAtCleanup = 0;
-  }
-
-  function startPostGreetSpeechWatchdog() {
-    clearPostGreetSpeechWatchdog();
-    postGreetSpeechWatchdogActive = true;
-    postGreetAudioBytesAtCleanup = Number.isFinite(__micBytes) ? __micBytes : 0;
-    postGreetSpeechWatchdogTimer = setTimeout(() => {
-      postGreetSpeechWatchdogTimer = null;
-      if (!postGreetSpeechWatchdogActive) {
-        return;
-      }
-      postGreetSpeechWatchdogActive = false;
-      const bytesNow = Number.isFinite(__micBytes) ? __micBytes : 0;
-      const bytesSent = bytesNow > postGreetAudioBytesAtCleanup || postGreetAudioSent;
-      if (postGreetSpeechDetected && !postGreetTurnStartSent && !bytesSent) {
-        const gateSnapshot = typeof getPcmSenderGateSnapshot === "function"
-          ? getPcmSenderGateSnapshot()
-          : null;
-        try {
-          logStage("client.alert.speech_but_no_turn_start", {
-            phase: getPhase(),
-            wsPhase: AppState?.wsPhase || null,
-            bytesSent,
-            turnStartSent: postGreetTurnStartSent,
-            gateSnapshot,
-          });
-        } catch (_) {}
-      }
-    }, 3000);
-  }
-
-  function generateBootstrapTurnId() {
-    if (bootstrapTurnId) {
-      return bootstrapTurnId;
-    }
-    try {
-      if (typeof globalThis?.crypto?.randomUUID === "function") {
-        bootstrapTurnId = globalThis.crypto.randomUUID();
-        return bootstrapTurnId;
-      }
-    } catch (_) {}
-    const nowPart = Date.now().toString(36);
-    const randPart = Math.random().toString(36).slice(2, 10);
-    bootstrapTurnId = `bootstrap-${nowPart}${randPart}`;
-    return bootstrapTurnId;
-  }
-
-  function resolveBootstrapTurnId() {
-    const turnId = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
-    if (typeof turnId === "string" && turnId) {
-      bootstrapTurnId = turnId;
-      return turnId;
-    }
-    return generateBootstrapTurnId();
-  }
-
-  function clearBootstrapTurnStartRetry() {
-    if (firstTurnBootstrapRetryTimer) {
-      clearTimeout(firstTurnBootstrapRetryTimer);
-      firstTurnBootstrapRetryTimer = null;
-    }
-    firstTurnBootstrapRetryAttempted = false;
-  }
-
-  function canSendBootstrapTurnStart() {
-    if (!WS_READY_PHASES.has(AppState?.wsPhase)) {
-      return false;
-    }
-    const liveSocket = socket || WSClient?._ws || window.ws;
-    return Boolean(liveSocket && liveSocket.readyState === WebSocket.OPEN);
-  }
-
-  function scheduleBootstrapTurnStartRetry(reason = "post_greet_bootstrap_retry") {
-    if (firstTurnBootstrapRetryAttempted || firstTurnBootstrapRetryTimer) {
-      return;
-    }
-    firstTurnBootstrapRetryAttempted = true;
-    firstTurnBootstrapRetryTimer = setTimeout(() => {
-      firstTurnBootstrapRetryTimer = null;
-      if (!firstTurnBootstrapArmed || firstTurnBootstrapSent) {
-        return;
-      }
-      maybeSendBootstrapTurnStart(reason);
-    }, 150);
-  }
-
-  function maybeSendBootstrapTurnStart(source = "post_greet_bootstrap") {
-    // Phase 0 invariant: greet never opens ASR; first user speech always starts a turn.
-    if (firstTurnBootstrapSent || !firstTurnBootstrapArmed) {
-      return false;
-    }
-    if (isDeepgramV3TurnControlEnabled()) {
-      return false;
-    }
-    if (!canSendBootstrapTurnStart()) {
-      return false;
-    }
-    const turnId = resolveBootstrapTurnId();
-    const sampleRateHz =
-      Number(AppState?.policy?.sample_rate_hz) ||
-      Number(AppState?.policy?.audio?.sample_rate_hz) ||
-      Number(AppState?.policy?.audio?.sample_rate) ||
-      Number(AppState?.targetSampleRate) ||
-      16000;
-    const payload = {
-      type: "client.turn_start",
-      lane: "mic",
-      turn_id: turnId || undefined,
-      source,
-      pre_roll_ms: 0,
-      sample_rate_hz: sampleRateHz,
-      phase: getPhase(),
-      wsPhase: AppState?.wsPhase || null,
-    };
-    try {
-      sendJson(payload);
-    } catch (_) {}
-    firstTurnBootstrapSent = true;
-    firstTurnBootstrapArmed = false;
-    clearBootstrapTurnStartRetry();
-    postGreetTurnStartSent = true;
-    const willRequestAsrOpen = !AppState?.asrReady && !AppState?.asrArmInFlight;
-    try {
-      logStage("client.turn.bootstrap.turn_start_sent", {
-        source,
-        turn_id: turnId || null,
-        phase: getPhase(),
-        wsPhase: AppState?.wsPhase || null,
-        asrReady: Boolean(AppState?.asrReady),
-        asrArmInFlight: Boolean(AppState?.asrArmInFlight),
-        willRequestAsrOpen,
-      });
-    } catch (_) {}
-    if (!firstTurnInvariantOkLogged) {
-      firstTurnInvariantOkLogged = true;
-      try {
-        logStage("client.invariant_ok.first_turn_started", {
-          turn_id: turnId || null,
-          phase: getPhase(),
-          wsPhase: AppState?.wsPhase || null,
-        });
-      } catch (_) {}
-    }
-    if (willRequestAsrOpen) {
-      safeRequestAsrOpen("turn_bootstrap");
-    }
-    return true;
-  }
-
-  function maybeArmFirstTurnBootstrap(source = "post_greet_cleanup") {
-    if (firstTurnBootstrapSent || firstTurnBootstrapArmed || !postGreetCleanupCompleted) {
-      return false;
-    }
-    if (isDeepgramV3TurnControlEnabled()) {
-      return false;
-    }
-    if (!micAndPcmReady || AppState?.wsPhase !== "ready") {
-      return false;
-    }
-    if (!isConversationReadyPhase()) {
-      return false;
-    }
-    firstTurnBootstrapArmed = true;
-    try {
-      logStage("client.turn.bootstrap.armed", {
-        source,
-        phase: getPhase(),
-        wsPhase: AppState?.wsPhase || null,
-      });
-    } catch (_) {}
-    return true;
-  }
 
   function runPostGreetCleanupOnce(cleanupSource = "greet_end") {
     if (postGreetCleanupCompleted) {
@@ -927,8 +729,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       } catch (_) {}
     }
     clearPostGreetCleanupRetry();
-    startPostGreetSpeechWatchdog();
-    maybeArmFirstTurnBootstrap("post_greet_cleanup");
     return true;
   }
 
@@ -990,7 +790,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     }
     clearConversationStartTimer();
     clearPostGreetCleanupRetry("greet_start");
-    clearPostGreetSpeechWatchdog();
     resetMicAndPcmReady("greet_start");
     resetConversationAsrReady("greet_start");
     wsDiag("greet_start", { utt_id: frame?.utt_id });
@@ -1003,10 +802,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
     hasOpenedAsrForConversation = false;
     postGreetCleanupCompleted = false;
     postGreetCleanupSource = null;
-    firstTurnBootstrapArmed = false;
-    firstTurnBootstrapSent = false;
-    clearBootstrapTurnStartRetry();
-    bootstrapTurnId = null;
     try {
       const audioCtx = getPlaybackAudioContext();
       if (audioCtx) {
@@ -1142,7 +937,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         reason,
       });
     } catch (_) {}
-    maybeArmFirstTurnBootstrap("mic_pcm_ready");
   }
 
   function resetMicAndPcmReady(reason = "mic_pcm_reset") {
@@ -1712,43 +1506,8 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
       } catch (_) {}
     }
 
-    if (postGreetSpeechWatchdogActive) {
-      postGreetSpeechDetected = true;
-    }
-
     if (isDeepgramV3TurnControlEnabled()) {
       return;
-    }
-
-    if (firstTurnBootstrapArmed && !firstTurnBootstrapSent) {
-      const source = postGreetCleanupSource || "post_greet_bootstrap";
-      if (!maybeSendBootstrapTurnStart(source)) {
-        if (WS_READY_PHASES.has(AppState?.wsPhase)) {
-          scheduleBootstrapTurnStartRetry(source);
-        }
-      }
-    }
-
-    if (
-      speechSeenThisTurn &&
-      !firstTurnBootstrapArmed &&
-      !firstTurnBootstrapSent &&
-      !turnStopSent
-    ) {
-      const phase = getPhase();
-      if (phase === PHASE.ConversationReady || phase === PHASE.UserTurn) {
-        const gateSnapshot = typeof getPcmSenderGateSnapshot === "function"
-          ? getPcmSenderGateSnapshot()
-          : null;
-        try {
-          logStage("client.invariant_violation.speech_without_turn_start", {
-            phase,
-            wsPhase: AppState?.wsPhase || null,
-            postGreetCleanupCompleted,
-            gateSnapshot,
-          });
-        } catch (_) {}
-      }
     }
   }
 
@@ -2285,9 +2044,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
         markTurnAudioChunk(detail?.bytes);
       }
     } catch {}
-    if (postGreetSpeechWatchdogActive && detail?.bytes) {
-      postGreetAudioSent = true;
-    }
     if (!__secondGreetingTraceActive || __secondGreetingTraceCompleted) {
       return;
     }
@@ -3475,9 +3231,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function sendJson(frame) {
     try {
-      if (frame?.type === "client.turn_start") {
-        postGreetTurnStartSent = true;
-      }
       if (WSClient && typeof WSClient.sendJSON === "function") {
         return WSClient.sendJSON(frame);
       }
