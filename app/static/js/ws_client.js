@@ -3231,9 +3231,6 @@ const reasonLooksUserInitiated = typeof captureRuntimeExports.reasonLooksUserIni
 
   function sendJson(frame) {
     try {
-      if (frame?.type === "client.turn_start") {
-        postGreetTurnStartSent = true;
-      }
       if (WSClient && typeof WSClient.sendJSON === "function") {
         return WSClient.sendJSON(frame);
       }
