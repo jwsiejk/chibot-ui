@@ -509,6 +509,12 @@ if (turnControlEnabled && !isKeepalive && !speechSeenThisTurn && softDecision.va
 - A pre‑speech buffer is transmitted immediately after the turn start to capture audio that arrived before the `client.turn_start` frame. (See excerpts above.)
 - **Phase 2A:** `client.turn_start` is speech‑triggered only; preroll is sent once.
 
+#### Phase 2B contract
+
+- PCM sending is gated only by socket-open + local mute/hold/pause controls (+ optional silence suppression).
+- No gating on greet/ASR/wsPhase/turnActive/ttsActive.
+- `client.turn_start` / `client.turn_stop` are advisory markers only.
+
 ---
 
 ### A3) Turn end (client control paths)
