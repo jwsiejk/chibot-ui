@@ -205,7 +205,6 @@ function markGreetStart(frame) {
   }
   clearConversationStartTimer();
   clearPostGreetCleanupRetry("greet_start");
-  clearPostGreetSpeechWatchdog();
   resetMicAndPcmReady("greet_start");
   resetConversationAsrReady("greet_start");
   wsDiag("greet_start", { utt_id: frame?.utt_id });
@@ -218,10 +217,6 @@ function markGreetStart(frame) {
   hasOpenedAsrForConversation = false;
   postGreetCleanupCompleted = false;
   postGreetCleanupSource = null;
-  firstTurnBootstrapArmed = false;
-  firstTurnBootstrapSent = false;
-  clearBootstrapTurnStartRetry();
-  bootstrapTurnId = null;
   try {
     const audioCtx = getPlaybackAudioContext();
     if (audioCtx) {
@@ -415,7 +410,6 @@ function runPostGreetCleanupOnce(cleanupSource = "greet_end") {
     } catch (_) {}
   }
   clearPostGreetCleanupRetry();
-  startPostGreetSpeechWatchdog();
 }
 ```
 **Behavioral notes**
@@ -424,81 +418,7 @@ function runPostGreetCleanupOnce(cleanupSource = "greet_end") {
 ---
 
 ### A2) Turn start (client control paths)
-
-#### A2.1 Bootstrap turn start (non‑Deepgram V3)
-
-For non‑V3 turn control, the client may send a bootstrap `client.turn_start` after greet when the first user speech is detected. It is gated by WS readiness, phase, and a `firstTurnBootstrapArmed` flag.
-
-**Source: `app/static/js/ws_client.js` — `maybeSendBootstrapTurnStart`**
-```js
-function maybeSendBootstrapTurnStart(source = "post_greet_bootstrap") {
-  // Phase 0 invariant: greet never opens ASR; first user speech always starts a turn.
-  if (firstTurnBootstrapSent || !firstTurnBootstrapArmed) {
-    return false;
-  }
-  if (isDeepgramV3TurnControlEnabled()) {
-    return false;
-  }
-  if (!canSendBootstrapTurnStart()) {
-    return false;
-  }
-  const turnId = resolveBootstrapTurnId();
-  const sampleRateHz =
-    Number(AppState?.policy?.sample_rate_hz) ||
-    Number(AppState?.policy?.audio?.sample_rate_hz) ||
-    Number(AppState?.policy?.audio?.sample_rate) ||
-    Number(AppState?.targetSampleRate) ||
-    16000;
-  const payload = {
-    type: "client.turn_start",
-    lane: "mic",
-    turn_id: turnId || undefined,
-    source,
-    pre_roll_ms: 0,
-    sample_rate_hz: sampleRateHz,
-    phase: getPhase(),
-    wsPhase: AppState?.wsPhase || null,
-  };
-  try {
-    sendJson(payload);
-  } catch (_) {}
-  firstTurnBootstrapSent = true;
-  firstTurnBootstrapArmed = false;
-  clearBootstrapTurnStartRetry();
-  postGreetTurnStartSent = true;
-  const willRequestAsrOpen = !AppState?.asrReady && !AppState?.asrArmInFlight;
-  try {
-    logStage("client.turn.bootstrap.turn_start_sent", {
-      source,
-      turn_id: turnId || null,
-      phase: getPhase(),
-      wsPhase: AppState?.wsPhase || null,
-      asrReady: Boolean(AppState?.asrReady),
-      asrArmInFlight: Boolean(AppState?.asrArmInFlight),
-      willRequestAsrOpen,
-    });
-  } catch (_) {}
-  if (!firstTurnInvariantOkLogged) {
-    firstTurnInvariantOkLogged = true;
-    try {
-      logStage("client.invariant_ok.first_turn_started", {
-        turn_id: turnId || null,
-        phase: getPhase(),
-        wsPhase: AppState?.wsPhase || null,
-      });
-    } catch (_) {}
-  }
-  if (willRequestAsrOpen) {
-    safeRequestAsrOpen("turn_bootstrap");
-  }
-  return true;
-}
-```
-**Behavioral notes**
-- Bootstrap `client.turn_start` is only sent if V3 turn control is **not** enabled, and only after WS is ready. (See excerpt above.)
-- The payload includes `turn_id`, `pre_roll_ms`, and `sample_rate_hz`, which are mirrored in the V3 path as well. (See excerpt above.)
-
-#### A2.2 Deepgram V3 turn control (speech‑triggered start + preroll)
+#### A2.1 Deepgram V3 turn control (speech‑triggered start + preroll)
 
 When Deepgram V3 turn control is enabled, the client defers turn start until **speech is detected** in PCM frames. On the first speech frame, it allocates a `turn_id`, sends `client.turn_start`, and transmits a pre‑speech “preroll” slice from the PCM ring buffer.
 
@@ -587,6 +507,7 @@ if (turnControlEnabled && !isKeepalive && !speechSeenThisTurn && softDecision.va
 **Behavioral notes**
 - V3 turn start is **speech‑gated**: `client.turn_start` is sent only on the first speech frame, and it includes `pre_roll_ms`, `sample_rate_hz`, and optional VAD metadata. (See excerpts above.)
 - A pre‑speech buffer is transmitted immediately after the turn start to capture audio that arrived before the `client.turn_start` frame. (See excerpts above.)
+- **Phase 2A:** `client.turn_start` is speech‑triggered only; preroll is sent once.
 
 ---
 
@@ -1647,7 +1568,7 @@ if (frame.type === "asr.ready") {
 
 | Frame / event | Direction | Required fields (enforced) | Producer | Consumer(s) |
 | --- | --- | --- | --- | --- |
-| `client.turn_start` | Client → Server | `turn_id` non‑empty string; optional `lane`, `pre_roll_ms`, `sample_rate_hz` | `ws_audio_runtime.js` (V3) or `ws_client.js` (bootstrap) | `app/ws/adapter.py` |
+| `client.turn_start` | Client → Server | `turn_id` non‑empty string; optional `lane`, `pre_roll_ms`, `sample_rate_hz` | `ws_audio_runtime.js` (V3) | `app/ws/adapter.py` |
 | `client.turn_stop` | Client → Server | `turn_id` non‑empty string; `reason` non‑empty string | `ws_audio_runtime.js` via `finalizeTurn` | `app/ws/adapter.py` |
 | `input.stop` | Client → Server | `reason` optional | `ws_client.js` | `app/ws/adapter.py` (`_handle_client_turn_stop`) |
 | `asr.ready` | Server → Client | (bundle includes `input` + `policy`) | `app/ws/adapter.py` | `app/static/js/ws/turns.js`, `app/static/js/app.js` |
@@ -1963,24 +1884,9 @@ sequenceDiagram
 
 ## Known race mitigations in current code
 
-1) **Post‑greet cleanup retry + bootstrap retry**: If the post‑greet cleanup or bootstrap turn start does not occur immediately, the client schedules retries.
+1) **Post‑greet cleanup retry**: If the post‑greet cleanup does not occur immediately, the client schedules retries.
 
 **Source: `app/static/js/ws_client.js` — retry scheduling**
-```js
-function scheduleBootstrapTurnStartRetry(reason = "post_greet_bootstrap_retry") {
-  if (firstTurnBootstrapRetryAttempted || firstTurnBootstrapRetryTimer) {
-    return;
-  }
-  firstTurnBootstrapRetryAttempted = true;
-  firstTurnBootstrapRetryTimer = setTimeout(() => {
-    firstTurnBootstrapRetryTimer = null;
-    if (!firstTurnBootstrapArmed || firstTurnBootstrapSent) {
-      return;
-    }
-    maybeSendBootstrapTurnStart(reason);
-  }, 150);
-}
-```
 ```js
 if (!completed && !postGreetCleanupCompleted) {
   schedulePostGreetCleanupRetry("retry");
@@ -2035,7 +1941,7 @@ if (
 ## Places where ownership is split today (code‑backed)
 
 1) **Turn start responsibility (client vs server)**
-- Client (V3): `ws_audio_runtime.js` sends `client.turn_start` on first speech. (See A2.2 excerpts.)
+- Client (V3): `ws_audio_runtime.js` sends `client.turn_start` on first speech. (See A2.1 excerpts.)
 - Server: when PCM arrives and no ASR stream exists, the adapter schedules `_open_asr` and starts the server turn/metrics. (See B4 excerpts.)
 
 2) **Turn end responsibility (client vs server)**
@@ -2173,7 +2079,7 @@ if (maybeClient && typeof maybeClient.send === "function") {
   - Server: a user turn begins in `_start_user_turn` and advances `turn_index` in `_next_turn_index`; greet is `turn_index = 0`. (See “Server definition” excerpts.)
 
 - **Who owns turn start/end and ASR open/close?**
-  - Client: V3 turn start/stop (`client.turn_start`/`client.turn_stop`) is generated in `ws_audio_runtime.js`. (See A2.2/A3.1 excerpts.)
+  - Client: V3 turn start/stop (`client.turn_start`/`client.turn_stop`) is generated in `ws_audio_runtime.js`. (See A2.1/A3.1 excerpts.)
   - Server: ASR open/close is in `_open_asr`/`_close_asr`, scheduled on first PCM of an open turn. (See B4 excerpts.)
 
 - **What exact messages define boundaries?**
@@ -2186,7 +2092,7 @@ if (maybeClient && typeof maybeClient.send === "function") {
   - V3 adds a turn‑control gate: PCM dropped until `speechSeenThisTurn` is true. (See A4 excerpts.)
 
 - **How are race conditions mitigated?**
-  - Post‑greet cleanup and bootstrap turn start retries; pre‑speech PCM preroll; server buffer overflow/gap handling. (See “Known race mitigations” excerpts.)
+  - Post‑greet cleanup retries; pre‑speech PCM preroll; server buffer overflow/gap handling. (See “Known race mitigations” excerpts.)
 
 - **Known failure modes implied by code?**
   - PCM without turn (V3), oversized frames, unexpected container, buffer overflow, and `gum` failure induced `input.stop`. (See “Known failure modes” excerpts.)
