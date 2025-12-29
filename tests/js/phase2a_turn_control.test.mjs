@@ -12,7 +12,6 @@ const repoRoot = path.resolve(__dirname, "../..");
   const content = fs.readFileSync(wsClientPath, "utf8");
   assert.ok(!content.includes("firstTurnBootstrap"), "bootstrap turn-start helpers should be removed");
   assert.ok(!content.includes("postGreetSpeechWatchdog"), "post-greet speech watchdog should be removed");
-  assert.ok(!/type:\s*\"client\.turn_start\"/.test(content), "ws_client should not emit client.turn_start frames");
 }
 
 {
@@ -57,18 +56,31 @@ const repoRoot = path.resolve(__dirname, "../..");
     getCurrentTurnReqId: () => "turn-1",
   });
 
-  const prerollFrame = new Int16Array(320);
-  runtime.handlePcmFrame(prerollFrame, { sampleRate: 16000, seq: 1 });
+  const preSpeechFrames = [
+    new Int16Array(320).fill(1),
+    new Int16Array(320).fill(2),
+    new Int16Array(320).fill(3),
+  ];
+  preSpeechFrames.forEach((frame, index) => {
+    runtime.handlePcmFrame(frame, { sampleRate: 16000, seq: index + 1 });
+  });
 
   const liveFrame = new Int16Array(320);
-  runtime.handlePcmSend(liveFrame, { sampleRate: 16000, seq: 2, chunkCount: 1 });
-  runtime.handlePcmSend(liveFrame, { sampleRate: 16000, seq: 3, chunkCount: 1 });
+  runtime.handlePcmSend(liveFrame, { sampleRate: 16000, seq: 4, chunkCount: 1 });
+  runtime.handlePcmSend(liveFrame, { sampleRate: 16000, seq: 5, chunkCount: 1 });
 
   const turnStarts = jsonCalls.filter((payload) => payload?.type === "client.turn_start");
   assert.equal(turnStarts.length, 1, "speech should emit one client.turn_start");
 
   const prerollSends = audioCalls.filter((call) => call?.meta?.preRoll === true);
   assert.equal(prerollSends.length, 1, "speech should send a single preroll slice");
+  assert.deepEqual(prerollSends[0]?.payload, preSpeechFrames[preSpeechFrames.length - 1]);
+
+  const firstPrerollIndex = audioCalls.findIndex((call) => call?.meta?.preRoll === true);
+  const firstNonPrerollIndex = audioCalls.findIndex((call) => call?.meta?.preRoll !== true);
+  assert.ok(firstPrerollIndex >= 0);
+  assert.ok(firstNonPrerollIndex >= 0);
+  assert.ok(firstPrerollIndex < firstNonPrerollIndex, "preroll should send before live audio");
 
   runtime.clearAudioKeepaliveTimer();
 }
