@@ -83,3 +83,83 @@ globalThis.WebSocket = { OPEN: 1 };
 
   runtime.clearAudioKeepaliveTimer();
 }
+
+{
+  const audioCalls = [];
+  const socket = { readyState: 0 };
+  const appState = {
+    policy: {
+      deepgramV3Enabled: true,
+      deepgramV3TurnControlEnabled: false,
+    },
+    wsPhase: "booting",
+    phase: "ConversationReady",
+    targetSampleRate: 16000,
+    preSpeechBufferMs: 20,
+    getState() {
+      return this;
+    },
+  };
+
+  const runtime = createWsAudioRuntime({
+    AppState: appState,
+    initPcmSender: () => ({}),
+    updateState: () => {},
+    logStage: () => {},
+    getSocket: () => socket,
+    sendAudioChunk: (payload, meta) => {
+      audioCalls.push({ payload, meta });
+    },
+    sendJSON: () => {},
+    isAudioStreaming: () => true,
+    canCaptureNow: () => true,
+    isSenderPaused: () => false,
+    getVadController: () => ({
+      getState: () => ({ state: "speech", isSpeech: true, rms: 0.5 }),
+    }),
+    getCurrentTurnReqId: () => "turn-2",
+  });
+
+  const frame = new Int16Array(320);
+  runtime.handlePcmSend(frame, { sampleRate: 16000, seq: 1, chunkCount: 1 });
+
+  assert.equal(
+    audioCalls.length,
+    0,
+    "closed socket should block audio send"
+  );
+
+  runtime.clearAudioKeepaliveTimer();
+}
+
+{
+  const appState = {
+    wsConnected: false,
+    policy: {
+      deepgramV3Enabled: true,
+      deepgramV3TurnControlEnabled: false,
+    },
+    getState() {
+      return this;
+    },
+  };
+
+  const runtime = createWsAudioRuntime({
+    AppState: appState,
+    initPcmSender: () => ({}),
+    updateState: () => {},
+    logStage: () => {},
+    sendAudioChunk: () => {},
+    sendJSON: () => {},
+    isAudioStreaming: () => true,
+    canCaptureNow: () => true,
+    isSenderPaused: () => false,
+  });
+
+  let snapshot = null;
+  assert.doesNotThrow(() => {
+    snapshot = runtime.getPcmSenderGateSnapshot();
+  }, "gate snapshot should not throw without socket helpers");
+  assert.equal(snapshot.wsReadyForAudio, false, "wsConnected fallback should be respected");
+  runtime.clearAudioKeepaliveTimer();
+}

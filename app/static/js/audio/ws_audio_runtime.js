@@ -690,6 +690,22 @@ export function createWsAudioRuntime(options = {}) {
     return wsClient?._ws || null;
   };
 
+  const isSocketOpen = (stateSnapshot = null) => {
+    try {
+      const socket = resolveSocket?.();
+      if (socket) {
+        if (typeof WebSocket !== "undefined") {
+          return socket.readyState === WebSocket.OPEN;
+        }
+        return socket.readyState === 1;
+      }
+    } catch (_) {}
+    if (stateSnapshot && typeof stateSnapshot.wsConnected === "boolean") {
+      return stateSnapshot.wsConnected;
+    }
+    return true;
+  };
+
   const getMicChunksValue = () => {
     if (typeof getMicChunks === "function") {
       try {
@@ -874,10 +890,14 @@ export function createWsAudioRuntime(options = {}) {
       : null;
     const enrichedMeta = meta && typeof meta === "object" ? { ...meta } : {};
     const wsPhase = getAppState()?.wsPhase || null;
+    let wsReadyState = null;
+    try {
+      wsReadyState = resolveSocket?.()?.readyState ?? null;
+    } catch (_) {}
     try {
       logStage("client.audio_chunk_attempt", {
         length: payload?.byteLength || payload?.length || null,
-        ws_ready: resolveSocket()?.readyState,
+        ws_ready: wsReadyState,
         turnId: enrichedMeta.turnId || null,
       });
     } catch (_) {}
@@ -904,8 +924,7 @@ export function createWsAudioRuntime(options = {}) {
       enrichedMeta.sampleRateHz = enrichedMeta.sampleRate;
     }
     trackChunkShape(payload, enrichedMeta);
-    const socket = resolveSocket?.();
-    const socketOpen = !!socket && socket.readyState === WebSocket.OPEN;
+    const socketOpen = isSocketOpen();
 
     if (!socketOpen) {
       lastPcmSendDropReason = "ws_not_open";
@@ -1394,8 +1413,10 @@ export function createWsAudioRuntime(options = {}) {
 
   function computeHardGateSnapshot({ wsPhase, fatalError, wsReadyState }) {
     const socketOpen = typeof wsReadyState === "number"
-      ? wsReadyState === WebSocket.OPEN
-      : true;
+      ? (typeof WebSocket !== "undefined"
+        ? wsReadyState === WebSocket.OPEN
+        : wsReadyState === 1)
+      : isSocketOpen();
 
     const wsReady = socketOpen;
     let allowed = wsReady && !fatalError;
@@ -2472,12 +2493,11 @@ export function createWsAudioRuntime(options = {}) {
     const phaseValue = typeof stateSnapshot?.phase === "string" ? stateSnapshot.phase : null;
     const wsPhase = typeof stateSnapshot?.wsPhase === "string" ? stateSnapshot.wsPhase : null;
     const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
-    const socket = resolveSocket();
-    const socketOpen = socket
-      ? (typeof WebSocket !== "undefined"
-        ? socket.readyState === WebSocket.OPEN
-        : socket.readyState === 1)
-      : (typeof stateSnapshot?.wsConnected === "boolean" ? stateSnapshot.wsConnected : true);
+    let socket = null;
+    try {
+      socket = resolveSocket?.();
+    } catch (_) {}
+    const socketOpen = isSocketOpen(stateSnapshot);
     const wsReadyForAudio = socketOpen;
     const audioStreaming = Boolean(isAudioStreaming());
     const senderPaused = Boolean(isSenderPaused());

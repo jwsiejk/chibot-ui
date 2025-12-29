@@ -382,6 +382,7 @@ export function createTurnRuntime(config = {}) {
     if (senderPaused) {
       return false;
     }
+    // Phase 2B: client does not gate on tts/wsPhase/asrReady/listening; only socket-open + local pause/mic health.
     return true;
   }
 
