@@ -907,7 +907,7 @@ export function createWsAudioRuntime(options = {}) {
     const socket = resolveSocket?.();
     const socketOpen = !!socket && socket.readyState === WebSocket.OPEN;
 
-    if (!socketOpen || wsPhase === "closing" || wsPhase === "closed") {
+    if (!socketOpen) {
       lastPcmSendDropReason = "ws_not_open";
       logWsAudioDropOnce(enrichedMeta, "ws_not_open");
       return false;
@@ -1397,14 +1397,12 @@ export function createWsAudioRuntime(options = {}) {
       ? wsReadyState === WebSocket.OPEN
       : true;
 
-    const phaseReady = typeof wsPhase === "string" ? WS_READY_PHASES.has(wsPhase) : true;
-
-    const wsReady = socketOpen && phaseReady;
+    const wsReady = socketOpen;
     let allowed = wsReady && !fatalError;
     let reason = "ok";
     if (!wsReady) {
       allowed = false;
-      reason = "ws_not_ready";
+      reason = "ws_not_open";
     } else if (fatalError) {
       allowed = false;
       reason = "fatal_error";
@@ -2204,6 +2202,9 @@ export function createWsAudioRuntime(options = {}) {
       (Number.isFinite(pcmSampleRate) && pcmSampleRate > 0 ? pcmSampleRate : asrRate);
 
     const turnControlEnabled = isTurnControlEnabled();
+    if (turnControlEnabled && !isKeepalive && turnStopSent && softDecision.vadLikelySpeech) {
+      resetTurnForNextUser();
+    }
     if (turnControlEnabled && !isKeepalive && !speechSeenThisTurn && softDecision.vadLikelySpeech) {
       const turnIdCandidate = typeof getCurrentTurnReqId === "function" ? getCurrentTurnReqId() : null;
       currentTurnId = turnIdCandidate && `${turnIdCandidate}`.length ? `${turnIdCandidate}` : allocateTurnId();
@@ -2471,7 +2472,13 @@ export function createWsAudioRuntime(options = {}) {
     const phaseValue = typeof stateSnapshot?.phase === "string" ? stateSnapshot.phase : null;
     const wsPhase = typeof stateSnapshot?.wsPhase === "string" ? stateSnapshot.wsPhase : null;
     const wsPhaseKnown = typeof wsPhase === "string" && wsPhase.length > 0;
-    const wsReadyForAudio = wsPhaseKnown ? WS_READY_PHASES.has(wsPhase) : true;
+    const socket = resolveSocket();
+    const socketOpen = socket
+      ? (typeof WebSocket !== "undefined"
+        ? socket.readyState === WebSocket.OPEN
+        : socket.readyState === 1)
+      : (typeof stateSnapshot?.wsConnected === "boolean" ? stateSnapshot.wsConnected : true);
+    const wsReadyForAudio = socketOpen;
     const audioStreaming = Boolean(isAudioStreaming());
     const senderPaused = Boolean(isSenderPaused());
     const captureAllowed = Boolean(canCaptureNow());
@@ -2511,7 +2518,7 @@ export function createWsAudioRuntime(options = {}) {
     } else if (!gates.micPerm) {
       decisionReason = "mic_perm";
     } else if (!wsReadyForAudio) {
-      decisionReason = "ws_not_ready";
+      decisionReason = "ws_not_open";
     } else if (fatalError) {
       decisionReason = "fatal_error";
     } else if (FORCE_PCM_SEND && !shouldSendBase) {
@@ -2524,6 +2531,7 @@ export function createWsAudioRuntime(options = {}) {
       wsPhase,
       wsPhaseKnown,
       wsReadyForAudio,
+      socketOpen,
       audioStreaming,
       senderPaused,
       captureAllowed,

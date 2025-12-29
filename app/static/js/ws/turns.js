@@ -358,9 +358,6 @@ export function createTurnRuntime(config = {}) {
     if (dbg("audio_safe_mode") || dbg("force_capture")) {
       return true;
     }
-    if (!firstChunkSeen || now() < armingGraceUntil) {
-      return true;
-    }
     let socket = null;
     try {
       socket = getSocket();
@@ -376,10 +373,16 @@ export function createTurnRuntime(config = {}) {
       }
     }
     const state = typeof AppState?.getState === "function" ? AppState.getState() : AppState;
-    if (state?.tts || state?.ttsActive) {
+    if (state && typeof state.micPermissionGranted === "boolean" && !state.micPermissionGranted) {
       return false;
     }
-    return warming() || (Boolean(state?.listening) && !senderPaused);
+    if (state?.gumFailed || state?.micHardFailed || (typeof window !== "undefined" && window.__gumFailed)) {
+      return false;
+    }
+    if (senderPaused) {
+      return false;
+    }
+    return true;
   }
 
   function buildAsrOpenPayload(options = {}) {
