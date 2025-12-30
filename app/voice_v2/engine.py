@@ -306,7 +306,7 @@ class EngineV2:
         """
         session = self._ensure_session(sid)
         if session.state != RESPONDING:
-           return
+            return
 
         policy = self.policy_snapshot or {}
         barge_enabled = bool(policy.get("barge_in_enabled"))
