@@ -314,33 +314,33 @@ class EngineV2:
         granted = barge_enabled
         reason = None if granted else "policy_disabled"
 
-    self._publish_barge_event(
-        sid,
-        "audio",
-        event_type=EVT_BARGE_DETECTED,
-        granted=granted,
-        reason=reason,
-    )
-
-    if not granted:
         self._publish_barge_event(
             sid,
             "audio",
-            event_type=EVT_BARGE_REJECTED,
-            granted=False,
-            reason=reason or "policy_disabled",
+            event_type=EVT_BARGE_DETECTED,
+            granted=granted,
+            reason=reason,
         )
-        return
 
-    self.cancel_current_tts(sid, reason="canceled")
-    self._publish_barge_event(
-        sid,
-        "audio",
-        event_type=EVT_BARGE_CONFIRMED,
-        granted=True,
-    )
+        if not granted:
+            self._publish_barge_event(
+                sid,
+                "audio",
+                event_type=EVT_BARGE_REJECTED,
+                granted=False,
+                reason=reason or "policy_disabled",
+            )
+            return
 
-    self._set_state(sid, LISTENING, reason="audio_barge_turn_start")
+        self.cancel_current_tts(sid, reason="canceled")
+        self._publish_barge_event(
+            sid,
+            "audio",
+            event_type=EVT_BARGE_CONFIRMED,
+            granted=True,
+        )
+
+        self._set_state(sid, LISTENING, reason="audio_barge_turn_start")
 
     def _emit_client_diag(self, sid: str, frame: Mapping[str, Any]) -> None:
         if not config.DIAG_CLIENT_HUD:
