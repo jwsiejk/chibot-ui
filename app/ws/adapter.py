@@ -4417,15 +4417,15 @@ class ChatV2Adapter:
                source="ws.adapter",
             )
 
-    # Notify engine so it can cancel TTS and reset state
-    await self._invoke_engine(
-        "on_client_turn_start",
-        ctx.sid,
-        frame,
-    )
+            # Notify engine so it can cancel TTS and reset state
+            await self._invoke_engine(
+                "on_client_turn_start",
+                ctx.sid,
+                frame,
+            )
 
-    # After barge request, do not treat TTS as gating capture
-    tts_active_now = False
+            # After barge request, do not treat TTS as gating capture
+            tts_active_now = False
 
             
             parsed_rate = None
