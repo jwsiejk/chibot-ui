@@ -295,6 +295,53 @@ class EngineV2:
         if frame_type == "client.diag":
             self._emit_client_diag(sid, frame)
 
+    def on_client_turn_start(self, sid: str, frame: Mapping[str, Any]) -> None:
+        """
+        Phase 3: Deterministic audio barge-in signal.
+
+        The adapter will call this when it receives client.turn_start.
+        If we're currently RESPONDING (TTS active) and policy allows barge-in,
+        cancel current TTS and transition back to LISTENING so subsequent PCM
+        is accepted (no audio_ignored).
+        """
+        session = self._ensure_session(sid)
+        if session.state != RESPONDING:
+           return
+
+        policy = self.policy_snapshot or {}
+        barge_enabled = bool(policy.get("barge_in_enabled"))
+
+        granted = barge_enabled
+        reason = None if granted else "policy_disabled"
+
+    self._publish_barge_event(
+        sid,
+        "audio",
+        event_type=EVT_BARGE_DETECTED,
+        granted=granted,
+        reason=reason,
+    )
+
+    if not granted:
+        self._publish_barge_event(
+            sid,
+            "audio",
+            event_type=EVT_BARGE_REJECTED,
+            granted=False,
+            reason=reason or "policy_disabled",
+        )
+        return
+
+    self.cancel_current_tts(sid, reason="canceled")
+    self._publish_barge_event(
+        sid,
+        "audio",
+        event_type=EVT_BARGE_CONFIRMED,
+        granted=True,
+    )
+
+    self._set_state(sid, LISTENING, reason="audio_barge_turn_start")
+
     def _emit_client_diag(self, sid: str, frame: Mapping[str, Any]) -> None:
         if not config.DIAG_CLIENT_HUD:
             return
@@ -1348,7 +1395,7 @@ class EngineV2:
     ) -> None:
         """Publish lifecycle-specific barge telemetry events."""
 
-        if source not in {"auto_vad", "asr_evidence", "text"}:
+        if source not in {"auto_vad", "asr_evidence", "text", "audio"}:
             return
 
         meta: Dict[str, Any] = {
