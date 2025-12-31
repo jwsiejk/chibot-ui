@@ -559,7 +559,16 @@ export function createWsAudioRuntime(options = {}) {
             });
           } catch (_) {}
           lastErrorName = lastErrorNameLocal || lastErrorName;
-          if (micReacquireFailures >= 3) {
+          // classify Win11-style transient failures
+          const errName = lastErrorNameLocal || lastErrorName || null;
+          const errMsg = lastErrorMessage || lastGumError || null;
+
+          const isTransientTrackEnded =
+            errName === "TrackEndedError" ||
+            errMsg === "track_ended";
+
+          // only hard-fail on real errors
+          if (micReacquireFailures >= 3 && !isTransientTrackEnded) {
             micHardFailed = true;
             gumFailed = true;
             updatePcmSenderState("mic_reacquire_hard_failed");
@@ -570,12 +579,15 @@ export function createWsAudioRuntime(options = {}) {
             try {
               updateState({ micUnavailable: true });
             } catch (_) {}
+          } else {
+            // keep retrying — Windows needs time to re-enumerate the device
+            scheduleMicReacquire(
+              "transient_reacquire",
+              Math.min(5000, 500 * micReacquireFailures)
+            );
           }
+
           logMicState("reacquire_failed");
-        }
-      }
-    }
-  }
 
   try {
     console.log("AskChip ws_audio_runtime loaded", {
