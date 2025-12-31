@@ -31,7 +31,9 @@ const CORE = [
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE)));
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE))
+  );
 });
 
 self.addEventListener("activate", (event) => {
@@ -48,13 +50,13 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const request = event.request;
 
-  // Only cache GET requests
+  // Only handle GET requests
   if (request.method !== "GET") return;
 
   const accept = request.headers.get("Accept") || "";
   const isHTML = request.mode === "navigate" || accept.includes("text/html");
 
-  // Don't cache HTML navigations; always go to network
+  // Never cache HTML navigations; always go to network
   if (isHTML) {
     event.respondWith(fetch(request));
     return;
@@ -62,24 +64,35 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
+    const url = new URL(request.url);
 
-    // Try cache first
-    const match = await cache.match(request, { ignoreSearch: false });
-    if (match) return match;
+    // Treat versioned static assets as cache-first.
+    // This prevents re-downloading for the same BUILD_ID, but avoids caching arbitrary requests.
+    const isVersionedStatic =
+      (url.pathname.startsWith("/static/") || url.pathname.startsWith("/admin/ui/")) &&
+      url.searchParams.has("v");
 
-    // Network fetch
-    const response = await fetch(request);
+    if (isVersionedStatic) {
+      const cached = await cache.match(request, { ignoreSearch: false });
+      if (cached) return cached;
 
-    // Cache only successful, non-opaque responses
-    if (response.ok && response.type !== "opaque") {
-      cache.put(request, response.clone());
+      const resp = await fetch(request);
+
+      // Only cache good responses
+      if (resp.ok && resp.type !== "opaque") {
+        cache.put(request, resp.clone());
+      }
+
+      return resp;
     }
 
-    return response;
+    // Everything else: network-first, cache fallback (useful for transient offline)
+    try {
+      return await fetch(request);
+    } catch (err) {
+      const cached = await cache.match(request, { ignoreSearch: false });
+      if (cached) return cached;
+      throw err;
+    }
   })());
-});
-
-  event.respondWith(
-    fetch(request).catch(() => caches.match(request, { ignoreSearch: false }))
-  );
 });
