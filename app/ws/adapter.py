@@ -734,7 +734,6 @@ class _PartialCoalescer:
         if timer is not None:
             timer.cancel()
 
-
 @runtime_checkable
 class EngineHooks(Protocol):
     """Engine surface used by the WebSocket adapter."""
@@ -750,7 +749,9 @@ class EngineHooks(Protocol):
 
     def on_close(self, sid: str, code: int, reason: Optional[str]) -> Any:  # pragma: no cover - signature stub
         """Handle the WebSocket closing."""
-
+        
+    def on_client_turn_start(self, sid: str, frame: Dict[str, Any]) -> Any:  # pragma: no cover
+        """Handle deterministic barge-in signal from client.turn_start."""
 
 @dataclass
 class AdapterContext:
@@ -4403,30 +4404,29 @@ class ChatV2Adapter:
             barge_enabled = bool(self._policy(ctx).get("barge_in_enabled"))
 
             if (
-               tts_active_now
-               and barge_enabled
-               and ctx.last_barge_turn_start_turn_id != normalized_turn_id
+                tts_active_now
+                and barge_enabled
+                and ctx.last_barge_turn_start_turn_id != normalized_turn_id
             ):
-               ctx.last_barge_turn_start_turn_id = normalized_turn_id
+                ctx.last_barge_turn_start_turn_id = normalized_turn_id
 
-            self._emit_session_step(
-               ctx.sid,
-               "barge.detected",
-               summary="Client turn_start while TTS active; requesting barge-in",
-               meta={"turn_id": normalized_turn_id, "source": "client.turn_start"},
-               source="ws.adapter",
-            )
+                self._emit_session_step(
+                    ctx.sid,
+                    "barge.detected",
+                    summary="Client turn_start while TTS active; requesting barge-in",
+                    meta={"turn_id": normalized_turn_id, "source": "client.turn_start"},
+                    source="ws.adapter",
+                )
 
-            # Notify engine so it can cancel TTS and reset state
-            await self._invoke_engine(
-                "on_client_turn_start",
-                ctx.sid,
-                frame,
-            )
+                # Notify engine so it can cancel TTS and reset state
+                await self._invoke_engine(
+                    "on_client_turn_start",
+                    ctx.sid,
+                    frame,
+                )
 
-            # After barge request, do not treat TTS as gating capture
-            tts_active_now = False
-
+                # After barge request, do not treat TTS as gating capture
+                tts_active_now = False
             
             parsed_rate = None
             if isinstance(sample_rate_value, (int, float)) and not isinstance(
