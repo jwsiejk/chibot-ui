@@ -47,30 +47,37 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
-  const url = new URL(request.url);
 
-  if (request.mode === "navigate" || request.headers.get("Accept")?.includes("text/html")) {
+  // Only cache GET requests
+  if (request.method !== "GET") return;
+
+  const accept = request.headers.get("Accept") || "";
+  const isHTML = request.mode === "navigate" || accept.includes("text/html");
+
+  // Don't cache HTML navigations; always go to network
+  if (isHTML) {
     event.respondWith(fetch(request));
     return;
   }
 
-  if (
-    (url.pathname.startsWith("/static/") || url.pathname.startsWith("/admin/ui/")) &&
-    url.searchParams.get("v")
-  ) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then(async (cache) => {
-        const match = await cache.match(request, { ignoreSearch: false });
-        if (match) {
-          return match;
-        }
-        const response = await fetch(request);
-        cache.put(request, response.clone());
-        return response;
-      })
-    );
-    return;
-  }
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+
+    // Try cache first
+    const match = await cache.match(request, { ignoreSearch: false });
+    if (match) return match;
+
+    // Network fetch
+    const response = await fetch(request);
+
+    // Cache only successful, non-opaque responses
+    if (response.ok && response.type !== "opaque") {
+      cache.put(request, response.clone());
+    }
+
+    return response;
+  })());
+});
 
   event.respondWith(
     fetch(request).catch(() => caches.match(request, { ignoreSearch: false }))
