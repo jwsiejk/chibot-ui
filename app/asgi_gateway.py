@@ -31,7 +31,7 @@ from app.auth.http_handlers import (
 from app.db import neon
 from app.firehose import is_firehose_enabled
 from app.logging_config import configure_logging
-from app.logging_tuning import tune_logging_noise
+from app.logging_tuning import _silence_logger, _ws_text_debug_enabled, tune_logging_noise
 from app.logging_setup import install_bus_handler
 from app.telemetry import bus as telemetry_bus
 from app.telemetry.exporter import FileExporter
@@ -45,12 +45,24 @@ from app.ws.adapter import CHAT_V2_SUBPROTOCOL, ChatV2Adapter
 def _silence_uvicorn_ws_frame_debug_logs() -> None:
     """Silence verbose per-frame websocket logs unless explicitly enabled."""
 
-    if os.getenv("ASKCHIP_WS_TEXT_DEBUG", "").lower() in ("1", "true", "yes", "on"):
+    if _ws_text_debug_enabled():
         return
 
-    logging.getLogger("uvicorn.protocols.websockets.websockets_impl").setLevel(
-        logging.INFO
+    targets = (
+        "uvicorn.protocols.websockets.websockets_impl",
+        "uvicorn.protocols.websockets.wsproto_impl",
     )
+
+    logger_dict = getattr(logging.root.manager, "loggerDict", {})
+    for name, candidate in logger_dict.items():
+        if not isinstance(name, str) or not name.startswith("uvicorn.protocols.websockets"):
+            continue
+
+        logger = candidate if isinstance(candidate, logging.Logger) else logging.getLogger(name)
+        _silence_logger(logger)
+
+    for name in targets:
+        _silence_logger(logging.getLogger(name))
 
 
 configure_logging()
