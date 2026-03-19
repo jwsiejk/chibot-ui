@@ -11,7 +11,7 @@ class WebRtcSignalingService:
         self._peer_factory = peer_factory or AiortcPeerFactory()
 
     async def negotiate_offer(self, *, session_id: str | None, offer: SessionDescriptionModel) -> WebRtcSignalResponse:
-        await self._store.prune_expired_pending_sessions()
+        await self._store.prune_expired_sessions()
         session = self._store.resolve_session(session_id)
         await self._store.update_offer(session.session_id, offer.sdp)
         result = await self._peer_factory.create_answer(offer)
@@ -28,6 +28,7 @@ class WebRtcSignalingService:
         )
 
     async def disconnect(self, session_id: str | None) -> WebRtcSignalResponse:
+        await self._store.prune_expired_sessions()
         if session_id:
             await self._store.release(session_id)
         return WebRtcSignalResponse(

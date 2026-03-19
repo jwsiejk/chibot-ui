@@ -327,6 +327,36 @@ def test_webrtc_websocket_offer_keeps_backend_peer_alive_after_socket_close(tmp_
         assert peer_factory.peers[0].closed is False
 
 
+def test_webrtc_store_prunes_idle_negotiated_peer_sessions(tmp_path: Path) -> None:
+    peer_factory = FakePeerFactory()
+    store = WebRtcSessionStore(negotiated_session_timeout_seconds=5)
+    app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
+    with TestClient(app) as client:
+        signaling = client.app.state.askchip.webrtc_signaling
+        signaling._store = store
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({
+                'event': 'offer',
+                'session_id': 'rtc-session-stale-peer',
+                'offer': {'type': 'offer', 'sdp': 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n'},
+            })
+            response = websocket.receive_json()
+
+        session = signaling.get_session('rtc-session-stale-peer')
+        assert response['status'] == 'answer_created'
+        assert session is not None
+        assert session.peer is peer_factory.peers[0]
+        assert peer_factory.peers[0].closed is False
+
+        session.updated_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({'event': 'disconnect', 'session_id': 'different-session'})
+            disconnect_response = websocket.receive_json()
+
+    assert disconnect_response['status'] == 'disconnected'
+    assert peer_factory.peers[0].closed is True
+    assert signaling.get_session('rtc-session-stale-peer') is None
+
 def test_webrtc_websocket_disconnect_releases_backend_peer(tmp_path: Path) -> None:
     peer_factory = FakePeerFactory()
     app = make_app(tmp_path, webrtc_peer_factory=peer_factory)

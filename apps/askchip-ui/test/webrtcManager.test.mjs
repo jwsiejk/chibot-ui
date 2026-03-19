@@ -142,6 +142,39 @@ describe('WebRtcManager', () => {
     });
   });
 
+
+  it('resets local state even when remote disconnect times out', async () => {
+    const snapshots = [];
+    const peer = new FakePeerConnection();
+    const manager = new WebRtcManager(
+      (snapshot) => snapshots.push(snapshot),
+      {
+        exchange: async () => ({
+          session_id: 'rtc-remote-timeout',
+          event: 'answer',
+          status: 'answer_created',
+          detail: 'ok',
+          answer: { type: 'answer', sdp: 'answer-sdp' },
+        }),
+        disconnect: async () => ({ timedOut: true, error: null }),
+      },
+      () => peer,
+    );
+
+    await manager.connect(buildStream(), 'session-1');
+    await manager.disconnect();
+    await manager.disconnect();
+
+    assert.equal(peer.closed, true);
+    assert.deepEqual(snapshots.at(-1), {
+      sessionId: 'rtc-remote-timeout',
+      connectionState: 'disconnected',
+      iceConnectionState: 'new',
+      signalingState: 'stable',
+      lastError: 'Remote WebRTC cleanup timed out; local diagnostics were reset anyway.',
+    });
+  });
+
   it('treats repeated disconnect calls as a safe no-op after the first cleanup', async () => {
     const snapshots = [];
     const peer = new FakePeerConnection();
