@@ -1,5 +1,6 @@
 import { runtimeConfig } from '../config/runtime';
 import type { AskChipEvent } from '../types/contract';
+import { createConnectionFinalizer } from './connectionFinalizer';
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
@@ -22,26 +23,15 @@ export class AskChipEventsClient {
     const socket = new WebSocket(url);
     this.socket = socket;
 
-    let finalized = false;
     let lastFailure: 'error' | 'close' | null = null;
-
-    const finalize = (reason: 'error' | 'close') => {
-      if (finalized) {
-        return;
-      }
-      finalized = true;
-
-      if (this.socket === socket) {
+    const finalize = createConnectionFinalizer({
+      isCurrentSocket: () => this.socket === socket,
+      clearCurrentSocket: () => {
         this.socket = null;
-      }
-
-      if (reason === 'error') {
-        options.onError();
-        return;
-      }
-
-      options.onClose();
-    };
+      },
+      onError: options.onError,
+      onClose: options.onClose,
+    });
 
     socket.addEventListener('open', () => {
       lastFailure = null;
@@ -61,7 +51,6 @@ export class AskChipEventsClient {
     socket.addEventListener('close', () => finalize(lastFailure ?? 'close'));
 
     return () => {
-      finalized = true;
       if (this.socket === socket) {
         this.socket = null;
       }
