@@ -16,9 +16,10 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 
 ## Current frontend scope
 - Typed chat is implemented, including transcript loading, session selection, and streaming assistant text updates.
-- WebRTC foundation work is implemented for mic readiness, peer negotiation, and transport diagnostics only.
+- WebRTC foundation work is implemented for mic readiness, peer negotiation, explicit disconnect cleanup, and transport diagnostics only.
+- Backend WebRTC peer/session lifetime is intentionally not tied to the signaling WebSocket lifetime; explicit disconnect and backend orphan cleanup release peer sessions.
 - Voice/WebRTC conversation is not implemented in this phase.
-- STT, TTS, voice controls, tools, RAG, and auth remain out of scope.
+- STT, TTS, voice turns, wake word, tools, RAG, and auth remain out of scope.
 
 ## Windows (PowerShell)
 1. Create and activate a Python 3.11+ virtual environment in `services/askchip-api`.

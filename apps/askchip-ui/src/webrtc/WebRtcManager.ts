@@ -1,13 +1,17 @@
 import { waitForIceGatheringComplete } from './iceGathering.js';
 import { askChipSignalingClient, type AskChipSignalingClient } from './signalingClient.js';
 import { createDiagnostics, mapPeerConnectionState } from './diagnostics.js';
-import type { WebRtcDiagnosticsSnapshot, WebRtcSignalResponse } from './types.js';
+import type { DisconnectResult, WebRtcDiagnosticsSnapshot, WebRtcSignalResponse } from './types.js';
+
+const REMOTE_DISCONNECT_TIMEOUT_DETAIL = 'Remote WebRTC cleanup timed out; local diagnostics were reset anyway.';
+const REMOTE_DISCONNECT_FAILURE_DETAIL = 'Remote WebRTC cleanup failed; local diagnostics were reset anyway.';
 
 export class WebRtcManager {
   private peer: RTCPeerConnection | null = null;
   private sessionId: string | null = null;
   private remoteSessionId: string | null = null;
   private connectAttempt = 0;
+  private disconnectPromise: Promise<void> | null = null;
 
   constructor(
     private readonly onDiagnostics: (value: WebRtcDiagnosticsSnapshot) => void,
@@ -22,7 +26,7 @@ export class WebRtcManager {
     this.peer = peer;
     this.sessionId = sessionId;
     this.remoteSessionId = null;
-    this.publish(createDiagnostics(peer, { sessionId, connectionState: 'preparing' }));
+    this.publish(createDiagnostics(peer, { sessionId, connectionState: 'preparing', lastError: null }));
 
     const publishPeerDiagnostics = (lastError: string | null = null) => {
       if (!this.isCurrentAttempt(connectAttempt, peer)) {
@@ -49,7 +53,7 @@ export class WebRtcManager {
         return;
       }
 
-      this.publish(createDiagnostics(peer, { sessionId, connectionState: 'connecting' }));
+      this.publish(createDiagnostics(peer, { sessionId, connectionState: 'connecting', lastError: null }));
       const response = await this.signalingClient.exchange({
         event: 'offer',
         session_id: sessionId,
@@ -68,24 +72,54 @@ export class WebRtcManager {
   }
 
   async disconnect(finalState: WebRtcDiagnosticsSnapshot['connectionState'] = 'disconnected'): Promise<void> {
-    this.connectAttempt += 1;
+    if (this.disconnectPromise) {
+      await this.disconnectPromise;
+      return;
+    }
+
     const peer = this.peer;
-    const sessionId = this.sessionId;
+    const sessionId = this.remoteSessionId ?? this.sessionId;
     const remoteSessionId = this.remoteSessionId;
+    const hasActiveState = peer !== null || this.sessionId !== null || this.remoteSessionId !== null;
+
+    if (!hasActiveState) {
+      return;
+    }
+
+    this.connectAttempt += 1;
     this.peer = null;
     this.sessionId = null;
     this.remoteSessionId = null;
     peer?.close();
 
-    if (remoteSessionId) {
-      try {
-        await this.signalingClient.disconnect(remoteSessionId);
-      } catch {
-        // Best-effort remote cleanup should not prevent deterministic local teardown.
-      }
+    this.disconnectPromise = this.finalizeDisconnect(finalState, sessionId, remoteSessionId);
+    try {
+      await this.disconnectPromise;
+    } finally {
+      this.disconnectPromise = null;
     }
+  }
 
-    this.publish(createDiagnostics(null, { sessionId, connectionState: finalState }));
+  private async finalizeDisconnect(
+    finalState: WebRtcDiagnosticsSnapshot['connectionState'],
+    sessionId: string | null,
+    remoteSessionId: string | null,
+  ): Promise<void> {
+    const remoteResult = remoteSessionId ? await this.signalingClient.disconnect(remoteSessionId) : { timedOut: false, error: null };
+    this.publishDisconnectDiagnostics(finalState, sessionId, remoteResult);
+  }
+
+  private publishDisconnectDiagnostics(
+    finalState: WebRtcDiagnosticsSnapshot['connectionState'],
+    sessionId: string | null,
+    remoteResult: DisconnectResult,
+  ): void {
+    const lastError = remoteResult.timedOut
+      ? REMOTE_DISCONNECT_TIMEOUT_DETAIL
+      : remoteResult.error
+        ? `${REMOTE_DISCONNECT_FAILURE_DETAIL} ${remoteResult.error.message}`
+        : null;
+    this.publish(createDiagnostics(null, { sessionId, connectionState: finalState, lastError }));
   }
 
   private async applyRemoteResponse(response: WebRtcSignalResponse, peer: RTCPeerConnection, connectAttempt: number): Promise<void> {
@@ -93,10 +127,11 @@ export class WebRtcManager {
       return;
     }
 
-    this.sessionId = response.session_id || this.sessionId;
+    const resolvedSessionId = response.session_id || this.sessionId;
+    this.sessionId = resolvedSessionId;
     this.remoteSessionId = response.session_id || null;
     if (response.status !== 'answer_created' || !response.answer?.sdp) {
-      this.failAndCleanup(response.detail, peer, connectAttempt, response.status === 'unsupported' ? 'unsupported' : 'failed', response.session_id);
+      this.failAndCleanup(response.detail, peer, connectAttempt, response.status === 'unsupported' ? 'unsupported' : 'failed', resolvedSessionId);
       return;
     }
 
@@ -104,7 +139,7 @@ export class WebRtcManager {
     if (!this.isCurrentAttempt(connectAttempt, peer)) {
       return;
     }
-    this.publish(createDiagnostics(peer, { sessionId: this.sessionId, connectionState: 'connecting' }));
+    this.publish(createDiagnostics(peer, { sessionId: resolvedSessionId, connectionState: mapPeerConnectionState(peer), lastError: null }));
   }
 
   private failAndCleanup(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.webrtc.session_store import WebRtcSessionStore
 from app.webrtc.peer_factory import AiortcPeerFactory, PeerFactory
+from app.webrtc.session_store import WebRtcSessionStore
 from app.webrtc_models import SessionDescriptionModel, WebRtcSignalResponse
 
 
@@ -11,10 +11,14 @@ class WebRtcSignalingService:
         self._peer_factory = peer_factory or AiortcPeerFactory()
 
     async def negotiate_offer(self, *, session_id: str | None, offer: SessionDescriptionModel) -> WebRtcSignalResponse:
+        await self._store.prune_expired_pending_sessions()
         session = self._store.resolve_session(session_id)
         await self._store.update_offer(session.session_id, offer.sdp)
         result = await self._peer_factory.create_answer(offer)
-        await self._store.attach_peer(session.session_id, result.peer)
+        if result.status == 'answer_created' and result.peer is not None:
+            await self._store.attach_peer(session.session_id, result.peer)
+        else:
+            await self._store.release(session.session_id)
         return WebRtcSignalResponse(
             session_id=session.session_id,
             event='answer',
@@ -39,3 +43,6 @@ class WebRtcSignalingService:
 
     def get_session(self, session_id: str):
         return self._store.get(session_id)
+
+    def session_count(self) -> int:
+        return self._store.size()
