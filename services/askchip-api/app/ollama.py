@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+from app.domain_models import PromptMessage
+
 
 class OllamaUnavailableError(RuntimeError):
     pass
@@ -18,8 +20,12 @@ class OllamaClient:
         self.timeout_seconds = timeout_seconds
         self._transport = transport
 
-    async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:
-        payload = {'model': self.model, 'messages': messages, 'stream': True}
+    async def stream_chat(self, messages: list[PromptMessage]) -> AsyncIterator[dict[str, Any]]:
+        payload = {
+            'model': self.model,
+            'messages': [{'role': message.role, 'content': message.text} for message in messages],
+            'stream': True,
+        }
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
                 async with client.stream('POST', '/api/chat', json=payload) as response:
@@ -30,7 +36,7 @@ class OllamaClient:
                         body = json.loads(line)
                         message = body.get('message', {})
                         yield {
-                            'content': message.get('content', ''),
+                            'text': message.get('content', ''),
                             'done': bool(body.get('done', False)),
                             'done_reason': body.get('done_reason', ''),
                             'metrics': {

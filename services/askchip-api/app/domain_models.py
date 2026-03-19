@@ -4,13 +4,14 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 TurnState = Literal['ready', 'thinking', 'error']
 MessageStatus = Literal['pending', 'streaming', 'committed', 'completed', 'error']
-MessageSource = Literal['typed_input', 'model_output', 'system']
+MessageSource = Literal['typed_input', 'voice_input', 'model_output', 'system_notice']
 MessageModality = Literal['text', 'voice', 'mixed']
+PromptRole = Literal['system', 'user', 'assistant']
 
 
 def utc_now() -> datetime:
@@ -31,12 +32,10 @@ class SessionRecord(BaseModel):
 
 
 class MessageRecord(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
     id: str = Field(default_factory=lambda: str(uuid4()))
     session_id: str
     role: Literal['user', 'assistant']
-    text: str = Field(validation_alias='content')
+    text: str
     status: MessageStatus = 'pending'
     turn_id: str
     source: MessageSource
@@ -46,6 +45,11 @@ class MessageRecord(BaseModel):
     committed_at: datetime | None = None
     completed_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PromptMessage(BaseModel):
+    role: PromptRole
+    text: str
 
 
 class EventRecord(BaseModel):

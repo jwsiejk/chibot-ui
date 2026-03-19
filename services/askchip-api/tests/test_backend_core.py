@@ -27,6 +27,7 @@ CONTRACT_MESSAGE_KEYS = {
 }
 CONTRACT_TRANSCRIPT_STATES = {'ready', 'thinking', 'error'}
 CONTRACT_SOURCES_BY_ROLE = {'user': 'typed_input', 'assistant': 'model_output'}
+CONTRACT_SOURCE_VOCABULARY = {'typed_input', 'voice_input', 'model_output', 'system_notice'}
 
 
 def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, **settings_overrides):
@@ -125,8 +126,23 @@ def test_transcript_role_and_source_semantics_are_distinct(tmp_path: Path) -> No
 
     assert transcript.status_code == 200
     for message in transcript.json()['messages']:
+        assert message['source'] in CONTRACT_SOURCE_VOCABULARY
         assert message['source'] == CONTRACT_SOURCES_BY_ROLE[message['role']]
         assert message['source'] != message['role']
+
+
+def test_transcript_only_emits_canonical_source_values(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Reply'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Vocabulary'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Question'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert transcript.status_code == 200
+    sources = {message['source'] for message in transcript.json()['messages']}
+    assert sources
+    assert sources.issubset(CONTRACT_SOURCE_VOCABULARY)
 
 
 def test_only_contract_states_are_emitted(tmp_path: Path) -> None:
@@ -224,10 +240,10 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
 
     messages = assembler.build_messages(transcript, user_text='new question')
 
-    assert messages[0]['role'] == 'system'
-    assert 'Nebraska ex-farmer turned techy' in messages[0]['content']
-    assert messages[-2]['content'] == 'recent'
-    assert messages[-1] == {'role': 'user', 'content': 'new question'}
+    assert messages[0].role == 'system'
+    assert 'Nebraska ex-farmer turned techy' in messages[0].text
+    assert messages[-2].text == 'recent'
+    assert messages[-1].model_dump() == {'role': 'user', 'text': 'new question'}
 
 
 def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
