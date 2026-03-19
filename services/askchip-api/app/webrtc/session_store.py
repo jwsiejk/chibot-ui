@@ -25,9 +25,15 @@ class SignalingSession:
 
 
 class WebRtcSessionStore:
-    def __init__(self, *, pending_session_timeout_seconds: int = 30) -> None:
+    def __init__(
+        self,
+        *,
+        pending_session_timeout_seconds: int = 30,
+        negotiated_session_timeout_seconds: int = 120,
+    ) -> None:
         self._sessions: dict[str, SignalingSession] = {}
         self._pending_session_timeout = timedelta(seconds=pending_session_timeout_seconds)
+        self._negotiated_session_timeout = timedelta(seconds=negotiated_session_timeout_seconds)
 
     def resolve_session(self, session_id: str | None) -> SignalingSession:
         resolved_id = session_id or str(uuid4())
@@ -66,13 +72,15 @@ class WebRtcSessionStore:
             await self.release(session_id)
 
     async def prune_expired_pending_sessions(self, now: datetime | None = None) -> None:
+        await self.prune_expired_sessions(now=now)
+
+    async def prune_expired_sessions(self, now: datetime | None = None) -> None:
         reference = now or datetime.now(timezone.utc)
         expired_ids = []
         for session_id, session in self._sessions.items():
             updated_at = datetime.fromisoformat(session.updated_at)
-            if session.established or session.peer is not None:
-                continue
-            if reference - updated_at >= self._pending_session_timeout:
+            timeout = self._negotiated_session_timeout if session.established or session.peer is not None else self._pending_session_timeout
+            if reference - updated_at >= timeout:
                 expired_ids.append(session_id)
         for session_id in expired_ids:
             await self.release(session_id)

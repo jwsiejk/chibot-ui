@@ -3,11 +3,16 @@ import type { DisconnectResult, WebRtcSignalEnvelope, WebRtcSignalResponse } fro
 
 const DEFAULT_DISCONNECT_TIMEOUT_MS = 750;
 
+interface ExchangeOptions {
+  onSocketOpen?: (socket: WebSocket) => void;
+}
+
 export class AskChipSignalingClient {
   constructor(private readonly baseUrl = runtimeConfig.wsBaseUrl) {}
 
-  async exchange(payload: WebRtcSignalEnvelope): Promise<WebRtcSignalResponse> {
+  async exchange(payload: WebRtcSignalEnvelope, options: ExchangeOptions = {}): Promise<WebRtcSignalResponse> {
     const socket = new WebSocket(`${this.baseUrl}/ws/webrtc`);
+    options.onSocketOpen?.(socket);
 
     return new Promise<WebRtcSignalResponse>((resolve, reject) => {
       let settled = false;
@@ -57,20 +62,44 @@ export class AskChipSignalingClient {
       return { timedOut: false, error: null };
     }
 
+    let socket: WebSocket | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const clearDisconnectTimeout = () => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
     const timeout = new Promise<DisconnectResult>((resolve) => {
-      setTimeout(() => resolve({ timedOut: true, error: null }), timeoutMs);
+      timeoutId = setTimeout(() => {
+        socket?.close();
+        resolve({ timedOut: true, error: null });
+      }, timeoutMs);
     });
 
-    return Promise.race([
-      this.exchange({
+    const remoteDisconnect = this.exchange(
+      {
         event: 'disconnect',
         session_id: sessionId,
-      }).then(() => ({ timedOut: false, error: null })).catch((error) => ({
+      },
+      {
+        onSocketOpen: (openSocket) => {
+          socket = openSocket;
+        },
+      },
+    )
+      .then(() => ({ timedOut: false, error: null }))
+      .catch((error) => ({
         timedOut: false,
         error: error instanceof Error ? error : new Error('WebRTC remote disconnect failed.'),
-      })),
-      timeout,
-    ]);
+      }));
+
+    try {
+      return await Promise.race([remoteDisconnect, timeout]);
+    } finally {
+      clearDisconnectTimeout();
+    }
   }
 }
 
