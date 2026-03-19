@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 from app.webrtc_models import SessionDescriptionModel
 
@@ -33,6 +33,17 @@ class UnsupportedPeerFactory:
 class AiortcPeerAdapter:
     def __init__(self, peer) -> None:
         self._peer = peer
+        self._terminal_state_callback: Callable[[str], Awaitable[None]] | None = None
+        self._bind_connection_state_listener()
+
+    def _bind_connection_state_listener(self) -> None:
+        @self._peer.on('connectionstatechange')
+        async def _handle_connectionstatechange() -> None:
+            if self._terminal_state_callback is not None:
+                await self._terminal_state_callback(self._peer.connectionState)
+
+    def set_terminal_state_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        self._terminal_state_callback = callback
 
     async def close(self) -> None:
         await self._peer.close()

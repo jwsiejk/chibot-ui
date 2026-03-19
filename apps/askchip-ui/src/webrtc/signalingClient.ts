@@ -1,5 +1,7 @@
 import { runtimeConfig } from '../config/runtime.js';
-import type { WebRtcSignalEnvelope, WebRtcSignalResponse } from './types.js';
+import type { DisconnectResult, WebRtcSignalEnvelope, WebRtcSignalResponse } from './types.js';
+
+const DEFAULT_DISCONNECT_TIMEOUT_MS = 750;
 
 export class AskChipSignalingClient {
   constructor(private readonly baseUrl = runtimeConfig.wsBaseUrl) {}
@@ -50,15 +52,25 @@ export class AskChipSignalingClient {
     });
   }
 
-  async disconnect(sessionId: string | null): Promise<void> {
+  async disconnect(sessionId: string | null, timeoutMs = DEFAULT_DISCONNECT_TIMEOUT_MS): Promise<DisconnectResult> {
     if (!sessionId) {
-      return;
+      return { timedOut: false, error: null };
     }
 
-    await this.exchange({
-      event: 'disconnect',
-      session_id: sessionId,
+    const timeout = new Promise<DisconnectResult>((resolve) => {
+      setTimeout(() => resolve({ timedOut: true, error: null }), timeoutMs);
     });
+
+    return Promise.race([
+      this.exchange({
+        event: 'disconnect',
+        session_id: sessionId,
+      }).then(() => ({ timedOut: false, error: null })).catch((error) => ({
+        timedOut: false,
+        error: error instanceof Error ? error : new Error('WebRTC remote disconnect failed.'),
+      })),
+      timeout,
+    ]);
   }
 }
 

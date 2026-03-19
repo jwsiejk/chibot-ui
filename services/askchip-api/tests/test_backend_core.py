@@ -4,6 +4,7 @@ import asyncio
 import json
 import sqlite3
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings, load_settings
 from app.main import create_app
 from app.prompting import PromptAssembler
+from app.webrtc.session_store import WebRtcSessionStore
 
 CONTRACT_MESSAGE_KEYS = {
     'id',
@@ -36,11 +38,17 @@ def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, 
     return create_app(config=config, ollama_transport=transport, webrtc_peer_factory=webrtc_peer_factory)
 
 
-
-
 class FakeManagedPeer:
     def __init__(self) -> None:
         self.closed = False
+        self.terminal_callback = None
+
+    def set_terminal_state_callback(self, callback) -> None:
+        self.terminal_callback = callback
+
+    async def emit_terminal_state(self, state: str) -> None:
+        if self.terminal_callback is not None:
+            await self.terminal_callback(state)
 
     async def close(self) -> None:
         self.closed = True
@@ -299,8 +307,6 @@ def test_webrtc_offer_route_is_separate_from_typed_chat_contract(tmp_path: Path)
     assert listed.status_code == 200
 
 
-
-
 def test_webrtc_websocket_offer_keeps_backend_peer_alive_after_socket_close(tmp_path: Path) -> None:
     peer_factory = FakePeerFactory()
     app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
@@ -353,6 +359,7 @@ def test_webrtc_websocket_disconnect_releases_backend_peer(tmp_path: Path) -> No
         }
         assert released_session is None
         assert peer_factory.peers[0].closed is True
+
 
 def test_webrtc_offer_reuses_explicit_session_identifier(tmp_path: Path) -> None:
     app = make_app(tmp_path)
@@ -498,3 +505,61 @@ def test_http_webrtc_offer_route_is_compatibility_only(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.headers['x-askchip-webrtc-compatibility'] == 'http-offer'
     assert response.json()['status'] == 'answer_created'
+
+
+def test_webrtc_disconnect_is_idempotent_and_clears_session_store(tmp_path: Path) -> None:
+    peer_factory = FakePeerFactory()
+    app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
+    with TestClient(app) as client:
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({
+                'event': 'offer',
+                'session_id': 'rtc-session-cleanup',
+                'offer': {'type': 'offer', 'sdp': 'offer-sdp'},
+            })
+            websocket.receive_json()
+        assert client.app.state.askchip.webrtc_signaling.session_count() == 1
+
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({'event': 'disconnect', 'session_id': 'rtc-session-cleanup'})
+            first = websocket.receive_json()
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({'event': 'disconnect', 'session_id': 'rtc-session-cleanup'})
+            second = websocket.receive_json()
+
+        assert first['status'] == 'disconnected'
+        assert second['status'] == 'disconnected'
+        assert client.app.state.askchip.webrtc_signaling.get_session('rtc-session-cleanup') is None
+        assert client.app.state.askchip.webrtc_signaling.session_count() == 0
+        assert peer_factory.peers[0].closed is True
+
+
+def test_webrtc_failed_peer_cleanup_releases_orphaned_session(tmp_path: Path) -> None:
+    peer_factory = FakePeerFactory()
+    app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
+    with TestClient(app) as client:
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({
+                'event': 'offer',
+                'session_id': 'rtc-session-failed',
+                'offer': {'type': 'offer', 'sdp': 'offer-sdp'},
+            })
+            websocket.receive_json()
+
+        assert client.app.state.askchip.webrtc_signaling.get_session('rtc-session-failed') is not None
+        asyncio.run(peer_factory.peers[0].emit_terminal_state('failed'))
+
+        assert client.app.state.askchip.webrtc_signaling.get_session('rtc-session-failed') is None
+        assert client.app.state.askchip.webrtc_signaling.session_count() == 0
+        assert peer_factory.peers[0].closed is True
+
+
+def test_session_store_prunes_stale_pending_webrtc_sessions() -> None:
+    store = WebRtcSessionStore(pending_session_timeout_seconds=5)
+    session = store.resolve_session('stale-pending')
+    session.updated_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+
+    asyncio.run(store.prune_expired_pending_sessions())
+
+    assert store.get('stale-pending') is None
+    assert store.size() == 0

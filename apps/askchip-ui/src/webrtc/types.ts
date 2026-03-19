@@ -21,3 +21,8 @@ export interface WebRtcSignalResponse {
   detail: string;
   answer: { type: 'answer'; sdp: string } | null;
 }
+
+export interface DisconnectResult {
+  timedOut: boolean;
+  error: Error | null;
+}
