@@ -17,9 +17,39 @@ class CreateTurnRequest(BaseModel):
     text: str
 
 
+class TranscriptMessageResponse(BaseModel):
+    id: str
+    session_id: str
+    role: str
+    source: str
+    modality: str
+    status: str
+    text: str
+    created_at: str
+    committed_at: str | None = None
+    completed_at: str | None = None
+    metadata: dict[str, object]
+
+    @classmethod
+    def from_record(cls, message: MessageRecord) -> 'TranscriptMessageResponse':
+        return cls(
+            id=message.id,
+            session_id=message.session_id,
+            role=message.role,
+            source=message.source,
+            modality=message.modality,
+            status=message.status,
+            text=message.text,
+            created_at=message.created_at.isoformat(),
+            committed_at=message.committed_at.isoformat() if message.committed_at else None,
+            completed_at=message.completed_at.isoformat() if message.completed_at else None,
+            metadata=message.metadata,
+        )
+
+
 class TranscriptResponse(BaseModel):
     session: SessionRecord
-    messages: list[MessageRecord]
+    messages: list[TranscriptMessageResponse]
     events: list[EventRecord]
     timings: list[TimingRecord]
 

@@ -23,9 +23,9 @@ class PromptAssembler:
             },
         ]
         for item in recent:
-            if item.role == 'assistant' and not item.content:
+            if item.role == 'assistant' and not item.text:
                 continue
-            messages.append({'role': item.role, 'content': item.content})
-        if not recent or recent[-1].role != 'user' or recent[-1].content != user_text:
+            messages.append({'role': item.role, 'content': item.text})
+        if not recent or recent[-1].role != 'user' or recent[-1].text != user_text:
             messages.append({'role': 'user', 'content': user_text})
         return messages

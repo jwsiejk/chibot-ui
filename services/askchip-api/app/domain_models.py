@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 TurnState = Literal['ready', 'thinking', 'error']
 MessageStatus = Literal['pending', 'streaming', 'committed', 'completed', 'error']
-MessageSource = Literal['user', 'assistant', 'system']
+MessageSource = Literal['typed_input', 'model_output', 'system']
 MessageModality = Literal['text', 'voice', 'mixed']
 
 
@@ -31,10 +31,12 @@ class SessionRecord(BaseModel):
 
 
 class MessageRecord(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     session_id: str
     role: Literal['user', 'assistant']
-    content: str
+    text: str = Field(validation_alias='content')
     status: MessageStatus = 'pending'
     turn_id: str
     source: MessageSource

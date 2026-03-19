@@ -12,6 +12,22 @@ from app.config import Settings, load_settings
 from app.main import create_app
 from app.prompting import PromptAssembler
 
+CONTRACT_MESSAGE_KEYS = {
+    'id',
+    'session_id',
+    'role',
+    'source',
+    'modality',
+    'status',
+    'text',
+    'created_at',
+    'committed_at',
+    'completed_at',
+    'metadata',
+}
+CONTRACT_TRANSCRIPT_STATES = {'ready', 'thinking', 'error'}
+CONTRACT_SOURCES_BY_ROLE = {'user': 'typed_input', 'assistant': 'model_output'}
+
 
 def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, **settings_overrides):
     config = Settings(database_path=tmp_path / 'askchip.db', **settings_overrides)
@@ -58,13 +74,13 @@ def test_typed_turn_commits_and_assembles_assistant_message(tmp_path: Path) -> N
     assert response.status_code == 201
     data = transcript.json()
     assert [message['role'] for message in data['messages']] == ['user', 'assistant']
-    assert data['messages'][0]['content'] == 'Hi'
-    assert data['messages'][0]['source'] == 'user'
+    assert data['messages'][0]['text'] == 'Hi'
+    assert data['messages'][0]['source'] == 'typed_input'
     assert data['messages'][0]['modality'] == 'text'
     assert data['messages'][0]['committed_at'] is not None
-    assert data['messages'][1]['content'] == 'Hello world!'
+    assert data['messages'][1]['text'] == 'Hello world!'
     assert data['messages'][1]['status'] == 'completed'
-    assert data['messages'][1]['source'] == 'assistant'
+    assert data['messages'][1]['source'] == 'model_output'
     assert data['messages'][1]['completed_at'] is not None
     assert 'provider_metrics' in data['messages'][1]['metadata']
     assert data['session']['status'] == 'ready'
@@ -79,6 +95,52 @@ def test_typed_turn_commits_and_assembles_assistant_message(tmp_path: Path) -> N
     timings = {timing['phase']: timing for timing in data['timings']}
     assert timings['model_stream']['meta']['first_chunk_ms'] is not None
     assert timings['model_stream']['meta']['total_duration'] == 99
+
+
+def test_transcript_message_contract_shape_is_locked(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Hello'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Contract'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hi'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert transcript.status_code == 200
+    messages = transcript.json()['messages']
+    assert len(messages) == 2
+    for message in messages:
+        assert set(message) == CONTRACT_MESSAGE_KEYS
+        assert 'content' not in message
+        assert 'turn_id' not in message
+        assert 'updated_at' not in message
+
+
+def test_transcript_role_and_source_semantics_are_distinct(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Reply'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Semantics'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Question'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert transcript.status_code == 200
+    for message in transcript.json()['messages']:
+        assert message['source'] == CONTRACT_SOURCES_BY_ROLE[message['role']]
+        assert message['source'] != message['role']
+
+
+def test_only_contract_states_are_emitted(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Reply'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'States'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Question'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert transcript.status_code == 200
+    state_events = [event['payload']['state'] for event in transcript.json()['events'] if event['type'] == 'state']
+    assert state_events
+    assert set(state_events).issubset(CONTRACT_TRANSCRIPT_STATES)
 
 
 def test_one_active_assistant_job_enforced(tmp_path: Path) -> None:
@@ -155,9 +217,9 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     from app.domain_models import MessageRecord
 
     transcript = [
-        MessageRecord(session_id='s', role='user', content='old 1', turn_id='t1', source='user'),
-        MessageRecord(session_id='s', role='assistant', content='old 2', turn_id='t1', source='assistant'),
-        MessageRecord(session_id='s', role='user', content='recent', turn_id='t2', source='user'),
+        MessageRecord(session_id='s', role='user', text='old 1', turn_id='t1', source='typed_input'),
+        MessageRecord(session_id='s', role='assistant', text='old 2', turn_id='t1', source='model_output'),
+        MessageRecord(session_id='s', role='user', text='recent', turn_id='t2', source='typed_input'),
     ]
 
     messages = assembler.build_messages(transcript, user_text='new question')

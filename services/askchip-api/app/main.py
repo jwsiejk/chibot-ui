@@ -14,6 +14,7 @@ from app.api_models import (
     CreateTurnRequest,
     HealthResponse,
     RenameSessionRequest,
+    TranscriptMessageResponse,
     TranscriptResponse,
 )
 from app.config import Settings, settings
@@ -95,7 +96,12 @@ def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
         session = state.db.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail='session not found')
-        transcript = TranscriptResponse(session=session, messages=state.db.list_messages(session_id), events=state.db.list_events(session_id), timings=state.db.list_timings(session_id))
+        transcript = TranscriptResponse(
+            session=session,
+            messages=[TranscriptMessageResponse.from_record(message) for message in state.db.list_messages(session_id)],
+            events=state.db.list_events(session_id),
+            timings=state.db.list_timings(session_id),
+        )
         return JSONResponse(transcript.model_dump(mode='json'))
 
     @app.post('/api/v1/sessions/{session_id}/turns')
