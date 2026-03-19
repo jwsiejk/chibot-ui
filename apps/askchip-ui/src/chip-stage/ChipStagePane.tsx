@@ -66,7 +66,7 @@ export function ChipStagePane({
               <dd className="font-medium text-white">Local-first</dd>
             </div>
             <div className="rounded-2xl border border-dashed border-slate-800 px-4 py-3 text-xs leading-5 text-slate-400">
-              Voice capture, wake word, WebRTC, and spoken transcript regions are intentionally not actionable in this phase.
+              Mic preflight and WebRTC negotiation diagnostics may be configured in the side panel, but voice turns, STT, TTS, and spoken transcript behavior are still intentionally out of scope.
             </div>
           </dl>
         </div>

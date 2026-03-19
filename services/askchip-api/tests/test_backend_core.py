@@ -238,13 +238,46 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
         MessageRecord(session_id='s', role='assistant', text='old 2', turn_id='t1', source='model_output'),
         MessageRecord(session_id='s', role='user', text='recent', turn_id='t2', source='typed_input'),
     ]
-
     messages = assembler.build_messages(transcript, user_text='new question')
 
     assert messages[0].role == 'system'
     assert 'Nebraska ex-farmer turned techy' in messages[0].text
     assert messages[-2].text == 'recent'
     assert messages[-1].model_dump() == {'role': 'user', 'text': 'new question'}
+
+
+def test_webrtc_offer_route_is_separate_from_typed_chat_contract(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            '/api/v1/webrtc/offer',
+            json={'offer': {'type': 'offer', 'sdp': 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n'}},
+        )
+        session_id = response.json()['session_id']
+        created = client.post('/api/v1/sessions', json={'title': 'Typed chat still works'})
+        listed = client.get('/api/v1/sessions')
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'unsupported'
+    assert response.json()['answer'] is None
+    assert session_id
+    assert created.status_code == 201
+    assert listed.status_code == 200
+
+
+def test_webrtc_offer_reuses_explicit_session_identifier(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            '/api/v1/webrtc/offer',
+            json={
+                'session_id': 'rtc-session-1',
+                'offer': {'type': 'offer', 'sdp': 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n'},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()['session_id'] == 'rtc-session-1'
 
 
 def test_load_settings_reads_environment_overrides(monkeypatch) -> None:

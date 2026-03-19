@@ -24,6 +24,8 @@ from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.storage import Database, DatabaseError
 from app.turns import BusyError, TurnManager
+from app.webrtc_models import WebRtcOfferRequest
+from app.webrtc_signaling import WebRtcSignalingService
 
 
 class AppState:
@@ -39,6 +41,7 @@ class AppState:
             transport=ollama_transport,
         )
         self.turn_manager = TurnManager(self.db, self.event_bus, self.ollama, self.prompt_assembler)
+        self.webrtc_signaling = WebRtcSignalingService()
 
 
 def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
@@ -72,6 +75,11 @@ def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
             database_path=str(config.database_path),
         )
         return JSONResponse(payload.model_dump())
+
+    @app.post('/api/v1/webrtc/offer')
+    def create_webrtc_offer(request: WebRtcOfferRequest) -> JSONResponse:
+        response = state.webrtc_signaling.negotiate_offer(session_id=request.session_id, offer=request.offer)
+        return JSONResponse(response.model_dump(), status_code=200)
 
     @app.post('/api/v1/sessions')
     def create_session(request: CreateSessionRequest) -> JSONResponse:
