@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, askChipApiClient } from '../api/client';
 import { askChipEventsClient, type ConnectionState } from '../api/events';
+import { applyAssistantStreamEvent, dedupeEvents, MAX_RECENT_EVENTS, MAX_RECENT_TIMINGS } from './controllerHelpers';
 import type {
   AskChipEvent,
   ConfigResponse,
@@ -12,8 +13,6 @@ import type {
 } from '../types/contract';
 
 const STORAGE_KEY = 'askchip-ui.current-session-id';
-const MAX_RECENT_EVENTS = 24;
-const MAX_RECENT_TIMINGS = 12;
 
 export interface AskChipControllerState {
   sessions: SessionRecord[];
@@ -35,17 +34,6 @@ function sortSessions(items: SessionRecord[]): SessionRecord[] {
   return [...items].sort((left, right) => right.updated_at.localeCompare(left.updated_at));
 }
 
-function dedupeEvents(events: EventRecord[]): EventRecord[] {
-  const seen = new Set<string>();
-  return events.filter((event) => {
-    if (seen.has(event.id)) {
-      return false;
-    }
-    seen.add(event.id);
-    return true;
-  });
-}
-
 export function useAskChipController() {
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -58,6 +46,7 @@ export function useAskChipController() {
   const [pendingTurn, setPendingTurn] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
   const [wsNotice, setWsNotice] = useState<string | null>(null);
+  const [reconnectKey, setReconnectKey] = useState(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
 
@@ -65,6 +54,13 @@ export function useAskChipController() {
     () => sessions.find((session) => session.id === currentSessionId) ?? null,
     [currentSessionId, sessions],
   );
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
 
   const loadSessions = useCallback(async () => {
     const nextSessions = sortSessions(await askChipApiClient.listSessions());
@@ -115,16 +111,17 @@ export function useAskChipController() {
     }
   }, [loadSessions, selectSession]);
 
-  const scheduleReconnect = useCallback(() => {
-    if (reconnectTimerRef.current !== null) {
-      window.clearTimeout(reconnectTimerRef.current);
-    }
+  const scheduleReconnect = useCallback((notice: string) => {
+    clearReconnectTimer();
+    setConnectionState('disconnected');
+    setWsNotice(notice);
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
       setConnectionState('connecting');
       setWsNotice('Attempting to reconnect to the backend event stream.');
+      setReconnectKey((current) => current + 1);
     }, 1200);
-  }, []);
+  }, [clearReconnectTimer]);
 
   useEffect(() => {
     void bootstrap();
@@ -146,30 +143,17 @@ export function useAskChipController() {
       return;
     }
 
-    if (event.type === 'turn.committed' || event.type === 'assistant.started') {
+    if (event.type === 'assistant.started' || event.type === 'assistant.delta') {
+      setMessages((existing) => applyAssistantStreamEvent(existing, event));
+      if (event.type === 'assistant.started') {
+        return;
+      }
+    }
+
+    if (event.type === 'turn.committed') {
       if (activeSessionIdRef.current) {
         void loadTranscript(activeSessionIdRef.current);
       }
-      return;
-    }
-
-    if (event.type === 'assistant.delta') {
-      const messageId = typeof event.payload.message_id === 'string' ? event.payload.message_id : null;
-      const delta = typeof event.payload.delta === 'string' ? event.payload.delta : '';
-      if (!messageId || !delta) {
-        return;
-      }
-      setMessages((existing) =>
-        existing.map((message) =>
-          message.id === messageId
-            ? {
-                ...message,
-                status: 'streaming',
-                text: `${message.text}${delta}`,
-              }
-            : message,
-        ),
-      );
       return;
     }
 
@@ -182,28 +166,25 @@ export function useAskChipController() {
 
   useEffect(() => {
     if (currentSessionId === null) {
+      clearReconnectTimer();
       setConnectionState('disconnected');
+      setWsNotice(null);
       return;
     }
 
-    if (connectionState !== 'connecting') {
-      return;
-    }
-
+    setConnectionState('connecting');
     const disconnect = askChipEventsClient.connect({
       sessionId: currentSessionId,
       onOpen: () => {
+        clearReconnectTimer();
         setConnectionState('connected');
         setWsNotice(null);
       },
       onClose: () => {
-        setConnectionState('disconnected');
-        setWsNotice('WebSocket disconnected. Streaming updates are unavailable until reconnection succeeds.');
-        scheduleReconnect();
+        scheduleReconnect('WebSocket disconnected. Streaming updates are unavailable until reconnection succeeds.');
       },
       onError: () => {
-        setConnectionState('disconnected');
-        setWsNotice('WebSocket connection failed.');
+        scheduleReconnect('WebSocket connection failed. Retrying shortly.');
       },
       onMessage: (event) => {
         setEvents((existing) => dedupeEvents([...existing, event]).slice(-MAX_RECENT_EVENTS));
@@ -211,12 +192,11 @@ export function useAskChipController() {
       },
     });
 
-    return () => disconnect();
-  }, [connectionState, currentSessionId, handleEvent, scheduleReconnect]);
-
-  useEffect(() => {
-    setConnectionState(currentSessionId ? 'connecting' : 'disconnected');
-  }, [currentSessionId]);
+    return () => {
+      clearReconnectTimer();
+      disconnect();
+    };
+  }, [clearReconnectTimer, currentSessionId, handleEvent, reconnectKey, scheduleReconnect]);
 
   const createSession = useCallback(async () => {
     const session = await askChipApiClient.createSession({ title: 'New chat' });
