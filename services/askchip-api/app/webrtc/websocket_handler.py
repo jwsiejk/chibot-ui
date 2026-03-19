@@ -13,7 +13,6 @@ class WebRtcWebSocketHandler:
 
     async def handle(self, websocket: WebSocket) -> None:
         await websocket.accept()
-        active_session_ids: set[str] = set()
         try:
             while True:
                 payload = WebRtcSignalEnvelope.model_validate(await websocket.receive_json())
@@ -31,12 +30,8 @@ class WebRtcWebSocketHandler:
                             session_id=payload.session_id,
                             offer=payload.offer,
                         )
-                        if response.session_id:
-                            active_session_ids.add(response.session_id)
                 elif payload.event == 'disconnect':
                     response = await self._signaling_service.disconnect(payload.session_id)
-                    if payload.session_id:
-                        active_session_ids.discard(payload.session_id)
                 else:
                     response = WebRtcSignalResponse(
                         session_id=payload.session_id or '',
@@ -48,6 +43,3 @@ class WebRtcWebSocketHandler:
                 await websocket.send_json(response.model_dump())
         except WebSocketDisconnect:
             pass
-        finally:
-            for session_id in list(active_session_ids):
-                await self._signaling_service.disconnect(session_id)

@@ -49,6 +49,17 @@ export class AskChipSignalingClient {
       });
     });
   }
+
+  async disconnect(sessionId: string | null): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+
+    await this.exchange({
+      event: 'disconnect',
+      session_id: sessionId,
+    });
+  }
 }
 
 export const askChipSignalingClient = new AskChipSignalingClient();

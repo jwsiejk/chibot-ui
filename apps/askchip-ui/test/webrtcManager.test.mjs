@@ -72,7 +72,10 @@ describe('WebRtcManager', () => {
     const peer = new FakePeerConnection();
     const manager = new WebRtcManager(
       (snapshot) => snapshots.push(snapshot),
-      { exchange: async () => ({ session_id: 'rtc-1', event: 'answer', status: 'unsupported', detail: 'aiortc missing', answer: null }) },
+      {
+        exchange: async () => ({ session_id: 'rtc-1', event: 'answer', status: 'unsupported', detail: 'aiortc missing', answer: null }),
+        disconnect: async () => {},
+      },
       () => peer,
     );
 
@@ -93,7 +96,7 @@ describe('WebRtcManager', () => {
     const peer = new FakePeerConnection();
     const manager = new WebRtcManager(
       (snapshot) => snapshots.push(snapshot),
-      { exchange: async () => { throw new Error('socket failed'); } },
+      { exchange: async () => { throw new Error('socket failed'); }, disconnect: async () => {} },
       () => peer,
     );
 
@@ -101,5 +104,40 @@ describe('WebRtcManager', () => {
     assert.equal(peer.closed, true);
     assert.equal(snapshots.at(-1).connectionState, 'failed');
     assert.equal(snapshots.at(-1).lastError, 'socket failed');
+  });
+
+  it('disconnects the negotiated remote session before clearing local diagnostics', async () => {
+    const snapshots = [];
+    const peer = new FakePeerConnection();
+    const disconnectCalls = [];
+    const manager = new WebRtcManager(
+      (snapshot) => snapshots.push(snapshot),
+      {
+        exchange: async () => ({
+          session_id: 'rtc-remote-1',
+          event: 'answer',
+          status: 'answer_created',
+          detail: 'ok',
+          answer: { type: 'answer', sdp: 'answer-sdp' },
+        }),
+        disconnect: async (sessionId) => {
+          disconnectCalls.push(sessionId);
+        },
+      },
+      () => peer,
+    );
+
+    await manager.connect(buildStream(), 'session-1');
+    await manager.disconnect();
+
+    assert.deepEqual(disconnectCalls, ['rtc-remote-1']);
+    assert.equal(peer.closed, true);
+    assert.deepEqual(snapshots.at(-1), {
+      sessionId: 'rtc-remote-1',
+      connectionState: 'disconnected',
+      iceConnectionState: 'new',
+      signalingState: 'stable',
+      lastError: null,
+    });
   });
 });

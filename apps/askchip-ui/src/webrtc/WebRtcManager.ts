@@ -6,20 +6,22 @@ import type { WebRtcDiagnosticsSnapshot, WebRtcSignalResponse } from './types.js
 export class WebRtcManager {
   private peer: RTCPeerConnection | null = null;
   private sessionId: string | null = null;
+  private remoteSessionId: string | null = null;
   private connectAttempt = 0;
 
   constructor(
     private readonly onDiagnostics: (value: WebRtcDiagnosticsSnapshot) => void,
-    private readonly signalingClient: Pick<AskChipSignalingClient, 'exchange'> = askChipSignalingClient,
+    private readonly signalingClient: Pick<AskChipSignalingClient, 'exchange' | 'disconnect'> = askChipSignalingClient,
     private readonly peerFactory: () => RTCPeerConnection = () => new RTCPeerConnection(),
   ) {}
 
   async connect(stream: MediaStream, sessionId: string | null): Promise<void> {
-    this.disconnect('idle');
+    await this.disconnect('idle');
     const connectAttempt = ++this.connectAttempt;
     const peer = this.peerFactory();
     this.peer = peer;
     this.sessionId = sessionId;
+    this.remoteSessionId = null;
     this.publish(createDiagnostics(peer, { sessionId, connectionState: 'preparing' }));
 
     const publishPeerDiagnostics = (lastError: string | null = null) => {
@@ -65,13 +67,24 @@ export class WebRtcManager {
     }
   }
 
-  disconnect(finalState: WebRtcDiagnosticsSnapshot['connectionState'] = 'disconnected'): void {
+  async disconnect(finalState: WebRtcDiagnosticsSnapshot['connectionState'] = 'disconnected'): Promise<void> {
     this.connectAttempt += 1;
     const peer = this.peer;
     const sessionId = this.sessionId;
+    const remoteSessionId = this.remoteSessionId;
     this.peer = null;
     this.sessionId = null;
+    this.remoteSessionId = null;
     peer?.close();
+
+    if (remoteSessionId) {
+      try {
+        await this.signalingClient.disconnect(remoteSessionId);
+      } catch {
+        // Best-effort remote cleanup should not prevent deterministic local teardown.
+      }
+    }
+
     this.publish(createDiagnostics(null, { sessionId, connectionState: finalState }));
   }
 
@@ -81,6 +94,7 @@ export class WebRtcManager {
     }
 
     this.sessionId = response.session_id || this.sessionId;
+    this.remoteSessionId = response.session_id || null;
     if (response.status !== 'answer_created' || !response.answer?.sdp) {
       this.failAndCleanup(response.detail, peer, connectAttempt, response.status === 'unsupported' ? 'unsupported' : 'failed', response.session_id);
       return;
@@ -105,6 +119,7 @@ export class WebRtcManager {
     }
     this.peer = null;
     this.sessionId = null;
+    this.remoteSessionId = null;
     peer.close();
     this.publish(createDiagnostics(null, { sessionId, connectionState, lastError: message }));
   }
