@@ -6,7 +6,10 @@ import {
   buildListeningDraft,
   buildTranscribingDraft,
   dedupeEvents,
+  getSendingDisabledReason,
+  getVoiceDisabledReason,
   isTurnState,
+  isVoiceLifecycleState,
   MAX_RECENT_EVENTS,
   MAX_RECENT_TIMINGS,
   type VoiceDraftState,
@@ -238,6 +241,12 @@ export function useAskChipController() {
     if (!currentSessionId) {
       throw new Error('Create a session before sending a message.');
     }
+    if (isVoiceLifecycleState(topLevelState)) {
+      throw new Error('Release the active push-to-talk capture before sending a typed turn.');
+    }
+    if (topLevelState === 'thinking') {
+      throw new Error('Assistant is already processing the current turn.');
+    }
 
     setPendingTurn(true);
     setAppError(null);
@@ -254,11 +263,17 @@ export function useAskChipController() {
     } finally {
       setPendingTurn(false);
     }
-  }, [currentSessionId, loadSessions, loadTranscript]);
+  }, [currentSessionId, loadSessions, loadTranscript, topLevelState]);
 
   const startVoiceTurn = useCallback(async (deviceId: string | null, startedAt: number | null) => {
     if (!currentSessionId) {
       throw new Error('Create a session before starting push-to-talk.');
+    }
+    if (pendingTurn || topLevelState === 'thinking') {
+      throw new Error('Assistant is already processing the current turn.');
+    }
+    if (isVoiceLifecycleState(topLevelState)) {
+      throw new Error('Push-to-talk capture is already active.');
     }
     setAppError(null);
     setVoiceDraft(buildListeningDraft(startedAt));
@@ -271,11 +286,14 @@ export function useAskChipController() {
       setAppError(message);
       throw error;
     }
-  }, [currentSessionId]);
+  }, [currentSessionId, pendingTurn, topLevelState]);
 
   const finishVoiceTurn = useCallback(async (payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; }) => {
     if (!currentSessionId) {
       throw new Error('Create a session before sending a voice turn.');
+    }
+    if (pendingTurn || topLevelState === 'thinking') {
+      throw new Error('Assistant is already processing the current turn.');
     }
     setPendingTurn(true);
     setAppError(null);
@@ -296,19 +314,11 @@ export function useAskChipController() {
     } finally {
       setPendingTurn(false);
     }
-  }, [currentSessionId, loadSessions, loadTranscript]);
+  }, [currentSessionId, loadSessions, loadTranscript, pendingTurn, topLevelState]);
 
-  const sendingDisabledReason = !currentSessionId
-    ? 'Create or select a session to start a typed chat.'
-    : pendingTurn
-      ? 'Assistant is processing the current typed turn.'
-      : null;
+  const sendingDisabledReason = getSendingDisabledReason({ currentSessionId, pendingTurn, topLevelState });
 
-  const voiceDisabledReason = !currentSessionId
-    ? 'Create or select a session to start push-to-talk.'
-    : pendingTurn
-      ? 'Wait for the current turn to finish before recording another voice turn.'
-      : null;
+  const voiceDisabledReason = getVoiceDisabledReason({ currentSessionId, pendingTurn, topLevelState });
 
   return {
     state: {

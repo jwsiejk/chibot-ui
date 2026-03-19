@@ -202,3 +202,7 @@ class TurnManager:
             'payload': event.payload,
             'created_at': event.created_at.isoformat(),
         }
+
+
+    def is_busy(self) -> bool:
+        return self._job_lock.locked()

@@ -103,3 +103,42 @@ export function applyAssistantStreamEvent(messages: TranscriptMessage[], event: 
 
   return [...messages, nextMessage];
 }
+
+
+export function isVoiceLifecycleState(state: TurnState | null): boolean {
+  return state === 'listening' || state === 'transcribing';
+}
+
+export function getSendingDisabledReason(params: {
+  currentSessionId: string | null;
+  pendingTurn: boolean;
+  topLevelState: TurnState | null;
+}): string | null {
+  if (!params.currentSessionId) {
+    return 'Create or select a session to start a typed chat.';
+  }
+  if (params.pendingTurn || params.topLevelState === 'thinking') {
+    return 'Assistant is processing the current typed turn.';
+  }
+  if (isVoiceLifecycleState(params.topLevelState)) {
+    return 'Release the active push-to-talk capture before sending a typed turn.';
+  }
+  return null;
+}
+
+export function getVoiceDisabledReason(params: {
+  currentSessionId: string | null;
+  pendingTurn: boolean;
+  topLevelState: TurnState | null;
+}): string | null {
+  if (!params.currentSessionId) {
+    return 'Create or select a session to start push-to-talk.';
+  }
+  if (params.pendingTurn || params.topLevelState === 'thinking') {
+    return 'Wait for the current assistant turn to finish before recording another voice turn.';
+  }
+  if (isVoiceLifecycleState(params.topLevelState)) {
+    return 'Finish the active push-to-talk lifecycle before starting another voice turn.';
+  }
+  return null;
+}

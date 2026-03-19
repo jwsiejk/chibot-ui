@@ -25,7 +25,7 @@ from app.prompting import PromptAssembler
 from app.storage import Database, DatabaseError
 from app.stt import FasterWhisperSttService
 from app.turns import BusyError, TurnManager
-from app.voice import EmptyTranscriptionError, VoiceInputError, VoiceTurnService
+from app.voice import EmptyTranscriptionError, InvalidVoiceLifecycleError, VoiceInputError, VoiceTurnService
 from app.webrtc import WebRtcSignalingService, WebRtcWebSocketHandler
 from app.webrtc_models import WebRtcOfferRequest
 
@@ -156,6 +156,8 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         try:
             await state.voice_turns.begin_ptt(session, device_id=device_id)
             return JSONResponse({'status': 'listening'})
+        except BusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except DatabaseError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -187,6 +189,8 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except EmptyTranscriptionError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except InvalidVoiceLifecycleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except VoiceInputError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except DatabaseError as exc:
