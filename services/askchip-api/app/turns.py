@@ -84,7 +84,7 @@ class TurnManager:
             try:
                 async for chunk in self.ollama.stream_chat(prompt_messages):
                     provider_metrics.update(chunk.get('metrics', {}))
-                    delta_text = str(chunk.get('content', ''))
+                    delta_text = str(chunk.get('text', ''))
                     if delta_text:
                         if first_chunk_ms is None:
                             first_chunk_ms = int((perf_counter() - started) * 1000)
