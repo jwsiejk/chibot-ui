@@ -12,7 +12,7 @@ export function TranscriptPane({ messages, empty }: TranscriptPaneProps) {
       <header className="mb-4 flex items-center justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Canonical transcript</p>
-          <h2 className="text-xl font-semibold text-white">Typed chat history</h2>
+          <h2 className="text-xl font-semibold text-white">Unified typed + voice history</h2>
         </div>
         <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">{messages.length} messages</span>
       </header>
@@ -21,7 +21,7 @@ export function TranscriptPane({ messages, empty }: TranscriptPaneProps) {
           <div className="flex h-full min-h-[18rem] items-center justify-center rounded-[1.25rem] border border-dashed border-slate-800 text-center text-sm leading-6 text-slate-400">
             <div>
               <p className="font-medium text-slate-200">No transcript yet.</p>
-              <p>Send a typed turn to render canonical user and assistant messages from the backend.</p>
+              <p>Send a typed turn or release a push-to-talk voice turn to render canonical user and assistant messages from the backend.</p>
             </div>
           </div>
         ) : (

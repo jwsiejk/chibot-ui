@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings, load_settings
 from app.main import create_app
 from app.prompting import PromptAssembler
+from app.stt import SttError, SttResult
 from app.webrtc.session_store import WebRtcSessionStore
 
 CONTRACT_MESSAGE_KEYS = {
@@ -28,14 +29,27 @@ CONTRACT_MESSAGE_KEYS = {
     'completed_at',
     'metadata',
 }
-CONTRACT_TRANSCRIPT_STATES = {'ready', 'thinking', 'error'}
-CONTRACT_SOURCES_BY_ROLE = {'user': 'typed_input', 'assistant': 'model_output'}
+CONTRACT_TRANSCRIPT_STATES = {'ready', 'listening', 'transcribing', 'thinking', 'error'}
+CONTRACT_SOURCES_BY_ROLE = {'assistant': 'model_output'}
 CONTRACT_SOURCE_VOCABULARY = {'typed_input', 'voice_input', 'model_output', 'system_notice'}
 
 
-def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, webrtc_peer_factory=None, **settings_overrides):
+class FakeSttService:
+    def __init__(self, *, text: str = 'voice transcript', error: str | None = None) -> None:
+        self.text = text
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    def transcribe_bytes(self, audio_bytes: bytes, *, filename: str | None = None) -> SttResult:
+        self.calls.append({'audio_bytes': audio_bytes, 'filename': filename})
+        if self.error:
+            raise SttError(self.error)
+        return SttResult(text=self.text, language='en', duration_seconds=1.2, segments=[{'text': self.text}])
+
+
+def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, webrtc_peer_factory=None, stt_service=None, **settings_overrides):
     config = Settings(database_path=tmp_path / 'askchip.db', **settings_overrides)
-    return create_app(config=config, ollama_transport=transport, webrtc_peer_factory=webrtc_peer_factory)
+    return create_app(config=config, ollama_transport=transport, webrtc_peer_factory=webrtc_peer_factory, stt_service=stt_service)
 
 
 class FakeManagedPeer:
@@ -170,7 +184,10 @@ def test_transcript_role_and_source_semantics_are_distinct(tmp_path: Path) -> No
     assert transcript.status_code == 200
     for message in transcript.json()['messages']:
         assert message['source'] in CONTRACT_SOURCE_VOCABULARY
-        assert message['source'] == CONTRACT_SOURCES_BY_ROLE[message['role']]
+        if message['role'] == 'assistant':
+            assert message['source'] == CONTRACT_SOURCES_BY_ROLE[message['role']]
+        else:
+            assert message['source'] in {'typed_input', 'voice_input'}
         assert message['source'] != message['role']
 
 
@@ -593,3 +610,105 @@ def test_session_store_prunes_stale_pending_webrtc_sessions() -> None:
 
     assert store.get('stale-pending') is None
     assert store.size() == 0
+
+
+def test_voice_turn_commits_only_after_ptt_release(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Voice reply'}, 'done': True}])
+    stt = FakeSttService(text='voice hello')
+    app = make_app(tmp_path, transport=transport, stt_service=stt)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Voice'}).json()['id']
+        started = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start', headers={'X-AskChip-Device-Id': 'mic-7'})
+        transcript_after_start = client.get(f'/api/v1/sessions/{session_id}/transcript')
+        released = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm', 'X-AskChip-Device-Id': 'mic-7', 'X-AskChip-Duration-Ms': '321'},
+        )
+        transcript_after_release = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert started.status_code == 200
+    assert transcript_after_start.status_code == 200
+    assert transcript_after_start.json()['messages'] == []
+    assert released.status_code == 201
+    data = transcript_after_release.json()
+    assert [message['role'] for message in data['messages']] == ['user', 'assistant']
+    assert data['messages'][0]['text'] == 'voice hello'
+    assert data['messages'][0]['source'] == 'voice_input'
+    assert data['messages'][0]['modality'] == 'voice'
+    assert data['messages'][0]['committed_at'] is not None
+    event_types = [event['type'] for event in data['events']]
+    assert 'ptt.started' in event_types
+    assert 'ptt.stopped' in event_types
+    assert 'stt.final' in event_types
+    assert 'turn.committed' in event_types
+    state_events = [event['payload']['state'] for event in data['events'] if event['type'] == 'state']
+    assert {'listening', 'transcribing', 'thinking', 'ready'}.issubset(set(state_events))
+    assert stt.calls[0]['audio_bytes'] == b'voice-bytes'
+
+
+def test_typed_and_voice_turns_share_one_canonical_transcript(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': 'typed reply'}, 'done': True},
+        {'message': {'content': 'voice reply'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport, stt_service=FakeSttService(text='spoken question'))
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Mixed'}).json()['id']
+        typed = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'typed question'})
+        started = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        voice = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert typed.status_code == 201
+    assert started.status_code == 200
+    assert voice.status_code == 201
+    data = transcript.json()
+    assert [message['source'] for message in data['messages']] == ['typed_input', 'model_output', 'voice_input', 'model_output']
+    assert [message['modality'] for message in data['messages']] == ['text', 'text', 'voice', 'text']
+
+
+def test_voice_turn_stt_failure_sets_error_state_without_committing_user_message(tmp_path: Path) -> None:
+    app = make_app(tmp_path, stt_service=FakeSttService(error='missing faster-whisper runtime'))
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Voice fail'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        released = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert released.status_code == 503
+    data = transcript.json()
+    assert data['messages'] == []
+    assert any(event['type'] == 'error' and event['payload']['code'] == 'stt_failed' for event in data['events'])
+    assert data['session']['status'] == 'error'
+
+
+def test_blank_stt_result_does_not_create_blank_canonical_message(tmp_path: Path) -> None:
+    app = make_app(tmp_path, stt_service=FakeSttService(text='   '))
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Blank'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        released = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert released.status_code == 422
+    data = transcript.json()
+    assert data['messages'] == []
+    assert any(event['type'] == 'error' and event['payload']['code'] == 'stt_empty_transcript' for event in data['events'])
+

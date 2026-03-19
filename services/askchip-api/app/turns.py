@@ -25,20 +25,37 @@ class TurnManager:
         self._job_lock = asyncio.Lock()
 
     async def handle_typed_turn(self, session: SessionRecord, text: str) -> dict[str, str]:
+        return await self.handle_committed_input(
+            session,
+            text=text,
+            source='typed_input',
+            modality='text',
+            detail='typed_turn',
+            input_metadata={'input_type': 'typed_turn'},
+        )
+
+    async def handle_committed_input(
+        self,
+        session: SessionRecord,
+        *,
+        text: str,
+        source: str,
+        modality: str,
+        detail: str,
+        input_metadata: dict[str, object],
+    ) -> dict[str, str]:
         if self._job_lock.locked():
-            event = EventRecord(session_id=session.id, type='error', payload={'code': 'assistant_busy', 'message': 'Assistant is already responding.'})
-            self.db.create_event(event)
-            await self.event_bus.publish(self._event_payload(event), session.id)
+            await self._publish_busy_error(session.id)
             raise BusyError('assistant is already responding')
 
         async with self._job_lock:
             turn_id = str(uuid4())
             turn_started_at = datetime.now(timezone.utc)
             started = perf_counter()
-            turn_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='turn', meta={'state': 'thinking'}))
-            model_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='model_stream'))
-            self._set_session_state(session.id, turn_id, 'thinking', detail='typed_turn')
-            await self._publish_state(session.id, turn_id, 'thinking', detail='typed_turn')
+            turn_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='turn', meta={'state': 'thinking', 'source': source, 'modality': modality}))
+            model_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='model_stream', meta={'source': source, 'modality': modality}))
+            self.set_session_state(session.id, turn_id, 'thinking', detail=detail)
+            await self.publish_state(session.id, turn_id, 'thinking', detail=detail)
 
             user_message = MessageRecord(
                 session_id=session.id,
@@ -46,15 +63,20 @@ class TurnManager:
                 text=text,
                 status='committed',
                 turn_id=turn_id,
-                source='typed_input',
-                modality='text',
+                source=source,
+                modality=modality,
                 committed_at=turn_started_at,
-                metadata={'input_type': 'typed_turn'},
+                metadata=input_metadata,
             )
             self.db.create_message(user_message)
-            committed_event = EventRecord(session_id=session.id, turn_id=turn_id, type='turn.committed', payload={'message_id': user_message.id, 'text': text, 'source': 'typed_input', 'modality': 'text'})
+            committed_event = EventRecord(
+                session_id=session.id,
+                turn_id=turn_id,
+                type='turn.committed',
+                payload={'message_id': user_message.id, 'text': text, 'source': source, 'modality': modality},
+            )
             self.db.create_event(committed_event)
-            await self.event_bus.publish(self._event_payload(committed_event), session.id)
+            await self.event_bus.publish(self.event_payload(committed_event), session.id)
 
             assistant_message = MessageRecord(
                 session_id=session.id,
@@ -70,13 +92,23 @@ class TurnManager:
 
             transcript = self.db.list_messages(session.id)
             prompt_messages = self.prompt_assembler.build_messages(transcript=transcript, user_text=text)
-            prompt_event = EventRecord(session_id=session.id, turn_id=turn_id, type='prompt.assembled', payload={'message_count': len(prompt_messages), 'transcript_window': self.prompt_assembler.transcript_window})
+            prompt_event = EventRecord(
+                session_id=session.id,
+                turn_id=turn_id,
+                type='prompt.assembled',
+                payload={'message_count': len(prompt_messages), 'transcript_window': self.prompt_assembler.transcript_window},
+            )
             self.db.create_event(prompt_event)
-            await self.event_bus.publish(self._event_payload(prompt_event), session.id)
+            await self.event_bus.publish(self.event_payload(prompt_event), session.id)
 
-            started_event = EventRecord(session_id=session.id, turn_id=turn_id, type='assistant.started', payload={'message_id': assistant_message.id, 'model': self.ollama.model})
+            started_event = EventRecord(
+                session_id=session.id,
+                turn_id=turn_id,
+                type='assistant.started',
+                payload={'message_id': assistant_message.id, 'model': self.ollama.model},
+            )
             self.db.create_event(started_event)
-            await self.event_bus.publish(self._event_payload(started_event), session.id)
+            await self.event_bus.publish(self.event_payload(started_event), session.id)
 
             first_chunk_ms: int | None = None
             assembled: list[str] = []
@@ -91,7 +123,7 @@ class TurnManager:
                         assembled.append(delta_text)
                         delta_event = EventRecord(session_id=session.id, turn_id=turn_id, type='assistant.delta', payload={'message_id': assistant_message.id, 'delta': delta_text})
                         self.db.create_event(delta_event)
-                        await self.event_bus.publish(self._event_payload(delta_event), session.id)
+                        await self.event_bus.publish(self.event_payload(delta_event), session.id)
                 completed_text = ''.join(assembled)
                 ended_at = datetime.now(timezone.utc)
                 self.db.update_message(
@@ -104,9 +136,9 @@ class TurnManager:
                 )
                 completed_event = EventRecord(session_id=session.id, turn_id=turn_id, type='assistant.completed', payload={'message_id': assistant_message.id, 'text': completed_text, 'first_chunk_ms': first_chunk_ms})
                 self.db.create_event(completed_event)
-                await self.event_bus.publish(self._event_payload(completed_event), session.id)
-                self._set_session_state(session.id, None, 'ready', ready_at=ended_at.isoformat(), detail='turn_complete')
-                await self._publish_state(session.id, turn_id, 'ready', detail='turn_complete')
+                await self.event_bus.publish(self.event_payload(completed_event), session.id)
+                self.set_session_state(session.id, None, 'ready', ready_at=ended_at.isoformat(), detail='turn_complete')
+                await self.publish_state(session.id, turn_id, 'ready', detail='turn_complete')
                 duration_ms = int((perf_counter() - started) * 1000)
                 self.db.update_timing(model_timing.id, ended_at.isoformat(), duration_ms, {'first_chunk_ms': first_chunk_ms, **provider_metrics})
                 self.db.update_timing(turn_timing.id, ended_at.isoformat(), duration_ms, {'assistant_message_id': assistant_message.id, 'first_chunk_ms': first_chunk_ms})
@@ -122,15 +154,20 @@ class TurnManager:
                 )
                 error_event = EventRecord(session_id=session.id, turn_id=turn_id, type='error', payload={'code': 'ollama_unavailable', 'message': str(exc)})
                 self.db.create_event(error_event)
-                await self.event_bus.publish(self._event_payload(error_event), session.id)
-                self._set_session_state(session.id, None, 'error', last_error_at=ended_at.isoformat(), detail='ollama_unavailable')
-                await self._publish_state(session.id, turn_id, 'error', detail='ollama_unavailable')
+                await self.event_bus.publish(self.event_payload(error_event), session.id)
+                self.set_session_state(session.id, None, 'error', last_error_at=ended_at.isoformat(), detail='ollama_unavailable')
+                await self.publish_state(session.id, turn_id, 'error', detail='ollama_unavailable')
                 duration_ms = int((perf_counter() - started) * 1000)
                 self.db.update_timing(model_timing.id, ended_at.isoformat(), duration_ms, {'error': str(exc), **provider_metrics})
                 self.db.update_timing(turn_timing.id, ended_at.isoformat(), duration_ms, {'error': str(exc)})
                 raise
 
-    def _set_session_state(
+    async def _publish_busy_error(self, session_id: str) -> None:
+        event = EventRecord(session_id=session_id, type='error', payload={'code': 'assistant_busy', 'message': 'Assistant is already responding.'})
+        self.db.create_event(event)
+        await self.event_bus.publish(self.event_payload(event), session_id)
+
+    def set_session_state(
         self,
         session_id: str,
         active_turn_id: str | None,
@@ -150,13 +187,13 @@ class TurnManager:
             metadata={'detail': detail},
         )
 
-    async def _publish_state(self, session_id: str, turn_id: str | None, state: str, *, detail: str) -> None:
+    async def publish_state(self, session_id: str, turn_id: str | None, state: str, *, detail: str) -> None:
         event = EventRecord(session_id=session_id, turn_id=turn_id, type='state', payload={'state': state, 'active_turn_id': turn_id if state == 'thinking' else None, 'detail': detail})
         self.db.create_event(event)
-        await self.event_bus.publish(self._event_payload(event), session_id)
+        await self.event_bus.publish(self.event_payload(event), session_id)
 
     @staticmethod
-    def _event_payload(event: EventRecord) -> dict[str, object]:
+    def event_payload(event: EventRecord) -> dict[str, object]:
         return {
             'id': event.id,
             'session_id': event.session_id,

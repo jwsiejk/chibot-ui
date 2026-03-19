@@ -54,13 +54,37 @@ export class AskChipApiClient {
     });
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  async startVoiceTurn(sessionId: string, deviceId: string | null): Promise<void> {
+    await this.request(`/api/v1/sessions/${sessionId}/voice-turns/ptt/start`, {
+      method: 'POST',
+      body: '',
+      isJsonRequest: false,
+      headers: deviceId ? { 'X-AskChip-Device-Id': deviceId } : undefined,
+    });
+  }
+
+  async createVoiceTurn(sessionId: string, payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; }): Promise<CreateTurnResponse> {
+    return this.request<CreateTurnResponse>(`/api/v1/sessions/${sessionId}/voice-turns?filename=${encodeURIComponent(payload.filename)}`, {
+      method: 'POST',
+      body: payload.blob,
+      isJsonRequest: false,
+      headers: {
+        'Content-Type': payload.blob.type || 'audio/webm',
+        'X-AskChip-Duration-Ms': String(payload.durationMs),
+        ...(payload.deviceId ? { 'X-AskChip-Device-Id': payload.deviceId } : {}),
+      },
+    });
+  }
+
+  private async request<T>(path: string, init?: RequestInit & { isJsonRequest?: boolean }): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init?.headers ?? {}),
-      },
+      headers: init?.isJsonRequest === false
+        ? init?.headers
+        : {
+            'Content-Type': 'application/json',
+            ...(init?.headers ?? {}),
+          },
     });
 
     if (!response.ok) {

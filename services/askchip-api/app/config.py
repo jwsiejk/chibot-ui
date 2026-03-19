@@ -17,6 +17,10 @@ class Settings(BaseModel):
     ollama_model: str = 'llama3.2:3b'
     ollama_timeout_seconds: float = 60.0
     prompt_transcript_window: int = 6
+    stt_model: str = 'base'
+    stt_device: str = 'auto'
+    stt_compute_type: str = 'int8'
+    stt_cpu_threads: int = 4
 
 
 _ENV_MAP: dict[str, tuple[str, callable]] = {
@@ -28,6 +32,10 @@ _ENV_MAP: dict[str, tuple[str, callable]] = {
     'ollama_model': ('OLLAMA_MODEL', str),
     'ollama_timeout_seconds': ('OLLAMA_TIMEOUT_SECONDS', float),
     'prompt_transcript_window': ('ASKCHIP_PROMPT_TRANSCRIPT_WINDOW', int),
+    'stt_model': ('ASKCHIP_STT_MODEL', str),
+    'stt_device': ('ASKCHIP_STT_DEVICE', str),
+    'stt_compute_type': ('ASKCHIP_STT_COMPUTE_TYPE', str),
+    'stt_cpu_threads': ('ASKCHIP_STT_CPU_THREADS', int),
 }
 
 

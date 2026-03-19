@@ -18,12 +18,14 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - Typed chat is implemented, including transcript loading, session selection, and streaming assistant text updates.
 - WebRTC foundation work is implemented for mic readiness, peer negotiation, explicit disconnect cleanup, and transport diagnostics only.
 - Backend WebRTC peer/session lifetime is intentionally not tied to the signaling WebSocket lifetime; explicit disconnect and backend orphan cleanup release peer sessions.
-- Voice/WebRTC conversation is not implemented in this phase.
-- STT, TTS, voice turns, wake word, tools, RAG, and auth remain out of scope.
+- Push-to-talk voice input is implemented through direct microphone capture plus backend faster-whisper transcription after release.
+- WebRTC remains foundation-only for diagnostics/signaling and is not required for voice-turn capture or upload.
+- TTS, wake word, always-open microphones, tools, RAG, and auth remain out of scope.
 
 ## Windows (PowerShell)
 1. Create and activate a Python 3.11+ virtual environment in `services/askchip-api`.
 2. Install API dependencies: `pip install -e .[dev]`
+   - Voice input now depends on `faster-whisper` plus its local runtime prerequisites. On Windows 11 local-first setups, keep the configured model/device/compute settings aligned with your machine capabilities.
 3. Install UI dependencies in `apps/askchip-ui`: `npm install`
 4. Start both services from the repo root:
    ```powershell
@@ -34,6 +36,7 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 ## Bash
 1. Create and activate a Python 3.11+ virtual environment in `services/askchip-api`.
 2. Install API dependencies: `pip install -e .[dev]`
+   - Voice input now depends on `faster-whisper` plus its local runtime prerequisites. On Windows 11 local-first setups, keep the configured model/device/compute settings aligned with your machine capabilities.
 3. Install UI dependencies in `apps/askchip-ui`: `npm install`
 4. Start both services from the repo root:
    ```bash

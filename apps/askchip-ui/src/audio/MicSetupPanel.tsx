@@ -46,7 +46,7 @@ export function MicSetupPanel({
 
       <div className="space-y-4 text-sm text-slate-300">
         <p className="rounded-2xl border border-slate-800 px-4 py-3 text-slate-300">
-          This phase verifies microphone/device readiness plus the WebRTC transport foundation only. Typed chat remains the source of truth, and voice turns are still out of scope.
+          Microphone setup and device selection stay separate from voice-turn transport. Push-to-talk uses the selected input device directly, while WebRTC remains limited to foundation diagnostics.
         </p>
 
         <label className="block space-y-2">

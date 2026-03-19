@@ -3,15 +3,23 @@ import type { ConfigResponse, TurnState } from '../types/contract';
 const STATE_COPY: Record<TurnState, { label: string; detail: string }> = {
   ready: {
     label: 'Ready',
-    detail: 'The backend is idle and available for typed input.',
+    detail: 'The backend is idle and available for typed or push-to-talk input.',
+  },
+  listening: {
+    label: 'Listening',
+    detail: 'Push-to-talk capture is active and waiting for release before any voice turn can commit.',
+  },
+  transcribing: {
+    label: 'Transcribing',
+    detail: 'The released push-to-talk audio is being transcribed into one final user transcript before commit.',
   },
   thinking: {
     label: 'Thinking',
-    detail: 'An active typed turn is in progress on the backend.',
+    detail: 'A canonical user turn is committed and the assistant is generating a text response.',
   },
   error: {
     label: 'Error',
-    detail: 'The backend reported an assistant or model failure that needs attention.',
+    detail: 'The backend reported an assistant or voice-input failure that needs attention.',
   },
 };
 
@@ -34,7 +42,7 @@ export function ChipStagePane({
           <h2 className="text-2xl font-semibold text-white">AskChip Local desktop shell</h2>
         </div>
         <div className="rounded-full border border-slate-700 px-3 py-1 text-xs uppercase tracking-[0.18em] text-slate-300">
-          Typed chat only
+          Typed + voice input
         </div>
       </header>
 
@@ -62,11 +70,11 @@ export function ChipStagePane({
               <dd className="font-medium text-white">{modelName ?? config?.ollama_model ?? 'Unavailable'}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 px-4 py-3">
-              <dt>Scope</dt>
-              <dd className="font-medium text-white">Local-first</dd>
+              <dt>STT</dt>
+              <dd className="font-medium text-white">{config ? `${config.stt_model} · ${config.stt_device}/${config.stt_compute_type}` : 'Unavailable'}</dd>
             </div>
             <div className="rounded-2xl border border-dashed border-slate-800 px-4 py-3 text-xs leading-5 text-slate-400">
-              Mic preflight and WebRTC foundation signaling may be configured in the side panel, but voice turns, STT, TTS, and spoken transcript behavior are still intentionally out of scope.
+              Voice input uses push-to-talk plus faster-whisper after release. WebRTC stays limited to mic readiness and transport diagnostics, not voice-turn transport.
             </div>
           </dl>
         </div>
