@@ -8,9 +8,16 @@ export interface WebRtcDiagnosticsSnapshot {
   lastError: string | null;
 }
 
-export interface WebRtcOfferResponse {
+export interface WebRtcSignalEnvelope {
+  event: 'offer' | 'disconnect';
+  session_id: string | null;
+  offer?: { type: RTCSdpType; sdp: string };
+}
+
+export interface WebRtcSignalResponse {
   session_id: string;
-  answer: { type: 'answer'; sdp: string } | null;
-  status: 'answer_created' | 'unsupported';
+  event: 'answer' | 'disconnected' | 'error';
+  status: 'answer_created' | 'unsupported' | 'error' | 'disconnected' | string;
   detail: string;
+  answer: { type: 'answer'; sdp: string } | null;
 }

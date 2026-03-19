@@ -74,6 +74,7 @@ export function AskChipShell() {
               onUnlock={audio.actions.unlockAudio}
               onRefresh={audio.actions.refreshDevices}
               onStart={() => audio.actions.startMicrophone()}
+              onConnectWebRtc={audio.actions.connectWebRtc}
               onSelectDevice={audio.actions.selectDevice}
             />
             <UtilityRail collapsed={!showUtilityRail} onToggle={toggleUtilityRail} />

@@ -83,7 +83,21 @@ export function DiagnosticsDrawer({
               <dt>WebRTC state</dt>
               <dd className="font-medium text-white">{webrtcDiagnostics.connectionState}</dd>
             </div>
+            <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>ICE state</dt>
+              <dd className="font-medium text-white">{webrtcDiagnostics.iceConnectionState}</dd>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>Signaling state</dt>
+              <dd className="font-medium text-white">{webrtcDiagnostics.signalingState}</dd>
+            </div>
           </dl>
+
+          {webrtcDiagnostics.lastError && (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              WebRTC detail: {webrtcDiagnostics.lastError}
+            </div>
+          )}
 
           <div className="rounded-[1.5rem] border border-slate-900 bg-slate-950/60 p-4">
             <h3 className="mb-3 text-sm font-medium text-white">Recent events</h3>

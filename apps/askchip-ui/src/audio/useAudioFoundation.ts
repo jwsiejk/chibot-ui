@@ -53,7 +53,7 @@ export function useAudioFoundation(sessionId: string | null) {
     streamRef.current = null;
     setStreamActive(false);
     setLiveLevel(0);
-    webRtcRef.current.disconnect();
+    webRtcRef.current.disconnect('idle');
   }, []);
 
   const unlockAudio = useCallback(async () => {
@@ -96,7 +96,6 @@ export function useAudioFoundation(sessionId: string | null) {
       setPermissionState('granted');
       await meterRef.current.start(stream, (value) => setLiveLevel(normalizeLiveLevel(value)));
       await refreshDevices();
-      await webRtcRef.current.connect(stream, sessionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to access microphone.';
       setStreamError(message);
@@ -109,7 +108,20 @@ export function useAudioFoundation(sessionId: string | null) {
         setAvailability('error');
       }
     }
-  }, [refreshDevices, releaseStream, selectedDeviceId, sessionId, unlockAudio]);
+  }, [refreshDevices, releaseStream, selectedDeviceId, unlockAudio]);
+
+  const connectWebRtc = useCallback(async () => {
+    if (!streamRef.current) {
+      setWebrtcDiagnostics({ ...DEFAULT_WEBRTC, lastError: 'Start the mic test before connecting the WebRTC foundation.' });
+      return;
+    }
+
+    try {
+      await webRtcRef.current.connect(streamRef.current, sessionId);
+    } catch (error) {
+      setStreamError((current) => current ?? (error instanceof Error ? error.message : 'WebRTC foundation connection failed.'));
+    }
+  }, [sessionId]);
 
   const selectDevice = useCallback(async (deviceId: string) => {
     setSelectedDeviceId(deviceId);
@@ -176,6 +188,7 @@ export function useAudioFoundation(sessionId: string | null) {
       unlockAudio,
       refreshDevices,
       startMicrophone,
+      connectWebRtc,
       selectDevice,
       releaseStream,
     },

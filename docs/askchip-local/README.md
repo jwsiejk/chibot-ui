@@ -10,10 +10,13 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - `VITE_ASKCHIP_API_BASE_URL` defaults to `http://127.0.0.1:8000`
 - `VITE_ASKCHIP_WS_BASE_URL` defaults to `ws://127.0.0.1:8000`
 - API requests resolve against `${VITE_ASKCHIP_API_BASE_URL}/api/v1/...`
-- WebSocket events resolve against `${VITE_ASKCHIP_WS_BASE_URL}/ws/events`
+- Typed-chat event streaming resolves against `${VITE_ASKCHIP_WS_BASE_URL}/ws/events`
+- Canonical WebRTC signaling resolves against `${VITE_ASKCHIP_WS_BASE_URL}/ws/webrtc`
+- `POST /api/v1/webrtc/offer` remains compatibility-only and is not the primary signaling path
 
 ## Current frontend scope
 - Typed chat is implemented, including transcript loading, session selection, and streaming assistant text updates.
+- WebRTC foundation work is implemented for mic readiness, peer negotiation, and transport diagnostics only.
 - Voice/WebRTC conversation is not implemented in this phase.
 - STT, TTS, voice controls, tools, RAG, and auth remain out of scope.
 

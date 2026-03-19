@@ -14,6 +14,7 @@ export function MicSetupPanel({
   onUnlock,
   onRefresh,
   onStart,
+  onConnectWebRtc,
   onSelectDevice,
 }: {
   devices: AudioInputDevice[];
@@ -24,6 +25,7 @@ export function MicSetupPanel({
   onUnlock: () => Promise<void>;
   onRefresh: () => Promise<unknown>;
   onStart: () => Promise<void>;
+  onConnectWebRtc: () => Promise<void>;
   onSelectDevice: (deviceId: string) => Promise<void>;
 }) {
   return (
@@ -44,7 +46,7 @@ export function MicSetupPanel({
 
       <div className="space-y-4 text-sm text-slate-300">
         <p className="rounded-2xl border border-slate-800 px-4 py-3 text-slate-300">
-          This phase only verifies local microphone/device readiness and WebRTC negotiation foundations. Voice conversation is not available yet.
+          This phase verifies microphone/device readiness plus the WebRTC transport foundation only. Typed chat remains the source of truth, and voice turns are still out of scope.
         </p>
 
         <label className="block space-y-2">
@@ -61,7 +63,7 @@ export function MicSetupPanel({
           </select>
         </label>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
           <button
             type="button"
             onClick={() => void onUnlock()}
@@ -75,6 +77,13 @@ export function MicSetupPanel({
             className="rounded-[1.25rem] bg-cyan-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300"
           >
             Start mic test
+          </button>
+          <button
+            type="button"
+            onClick={() => void onConnectWebRtc()}
+            className="rounded-[1.25rem] border border-cyan-400/40 bg-slate-950/60 px-4 py-3 font-medium text-cyan-100 transition hover:border-cyan-300 hover:text-white"
+          >
+            Connect WebRTC foundation
           </button>
         </div>
 
@@ -100,6 +109,14 @@ export function MicSetupPanel({
           <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
             <dt>WebRTC</dt>
             <dd className="font-medium text-white">{webrtcDiagnostics.connectionState}</dd>
+          </div>
+          <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+            <dt>ICE</dt>
+            <dd className="font-medium text-white">{webrtcDiagnostics.iceConnectionState}</dd>
+          </div>
+          <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+            <dt>Signaling</dt>
+            <dd className="font-medium text-white">{webrtcDiagnostics.signalingState}</dd>
           </div>
         </dl>
 
