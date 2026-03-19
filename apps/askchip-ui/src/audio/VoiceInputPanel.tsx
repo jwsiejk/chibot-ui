@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 interface VoiceDraftState {
   mode: 'listening' | 'transcribing';
   text: string;
@@ -17,13 +19,38 @@ export function VoiceInputPanel({
   liveDraft,
   onPressStart,
   onPressEnd,
+  onPressCancel,
 }: {
   disabled: boolean;
   disabledReason: string | null;
   liveDraft: VoiceDraftState | null;
   onPressStart: () => Promise<void>;
   onPressEnd: () => Promise<void>;
+  onPressCancel: () => Promise<void>;
 }) {
+  const pointerIdRef = useRef<number | null>(null);
+  const keyboardPressedRef = useRef(false);
+
+  useEffect(() => {
+    function handleBlur() {
+      if (pointerIdRef.current !== null || keyboardPressedRef.current) {
+        pointerIdRef.current = null;
+        keyboardPressedRef.current = false;
+        void onPressCancel();
+      }
+    }
+
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('blur', handleBlur);
+      if (pointerIdRef.current !== null || keyboardPressedRef.current) {
+        pointerIdRef.current = null;
+        keyboardPressedRef.current = false;
+        void onPressCancel();
+      }
+    };
+  }, [onPressCancel]);
+
   return (
     <section className="rounded-[2rem] border border-slate-800 bg-panel/80 p-5 shadow-panel backdrop-blur">
       <header className="mb-4 flex items-center justify-between gap-3">
@@ -37,21 +64,52 @@ export function VoiceInputPanel({
         <button
           type="button"
           disabled={disabled}
-          onPointerDown={() => void onPressStart()}
-          onPointerUp={() => void onPressEnd()}
-          onPointerLeave={() => void onPressEnd()}
+          onPointerDown={(event) => {
+            if (disabled || pointerIdRef.current !== null) {
+              return;
+            }
+            pointerIdRef.current = event.pointerId;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            void onPressStart();
+          }}
+          onPointerUp={(event) => {
+            if (pointerIdRef.current !== event.pointerId) {
+              return;
+            }
+            pointerIdRef.current = null;
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            void onPressEnd();
+          }}
+          onPointerCancel={(event) => {
+            if (pointerIdRef.current !== event.pointerId) {
+              return;
+            }
+            pointerIdRef.current = null;
+            void onPressCancel();
+          }}
+          onLostPointerCapture={() => {
+            if (pointerIdRef.current === null) {
+              return;
+            }
+            pointerIdRef.current = null;
+            void onPressCancel();
+          }}
           onKeyDown={(event) => {
-            if (event.repeat) {
+            if (event.repeat || keyboardPressedRef.current) {
               return;
             }
             if (event.key === ' ' || event.key === 'Enter') {
               event.preventDefault();
+              keyboardPressedRef.current = true;
               void onPressStart();
             }
           }}
           onKeyUp={(event) => {
-            if (event.key === ' ' || event.key === 'Enter') {
+            if ((event.key === ' ' || event.key === 'Enter') && keyboardPressedRef.current) {
               event.preventDefault();
+              keyboardPressedRef.current = false;
               void onPressEnd();
             }
           }}

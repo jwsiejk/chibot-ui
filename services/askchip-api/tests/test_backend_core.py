@@ -712,3 +712,89 @@ def test_blank_stt_result_does_not_create_blank_canonical_message(tmp_path: Path
     assert data['messages'] == []
     assert any(event['type'] == 'error' and event['payload']['code'] == 'stt_empty_transcript' for event in data['events'])
 
+
+
+def test_voice_start_is_rejected_while_assistant_is_busy(tmp_path: Path) -> None:
+    start = threading.Event()
+    finish = threading.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        start.set()
+        await asyncio.to_thread(finish.wait, 2)
+        body = json.dumps({'message': {'content': 'done'}, 'done': True}).encode() + b'\n'
+        return httpx.Response(200, content=body)
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), stt_service=FakeSttService(text='voice hello'))
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Busy voice start'}).json()['id']
+        thread = threading.Thread(target=lambda: client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'typed first'}))
+        thread.start()
+        assert start.wait(timeout=2)
+        response = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        finish.set()
+        thread.join(timeout=2)
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert response.status_code == 409
+    assert any(event['type'] == 'error' and event['payload']['code'] == 'assistant_busy' for event in transcript.json()['events'])
+
+
+def test_stale_voice_release_is_rejected_without_running_stt(tmp_path: Path) -> None:
+    stt = FakeSttService(text='should not run')
+    app = make_app(tmp_path, stt_service=stt)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Stale release'}).json()['id']
+        released = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert released.status_code == 409
+    assert released.json()['detail'] == 'push-to-talk release does not match an active capture'
+    assert stt.calls == []
+    assert transcript.json()['session']['status'] == 'ready'
+    assert transcript.json()['messages'] == []
+
+
+def test_busy_voice_release_does_not_run_stt_or_leave_session_stuck(tmp_path: Path) -> None:
+    start = threading.Event()
+    finish = threading.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        start.set()
+        await asyncio.to_thread(finish.wait, 2)
+        body = json.dumps({'message': {'content': 'done'}, 'done': True}).encode() + b'\n'
+        return httpx.Response(200, content=body)
+
+    stt = FakeSttService(text='should not run')
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), stt_service=stt)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Busy release'}).json()['id']
+        started = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        assert started.status_code == 200
+        thread = threading.Thread(target=lambda: client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'typed wins'}))
+        thread.start()
+        assert start.wait(timeout=2)
+        released = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm'},
+        )
+        finish.set()
+        thread.join(timeout=2)
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert released.status_code == 409
+    assert stt.calls == []
+    data = transcript.json()
+    assert data['session']['status'] == 'ready'
+    state_events = [event['payload']['state'] for event in data['events'] if event['type'] == 'state']
+    assert 'listening' in state_events
+    assert 'thinking' in state_events
+    assert 'transcribing' not in state_events
+    assert [message['source'] for message in data['messages']] == ['typed_input', 'model_output']

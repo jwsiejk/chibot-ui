@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { acquireMicrophone, stopStream, supportsMediaDevices } from './mediaDevices';
 
 export interface RecordedVoiceTurn {
@@ -86,6 +86,7 @@ export function usePushToTalkRecorder(selectedDeviceId: string | null) {
     });
 
     reset();
+    startedAtRef.current = null;
     return result;
   }, [reset]);
 
@@ -103,6 +104,10 @@ export function usePushToTalkRecorder(selectedDeviceId: string | null) {
     setStatus({ phase: 'idle', startedAt: null, error: null });
   }, []);
 
+  useEffect(() => () => {
+    cancelCapture();
+  }, [cancelCapture]);
+
   const active = useMemo(() => status.phase === 'listening' || status.phase === 'transcribing', [status.phase]);
 
   return {
@@ -113,6 +118,7 @@ export function usePushToTalkRecorder(selectedDeviceId: string | null) {
       finishCapture,
       cancelCapture,
       markComplete,
+      getStartedAt: () => startedAtRef.current,
     },
   };
 }

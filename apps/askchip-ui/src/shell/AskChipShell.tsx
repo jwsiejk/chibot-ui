@@ -1,5 +1,7 @@
+import { useEffect, useMemo, useRef } from 'react';
 import { MicSetupPanel } from '../audio/MicSetupPanel';
 import { useAudioFoundation } from '../audio/useAudioFoundation';
+import { createPttLifecycleController } from '../audio/pttLifecycle';
 import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
 import { VoiceInputPanel } from '../audio/VoiceInputPanel';
 import { ChipStagePane } from '../chip-stage/ChipStagePane';
@@ -24,35 +26,44 @@ export function AskChipShell() {
   const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
 
-  async function startVoiceCapture() {
-    if (pushToTalk.status.phase !== 'idle') {
-      return;
-    }
-    try {
-      await pushToTalk.actions.beginCapture();
-      await actions.startVoiceTurn(audio.selectedDeviceId, Date.now());
-    } catch (error) {
-      pushToTalk.actions.cancelCapture();
-      throw error;
-    }
-  }
+  const pttRuntimeRef = useRef({ actions, audioSelectedDeviceId: audio.selectedDeviceId, pushToTalkActions: pushToTalk.actions, pushToTalkActive: pushToTalk.active, voiceDisabledReason: state.voiceDisabledReason });
 
-  async function finishVoiceCapture() {
-    if (pushToTalk.status.phase !== 'listening') {
-      return;
-    }
-    const recorded = await pushToTalk.actions.finishCapture();
-    try {
-      await actions.finishVoiceTurn({
-        blob: recorded.blob,
-        filename: recorded.mimeType.includes('mp4') ? 'voice-turn.mp4' : 'voice-turn.webm',
-        deviceId: audio.selectedDeviceId,
-        durationMs: recorded.durationMs,
-      });
-    } finally {
-      pushToTalk.actions.markComplete();
-    }
-  }
+  useEffect(() => {
+    pttRuntimeRef.current = {
+      actions,
+      audioSelectedDeviceId: audio.selectedDeviceId,
+      pushToTalkActions: pushToTalk.actions,
+      pushToTalkActive: pushToTalk.active,
+      voiceDisabledReason: state.voiceDisabledReason,
+    };
+  }, [actions, audio.selectedDeviceId, pushToTalk.actions, pushToTalk.active, state.voiceDisabledReason]);
+
+  const pttLifecycle = useMemo(() => createPttLifecycleController({
+    beginLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.beginCapture(),
+    finishLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.finishCapture(),
+    cancelLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.cancelCapture(),
+    startBackendVoiceTurn: () => pttRuntimeRef.current.actions.startVoiceTurn(
+      pttRuntimeRef.current.audioSelectedDeviceId,
+      pttRuntimeRef.current.pushToTalkActions.getStartedAt(),
+    ),
+    submitVoiceTurn: async (recorded) => {
+      try {
+        await pttRuntimeRef.current.actions.finishVoiceTurn({
+          blob: recorded.blob,
+          filename: recorded.mimeType.includes('mp4') ? 'voice-turn.mp4' : 'voice-turn.webm',
+          deviceId: pttRuntimeRef.current.audioSelectedDeviceId,
+          durationMs: recorded.durationMs,
+        });
+      } finally {
+        pttRuntimeRef.current.pushToTalkActions.markComplete();
+      }
+    },
+    isInteractionBlocked: () => Boolean(pttRuntimeRef.current.voiceDisabledReason) || pttRuntimeRef.current.pushToTalkActive,
+  }), []);
+
+  useEffect(() => () => {
+    pttLifecycle.dispose();
+  }, [pttLifecycle]);
 
   return (
     <main className="min-h-screen bg-surface px-4 py-6 text-slate-100 md:px-6 md:py-8">
@@ -114,8 +125,9 @@ export function AskChipShell() {
               disabled={Boolean(state.voiceDisabledReason)}
               disabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
               liveDraft={state.voiceDraft}
-              onPressStart={startVoiceCapture}
-              onPressEnd={finishVoiceCapture}
+              onPressStart={pttLifecycle.pressStart}
+              onPressEnd={pttLifecycle.pressRelease}
+              onPressCancel={pttLifecycle.pressCancel}
             />
             <UtilityRail collapsed={!showUtilityRail} onToggle={toggleUtilityRail} />
           </div>
