@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
+    "test": "rm -rf .test-dist && tsc -p tsconfig.test.json && find test -name '*.test.mjs' -print0 | xargs -0 node --test",
     "preview": "vite preview --host 127.0.0.1 --port 4173"
   },
   "dependencies": {
