@@ -63,7 +63,7 @@ class Database:
                     content TEXT NOT NULL,
                     status TEXT NOT NULL,
                     turn_id TEXT NOT NULL,
-                    source TEXT NOT NULL DEFAULT 'user',
+                    source TEXT NOT NULL DEFAULT 'typed_input',
                     modality TEXT NOT NULL DEFAULT 'text',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -98,7 +98,7 @@ class Database:
             self._ensure_column(conn, 'sessions', 'ready_at', 'TEXT')
             self._ensure_column(conn, 'sessions', 'last_error_at', 'TEXT')
             self._ensure_column(conn, 'sessions', 'metadata', "TEXT NOT NULL DEFAULT '{}'")
-            self._ensure_column(conn, 'messages', 'source', "TEXT NOT NULL DEFAULT 'user'")
+            self._ensure_column(conn, 'messages', 'source', "TEXT NOT NULL DEFAULT 'typed_input'")
             self._ensure_column(conn, 'messages', 'modality', "TEXT NOT NULL DEFAULT 'text'")
             self._ensure_column(conn, 'messages', 'committed_at', 'TEXT')
             self._ensure_column(conn, 'messages', 'completed_at', 'TEXT')
@@ -193,7 +193,7 @@ class Database:
                     message.id,
                     message.session_id,
                     message.role,
-                    message.content,
+                    message.text,
                     message.status,
                     message.turn_id,
                     message.source,
@@ -215,7 +215,7 @@ class Database:
         self,
         message_id: str,
         *,
-        content: str,
+        text: str,
         status: str,
         updated_at: str,
         committed_at: str | None = None,
@@ -232,7 +232,7 @@ class Database:
                    SET content = ?, status = ?, updated_at = ?, committed_at = COALESCE(?, committed_at),
                        completed_at = COALESCE(?, completed_at), metadata = ?
                    WHERE id = ?''',
-                (content, status, updated_at, committed_at, completed_at, json.dumps(merged_metadata), message_id),
+                (text, status, updated_at, committed_at, completed_at, json.dumps(merged_metadata), message_id),
             )
 
     def list_messages(self, session_id: str) -> list[MessageRecord]:
@@ -303,7 +303,7 @@ class Database:
             id=row['id'],
             session_id=row['session_id'],
             role=row['role'],
-            content=row['content'],
+            text=row['content'],
             status=row['status'],
             turn_id=row['turn_id'],
             source=row['source'],

@@ -43,26 +43,26 @@ class TurnManager:
             user_message = MessageRecord(
                 session_id=session.id,
                 role='user',
-                content=text,
+                text=text,
                 status='committed',
                 turn_id=turn_id,
-                source='user',
+                source='typed_input',
                 modality='text',
                 committed_at=turn_started_at,
                 metadata={'input_type': 'typed_turn'},
             )
             self.db.create_message(user_message)
-            committed_event = EventRecord(session_id=session.id, turn_id=turn_id, type='turn.committed', payload={'message_id': user_message.id, 'text': text, 'source': 'user', 'modality': 'text'})
+            committed_event = EventRecord(session_id=session.id, turn_id=turn_id, type='turn.committed', payload={'message_id': user_message.id, 'text': text, 'source': 'typed_input', 'modality': 'text'})
             self.db.create_event(committed_event)
             await self.event_bus.publish(self._event_payload(committed_event), session.id)
 
             assistant_message = MessageRecord(
                 session_id=session.id,
                 role='assistant',
-                content='',
+                text='',
                 status='streaming',
                 turn_id=turn_id,
-                source='assistant',
+                source='model_output',
                 modality='text',
                 metadata={'model': self.ollama.model},
             )
@@ -84,19 +84,19 @@ class TurnManager:
             try:
                 async for chunk in self.ollama.stream_chat(prompt_messages):
                     provider_metrics.update(chunk.get('metrics', {}))
-                    content = str(chunk.get('content', ''))
-                    if content:
+                    delta_text = str(chunk.get('content', ''))
+                    if delta_text:
                         if first_chunk_ms is None:
                             first_chunk_ms = int((perf_counter() - started) * 1000)
-                        assembled.append(content)
-                        delta_event = EventRecord(session_id=session.id, turn_id=turn_id, type='assistant.delta', payload={'message_id': assistant_message.id, 'delta': content})
+                        assembled.append(delta_text)
+                        delta_event = EventRecord(session_id=session.id, turn_id=turn_id, type='assistant.delta', payload={'message_id': assistant_message.id, 'delta': delta_text})
                         self.db.create_event(delta_event)
                         await self.event_bus.publish(self._event_payload(delta_event), session.id)
                 completed_text = ''.join(assembled)
                 ended_at = datetime.now(timezone.utc)
                 self.db.update_message(
                     assistant_message.id,
-                    content=completed_text,
+                    text=completed_text,
                     status='completed',
                     updated_at=ended_at.isoformat(),
                     completed_at=ended_at.isoformat(),
@@ -115,7 +115,7 @@ class TurnManager:
                 ended_at = datetime.now(timezone.utc)
                 self.db.update_message(
                     assistant_message.id,
-                    content=''.join(assembled),
+                    text=''.join(assembled),
                     status='error',
                     updated_at=ended_at.isoformat(),
                     metadata={'provider_metrics': provider_metrics},
