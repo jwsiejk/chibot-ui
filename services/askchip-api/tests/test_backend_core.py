@@ -31,9 +31,43 @@ CONTRACT_SOURCES_BY_ROLE = {'user': 'typed_input', 'assistant': 'model_output'}
 CONTRACT_SOURCE_VOCABULARY = {'typed_input', 'voice_input', 'model_output', 'system_notice'}
 
 
-def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, **settings_overrides):
+def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, webrtc_peer_factory=None, **settings_overrides):
     config = Settings(database_path=tmp_path / 'askchip.db', **settings_overrides)
-    return create_app(config=config, ollama_transport=transport)
+    return create_app(config=config, ollama_transport=transport, webrtc_peer_factory=webrtc_peer_factory)
+
+
+
+
+class FakeManagedPeer:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakePeerFactory:
+    def __init__(self, *, status: str = 'answer_created', detail: str = 'ok') -> None:
+        self.status = status
+        self.detail = detail
+        self.calls = 0
+        self.peers: list[FakeManagedPeer] = []
+
+    async def create_answer(self, offer) -> object:
+        from app.webrtc.peer_factory import PeerFactoryResult
+        from app.webrtc_models import SessionDescriptionModel
+
+        self.calls += 1
+        if self.status != 'answer_created':
+            return PeerFactoryResult(status=self.status, detail=self.detail)
+        peer = FakeManagedPeer()
+        self.peers.append(peer)
+        return PeerFactoryResult(
+            status='answer_created',
+            detail=self.detail,
+            answer=SessionDescriptionModel(type='answer', sdp=f'answer-for:{offer.sdp}'),
+            peer=peer,
+        )
 
 
 def streaming_transport(chunks: list[dict[str, object]], status_code: int = 200) -> httpx.MockTransport:
@@ -339,3 +373,73 @@ def test_startup_migrates_legacy_message_content_column_to_text(tmp_path: Path) 
     assert 'content' not in columns
     assert row is not None
     assert row['text'] == 'legacy text'
+
+
+def test_webrtc_websocket_offer_returns_real_answer_when_peer_factory_supports_it(tmp_path: Path) -> None:
+    peer_factory = FakePeerFactory(detail='foundation answer created')
+    app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
+    with TestClient(app) as client:
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({
+                'event': 'offer',
+                'offer': {'type': 'offer', 'sdp': 'offer-sdp'},
+            })
+            response = websocket.receive_json()
+
+    assert response['event'] == 'answer'
+    assert response['status'] == 'answer_created'
+    assert response['answer'] == {'type': 'answer', 'sdp': 'answer-for:offer-sdp'}
+    assert peer_factory.calls == 1
+
+
+def test_webrtc_websocket_disconnect_releases_peer_session(tmp_path: Path) -> None:
+    peer_factory = FakePeerFactory()
+    app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
+    with TestClient(app) as client:
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({
+                'event': 'offer',
+                'session_id': 'rtc-session-1',
+                'offer': {'type': 'offer', 'sdp': 'offer-sdp'},
+            })
+            websocket.receive_json()
+            websocket.send_json({'event': 'disconnect', 'session_id': 'rtc-session-1'})
+            disconnected = websocket.receive_json()
+
+    assert disconnected['event'] == 'disconnected'
+    assert disconnected['status'] == 'disconnected'
+    assert peer_factory.peers[0].closed is True
+
+
+def test_webrtc_websocket_reports_explicit_unsupported_error_without_touching_typed_chat(tmp_path: Path) -> None:
+    peer_factory = FakePeerFactory(status='unsupported', detail='aiortc missing in runtime')
+    app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
+    with TestClient(app) as client:
+        with client.websocket_connect('/ws/webrtc') as websocket:
+            websocket.send_json({
+                'event': 'offer',
+                'offer': {'type': 'offer', 'sdp': 'offer-sdp'},
+            })
+            response = websocket.receive_json()
+        created = client.post('/api/v1/sessions', json={'title': 'Typed chat still works'})
+        listed = client.get('/api/v1/sessions')
+
+    assert response['status'] == 'unsupported'
+    assert response['answer'] is None
+    assert response['detail'] == 'aiortc missing in runtime'
+    assert created.status_code == 201
+    assert listed.status_code == 200
+
+
+def test_http_webrtc_offer_route_is_compatibility_only(tmp_path: Path) -> None:
+    peer_factory = FakePeerFactory(detail='compatibility answer')
+    app = make_app(tmp_path, webrtc_peer_factory=peer_factory)
+    with TestClient(app) as client:
+        response = client.post(
+            '/api/v1/webrtc/offer',
+            json={'offer': {'type': 'offer', 'sdp': 'compat-offer'}},
+        )
+
+    assert response.status_code == 200
+    assert response.headers['x-askchip-webrtc-compatibility'] == 'http-offer'
+    assert response.json()['status'] == 'answer_created'

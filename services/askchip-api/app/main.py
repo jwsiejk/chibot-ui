@@ -24,12 +24,12 @@ from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.storage import Database, DatabaseError
 from app.turns import BusyError, TurnManager
+from app.webrtc import WebRtcSignalingService, WebRtcWebSocketHandler
 from app.webrtc_models import WebRtcOfferRequest
-from app.webrtc_signaling import WebRtcSignalingService
 
 
 class AppState:
-    def __init__(self, config: Settings, ollama_transport=None) -> None:
+    def __init__(self, config: Settings, ollama_transport=None, webrtc_peer_factory=None) -> None:
         self.config = config
         self.db = Database(Path(config.database_path))
         self.event_bus = EventBus()
@@ -41,11 +41,12 @@ class AppState:
             transport=ollama_transport,
         )
         self.turn_manager = TurnManager(self.db, self.event_bus, self.ollama, self.prompt_assembler)
-        self.webrtc_signaling = WebRtcSignalingService()
+        self.webrtc_signaling = WebRtcSignalingService(peer_factory=webrtc_peer_factory)
+        self.webrtc_websocket = WebRtcWebSocketHandler(self.webrtc_signaling)
 
 
-def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
-    state = AppState(config, ollama_transport=ollama_transport)
+def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_factory=None) -> FastAPI:
+    state = AppState(config, ollama_transport=ollama_transport, webrtc_peer_factory=webrtc_peer_factory)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -55,6 +56,7 @@ def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
         state.db.upsert_setting('ollama_model', config.ollama_model, now)
         app.state.askchip = state
         yield
+        await state.webrtc_signaling.clear()
 
     app = FastAPI(title=config.app_name, lifespan=lifespan)
 
@@ -77,9 +79,13 @@ def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
         return JSONResponse(payload.model_dump())
 
     @app.post('/api/v1/webrtc/offer')
-    def create_webrtc_offer(request: WebRtcOfferRequest) -> JSONResponse:
-        response = state.webrtc_signaling.negotiate_offer(session_id=request.session_id, offer=request.offer)
-        return JSONResponse(response.model_dump(), status_code=200)
+    async def create_webrtc_offer(request: WebRtcOfferRequest) -> JSONResponse:
+        response = await state.webrtc_signaling.negotiate_offer(session_id=request.session_id, offer=request.offer)
+        return JSONResponse(response.model_dump(), status_code=200, headers={'X-AskChip-WebRTC-Compatibility': 'http-offer'})
+
+    @app.websocket('/ws/webrtc')
+    async def websocket_webrtc_signaling(websocket: WebSocket) -> None:
+        await state.webrtc_websocket.handle(websocket)
 
     @app.post('/api/v1/sessions')
     def create_session(request: CreateSessionRequest) -> JSONResponse:
