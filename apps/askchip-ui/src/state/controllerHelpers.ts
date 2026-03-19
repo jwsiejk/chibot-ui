@@ -1,7 +1,14 @@
-import type { AskChipEvent, TranscriptMessage } from '../types/contract';
+import type { AskChipEvent, TranscriptMessage, TurnState } from '../types/contract';
 
 export const MAX_RECENT_EVENTS = 24;
 export const MAX_RECENT_TIMINGS = 12;
+export const CONTRACT_TURN_STATES: TurnState[] = ['ready', 'listening', 'transcribing', 'thinking', 'error'];
+
+export interface VoiceDraftState {
+  mode: 'listening' | 'transcribing';
+  text: string;
+  durationMs: number | null;
+}
 
 export function dedupeEvents<T extends { id: string }>(events: T[]): T[] {
   const seen = new Set<string>();
@@ -12,6 +19,26 @@ export function dedupeEvents<T extends { id: string }>(events: T[]): T[] {
     seen.add(event.id);
     return true;
   });
+}
+
+export function isTurnState(value: unknown): value is TurnState {
+  return typeof value === 'string' && CONTRACT_TURN_STATES.includes(value as TurnState);
+}
+
+export function buildListeningDraft(startedAt: number | null, now = Date.now()): VoiceDraftState {
+  return {
+    mode: 'listening',
+    text: 'Listening… release to stop capture and submit this voice turn for transcription.',
+    durationMs: startedAt ? Math.max(0, now - startedAt) : null,
+  };
+}
+
+export function buildTranscribingDraft(durationMs: number | null): VoiceDraftState {
+  return {
+    mode: 'transcribing',
+    text: 'Transcribing the released voice turn with faster-whisper before committing the canonical user message.',
+    durationMs,
+  };
 }
 
 function placeholderAssistantMessage(event: AskChipEvent, messageId: string): TranscriptMessage {

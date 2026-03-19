@@ -7,7 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
-TurnState = Literal['ready', 'thinking', 'error']
+TurnState = Literal['ready', 'listening', 'transcribing', 'thinking', 'error']
 MessageStatus = Literal['pending', 'streaming', 'committed', 'completed', 'error']
 MessageSource = Literal['typed_input', 'voice_input', 'model_output', 'system_notice']
 MessageModality = Literal['text', 'voice', 'mixed']

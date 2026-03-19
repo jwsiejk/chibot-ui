@@ -1,4 +1,4 @@
-export type TurnState = 'ready' | 'thinking' | 'error';
+export type TurnState = 'ready' | 'listening' | 'transcribing' | 'thinking' | 'error';
 export type MessageRole = 'user' | 'assistant';
 export type MessageSource = 'typed_input' | 'voice_input' | 'model_output' | 'system_notice';
 export type MessageModality = 'text' | 'voice' | 'mixed';
@@ -67,6 +67,9 @@ export interface ConfigResponse {
   ollama_base_url: string;
   ollama_model: string;
   database_path: string;
+  stt_model: string;
+  stt_device: string;
+  stt_compute_type: string;
   local_only: boolean;
 }
 

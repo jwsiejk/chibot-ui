@@ -64,4 +64,7 @@ class ConfigResponse(BaseModel):
     ollama_base_url: str
     ollama_model: str
     database_path: str
+    stt_model: str
+    stt_device: str
+    stt_compute_type: str
     local_only: bool = True

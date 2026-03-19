@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, askChipApiClient } from '../api/client';
 import { askChipEventsClient, type ConnectionState } from '../api/events';
-import { applyAssistantStreamEvent, dedupeEvents, MAX_RECENT_EVENTS, MAX_RECENT_TIMINGS } from './controllerHelpers';
+import {
+  applyAssistantStreamEvent,
+  buildListeningDraft,
+  buildTranscribingDraft,
+  dedupeEvents,
+  isTurnState,
+  MAX_RECENT_EVENTS,
+  MAX_RECENT_TIMINGS,
+  type VoiceDraftState,
+} from './controllerHelpers';
 import type {
   AskChipEvent,
   ConfigResponse,
@@ -25,9 +34,11 @@ export interface AskChipControllerState {
   connectionState: ConnectionState;
   topLevelState: TurnState | null;
   pendingTurn: boolean;
+  voiceDraft: VoiceDraftState | null;
   appError: string | null;
   wsNotice: string | null;
   sendingDisabledReason: string | null;
+  voiceDisabledReason: string | null;
 }
 
 function sortSessions(items: SessionRecord[]): SessionRecord[] {
@@ -44,6 +55,7 @@ export function useAskChipController() {
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
   const [topLevelState, setTopLevelState] = useState<TurnState | null>(null);
   const [pendingTurn, setPendingTurn] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState<VoiceDraftState | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   const [wsNotice, setWsNotice] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
@@ -81,6 +93,7 @@ export function useAskChipController() {
   const selectSession = useCallback(async (sessionId: string) => {
     activeSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
+    setVoiceDraft(null);
     localStorage.setItem(STORAGE_KEY, sessionId);
     setAppError(null);
     await loadTranscript(sessionId);
@@ -130,7 +143,7 @@ export function useAskChipController() {
   const handleEvent = useCallback((event: AskChipEvent) => {
     if (event.type === 'state') {
       const nextState = event.payload.state;
-      if (nextState === 'ready' || nextState === 'thinking' || nextState === 'error') {
+      if (isTurnState(nextState)) {
         setTopLevelState(nextState);
         setSessions((existing) =>
           sortSessions(
@@ -151,6 +164,7 @@ export function useAskChipController() {
     }
 
     if (event.type === 'turn.committed') {
+      setVoiceDraft(null);
       if (activeSessionIdRef.current) {
         void loadTranscript(activeSessionIdRef.current);
       }
@@ -158,6 +172,9 @@ export function useAskChipController() {
     }
 
     if (event.type === 'assistant.completed' || event.type === 'error') {
+      if (event.type === 'error') {
+        setVoiceDraft(null);
+      }
       if (activeSessionIdRef.current) {
         void loadTranscript(activeSessionIdRef.current);
       }
@@ -239,10 +256,58 @@ export function useAskChipController() {
     }
   }, [currentSessionId, loadSessions, loadTranscript]);
 
+  const startVoiceTurn = useCallback(async (deviceId: string | null, startedAt: number | null) => {
+    if (!currentSessionId) {
+      throw new Error('Create a session before starting push-to-talk.');
+    }
+    setAppError(null);
+    setVoiceDraft(buildListeningDraft(startedAt));
+    setTopLevelState('listening');
+    try {
+      await askChipApiClient.startVoiceTurn(currentSessionId, deviceId);
+    } catch (error) {
+      setVoiceDraft(null);
+      const message = error instanceof ApiError ? error.detail : error instanceof Error ? error.message : 'Failed to start push-to-talk.';
+      setAppError(message);
+      throw error;
+    }
+  }, [currentSessionId]);
+
+  const finishVoiceTurn = useCallback(async (payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; }) => {
+    if (!currentSessionId) {
+      throw new Error('Create a session before sending a voice turn.');
+    }
+    setPendingTurn(true);
+    setAppError(null);
+    setVoiceDraft(buildTranscribingDraft(payload.durationMs));
+    setTopLevelState('transcribing');
+    try {
+      await askChipApiClient.createVoiceTurn(currentSessionId, payload);
+      await Promise.all([loadSessions(), loadTranscript(currentSessionId)]);
+      setVoiceDraft(null);
+    } catch (error) {
+      setVoiceDraft(null);
+      if (error instanceof ApiError) {
+        setAppError(error.detail);
+      } else {
+        setAppError(error instanceof Error ? error.message : 'Failed to send voice turn.');
+      }
+      throw error;
+    } finally {
+      setPendingTurn(false);
+    }
+  }, [currentSessionId, loadSessions, loadTranscript]);
+
   const sendingDisabledReason = !currentSessionId
     ? 'Create or select a session to start a typed chat.'
     : pendingTurn
       ? 'Assistant is processing the current typed turn.'
+      : null;
+
+  const voiceDisabledReason = !currentSessionId
+    ? 'Create or select a session to start push-to-talk.'
+    : pendingTurn
+      ? 'Wait for the current turn to finish before recording another voice turn.'
       : null;
 
   return {
@@ -257,15 +322,19 @@ export function useAskChipController() {
       connectionState,
       topLevelState,
       pendingTurn,
+      voiceDraft,
       appError,
       wsNotice,
       sendingDisabledReason,
+      voiceDisabledReason,
     } satisfies AskChipControllerState,
     actions: {
       createSession,
       selectSession,
       reloadTranscript,
       sendTurn,
+      startVoiceTurn,
+      finishVoiceTurn,
     },
   };
 }

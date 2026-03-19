@@ -61,7 +61,7 @@ export function Composer({
         </button>
       </div>
       <div className="mt-3 min-h-5 text-sm text-slate-400">
-        {localError ?? disabledReason ?? 'Messages appear in the transcript only when the backend commits them.'}
+        {localError ?? disabledReason ?? 'Typed draft text remains local to this composer until the backend commits a canonical transcript message.'}
       </div>
     </section>
   );

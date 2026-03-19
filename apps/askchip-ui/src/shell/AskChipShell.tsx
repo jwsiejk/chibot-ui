@@ -1,5 +1,7 @@
 import { MicSetupPanel } from '../audio/MicSetupPanel';
 import { useAudioFoundation } from '../audio/useAudioFoundation';
+import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
+import { VoiceInputPanel } from '../audio/VoiceInputPanel';
 import { ChipStagePane } from '../chip-stage/ChipStagePane';
 import { Composer } from '../composer/Composer';
 import { DiagnosticsDrawer } from '../diagnostics/DiagnosticsDrawer';
@@ -18,8 +20,39 @@ function findActiveModelName(messages: ReturnType<typeof useAskChipController>['
 export function AskChipShell() {
   const { state, actions } = useAskChipController();
   const audio = useAudioFoundation(state.currentSessionId);
+  const pushToTalk = usePushToTalkRecorder(audio.selectedDeviceId);
   const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
+
+  async function startVoiceCapture() {
+    if (pushToTalk.status.phase !== 'idle') {
+      return;
+    }
+    try {
+      await pushToTalk.actions.beginCapture();
+      await actions.startVoiceTurn(audio.selectedDeviceId, Date.now());
+    } catch (error) {
+      pushToTalk.actions.cancelCapture();
+      throw error;
+    }
+  }
+
+  async function finishVoiceCapture() {
+    if (pushToTalk.status.phase !== 'listening') {
+      return;
+    }
+    const recorded = await pushToTalk.actions.finishCapture();
+    try {
+      await actions.finishVoiceTurn({
+        blob: recorded.blob,
+        filename: recorded.mimeType.includes('mp4') ? 'voice-turn.mp4' : 'voice-turn.webm',
+        deviceId: audio.selectedDeviceId,
+        durationMs: recorded.durationMs,
+      });
+    } finally {
+      pushToTalk.actions.markComplete();
+    }
+  }
 
   return (
     <main className="min-h-screen bg-surface px-4 py-6 text-slate-100 md:px-6 md:py-8">
@@ -30,9 +63,9 @@ export function AskChipShell() {
               <p className="w-fit rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">
                 AskChip Local
               </p>
-              <h1 className="text-3xl font-semibold tracking-tight text-white">Modern shell for canonical typed chat</h1>
+              <h1 className="text-3xl font-semibold tracking-tight text-white">Modern shell for canonical typed chat + push-to-talk</h1>
               <p className="max-w-3xl text-sm leading-6 text-slate-300">
-                This frontend consumes the backend transcript contract directly for typed chat, sessions, streaming assistant deltas, and diagnostics.
+                This frontend consumes the backend transcript contract directly for typed chat, push-to-talk voice input, streaming assistant deltas, and diagnostics.
               </p>
             </div>
             <div className="grid gap-2 text-right text-sm text-slate-300">
@@ -76,6 +109,13 @@ export function AskChipShell() {
               onStart={() => audio.actions.startMicrophone()}
               onConnectWebRtc={audio.actions.connectWebRtc}
               onSelectDevice={audio.actions.selectDevice}
+            />
+            <VoiceInputPanel
+              disabled={Boolean(state.voiceDisabledReason)}
+              disabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
+              liveDraft={state.voiceDraft}
+              onPressStart={startVoiceCapture}
+              onPressEnd={finishVoiceCapture}
             />
             <UtilityRail collapsed={!showUtilityRail} onToggle={toggleUtilityRail} />
           </div>
