@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
 import httpx
 from fastapi.testclient import TestClient
 
-from app.config import Settings
+from app.config import Settings, load_settings
 from app.main import create_app
+from app.prompting import PromptAssembler
 
 
-def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None):
-    config = Settings(database_path=tmp_path / 'askchip.db')
+def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, **settings_overrides):
+    config = Settings(database_path=tmp_path / 'askchip.db', **settings_overrides)
     return create_app(config=config, ollama_transport=transport)
 
 
@@ -35,14 +37,16 @@ def test_session_creation_and_listing(tmp_path: Path) -> None:
     items = listed.json()['items']
     assert len(items) == 1
     assert items[0]['title'] == 'My chat'
+    assert items[0]['status'] == 'ready'
+    assert items[0]['ready_at'] is not None
 
 
 def test_typed_turn_commits_and_assembles_assistant_message(tmp_path: Path) -> None:
     transport = streaming_transport(
         [
             {'message': {'content': 'Hello'}, 'done': False},
-            {'message': {'content': ' world'}, 'done': False},
-            {'message': {'content': '!'}, 'done': True},
+            {'message': {'content': ' world'}, 'done': False, 'eval_count': 12},
+            {'message': {'content': '!'}, 'done': True, 'total_duration': 99},
         ]
     )
     app = make_app(tmp_path, transport=transport)
@@ -55,22 +59,35 @@ def test_typed_turn_commits_and_assembles_assistant_message(tmp_path: Path) -> N
     data = transcript.json()
     assert [message['role'] for message in data['messages']] == ['user', 'assistant']
     assert data['messages'][0]['content'] == 'Hi'
+    assert data['messages'][0]['source'] == 'user'
+    assert data['messages'][0]['modality'] == 'text'
+    assert data['messages'][0]['committed_at'] is not None
     assert data['messages'][1]['content'] == 'Hello world!'
     assert data['messages'][1]['status'] == 'completed'
+    assert data['messages'][1]['source'] == 'assistant'
+    assert data['messages'][1]['completed_at'] is not None
+    assert 'provider_metrics' in data['messages'][1]['metadata']
+    assert data['session']['status'] == 'ready'
     event_types = [event['type'] for event in data['events']]
     assert 'turn.committed' in event_types
+    assert 'prompt.assembled' in event_types
     assert 'assistant.started' in event_types
     assert event_types.count('assistant.delta') == 3
     assert 'assistant.completed' in event_types
+    state_events = [event for event in data['events'] if event['type'] == 'state']
+    assert [event['payload']['state'] for event in state_events[-2:]] == ['thinking', 'ready']
+    timings = {timing['phase']: timing for timing in data['timings']}
+    assert timings['model_stream']['meta']['first_chunk_ms'] is not None
+    assert timings['model_stream']['meta']['total_duration'] == 99
 
 
 def test_one_active_assistant_job_enforced(tmp_path: Path) -> None:
-    start = asyncio.Event()
-    finish = asyncio.Event()
+    start = threading.Event()
+    finish = threading.Event()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         start.set()
-        await finish.wait()
+        await asyncio.to_thread(finish.wait, 2)
         body = json.dumps({'message': {'content': 'done'}, 'done': True}).encode() + b'\n'
         return httpx.Response(200, content=body)
 
@@ -84,9 +101,9 @@ def test_one_active_assistant_job_enforced(tmp_path: Path) -> None:
         def first_turn() -> None:
             results['first'] = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'One'})
 
-        thread = __import__('threading').Thread(target=first_turn)
+        thread = threading.Thread(target=first_turn)
         thread.start()
-        asyncio.run(asyncio.wait_for(start.wait(), timeout=2))
+        assert start.wait(timeout=2)
         second = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Two'})
         finish.set()
         thread.join(timeout=2)
@@ -110,12 +127,13 @@ def test_event_persistence_and_websocket_state(tmp_path: Path) -> None:
 
     assert first['type'] == 'connection.lifecycle'
     assert second['type'] == 'state'
+    assert second['payload']['state'] == 'ready'
     event_types = [event['type'] for event in transcript.json()['events']]
     assert event_types[0] == 'connection.lifecycle'
     assert 'state' in event_types
 
 
-def test_ollama_unavailable_path(tmp_path: Path) -> None:
+def test_ollama_unavailable_path_sets_error_state(tmp_path: Path) -> None:
     transport = streaming_transport([], status_code=503)
     app = make_app(tmp_path, transport=transport)
     with TestClient(app) as client:
@@ -124,6 +142,41 @@ def test_ollama_unavailable_path(tmp_path: Path) -> None:
         transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
 
     assert response.status_code == 503
-    events = transcript.json()['events']
+    data = transcript.json()
+    events = data['events']
     assert any(event['type'] == 'error' and event['payload']['code'] == 'ollama_unavailable' for event in events)
-    assert transcript.json()['messages'][-1]['status'] == 'error'
+    assert any(event['type'] == 'state' and event['payload']['state'] == 'error' for event in events)
+    assert data['messages'][-1]['status'] == 'error'
+    assert data['session']['status'] == 'error'
+
+
+def test_prompt_assembler_adds_persona_and_recent_window() -> None:
+    assembler = PromptAssembler(transcript_window=2)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', content='old 1', turn_id='t1', source='user'),
+        MessageRecord(session_id='s', role='assistant', content='old 2', turn_id='t1', source='assistant'),
+        MessageRecord(session_id='s', role='user', content='recent', turn_id='t2', source='user'),
+    ]
+
+    messages = assembler.build_messages(transcript, user_text='new question')
+
+    assert messages[0]['role'] == 'system'
+    assert 'Nebraska ex-farmer turned techy' in messages[0]['content']
+    assert messages[-2]['content'] == 'recent'
+    assert messages[-1] == {'role': 'user', 'content': 'new question'}
+
+
+def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
+    monkeypatch.setenv('ASKCHIP_API_HOST', '0.0.0.0')
+    monkeypatch.setenv('ASKCHIP_API_PORT', '9000')
+    monkeypatch.setenv('ASKCHIP_API_DATABASE_PATH', '/tmp/askchip.db')
+    monkeypatch.setenv('ASKCHIP_PROMPT_TRANSCRIPT_WINDOW', '4')
+
+    config = load_settings()
+
+    assert config.host == '0.0.0.0'
+    assert config.port == 9000
+    assert str(config.database_path) == '/tmp/askchip.db'
+    assert config.prompt_transcript_window == 4

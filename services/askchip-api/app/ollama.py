@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -17,7 +18,7 @@ class OllamaClient:
         self.timeout_seconds = timeout_seconds
         self._transport = transport
 
-    async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[dict[str, str | bool]]:
+    async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:
         payload = {'model': self.model, 'messages': messages, 'stream': True}
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
@@ -32,6 +33,11 @@ class OllamaClient:
                             'content': message.get('content', ''),
                             'done': bool(body.get('done', False)),
                             'done_reason': body.get('done_reason', ''),
+                            'metrics': {
+                                key: body.get(key)
+                                for key in ('total_duration', 'load_duration', 'prompt_eval_count', 'prompt_eval_duration', 'eval_count', 'eval_duration')
+                                if body.get(key) is not None
+                            },
                         }
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             raise OllamaUnavailableError(str(exc)) from exc

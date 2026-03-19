@@ -8,20 +8,20 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
-from app.config import Settings, settings
-from app.db import Database, DatabaseError
-from app.events import EventBus
-from app.models import (
+from app.api_models import (
     ConfigResponse,
     CreateSessionRequest,
     CreateTurnRequest,
-    EventRecord,
     HealthResponse,
     RenameSessionRequest,
-    SessionRecord,
     TranscriptResponse,
 )
+from app.config import Settings, settings
+from app.domain_models import EventRecord, SessionRecord
+from app.events import EventBus
 from app.ollama import OllamaClient, OllamaUnavailableError
+from app.prompting import PromptAssembler
+from app.storage import Database, DatabaseError
 from app.turns import BusyError, TurnManager
 
 
@@ -30,13 +30,14 @@ class AppState:
         self.config = config
         self.db = Database(Path(config.database_path))
         self.event_bus = EventBus()
+        self.prompt_assembler = PromptAssembler(transcript_window=config.prompt_transcript_window)
         self.ollama = OllamaClient(
             base_url=config.ollama_base_url,
             model=config.ollama_model,
             timeout_seconds=config.ollama_timeout_seconds,
             transport=ollama_transport,
         )
-        self.turn_manager = TurnManager(self.db, self.event_bus, self.ollama)
+        self.turn_manager = TurnManager(self.db, self.event_bus, self.ollama, self.prompt_assembler)
 
 
 def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
@@ -73,7 +74,7 @@ def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
 
     @app.post('/api/v1/sessions')
     def create_session(request: CreateSessionRequest) -> JSONResponse:
-        session = SessionRecord(title=request.title or 'New chat')
+        session = SessionRecord(title=request.title or 'New chat', status='ready', ready_at=datetime.now(timezone.utc))
         state.db.create_session(session)
         return JSONResponse(session.model_dump(mode='json'), status_code=201)
 
@@ -94,12 +95,7 @@ def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
         session = state.db.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail='session not found')
-        transcript = TranscriptResponse(
-            session=session,
-            messages=state.db.list_messages(session_id),
-            events=state.db.list_events(session_id),
-            timings=state.db.list_timings(session_id),
-        )
+        transcript = TranscriptResponse(session=session, messages=state.db.list_messages(session_id), events=state.db.list_events(session_id), timings=state.db.list_timings(session_id))
         return JSONResponse(transcript.model_dump(mode='json'))
 
     @app.post('/api/v1/sessions/{session_id}/turns')
@@ -125,7 +121,7 @@ def create_app(config: Settings = settings, ollama_transport=None) -> FastAPI:
         lifecycle = EventRecord(session_id=session_id, type='connection.lifecycle', payload={'state': 'connected'})
         state.db.create_event(lifecycle)
         await state.event_bus.publish(state.turn_manager._event_payload(lifecycle), session_id)
-        state_event = EventRecord(session_id=session_id, type='state', payload={'state': 'idle'})
+        state_event = EventRecord(session_id=session_id, type='state', payload={'state': 'ready', 'detail': 'event_stream_connected'})
         state.db.create_event(state_event)
         await state.event_bus.publish(state.turn_manager._event_payload(state_event), session_id)
         try:
