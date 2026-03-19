@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -258,3 +259,50 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
     assert config.port == 9000
     assert str(config.database_path) == '/tmp/askchip.db'
     assert config.prompt_transcript_window == 4
+
+
+def test_startup_migrates_legacy_message_content_column_to_text(tmp_path: Path) -> None:
+    db_path = tmp_path / 'askchip.db'
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        '''
+        CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'typed_input',
+            modality TEXT NOT NULL DEFAULT 'text',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            committed_at TEXT,
+            completed_at TEXT,
+            metadata TEXT NOT NULL DEFAULT '{}'
+        );
+        INSERT INTO messages(
+            id, session_id, role, content, status, turn_id, source, modality, created_at, updated_at, metadata
+        ) VALUES(
+            'm1', 's1', 'user', 'legacy text', 'completed', 't1', 'typed_input', 'text',
+            '2026-03-19T00:00:00+00:00', '2026-03-19T00:00:00+00:00', '{}'
+        );
+        '''
+    )
+    conn.commit()
+    conn.close()
+
+    app = make_app(tmp_path)
+    with TestClient(app):
+        pass
+
+    migrated = sqlite3.connect(db_path)
+    migrated.row_factory = sqlite3.Row
+    columns = {row['name'] for row in migrated.execute('PRAGMA table_info(messages)').fetchall()}
+    row = migrated.execute('SELECT text FROM messages WHERE id = ?', ('m1',)).fetchone()
+    migrated.close()
+
+    assert 'text' in columns
+    assert 'content' not in columns
+    assert row is not None
+    assert row['text'] == 'legacy text'

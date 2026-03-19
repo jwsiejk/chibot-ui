@@ -36,63 +36,8 @@ class Database:
 
     def initialize(self) -> None:
         with self._lock, self.connect() as conn:
-            conn.executescript(
-                '''
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'ready',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    last_message_at TEXT,
-                    active_turn_id TEXT,
-                    ready_at TEXT,
-                    last_error_at TEXT,
-                    metadata TEXT NOT NULL DEFAULT '{}'
-                );
-                CREATE TABLE IF NOT EXISTS messages (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    turn_id TEXT NOT NULL,
-                    source TEXT NOT NULL DEFAULT 'typed_input',
-                    modality TEXT NOT NULL DEFAULT 'text',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    committed_at TEXT,
-                    completed_at TEXT,
-                    metadata TEXT NOT NULL DEFAULT '{}',
-                    FOREIGN KEY(session_id) REFERENCES sessions(id)
-                );
-                CREATE TABLE IF NOT EXISTS events (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT,
-                    turn_id TEXT,
-                    type TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS timings (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT,
-                    turn_id TEXT,
-                    phase TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    ended_at TEXT,
-                    duration_ms INTEGER,
-                    meta TEXT NOT NULL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                );
-                '''
-            )
+            self._create_tables(conn)
+            self._migrate_message_text_column(conn)
             self._ensure_column(conn, 'sessions', 'status', "TEXT NOT NULL DEFAULT 'ready'")
             self._ensure_column(conn, 'sessions', 'active_turn_id', 'TEXT')
             self._ensure_column(conn, 'sessions', 'ready_at', 'TEXT')
@@ -103,6 +48,88 @@ class Database:
             self._ensure_column(conn, 'messages', 'committed_at', 'TEXT')
             self._ensure_column(conn, 'messages', 'completed_at', 'TEXT')
             self._ensure_column(conn, 'messages', 'metadata', "TEXT NOT NULL DEFAULT '{}'")
+
+    @staticmethod
+    def _create_tables(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            '''
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'ready',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_message_at TEXT,
+                active_turn_id TEXT,
+                ready_at TEXT,
+                last_error_at TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                text TEXT NOT NULL,
+                status TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'typed_input',
+                modality TEXT NOT NULL DEFAULT 'text',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                committed_at TEXT,
+                completed_at TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+            CREATE TABLE IF NOT EXISTS events (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                turn_id TEXT,
+                type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS timings (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                turn_id TEXT,
+                phase TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_ms INTEGER,
+                meta TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            '''
+        )
+
+    @classmethod
+    def _migrate_message_text_column(cls, conn: sqlite3.Connection) -> None:
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(messages)').fetchall()}
+        if 'content' not in columns or 'text' in columns:
+            return
+
+        conn.execute('ALTER TABLE messages RENAME TO messages_legacy')
+        cls._create_tables(conn)
+        conn.execute(
+            '''
+            INSERT INTO messages(
+                id, session_id, role, text, status, turn_id, source, modality,
+                created_at, updated_at, committed_at, completed_at, metadata
+            )
+            SELECT
+                id, session_id, role, content, status, turn_id, source, modality,
+                created_at, updated_at, committed_at, completed_at, metadata
+            FROM messages_legacy
+            '''
+        )
+        conn.execute('DROP TABLE messages_legacy')
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
@@ -187,7 +214,7 @@ class Database:
         with self._lock, self.connect() as conn:
             conn.execute(
                 '''INSERT INTO messages(
-                    id, session_id, role, content, status, turn_id, source, modality, created_at, updated_at, committed_at, completed_at, metadata
+                    id, session_id, role, text, status, turn_id, source, modality, created_at, updated_at, committed_at, completed_at, metadata
                 ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                 (
                     message.id,
@@ -229,7 +256,7 @@ class Database:
                 merged_metadata.update(metadata)
             conn.execute(
                 '''UPDATE messages
-                   SET content = ?, status = ?, updated_at = ?, committed_at = COALESCE(?, committed_at),
+                   SET text = ?, status = ?, updated_at = ?, committed_at = COALESCE(?, committed_at),
                        completed_at = COALESCE(?, completed_at), metadata = ?
                    WHERE id = ?''',
                 (text, status, updated_at, committed_at, completed_at, json.dumps(merged_metadata), message_id),
@@ -303,7 +330,7 @@ class Database:
             id=row['id'],
             session_id=row['session_id'],
             role=row['role'],
-            text=row['content'],
+            text=row['text'],
             status=row['status'],
             turn_id=row['turn_id'],
             source=row['source'],
