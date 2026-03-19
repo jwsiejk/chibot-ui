@@ -1,5 +1,7 @@
 import type { ConnectionState } from '../api/events';
+import type { AudioDiagnosticsSnapshot } from '../audio/types';
 import type { EventRecord, TimingRecord, TurnState } from '../types/contract';
+import type { WebRtcDiagnosticsSnapshot } from '../webrtc/types';
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -13,6 +15,8 @@ export function DiagnosticsDrawer({
   connectionState,
   topLevelState,
   modelName,
+  audioDiagnostics,
+  webrtcDiagnostics,
   events,
   timings,
   collapsed,
@@ -21,6 +25,8 @@ export function DiagnosticsDrawer({
   connectionState: ConnectionState;
   topLevelState: TurnState | null;
   modelName: string | null;
+  audioDiagnostics: AudioDiagnosticsSnapshot;
+  webrtcDiagnostics: WebRtcDiagnosticsSnapshot;
   events: EventRecord[];
   timings: TimingRecord[];
   collapsed: boolean;
@@ -56,6 +62,26 @@ export function DiagnosticsDrawer({
             <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
               <dt>Current model</dt>
               <dd className="truncate pl-3 font-medium text-white">{modelName ?? 'Unavailable'}</dd>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>Selected mic</dt>
+              <dd className="truncate pl-3 font-medium text-white">{audioDiagnostics.selectedDeviceLabel ?? 'Unavailable'}</dd>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>Mic permission</dt>
+              <dd className="font-medium text-white">{audioDiagnostics.permissionState}</dd>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>Live level</dt>
+              <dd className="font-medium text-white">{Math.round(audioDiagnostics.liveLevel * 100)}%</dd>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>Device changes</dt>
+              <dd className="font-medium text-white">{audioDiagnostics.deviceChangeCount}</dd>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>WebRTC state</dt>
+              <dd className="font-medium text-white">{webrtcDiagnostics.connectionState}</dd>
             </div>
           </dl>
 

@@ -1,3 +1,5 @@
+import { MicSetupPanel } from '../audio/MicSetupPanel';
+import { useAudioFoundation } from '../audio/useAudioFoundation';
 import { ChipStagePane } from '../chip-stage/ChipStagePane';
 import { Composer } from '../composer/Composer';
 import { DiagnosticsDrawer } from '../diagnostics/DiagnosticsDrawer';
@@ -15,6 +17,7 @@ function findActiveModelName(messages: ReturnType<typeof useAskChipController>['
 
 export function AskChipShell() {
   const { state, actions } = useAskChipController();
+  const audio = useAudioFoundation(state.currentSessionId);
   const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
 
@@ -62,6 +65,17 @@ export function AskChipShell() {
               onSelect={actions.selectSession}
               onReload={actions.reloadTranscript}
             />
+            <MicSetupPanel
+              devices={audio.devices}
+              selectedDeviceId={audio.selectedDeviceId}
+              diagnostics={audio.diagnostics}
+              webrtcDiagnostics={audio.webrtcDiagnostics}
+              audioUnlocked={audio.audioUnlocked}
+              onUnlock={audio.actions.unlockAudio}
+              onRefresh={audio.actions.refreshDevices}
+              onStart={() => audio.actions.startMicrophone()}
+              onSelectDevice={audio.actions.selectDevice}
+            />
             <UtilityRail collapsed={!showUtilityRail} onToggle={toggleUtilityRail} />
           </div>
 
@@ -80,6 +94,8 @@ export function AskChipShell() {
               connectionState={state.connectionState}
               topLevelState={state.topLevelState}
               modelName={modelName}
+              audioDiagnostics={audio.diagnostics}
+              webrtcDiagnostics={audio.webrtcDiagnostics}
               events={state.events}
               timings={state.timings}
               collapsed={!showDiagnostics}
