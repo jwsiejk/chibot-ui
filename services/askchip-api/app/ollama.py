@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+
+import httpx
+
+
+class OllamaUnavailableError(RuntimeError):
+    pass
+
+
+class OllamaClient:
+    def __init__(self, base_url: str, model: str, timeout_seconds: float = 60.0, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self.base_url = base_url.rstrip('/')
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+        self._transport = transport
+
+    async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[dict[str, str | bool]]:
+        payload = {'model': self.model, 'messages': messages, 'stream': True}
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
+                async with client.stream('POST', '/api/chat', json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        body = json.loads(line)
+                        message = body.get('message', {})
+                        yield {
+                            'content': message.get('content', ''),
+                            'done': bool(body.get('done', False)),
+                            'done_reason': body.get('done_reason', ''),
+                        }
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            raise OllamaUnavailableError(str(exc)) from exc
