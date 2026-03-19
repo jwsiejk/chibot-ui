@@ -7,8 +7,7 @@ import type {
   SessionsResponse,
   TranscriptResponse,
 } from '../types/contract';
-
-const DEFAULT_API_BASE = 'http://127.0.0.1:8000';
+import { runtimeConfig } from '../config/runtime';
 
 export class ApiError extends Error {
   status: number;
@@ -24,7 +23,7 @@ export class ApiError extends Error {
 export class AskChipApiClient {
   readonly baseUrl: string;
 
-  constructor(baseUrl = DEFAULT_API_BASE) {
+  constructor(baseUrl = runtimeConfig.apiBaseUrl) {
     this.baseUrl = baseUrl;
   }
 

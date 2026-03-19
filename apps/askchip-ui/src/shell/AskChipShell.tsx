@@ -5,6 +5,7 @@ import { SessionList } from '../sessions/SessionList';
 import { useAskChipController } from '../state/useAskChipController';
 import { TranscriptPane } from '../transcript/TranscriptPane';
 import { UtilityRail } from '../utility/UtilityRail';
+import { useShellPanels } from './useShellPanels';
 
 function findActiveModelName(messages: ReturnType<typeof useAskChipController>['state']['messages']): string | null {
   const assistant = [...messages].reverse().find((message) => message.role === 'assistant');
@@ -14,11 +15,12 @@ function findActiveModelName(messages: ReturnType<typeof useAskChipController>['
 
 export function AskChipShell() {
   const { state, actions } = useAskChipController();
+  const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
 
   return (
-    <main className="min-h-screen bg-surface px-6 py-8 text-slate-100">
-      <div className="mx-auto flex max-w-[1520px] flex-col gap-6">
+    <main className="min-h-screen bg-surface px-4 py-6 text-slate-100 md:px-6 md:py-8">
+      <div className="mx-auto flex w-full max-w-[1520px] min-w-0 flex-col gap-6">
         <header className="rounded-[2rem] border border-cyan-400/10 bg-slate-950/85 p-6 shadow-panel backdrop-blur">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="space-y-2">
@@ -51,8 +53,8 @@ export function AskChipShell() {
           )}
         </header>
 
-        <section className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)_360px]">
-          <div className="space-y-6">
+        <section className="grid min-w-0 gap-6 xl:grid-cols-[minmax(260px,300px)_minmax(0,1fr)_minmax(280px,360px)]">
+          <div className="min-w-0 space-y-6">
             <SessionList
               sessions={state.sessions}
               currentSessionId={state.currentSessionId}
@@ -60,10 +62,10 @@ export function AskChipShell() {
               onSelect={actions.selectSession}
               onReload={actions.reloadTranscript}
             />
-            <UtilityRail />
+            <UtilityRail collapsed={!showUtilityRail} onToggle={toggleUtilityRail} />
           </div>
 
-          <div className="grid gap-6">
+          <div className="grid min-w-0 gap-6">
             <ChipStagePane state={state.topLevelState} modelName={modelName} config={state.config} />
             <TranscriptPane messages={state.messages} empty={!state.currentSession || state.messages.length === 0} />
             <Composer
@@ -73,13 +75,17 @@ export function AskChipShell() {
             />
           </div>
 
-          <DiagnosticsDrawer
-            connectionState={state.connectionState}
-            topLevelState={state.topLevelState}
-            modelName={modelName}
-            events={state.events}
-            timings={state.timings}
-          />
+          <div className="min-w-0">
+            <DiagnosticsDrawer
+              connectionState={state.connectionState}
+              topLevelState={state.topLevelState}
+              modelName={modelName}
+              events={state.events}
+              timings={state.timings}
+              collapsed={!showDiagnostics}
+              onToggle={toggleDiagnostics}
+            />
+          </div>
         </section>
       </div>
     </main>
