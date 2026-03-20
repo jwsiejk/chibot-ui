@@ -51,8 +51,8 @@ export function createPttLifecycleController(deps: PttLifecycleDependencies): Pt
     }
 
     completionFlow = (async () => {
-      const recorded = await deps.finishLocalCapture();
       try {
+        const recorded = await deps.finishLocalCapture();
         await deps.submitVoiceTurn(recorded);
       } finally {
         resetFlags();

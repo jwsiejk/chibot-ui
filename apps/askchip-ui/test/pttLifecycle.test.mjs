@@ -139,4 +139,51 @@ describe('PTT lifecycle controller', () => {
 
     assert.deepEqual(calls, ['begin', 'backend-start', 'cancel', 'backend-cancel']);
   });
+
+  it('resets completion flow after local capture finalization fails so a new press can start cleanly', async () => {
+    const calls = [];
+    let finishAttempts = 0;
+    const controller = createPttLifecycleController({
+      beginLocalCapture: async () => {
+        calls.push('begin');
+      },
+      finishLocalCapture: async () => {
+        finishAttempts += 1;
+        calls.push(`finish-${finishAttempts}`);
+        if (finishAttempts === 1) {
+          throw new Error('capture finalization failed');
+        }
+        return { blob: new Blob(['voice']), durationMs: 25, mimeType: 'audio/webm' };
+      },
+      cancelLocalCapture: () => {
+        calls.push('cancel');
+      },
+      submitVoiceTurn: async () => {
+        calls.push('submit');
+      },
+      startBackendVoiceTurn: async () => {
+        calls.push('backend-start');
+      },
+      cancelBackendVoiceTurn: async () => {
+        calls.push('backend-cancel');
+      },
+      isInteractionBlocked: () => false,
+    });
+
+    await controller.pressStart();
+    await assert.rejects(controller.pressRelease(), /capture finalization failed/);
+
+    await controller.pressStart();
+    await controller.pressRelease();
+
+    assert.deepEqual(calls, [
+      'begin',
+      'backend-start',
+      'finish-1',
+      'begin',
+      'backend-start',
+      'finish-2',
+      'submit',
+    ]);
+  });
 });
