@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createPttLifecycleController } from '../.test-dist/audio/pttLifecycle.js';
 import {
+  getRecoveredVoiceTopLevelState,
   getSendingDisabledReason,
   getVoiceDisabledReason,
 } from '../.test-dist/state/controllerHelpers.js';
@@ -31,6 +32,12 @@ describe('frontend gating helpers', () => {
       'Wait for the current assistant turn to finish before recording another voice turn.',
     );
   });
+
+  it('recovers local voice state to ready unless the backend is already thinking', () => {
+    assert.equal(getRecoveredVoiceTopLevelState('listening'), 'ready');
+    assert.equal(getRecoveredVoiceTopLevelState('transcribing'), 'ready');
+    assert.equal(getRecoveredVoiceTopLevelState('thinking'), 'thinking');
+  });
 });
 
 describe('PTT lifecycle controller', () => {
@@ -55,6 +62,9 @@ describe('PTT lifecycle controller', () => {
       startBackendVoiceTurn: async () => {
         calls.push('backend-start');
       },
+      cancelBackendVoiceTurn: async () => {
+        calls.push('backend-cancel');
+      },
       isInteractionBlocked: () => false,
     });
 
@@ -66,7 +76,7 @@ describe('PTT lifecycle controller', () => {
     assert.deepEqual(calls, ['begin', 'cancel']);
   });
 
-  it('routes pointer cancel or focus-loss cleanup through the same release-safe path', async () => {
+  it('routes pointer cancel and focus-loss cleanup through discard semantics instead of submit', async () => {
     const calls = [];
     const controller = createPttLifecycleController({
       beginLocalCapture: async () => {
@@ -85,12 +95,48 @@ describe('PTT lifecycle controller', () => {
       startBackendVoiceTurn: async () => {
         calls.push('backend-start');
       },
+      cancelBackendVoiceTurn: async () => {
+        calls.push('backend-cancel');
+      },
       isInteractionBlocked: () => false,
     });
 
     await controller.pressStart();
     await controller.pressCancel();
 
-    assert.deepEqual(calls, ['begin', 'backend-start', 'finish', 'submit']);
+    assert.deepEqual(calls, ['begin', 'backend-start', 'cancel', 'backend-cancel']);
+  });
+
+  it('disposes active capture without submitting a stale release later', async () => {
+    const calls = [];
+    const controller = createPttLifecycleController({
+      beginLocalCapture: async () => {
+        calls.push('begin');
+      },
+      finishLocalCapture: async () => {
+        calls.push('finish');
+        return { blob: new Blob(['voice']), durationMs: 25, mimeType: 'audio/webm' };
+      },
+      cancelLocalCapture: () => {
+        calls.push('cancel');
+      },
+      submitVoiceTurn: async () => {
+        calls.push('submit');
+      },
+      startBackendVoiceTurn: async () => {
+        calls.push('backend-start');
+      },
+      cancelBackendVoiceTurn: async () => {
+        calls.push('backend-cancel');
+      },
+      isInteractionBlocked: () => false,
+    });
+
+    await controller.pressStart();
+    controller.dispose();
+    await Promise.resolve();
+    await controller.pressRelease();
+
+    assert.deepEqual(calls, ['begin', 'backend-start', 'cancel', 'backend-cancel']);
   });
 });

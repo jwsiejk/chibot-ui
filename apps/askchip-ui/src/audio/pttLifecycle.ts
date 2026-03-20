@@ -10,6 +10,7 @@ export interface PttLifecycleDependencies {
   cancelLocalCapture: () => void;
   submitVoiceTurn: (recorded: VoiceTurnPayload) => Promise<void>;
   startBackendVoiceTurn: () => Promise<void>;
+  cancelBackendVoiceTurn: () => Promise<void>;
   isInteractionBlocked: () => boolean;
 }
 
@@ -29,6 +30,7 @@ export function createPttLifecycleController(deps: PttLifecycleDependencies): Pt
   let releasedBeforeCaptureReady = false;
   let startFlow: Promise<void> | null = null;
   let completionFlow: Promise<void> | null = null;
+  let cancelFlow: Promise<void> | null = null;
 
   function resetFlags() {
     pressed = false;
@@ -39,6 +41,7 @@ export function createPttLifecycleController(deps: PttLifecycleDependencies): Pt
     releasedBeforeCaptureReady = false;
     startFlow = null;
     completionFlow = null;
+    cancelFlow = null;
   }
 
   async function completeVoiceTurn() {
@@ -66,9 +69,34 @@ export function createPttLifecycleController(deps: PttLifecycleDependencies): Pt
       return;
     }
 
-    if (releaseRequested || cancelRequested) {
+    if (cancelRequested) {
+      await cancelVoiceTurn();
+      return;
+    }
+
+    if (releaseRequested) {
       await completeVoiceTurn();
     }
+  }
+
+  async function cancelVoiceTurn() {
+    if (cancelFlow) {
+      await cancelFlow;
+      return;
+    }
+
+    cancelFlow = (async () => {
+      deps.cancelLocalCapture();
+      try {
+        if (backendStarted) {
+          await deps.cancelBackendVoiceTurn();
+        }
+      } finally {
+        resetFlags();
+      }
+    })();
+
+    await cancelFlow;
   }
 
   return {
@@ -150,7 +178,7 @@ export function createPttLifecycleController(deps: PttLifecycleDependencies): Pt
       }
 
       if (backendStarted) {
-        await completeVoiceTurn();
+        await cancelVoiceTurn();
         return;
       }
 
@@ -162,10 +190,7 @@ export function createPttLifecycleController(deps: PttLifecycleDependencies): Pt
       pressed = false;
       releaseRequested = false;
       cancelRequested = true;
-      if (!backendStarted) {
-        deps.cancelLocalCapture();
-        resetFlags();
-      }
+      void cancelVoiceTurn();
     },
   };
 }

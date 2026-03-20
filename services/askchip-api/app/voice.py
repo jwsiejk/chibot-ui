@@ -168,6 +168,17 @@ class VoiceTurnService:
             raise InvalidVoiceLifecycleError('session not found')
         return session
 
+
+    async def cancel_ptt(self, session_id: str) -> None:
+        async with self._ptt_lock:
+            lifecycle = self._active_ptt.pop(session_id, None)
+
+        if lifecycle is None:
+            await self._restore_session_state_after_rejected_release(session_id, preserve_thinking=False)
+            return
+
+        await self._restore_session_state_after_rejected_release(session_id, preserve_thinking=False)
+
     async def _claim_active_lifecycle(self, session_id: str) -> ActivePttLifecycle:
         async with self._ptt_lock:
             lifecycle = self._active_ptt.pop(session_id, None)

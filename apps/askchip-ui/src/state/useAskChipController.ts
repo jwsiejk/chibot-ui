@@ -6,6 +6,7 @@ import {
   buildListeningDraft,
   buildTranscribingDraft,
   dedupeEvents,
+  getRecoveredVoiceTopLevelState,
   getSendingDisabledReason,
   getVoiceDisabledReason,
   isTurnState,
@@ -237,6 +238,15 @@ export function useAskChipController() {
     }
   }, [currentSessionId, loadTranscript]);
 
+  const restoreVoiceStateFromBackend = useCallback(async (sessionId: string) => {
+    try {
+      await loadTranscript(sessionId);
+    } catch (reloadError) {
+      setTopLevelState((current) => getRecoveredVoiceTopLevelState(current));
+      throw reloadError;
+    }
+  }, [loadTranscript]);
+
   const sendTurn = useCallback(async (text: string) => {
     if (!currentSessionId) {
       throw new Error('Create a session before sending a message.');
@@ -283,10 +293,15 @@ export function useAskChipController() {
     } catch (error) {
       setVoiceDraft(null);
       const message = error instanceof ApiError ? error.detail : error instanceof Error ? error.message : 'Failed to start push-to-talk.';
+      try {
+        await restoreVoiceStateFromBackend(currentSessionId);
+      } catch {
+        // keep the original start failure visible if transcript reload also fails
+      }
       setAppError(message);
       throw error;
     }
-  }, [currentSessionId, pendingTurn, topLevelState]);
+  }, [currentSessionId, pendingTurn, restoreVoiceStateFromBackend, topLevelState]);
 
   const finishVoiceTurn = useCallback(async (payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; }) => {
     if (!currentSessionId) {
@@ -305,6 +320,11 @@ export function useAskChipController() {
       setVoiceDraft(null);
     } catch (error) {
       setVoiceDraft(null);
+      try {
+        await Promise.all([loadSessions(), restoreVoiceStateFromBackend(currentSessionId)]);
+      } catch {
+        // keep the original release failure visible if recovery reload also fails
+      }
       if (error instanceof ApiError) {
         setAppError(error.detail);
       } else {
@@ -314,7 +334,7 @@ export function useAskChipController() {
     } finally {
       setPendingTurn(false);
     }
-  }, [currentSessionId, loadSessions, loadTranscript, pendingTurn, topLevelState]);
+  }, [currentSessionId, loadSessions, loadTranscript, pendingTurn, restoreVoiceStateFromBackend, topLevelState]);
 
   const sendingDisabledReason = getSendingDisabledReason({ currentSessionId, pendingTurn, topLevelState });
 
@@ -345,6 +365,22 @@ export function useAskChipController() {
       sendTurn,
       startVoiceTurn,
       finishVoiceTurn,
+      cancelVoiceTurn: async () => {
+        if (!currentSessionId) {
+          return;
+        }
+        setVoiceDraft(null);
+        setAppError(null);
+        try {
+          await askChipApiClient.cancelVoiceTurn(currentSessionId);
+        } finally {
+          try {
+            await Promise.all([loadSessions(), restoreVoiceStateFromBackend(currentSessionId)]);
+          } catch {
+            setTopLevelState((current) => getRecoveredVoiceTopLevelState(current));
+          }
+        }
+      },
     },
   };
 }

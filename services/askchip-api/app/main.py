@@ -161,6 +161,17 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         except DatabaseError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @app.post('/api/v1/sessions/{session_id}/voice-turns/ptt/cancel')
+    async def cancel_voice_turn(session_id: str) -> JSONResponse:
+        session = state.db.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail='session not found')
+        try:
+            await state.voice_turns.cancel_ptt(session.id)
+            return JSONResponse({'status': 'ready'})
+        except DatabaseError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     @app.post('/api/v1/sessions/{session_id}/voice-turns')
     async def create_voice_turn(
         session_id: str,

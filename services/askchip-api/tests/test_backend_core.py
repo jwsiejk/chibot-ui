@@ -798,3 +798,54 @@ def test_busy_voice_release_does_not_run_stt_or_leave_session_stuck(tmp_path: Pa
     assert 'thinking' in state_events
     assert 'transcribing' not in state_events
     assert [message['source'] for message in data['messages']] == ['typed_input', 'model_output']
+
+
+def test_voice_cancel_invalidates_active_ptt_without_committing_or_running_stt(tmp_path: Path) -> None:
+    stt = FakeSttService(text='should not run')
+    app = make_app(tmp_path, stt_service=stt)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Cancel'}).json()['id']
+        started = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start', headers={'X-AskChip-Device-Id': 'mic-3'})
+        canceled = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/cancel')
+        stale_release = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm', 'X-AskChip-Device-Id': 'mic-3'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert started.status_code == 200
+    assert canceled.status_code == 200
+    assert stale_release.status_code == 409
+    assert stale_release.json()['detail'] == 'push-to-talk release does not match an active capture'
+    assert stt.calls == []
+    data = transcript.json()
+    assert data['messages'] == []
+    assert data['session']['status'] == 'ready'
+    event_types = [event['type'] for event in data['events']]
+    assert 'ptt.started' in event_types
+    assert 'ptt.stopped' not in event_types
+    assert 'stt.final' not in event_types
+    assert 'turn.committed' not in event_types
+
+
+def test_cancel_then_typed_turn_keeps_canonical_transcript_flow_unchanged(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'typed reply'}, 'done': True}])
+    stt = FakeSttService(text='should not run')
+    app = make_app(tmp_path, transport=transport, stt_service=stt)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Cancel then typed'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        canceled = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/cancel')
+        typed = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'typed question'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert canceled.status_code == 200
+    assert typed.status_code == 201
+    assert stt.calls == []
+    data = transcript.json()
+    assert data['session']['status'] == 'ready'
+    assert [message['source'] for message in data['messages']] == ['typed_input', 'model_output']
+    assert [message['text'] for message in data['messages']] == ['typed question', 'typed reply']
