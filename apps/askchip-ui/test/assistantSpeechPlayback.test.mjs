@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { findNextSpeechMessage, waitForPlaybackStart } from '../.test-dist/audio/assistantSpeechHelpers.js';
+import {
+  AssistantSpeechPlaybackCanceledError,
+  createBackendSpeechStartHandshake,
+  findNextSpeechMessage,
+  waitForPlaybackStart,
+} from '../.test-dist/audio/assistantSpeechHelpers.js';
 
 function message(overrides = {}) {
   return {
@@ -45,6 +50,12 @@ class FakeAudio {
     for (const handler of this.listeners.get(type) ?? []) {
       handler();
     }
+  }
+}
+
+class HangingAudio extends FakeAudio {
+  async play() {
+    this.paused = true;
   }
 }
 
@@ -98,5 +109,80 @@ describe('assistant speech playback helper', () => {
     await waitForPlaybackStart(audio);
 
     assert.equal(audio.paused, false);
+  });
+
+  it('rejects deterministically when playback is canceled before the playing event fires', async () => {
+    const audio = new HangingAudio();
+    const controller = new AbortController();
+    const wait = waitForPlaybackStart(audio, { signal: controller.signal });
+
+    controller.abort();
+
+    await assert.rejects(wait, AssistantSpeechPlaybackCanceledError);
+  });
+});
+
+describe('backend speech start handshake', () => {
+  async function resolveAfterCleanup(reason) {
+    const stopCalls = [];
+    const handshake = createBackendSpeechStartHandshake(async (stopReason) => {
+      stopCalls.push(stopReason);
+    });
+
+    handshake.beginStart();
+    const cleanupPromise = handshake.cancel(reason);
+    await handshake.acknowledgeStart();
+    await cleanupPromise;
+
+    return stopCalls;
+  }
+
+  it('sends exactly one backend stop when cleanup lands before the start ack resolves', async () => {
+    assert.deepEqual(await resolveAfterCleanup('typed_submit'), ['typed_submit']);
+  });
+
+  it('keeps typed-submit interrupts deterministic during the handshake window', async () => {
+    assert.deepEqual(await resolveAfterCleanup('typed_submit'), ['typed_submit']);
+  });
+
+  it('keeps PTT interrupts deterministic during the handshake window', async () => {
+    assert.deepEqual(await resolveAfterCleanup('ptt_start'), ['ptt_start']);
+  });
+
+  it('keeps session switch cleanup deterministic during the handshake window', async () => {
+    assert.deepEqual(await resolveAfterCleanup('session_switch'), ['session_switch']);
+  });
+
+  it('keeps unmount cleanup deterministic during the handshake window', async () => {
+    assert.deepEqual(await resolveAfterCleanup('unmount'), ['unmount']);
+  });
+
+  it('does not double-stop after cleanup already won the handshake race', async () => {
+    const stopCalls = [];
+    const handshake = createBackendSpeechStartHandshake(async (reason) => {
+      stopCalls.push(reason);
+    });
+
+    handshake.beginStart();
+    await handshake.cancel('session_switch');
+    await handshake.acknowledgeStart();
+    await handshake.cancel('unmount');
+
+    assert.deepEqual(stopCalls, ['session_switch']);
+    assert.equal(handshake.state, 'stopped');
+  });
+
+  it('does not send stop when backend start fails before an ack exists', async () => {
+    const stopCalls = [];
+    const handshake = createBackendSpeechStartHandshake(async (reason) => {
+      stopCalls.push(reason);
+    });
+
+    handshake.beginStart();
+    await handshake.cancel('typed_submit');
+    handshake.failStart();
+
+    assert.deepEqual(stopCalls, []);
+    assert.equal(handshake.state, 'not_started');
   });
 });
