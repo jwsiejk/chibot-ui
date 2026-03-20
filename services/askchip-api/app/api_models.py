@@ -67,4 +67,11 @@ class ConfigResponse(BaseModel):
     stt_model: str
     stt_device: str
     stt_compute_type: str
+    tts_voice: str
+    tts_device: str
+    tts_model_path: str | None = None
+    tts_voices_path: str | None = None
+    tts_sample_rate_hz: int
+    tts_speed: float
+    tts_lang_code: str
     local_only: bool = True

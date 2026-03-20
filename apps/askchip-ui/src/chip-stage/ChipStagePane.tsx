@@ -17,6 +17,10 @@ const STATE_COPY: Record<TurnState, { label: string; detail: string }> = {
     label: 'Thinking',
     detail: 'A canonical user turn is committed and the assistant is generating a text response.',
   },
+  speaking: {
+    label: 'Speaking',
+    detail: 'The completed canonical assistant message is actively playing through the local Kokoro speech path.',
+  },
   error: {
     label: 'Error',
     detail: 'The backend reported an assistant or voice-input failure that needs attention.',
@@ -73,8 +77,12 @@ export function ChipStagePane({
               <dt>STT</dt>
               <dd className="font-medium text-white">{config ? `${config.stt_model} · ${config.stt_device}/${config.stt_compute_type}` : 'Unavailable'}</dd>
             </div>
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 px-4 py-3">
+              <dt>TTS</dt>
+              <dd className="font-medium text-white">{config ? `${config.tts_voice} · ${config.tts_device}` : 'Unavailable'}</dd>
+            </div>
             <div className="rounded-2xl border border-dashed border-slate-800 px-4 py-3 text-xs leading-5 text-slate-400">
-              Voice input uses push-to-talk plus faster-whisper after release. WebRTC stays limited to mic readiness and transport diagnostics, not voice-turn transport.
+              Voice input uses push-to-talk plus faster-whisper after release. Assistant speech stays on a separate Kokoro playback path and does not ride the transcript WebSocket.
             </div>
           </dl>
         </div>

@@ -21,6 +21,13 @@ class Settings(BaseModel):
     stt_device: str = 'auto'
     stt_compute_type: str = 'int8'
     stt_cpu_threads: int = 4
+    tts_voice: str = 'af_heart'
+    tts_device: str = 'cpu'
+    tts_model_path: Path | None = None
+    tts_voices_path: Path | None = None
+    tts_sample_rate_hz: int = 24000
+    tts_speed: float = 1.0
+    tts_lang_code: str = 'a'
 
 
 _ENV_MAP: dict[str, tuple[str, callable]] = {
@@ -36,6 +43,13 @@ _ENV_MAP: dict[str, tuple[str, callable]] = {
     'stt_device': ('ASKCHIP_STT_DEVICE', str),
     'stt_compute_type': ('ASKCHIP_STT_COMPUTE_TYPE', str),
     'stt_cpu_threads': ('ASKCHIP_STT_CPU_THREADS', int),
+    'tts_voice': ('ASKCHIP_TTS_VOICE', str),
+    'tts_device': ('ASKCHIP_TTS_DEVICE', str),
+    'tts_model_path': ('ASKCHIP_TTS_MODEL_PATH', Path),
+    'tts_voices_path': ('ASKCHIP_TTS_VOICES_PATH', Path),
+    'tts_sample_rate_hz': ('ASKCHIP_TTS_SAMPLE_RATE_HZ', int),
+    'tts_speed': ('ASKCHIP_TTS_SPEED', float),
+    'tts_lang_code': ('ASKCHIP_TTS_LANG_CODE', str),
 }
 
 

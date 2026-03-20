@@ -1,8 +1,8 @@
-export type TurnState = 'ready' | 'listening' | 'transcribing' | 'thinking' | 'error';
+export type TurnState = 'ready' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'error';
 export type MessageRole = 'user' | 'assistant';
 export type MessageSource = 'typed_input' | 'voice_input' | 'model_output' | 'system_notice';
 export type MessageModality = 'text' | 'voice' | 'mixed';
-export type MessageStatus = 'pending' | 'streaming' | 'committed' | 'completed' | 'error';
+export type MessageStatus = 'pending' | 'streaming' | 'committed' | 'completed' | 'interrupted' | 'error';
 
 export interface SessionRecord {
   id: string;
@@ -70,6 +70,13 @@ export interface ConfigResponse {
   stt_model: string;
   stt_device: string;
   stt_compute_type: string;
+  tts_voice: string;
+  tts_device: string;
+  tts_model_path: string | null;
+  tts_voices_path: string | null;
+  tts_sample_rate_hz: number;
+  tts_speed: number;
+  tts_lang_code: string;
   local_only: boolean;
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { applyAssistantStreamEvent } from '../.test-dist/state/controllerHelpers.js';
+import { applyAssistantStreamEvent, getSendingDisabledReason, getVoiceDisabledReason } from '../.test-dist/state/controllerHelpers.js';
 
 function buildEvent(overrides = {}) {
   return {
@@ -83,5 +83,13 @@ describe('applyAssistantStreamEvent', () => {
       status: 'streaming',
       metadata: { model: 'phi4-mini', trace_id: 'trace-7' },
     }]);
+  });
+});
+
+
+describe('Phase 6 speaking helpers', () => {
+  it('does not block typed or voice turn starts while speaking because submit/PTT performs an explicit interrupt first', () => {
+    assert.equal(getSendingDisabledReason({ currentSessionId: 'session-1', pendingTurn: false, topLevelState: 'speaking' }), null);
+    assert.equal(getVoiceDisabledReason({ currentSessionId: 'session-1', pendingTurn: false, topLevelState: 'speaking' }), null);
   });
 });

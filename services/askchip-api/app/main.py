@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
@@ -22,8 +22,10 @@ from app.domain_models import EventRecord, SessionRecord
 from app.events import EventBus
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
+from app.speech import SpeechService
 from app.storage import Database, DatabaseError
 from app.stt import FasterWhisperSttService
+from app.tts import KokoroConfig, KokoroTtsAdapter, TtsError, configure_kokoro_runtime
 from app.turns import BusyError, TurnManager
 from app.voice import EmptyTranscriptionError, InvalidVoiceLifecycleError, VoiceInputError, VoiceTurnService
 from app.webrtc import WebRtcSignalingService, WebRtcWebSocketHandler
@@ -31,7 +33,7 @@ from app.webrtc_models import WebRtcOfferRequest
 
 
 class AppState:
-    def __init__(self, config: Settings, ollama_transport=None, webrtc_peer_factory=None, stt_service=None) -> None:
+    def __init__(self, config: Settings, ollama_transport=None, webrtc_peer_factory=None, stt_service=None, tts_adapter=None) -> None:
         self.config = config
         self.db = Database(Path(config.database_path))
         self.event_bus = EventBus()
@@ -43,6 +45,15 @@ class AppState:
             transport=ollama_transport,
         )
         self.turn_manager = TurnManager(self.db, self.event_bus, self.ollama, self.prompt_assembler)
+        configure_kokoro_runtime(KokoroConfig(
+            voice=config.tts_voice,
+            model_path=str(config.tts_model_path) if config.tts_model_path else None,
+            voices_path=str(config.tts_voices_path) if config.tts_voices_path else None,
+            device=config.tts_device,
+            sample_rate_hz=config.tts_sample_rate_hz,
+            speed=config.tts_speed,
+            lang_code=config.tts_lang_code,
+        ))
         self.stt = stt_service or FasterWhisperSttService(
             model_name=config.stt_model,
             device=config.stt_device,
@@ -50,12 +61,21 @@ class AppState:
             cpu_threads=config.stt_cpu_threads,
         )
         self.voice_turns = VoiceTurnService(self.db, self.event_bus, self.stt, self.turn_manager)
+        self.speech = SpeechService(self.db, self.event_bus, self.turn_manager, tts_adapter or KokoroTtsAdapter(KokoroConfig(
+            voice=config.tts_voice,
+            model_path=str(config.tts_model_path) if config.tts_model_path else None,
+            voices_path=str(config.tts_voices_path) if config.tts_voices_path else None,
+            device=config.tts_device,
+            sample_rate_hz=config.tts_sample_rate_hz,
+            speed=config.tts_speed,
+            lang_code=config.tts_lang_code,
+        )))
         self.webrtc_signaling = WebRtcSignalingService(peer_factory=webrtc_peer_factory)
         self.webrtc_websocket = WebRtcWebSocketHandler(self.webrtc_signaling)
 
 
-def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_factory=None, stt_service=None) -> FastAPI:
-    state = AppState(config, ollama_transport=ollama_transport, webrtc_peer_factory=webrtc_peer_factory, stt_service=stt_service)
+def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_factory=None, stt_service=None, tts_adapter=None) -> FastAPI:
+    state = AppState(config, ollama_transport=ollama_transport, webrtc_peer_factory=webrtc_peer_factory, stt_service=stt_service, tts_adapter=tts_adapter)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -64,6 +84,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         state.db.upsert_setting('ollama_base_url', config.ollama_base_url, now)
         state.db.upsert_setting('ollama_model', config.ollama_model, now)
         state.db.upsert_setting('stt_model', config.stt_model, now)
+        state.db.upsert_setting('tts_voice', config.tts_voice, now)
         app.state.askchip = state
         yield
         await state.webrtc_signaling.clear()
@@ -88,6 +109,13 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             stt_model=config.stt_model,
             stt_device=config.stt_device,
             stt_compute_type=config.stt_compute_type,
+            tts_voice=config.tts_voice,
+            tts_device=config.tts_device,
+            tts_model_path=str(config.tts_model_path) if config.tts_model_path else None,
+            tts_voices_path=str(config.tts_voices_path) if config.tts_voices_path else None,
+            tts_sample_rate_hz=config.tts_sample_rate_hz,
+            tts_speed=config.tts_speed,
+            tts_lang_code=config.tts_lang_code,
         )
         return JSONResponse(payload.model_dump())
 
@@ -130,6 +158,50 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             timings=state.db.list_timings(session_id),
         )
         return JSONResponse(transcript.model_dump(mode='json'))
+
+
+    @app.get('/api/v1/sessions/{session_id}/messages/{message_id}/speech')
+    def get_assistant_speech(session_id: str, message_id: str) -> Response:
+        session = state.db.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail='session not found')
+        try:
+            speech = state.speech.synthesize_message(session_id, message_id)
+            return Response(content=speech.audio_bytes, media_type=speech.content_type)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TtsError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post('/api/v1/sessions/{session_id}/messages/{message_id}/speech/start')
+    async def start_assistant_speech(session_id: str, message_id: str) -> JSONResponse:
+        session = state.db.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail='session not found')
+        try:
+            await state.speech.start_playback(session_id, message_id)
+            return JSONResponse({'status': 'speaking'})
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post('/api/v1/sessions/{session_id}/messages/{message_id}/speech/stop')
+    async def stop_assistant_speech(session_id: str, message_id: str, request: Request) -> JSONResponse:
+        session = state.db.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail='session not found')
+        payload = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+        reason = payload.get('reason') if isinstance(payload, dict) else None
+        try:
+            await state.speech.stop_playback(session_id, message_id, reason=str(reason or 'stopped'))
+            return JSONResponse({'status': 'ready'})
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post('/api/v1/sessions/{session_id}/turns')
     async def create_turn(session_id: str, request: CreateTurnRequest) -> JSONResponse:
