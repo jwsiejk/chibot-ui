@@ -2,7 +2,7 @@ export type TurnState = 'ready' | 'listening' | 'transcribing' | 'thinking' | 's
 export type MessageRole = 'user' | 'assistant';
 export type MessageSource = 'typed_input' | 'voice_input' | 'model_output' | 'system_notice';
 export type MessageModality = 'text' | 'voice' | 'mixed';
-export type MessageStatus = 'pending' | 'streaming' | 'committed' | 'completed' | 'interrupted' | 'error';
+export type MessageStatus = 'pending' | 'streaming' | 'committed' | 'completed' | 'error';
 
 export interface SessionRecord {
   id: string;

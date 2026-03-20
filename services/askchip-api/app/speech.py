@@ -16,6 +16,7 @@ class SpeechService:
         self.event_bus = event_bus
         self.turn_manager = turn_manager
         self.tts = tts
+        self._active_playback_by_session: dict[str, str] = {}
 
     def synthesize_message(self, session_id: str, message_id: str) -> SynthesizedSpeech:
         message = self._require_message(session_id, message_id)
@@ -44,23 +45,46 @@ class SpeechService:
 
     async def start_playback(self, session_id: str, message_id: str) -> None:
         message = self._require_message(session_id, message_id)
+        active_message_id = self._active_playback_by_session.get(session_id)
+        if active_message_id == message_id:
+            return
+        if active_message_id is not None and active_message_id != message_id:
+            raise ValueError('another assistant speech playback is already active for this session')
+
         now = datetime.now(timezone.utc).isoformat()
         event = EventRecord(session_id=session_id, turn_id=message.turn_id, type='tts.started', payload={'message_id': message.id})
         self.db.create_event(event)
         self.turn_manager.set_session_state(session_id, message.turn_id, 'speaking', detail='tts_started')
         await self.event_bus.publish(self.turn_manager.event_payload(event), session_id)
         await self.turn_manager.publish_state(session_id, message.turn_id, 'speaking', detail='tts_started')
-        self.db.update_message(message.id, text=message.text, status=message.status, updated_at=now, metadata={'speech': {'last_started_at': now}})
+        self._active_playback_by_session[session_id] = message_id
+        self.db.update_message(message.id, text=message.text, status=message.status, updated_at=now, metadata={
+            'speech': self._merge_speech_metadata(message, {'last_started_at': now}),
+        })
 
     async def stop_playback(self, session_id: str, message_id: str, *, reason: str) -> None:
         message = self._require_message(session_id, message_id)
+        active_message_id = self._active_playback_by_session.get(session_id)
+        if active_message_id != message_id:
+            return
+
         now = datetime.now(timezone.utc).isoformat()
         event = EventRecord(session_id=session_id, turn_id=message.turn_id, type='tts.stopped', payload={'message_id': message.id, 'reason': reason})
         self.db.create_event(event)
         self.turn_manager.set_session_state(session_id, None, 'ready', detail='tts_stopped', ready_at=now)
         await self.event_bus.publish(self.turn_manager.event_payload(event), session_id)
         await self.turn_manager.publish_state(session_id, message.turn_id, 'ready', detail='tts_stopped')
-        self.db.update_message(message.id, text=message.text, status=message.status, updated_at=now, metadata={'speech': {'last_stopped_at': now, 'stop_reason': reason}})
+        self._active_playback_by_session.pop(session_id, None)
+        self.db.update_message(message.id, text=message.text, status=message.status, updated_at=now, metadata={
+            'speech': self._merge_speech_metadata(message, {'last_stopped_at': now, 'stop_reason': reason}),
+        })
+
+    @staticmethod
+    def _merge_speech_metadata(message: MessageRecord, patch: dict[str, object]) -> dict[str, object]:
+        existing = message.metadata.get('speech') if isinstance(message.metadata, dict) else None
+        if not isinstance(existing, dict):
+            existing = {}
+        return {**existing, **patch}
 
     def _require_message(self, session_id: str, message_id: str) -> MessageRecord:
         messages = self.db.list_messages(session_id)

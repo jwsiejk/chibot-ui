@@ -102,7 +102,7 @@ export function AskChipShell() {
               <span>Event stream: {state.connectionState}</span>
             </div>
           </div>
-          {(state.appError || state.wsNotice) && (
+          {(state.appError || state.wsNotice || speech.speechError) && (
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               {state.appError && (
                 <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
@@ -112,6 +112,11 @@ export function AskChipShell() {
               {state.wsNotice && (
                 <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
                   {state.wsNotice}
+                </div>
+              )}
+              {speech.speechError && (
+                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                  Assistant speech failed: {speech.speechError}
                 </div>
               )}
             </div>
@@ -154,7 +159,7 @@ export function AskChipShell() {
             <ChipStagePane state={state.topLevelState} modelName={modelName} config={state.config} />
             <TranscriptPane messages={state.messages} empty={!state.currentSession || state.messages.length === 0} />
             <Composer
-              disabledReason={speech.speechError ?? state.sendingDisabledReason}
+              disabledReason={state.sendingDisabledReason}
               pending={state.pendingTurn}
               onSend={sendTypedTurn}
             />
