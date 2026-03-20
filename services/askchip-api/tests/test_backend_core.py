@@ -328,6 +328,97 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     assert messages[-1].model_dump() == {'role': 'user', 'text': 'new question'}
 
 
+def test_speech_start_and_stop_merge_metadata_without_replacing_canonical_fields(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Hello'}, 'done': True, 'eval_count': 12}])
+    app = make_app(tmp_path, transport=transport, tts_adapter=FakeTtsService())
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Speech merge'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hi'})
+        assistant_message_id = turn.json()['assistant_message_id']
+
+        started = client.post(f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech/start')
+        stopped = client.post(
+            f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech/stop',
+            json={'reason': 'ended'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert started.status_code == 200
+    assert stopped.status_code == 200
+    assistant_messages = [message for message in transcript.json()['messages'] if message['role'] == 'assistant']
+    assert len(assistant_messages) == 1
+    metadata = assistant_messages[0]['metadata']
+    assert metadata['model']
+    assert metadata['provider_metrics']['eval_count'] == 12
+    assert metadata['first_chunk_ms'] is not None
+    assert metadata['speech']['last_started_at'] is not None
+    assert metadata['speech']['last_stopped_at'] is not None
+    assert metadata['speech']['stop_reason'] == 'ended'
+
+
+def test_duplicate_and_stale_speech_stop_do_not_corrupt_session_state(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Reply'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport, tts_adapter=FakeTtsService())
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Speech stop'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hi'})
+        assistant_message_id = turn.json()['assistant_message_id']
+
+        assert client.post(f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech/start').status_code == 200
+        first_stop = client.post(f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech/stop', json={'reason': 'typed_submit'})
+        second_stop = client.post(f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech/stop', json={'reason': 'typed_submit'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert first_stop.status_code == 200
+    assert second_stop.status_code == 200
+    data = transcript.json()
+    assert data['session']['status'] == 'ready'
+    stop_events = [event for event in data['events'] if event['type'] == 'tts.stopped']
+    assert len(stop_events) == 1
+    assert stop_events[0]['payload']['reason'] == 'typed_submit'
+
+
+def test_tts_failure_preserves_completed_assistant_text_and_keeps_typed_and_voice_turns_working(tmp_path: Path) -> None:
+    responses = iter([
+        [{'message': {'content': 'typed reply'}, 'done': True}],
+        [{'message': {'content': 'voice reply'}, 'done': True}],
+    ])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        chunks = next(responses)
+        body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
+        return httpx.Response(200, content=body)
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), stt_service=FakeSttService(text='voice transcript'), tts_adapter=FakeTtsService(error='kokoro missing'))
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'TTS fail'}).json()['id']
+        typed = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'typed question'})
+        assistant_message_id = typed.json()['assistant_message_id']
+        speech = client.get(f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech')
+        started = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        voice = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert typed.status_code == 201
+    assert speech.status_code == 503
+    assert started.status_code == 200
+    assert voice.status_code == 201
+    data = transcript.json()
+    assert data['messages'][1]['text'] == 'typed reply'
+    assert data['messages'][1]['status'] == 'completed'
+    assert data['messages'][3]['text'] == 'voice reply'
+    assert data['messages'][3]['status'] == 'completed'
+    assert all('content' not in message for message in data['messages'])
+    state_events = [event['payload']['state'] for event in data['events'] if event['type'] == 'state']
+    assert set(state_events).issubset(CONTRACT_TRANSCRIPT_STATES)
+
 def test_webrtc_offer_route_is_separate_from_typed_chat_contract(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
