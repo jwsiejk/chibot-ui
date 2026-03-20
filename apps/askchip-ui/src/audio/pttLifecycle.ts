@@ -54,6 +54,15 @@ export function createPttLifecycleController(deps: PttLifecycleDependencies): Pt
       try {
         const recorded = await deps.finishLocalCapture();
         await deps.submitVoiceTurn(recorded);
+      } catch (error) {
+        if (backendStarted) {
+          try {
+            await deps.cancelBackendVoiceTurn();
+          } catch {
+            // Preserve the original local finalize failure after best-effort backend cleanup.
+          }
+        }
+        throw error;
       } finally {
         resetFlags();
       }

@@ -140,7 +140,7 @@ describe('PTT lifecycle controller', () => {
     assert.deepEqual(calls, ['begin', 'backend-start', 'cancel', 'backend-cancel']);
   });
 
-  it('resets completion flow after local capture finalization fails so a new press can start cleanly', async () => {
+  it('cancels an active backend PTT lifecycle when local capture finalization fails, then allows a clean retry', async () => {
     const calls = [];
     let finishAttempts = 0;
     const controller = createPttLifecycleController({
@@ -180,6 +180,7 @@ describe('PTT lifecycle controller', () => {
       'begin',
       'backend-start',
       'finish-1',
+      'backend-cancel',
       'begin',
       'backend-start',
       'finish-2',
