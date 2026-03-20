@@ -63,6 +63,14 @@ export class AskChipApiClient {
     });
   }
 
+  async cancelVoiceTurn(sessionId: string): Promise<void> {
+    await this.request(`/api/v1/sessions/${sessionId}/voice-turns/ptt/cancel`, {
+      method: 'POST',
+      body: '',
+      isJsonRequest: false,
+    });
+  }
+
   async createVoiceTurn(sessionId: string, payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; }): Promise<CreateTurnResponse> {
     return this.request<CreateTurnResponse>(`/api/v1/sessions/${sessionId}/voice-turns?filename=${encodeURIComponent(payload.filename)}`, {
       method: 'POST',

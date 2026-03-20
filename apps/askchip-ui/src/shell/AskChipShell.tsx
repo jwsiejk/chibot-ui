@@ -46,6 +46,7 @@ export function AskChipShell() {
       pttRuntimeRef.current.audioSelectedDeviceId,
       pttRuntimeRef.current.pushToTalkActions.getStartedAt(),
     ),
+    cancelBackendVoiceTurn: () => pttRuntimeRef.current.actions.cancelVoiceTurn(),
     submitVoiceTurn: async (recorded) => {
       try {
         await pttRuntimeRef.current.actions.finishVoiceTurn({

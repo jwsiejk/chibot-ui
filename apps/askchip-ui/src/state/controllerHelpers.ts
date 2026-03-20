@@ -142,3 +142,7 @@ export function getVoiceDisabledReason(params: {
   }
   return null;
 }
+
+export function getRecoveredVoiceTopLevelState(state: TurnState | null): TurnState {
+  return state === 'thinking' ? 'thinking' : 'ready';
+}
