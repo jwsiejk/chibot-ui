@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   AssistantSpeechPlaybackCanceledError,
+  cleanupFetchedAssistantSpeech,
   createBackendSpeechStartHandshake,
+  createPlaybackAttemptTracker,
   findNextSpeechMessage,
   waitForPlaybackStart,
 } from '../.test-dist/audio/assistantSpeechHelpers.js';
@@ -120,6 +122,74 @@ describe('assistant speech playback helper', () => {
 
     await assert.rejects(wait, AssistantSpeechPlaybackCanceledError);
   });
+
+  it('duplicate play attempts while speech fetch is in flight keep only one active reservation per session until superseded', () => {
+    const tracker = createPlaybackAttemptTracker();
+    const first = tracker.reserve('session-a', 'assistant-1');
+
+    assert.equal(tracker.current()?.sessionId, 'session-a');
+    assert.equal(tracker.current()?.messageId, 'assistant-1');
+    assert.equal(tracker.isCurrent(first), true);
+
+    const second = tracker.reserve('session-b', 'assistant-2');
+
+    assert.equal(tracker.isCurrent(first), false);
+    assert.equal(tracker.isCurrent(second), true);
+    assert.equal(tracker.current()?.sessionId, 'session-b');
+  });
+
+  it('stale speech fetch results after a session switch are discarded and cleaned up immediately', () => {
+    let revoked = null;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = (value) => {
+      revoked = value;
+    };
+
+    const audio = {
+      paused: false,
+      currentTime: 12,
+      pauseCalls: 0,
+      pause() {
+        this.pauseCalls += 1;
+      },
+    };
+
+    cleanupFetchedAssistantSpeech({ audio, objectUrl: 'blob:stale-audio' });
+
+    URL.revokeObjectURL = originalRevoke;
+    assert.equal(audio.pauseCalls, 1);
+    assert.equal(audio.currentTime, 0);
+    assert.equal(revoked, 'blob:stale-audio');
+  });
+
+  it('a superseded in-flight fetch result is discarded and cleaned up immediately', () => {
+    let revoked = null;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = (value) => {
+      revoked = value;
+    };
+
+    const tracker = createPlaybackAttemptTracker();
+    const staleAttempt = tracker.reserve('session-a', 'assistant-1');
+    tracker.reserve('session-b', 'assistant-2');
+
+    const audio = {
+      currentTime: 4,
+      pauseCalls: 0,
+      pause() {
+        this.pauseCalls += 1;
+      },
+    };
+
+    if (!tracker.isCurrent(staleAttempt)) {
+      cleanupFetchedAssistantSpeech({ audio, objectUrl: 'blob:superseded-audio' });
+    }
+
+    URL.revokeObjectURL = originalRevoke;
+    assert.equal(audio.pauseCalls, 1);
+    assert.equal(audio.currentTime, 0);
+    assert.equal(revoked, 'blob:superseded-audio');
+  });
 });
 
 describe('backend speech start handshake', () => {
@@ -172,17 +242,35 @@ describe('backend speech start handshake', () => {
     assert.equal(handshake.state, 'stopped');
   });
 
-  it('does not send stop when backend start fails before an ack exists', async () => {
+  it('best-effort stops exactly once when backend start fails after the uncertain start phase begins', async () => {
     const stopCalls = [];
     const handshake = createBackendSpeechStartHandshake(async (reason) => {
       stopCalls.push(reason);
     });
 
     handshake.beginStart();
+    await handshake.failStart('start_failed');
     await handshake.cancel('typed_submit');
-    handshake.failStart();
 
-    assert.deepEqual(stopCalls, []);
-    assert.equal(handshake.state, 'not_started');
+    assert.deepEqual(stopCalls, ['start_failed']);
+    assert.equal(handshake.state, 'stopped');
+  });
+
+  it('keeps the original start failure surface separate from best-effort cleanup', async () => {
+    const cleanupCalls = [];
+    const startError = new Error('start request failed');
+    const handshake = createBackendSpeechStartHandshake(async (reason) => {
+      cleanupCalls.push(reason);
+    });
+
+    handshake.beginStart();
+    try {
+      throw startError;
+    } catch (error) {
+      await handshake.failStart('start_failed');
+      assert.equal(error, startError);
+    }
+
+    assert.deepEqual(cleanupCalls, ['start_failed']);
   });
 });

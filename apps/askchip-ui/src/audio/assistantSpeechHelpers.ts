@@ -14,7 +14,21 @@ export interface BackendSpeechStartHandshake {
   beginStart(): void;
   cancel(reason: string): Promise<void>;
   acknowledgeStart(): Promise<void>;
-  failStart(): void;
+  failStart(reason: string): Promise<void>;
+}
+
+export interface PlaybackAttemptReservation {
+  token: number;
+  sessionId: string;
+  messageId: string;
+}
+
+export interface PlaybackAttemptTracker {
+  reserve(sessionId: string, messageId: string): PlaybackAttemptReservation;
+  isCurrent(attempt: PlaybackAttemptReservation): boolean;
+  clear(attempt: PlaybackAttemptReservation): void;
+  hasCurrent(): boolean;
+  current(): PlaybackAttemptReservation | null;
 }
 
 export function hasSpeechStarted(message: TranscriptMessage): boolean {
@@ -55,7 +69,41 @@ function normalizePlaybackError(error: unknown): Error {
   return new Error('Assistant speech playback failed.');
 }
 
-export function waitForPlaybackStart(
+export function cleanupFetchedAssistantSpeech(playback: { audio: Pick<HTMLAudioElement, 'pause' | 'currentTime'>; objectUrl: string }): void {
+  playback.audio.pause();
+  playback.audio.currentTime = 0;
+  URL.revokeObjectURL(playback.objectUrl);
+}
+
+export function createPlaybackAttemptTracker(): PlaybackAttemptTracker {
+  let nextToken = 0;
+  let currentAttempt: PlaybackAttemptReservation | null = null;
+
+  return {
+    reserve(sessionId: string, messageId: string) {
+      const attempt = { token: nextToken + 1, sessionId, messageId };
+      nextToken += 1;
+      currentAttempt = attempt;
+      return attempt;
+    },
+    isCurrent(attempt: PlaybackAttemptReservation) {
+      return currentAttempt?.token === attempt.token;
+    },
+    clear(attempt: PlaybackAttemptReservation) {
+      if (currentAttempt?.token === attempt.token) {
+        currentAttempt = null;
+      }
+    },
+    hasCurrent() {
+      return currentAttempt !== null;
+    },
+    current() {
+      return currentAttempt;
+    },
+  };
+}
+
+export async function waitForPlaybackStart(
   audio: Pick<HTMLAudioElement, 'addEventListener' | 'removeEventListener' | 'play' | 'paused'>,
   options: { signal?: AbortSignal; cancellationError?: Error } = {},
 ): Promise<void> {
@@ -144,9 +192,13 @@ export function createBackendSpeechStartHandshake(sendStop: (reason: string) => 
         await stopExactlyOnce(canceledReason ?? 'stopped');
       }
     },
-    failStart() {
+    async failStart(reason: string) {
       if (state === 'starting' || state === 'canceled_before_ack') {
-        state = 'not_started';
+        await stopExactlyOnce(reason);
+        return;
+      }
+      if (state === 'started') {
+        await stopExactlyOnce(reason);
       }
     },
   };
