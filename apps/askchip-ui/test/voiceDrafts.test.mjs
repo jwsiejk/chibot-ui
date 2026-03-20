@@ -23,7 +23,7 @@ const canonicalMessage = {
 
 describe('voice draft helpers', () => {
   it('recognizes the expanded contract state vocabulary for Phase 5', () => {
-    assert.deepEqual(CONTRACT_TURN_STATES, ['ready', 'listening', 'transcribing', 'thinking', 'error']);
+    assert.deepEqual(CONTRACT_TURN_STATES, ['ready', 'listening', 'transcribing', 'thinking', 'speaking', 'error']);
     assert.equal(isTurnState('listening'), true);
     assert.equal(isTurnState('transcribing'), true);
     assert.equal(isTurnState('recording'), false);

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { MicSetupPanel } from '../audio/MicSetupPanel';
+import { useAssistantSpeechPlayback } from '../audio/useAssistantSpeechPlayback';
 import { useAudioFoundation } from '../audio/useAudioFoundation';
 import { createPttLifecycleController } from '../audio/pttLifecycle';
 import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
@@ -25,8 +26,20 @@ export function AskChipShell() {
   const pushToTalk = usePushToTalkRecorder(audio.selectedDeviceId);
   const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
+  const speech = useAssistantSpeechPlayback(state.currentSessionId, state.messages);
 
-  const pttRuntimeRef = useRef({ actions, audioSelectedDeviceId: audio.selectedDeviceId, pushToTalkActions: pushToTalk.actions, pushToTalkActive: pushToTalk.active, voiceDisabledReason: state.voiceDisabledReason });
+  const interruptSpeaking = async (reason: string) => {
+    if (state.topLevelState === 'speaking' && speech.activeMessageId) {
+      await speech.stop(reason);
+    }
+  };
+
+  const sendTypedTurn = async (text: string) => {
+    await interruptSpeaking('typed_submit');
+    await actions.sendTurn(text);
+  };
+
+  const pttRuntimeRef = useRef({ actions, audioSelectedDeviceId: audio.selectedDeviceId, pushToTalkActions: pushToTalk.actions, pushToTalkActive: pushToTalk.active, voiceDisabledReason: state.voiceDisabledReason, interruptSpeaking });
 
   useEffect(() => {
     pttRuntimeRef.current = {
@@ -35,17 +48,21 @@ export function AskChipShell() {
       pushToTalkActions: pushToTalk.actions,
       pushToTalkActive: pushToTalk.active,
       voiceDisabledReason: state.voiceDisabledReason,
+      interruptSpeaking,
     };
-  }, [actions, audio.selectedDeviceId, pushToTalk.actions, pushToTalk.active, state.voiceDisabledReason]);
+  }, [actions, audio.selectedDeviceId, interruptSpeaking, pushToTalk.actions, pushToTalk.active, state.voiceDisabledReason]);
 
   const pttLifecycle = useMemo(() => createPttLifecycleController({
     beginLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.beginCapture(),
     finishLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.finishCapture(),
     cancelLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.cancelCapture(),
-    startBackendVoiceTurn: () => pttRuntimeRef.current.actions.startVoiceTurn(
-      pttRuntimeRef.current.audioSelectedDeviceId,
-      pttRuntimeRef.current.pushToTalkActions.getStartedAt(),
-    ),
+    startBackendVoiceTurn: async () => {
+      await pttRuntimeRef.current.interruptSpeaking('ptt_start');
+      return pttRuntimeRef.current.actions.startVoiceTurn(
+        pttRuntimeRef.current.audioSelectedDeviceId,
+        pttRuntimeRef.current.pushToTalkActions.getStartedAt(),
+      );
+    },
     cancelBackendVoiceTurn: () => pttRuntimeRef.current.actions.cancelVoiceTurn(),
     submitVoiceTurn: async (recorded) => {
       try {
@@ -77,7 +94,7 @@ export function AskChipShell() {
               </p>
               <h1 className="text-3xl font-semibold tracking-tight text-white">Modern shell for canonical typed chat + push-to-talk</h1>
               <p className="max-w-3xl text-sm leading-6 text-slate-300">
-                This frontend consumes the backend transcript contract directly for typed chat, push-to-talk voice input, streaming assistant deltas, and diagnostics.
+                This frontend consumes the backend transcript contract directly for typed chat, push-to-talk voice input, streaming assistant deltas, deterministic Kokoro playback, and diagnostics.
               </p>
             </div>
             <div className="grid gap-2 text-right text-sm text-slate-300">
@@ -137,9 +154,9 @@ export function AskChipShell() {
             <ChipStagePane state={state.topLevelState} modelName={modelName} config={state.config} />
             <TranscriptPane messages={state.messages} empty={!state.currentSession || state.messages.length === 0} />
             <Composer
-              disabledReason={state.sendingDisabledReason}
+              disabledReason={speech.speechError ?? state.sendingDisabledReason}
               pending={state.pendingTurn}
-              onSend={actions.sendTurn}
+              onSend={sendTypedTurn}
             />
           </div>
 

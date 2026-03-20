@@ -54,6 +54,30 @@ export class AskChipApiClient {
     });
   }
 
+  async getAssistantSpeech(sessionId: string, messageId: string): Promise<HTMLAudioElement> {
+    const response = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/messages/${messageId}/speech`);
+    if (!response.ok) {
+      throw new ApiError(response.status, `Assistant speech request failed with status ${response.status}`);
+    }
+    const blob = await response.blob();
+    return new Audio(URL.createObjectURL(blob));
+  }
+
+  async startAssistantSpeech(sessionId: string, messageId: string): Promise<void> {
+    await this.request(`/api/v1/sessions/${sessionId}/messages/${messageId}/speech/start`, {
+      method: 'POST',
+      body: '',
+      isJsonRequest: false,
+    });
+  }
+
+  async stopAssistantSpeech(sessionId: string, messageId: string, reason: string): Promise<void> {
+    await this.request(`/api/v1/sessions/${sessionId}/messages/${messageId}/speech/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
   async startVoiceTurn(sessionId: string, deviceId: string | null): Promise<void> {
     await this.request(`/api/v1/sessions/${sessionId}/voice-turns/ptt/start`, {
       method: 'POST',

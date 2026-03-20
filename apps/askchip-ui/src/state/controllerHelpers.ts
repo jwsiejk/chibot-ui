@@ -2,7 +2,7 @@ import type { AskChipEvent, TranscriptMessage, TurnState } from '../types/contra
 
 export const MAX_RECENT_EVENTS = 24;
 export const MAX_RECENT_TIMINGS = 12;
-export const CONTRACT_TURN_STATES: TurnState[] = ['ready', 'listening', 'transcribing', 'thinking', 'error'];
+export const CONTRACT_TURN_STATES: TurnState[] = ['ready', 'listening', 'transcribing', 'thinking', 'speaking', 'error'];
 
 export interface VoiceDraftState {
   mode: 'listening' | 'transcribing';
@@ -123,6 +123,9 @@ export function getSendingDisabledReason(params: {
   if (isVoiceLifecycleState(params.topLevelState)) {
     return 'Release the active push-to-talk capture before sending a typed turn.';
   }
+  if (params.topLevelState === 'speaking') {
+    return null;
+  }
   return null;
 }
 
@@ -139,6 +142,9 @@ export function getVoiceDisabledReason(params: {
   }
   if (isVoiceLifecycleState(params.topLevelState)) {
     return 'Finish the active push-to-talk lifecycle before starting another voice turn.';
+  }
+  if (params.topLevelState === 'speaking') {
+    return null;
   }
   return null;
 }

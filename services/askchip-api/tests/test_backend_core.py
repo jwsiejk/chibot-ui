@@ -29,7 +29,7 @@ CONTRACT_MESSAGE_KEYS = {
     'completed_at',
     'metadata',
 }
-CONTRACT_TRANSCRIPT_STATES = {'ready', 'listening', 'transcribing', 'thinking', 'error'}
+CONTRACT_TRANSCRIPT_STATES = {'ready', 'listening', 'transcribing', 'thinking', 'speaking', 'error'}
 CONTRACT_SOURCES_BY_ROLE = {'assistant': 'model_output'}
 CONTRACT_SOURCE_VOCABULARY = {'typed_input', 'voice_input', 'model_output', 'system_notice'}
 
@@ -47,9 +47,32 @@ class FakeSttService:
         return SttResult(text=self.text, language='en', duration_seconds=1.2, segments=[{'text': self.text}])
 
 
-def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, webrtc_peer_factory=None, stt_service=None, **settings_overrides):
+def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, webrtc_peer_factory=None, stt_service=None, tts_adapter=None, **settings_overrides):
     config = Settings(database_path=tmp_path / 'askchip.db', **settings_overrides)
-    return create_app(config=config, ollama_transport=transport, webrtc_peer_factory=webrtc_peer_factory, stt_service=stt_service)
+    return create_app(config=config, ollama_transport=transport, webrtc_peer_factory=webrtc_peer_factory, stt_service=stt_service, tts_adapter=tts_adapter)
+
+
+
+
+class FakeTtsService:
+    def __init__(self, *, audio_bytes: bytes = b'RIFFfake', error: str | None = None) -> None:
+        self.audio_bytes = audio_bytes
+        self.error = error
+        self.calls: list[str] = []
+
+    def synthesize(self, text: str):
+        from app.tts import SynthesizedSpeech, TtsError
+
+        self.calls.append(text)
+        if self.error:
+            raise TtsError(self.error)
+        return SynthesizedSpeech(
+            audio_bytes=self.audio_bytes,
+            content_type='audio/wav',
+            sample_rate_hz=24000,
+            duration_ms=100,
+            metadata={'engine': 'kokoro', 'voice': 'af_heart'},
+        )
 
 
 class FakeManagedPeer:
@@ -849,3 +872,79 @@ def test_cancel_then_typed_turn_keeps_canonical_transcript_flow_unchanged(tmp_pa
     assert data['session']['status'] == 'ready'
     assert [message['source'] for message in data['messages']] == ['typed_input', 'model_output']
     assert [message['text'] for message in data['messages']] == ['typed question', 'typed reply']
+
+
+def test_assistant_speech_uses_same_canonical_message(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Spoken reply'}, 'done': True}])
+    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
+    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Speech'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant = transcript['messages'][-1]
+        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
+        updated = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert speech.status_code == 200
+    assert speech.content == b'RIFFspeech'
+    assert tts.calls == ['Spoken reply']
+    assert len([message for message in updated['messages'] if message['role'] == 'assistant']) == 1
+    assert updated['messages'][-1]['text'] == 'Spoken reply'
+    assert 'content' not in updated['messages'][-1]
+
+
+def test_speaking_state_and_tts_events_only_emit_during_actual_playback(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Speech state'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport, tts_adapter=FakeTtsService())
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Speaking'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Go'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant_id = transcript['messages'][-1]['id']
+        start = client.post(f'/api/v1/sessions/{session_id}/messages/{assistant_id}/speech/start')
+        stop = client.post(f'/api/v1/sessions/{session_id}/messages/{assistant_id}/speech/stop', json={'reason': 'typed_submit'})
+        updated = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert start.status_code == 200
+    assert stop.status_code == 200
+    state_events = [event['payload']['state'] for event in updated['events'] if event['type'] == 'state']
+    assert 'speaking' in state_events
+    assert set(state_events).issubset(CONTRACT_TRANSCRIPT_STATES)
+    event_types = [event['type'] for event in updated['events']]
+    assert 'tts.started' in event_types
+    assert 'tts.stopped' in event_types
+    assert updated['session']['status'] == 'ready'
+
+
+def test_tts_failure_does_not_destroy_completed_text_response(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Still text'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport, tts_adapter=FakeTtsService(error='kokoro missing'))
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'TTS fail'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
+        transcript_before = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant_id = transcript_before['messages'][-1]['id']
+        speech = client.get(f'/api/v1/sessions/{session_id}/messages/{assistant_id}/speech')
+        transcript_after = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert speech.status_code == 503
+    assert transcript_before['messages'][-1]['text'] == 'Still text'
+    assert transcript_after['messages'][-1]['text'] == 'Still text'
+    assert transcript_after['messages'][-1]['status'] == 'completed'
+
+
+def test_voice_turn_and_typed_chat_still_work_with_speech_enabled(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Voice ok'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport, stt_service=FakeSttService(text='voice turn text'), tts_adapter=FakeTtsService())
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Voice + typed'}).json()['id']
+        start = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        voice = client.post(f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm', content=b'voice-bytes', headers={'content-type': 'audio/webm'})
+        typed = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'typed still works'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert start.status_code == 200
+    assert voice.status_code == 201
+    assert typed.status_code == 201
+    assert [message['source'] for message in transcript['messages'] if message['role'] == 'user'] == ['voice_input', 'typed_input']
