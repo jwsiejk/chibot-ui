@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TranscriptMessage } from '../types/contract';
 import { askChipApiClient } from '../api/client';
-import { findNextSpeechMessage, waitForPlaybackStart } from './assistantSpeechHelpers';
+import {
+  AssistantSpeechPlaybackCanceledError,
+  createBackendSpeechStartHandshake,
+  findNextSpeechMessage,
+  waitForPlaybackStart,
+} from './assistantSpeechHelpers';
 
 
 type ActivePlayback = {
@@ -9,8 +14,8 @@ type ActivePlayback = {
   messageId: string;
   objectUrl: string;
   sessionId: string;
-  backendStarted: boolean;
-  stopSent: boolean;
+  waitController: AbortController;
+  backendHandshake: ReturnType<typeof createBackendSpeechStartHandshake>;
 };
 
 export function useAssistantSpeechPlayback(sessionId: string | null, messages: TranscriptMessage[]) {
@@ -32,18 +37,14 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     }
 
     activePlaybackRef.current = null;
+    active.waitController.abort();
     active.audio.pause();
     active.audio.currentTime = 0;
     URL.revokeObjectURL(active.objectUrl);
     setActiveMessageId(null);
 
-    if (active.stopSent || !active.backendStarted) {
-      return;
-    }
-
-    active.stopSent = true;
     try {
-      await askChipApiClient.stopAssistantSpeech(active.sessionId, active.messageId, reason);
+      await active.backendHandshake.cancel(reason);
     } catch (error) {
       setSpeechError(error instanceof Error ? error.message : 'Assistant speech playback cleanup failed.');
     }
@@ -77,8 +78,8 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
         messageId: message.id,
         objectUrl,
         sessionId,
-        backendStarted: false,
-        stopSent: false,
+        waitController: new AbortController(),
+        backendHandshake: createBackendSpeechStartHandshake((reason) => askChipApiClient.stopAssistantSpeech(sessionId, message.id, reason)),
       };
       activePlaybackRef.current = active;
       setActiveMessageId(message.id);
@@ -89,19 +90,30 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
         void finalizePlayback('playback_error');
       }, { once: true });
 
-      await waitForPlaybackStart(audio);
+      await waitForPlaybackStart(audio, {
+        signal: active.waitController.signal,
+        cancellationError: new AssistantSpeechPlaybackCanceledError(),
+      });
       if (activePlaybackRef.current !== active || latestSessionIdRef.current !== sessionId) {
         await finalizePlayback('session_switch');
         return;
       }
 
-      await askChipApiClient.startAssistantSpeech(sessionId, message.id);
+      active.backendHandshake.beginStart();
+      try {
+        await askChipApiClient.startAssistantSpeech(sessionId, message.id);
+      } catch (error) {
+        active.backendHandshake.failStart();
+        throw error;
+      }
+      await active.backendHandshake.acknowledgeStart();
       if (activePlaybackRef.current !== active) {
-        await finalizePlayback('playback_error');
         return;
       }
-      active.backendStarted = true;
     } catch (error) {
+      if (error instanceof AssistantSpeechPlaybackCanceledError) {
+        return;
+      }
       const isCurrent = activePlaybackRef.current?.messageId === message.id;
       if (isCurrent) {
         const objectUrl = activePlaybackRef.current?.objectUrl;
