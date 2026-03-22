@@ -59,6 +59,22 @@ class HealthResponse(BaseModel):
     service: str
 
 
+class ReadinessCheck(BaseModel):
+    label: str
+    status: str
+    detail: str | None = None
+    checked_at: str | None = None
+    optional: bool = False
+
+
+class ReadinessResponse(BaseModel):
+    local_only: bool = True
+    ollama_warmup_enabled: bool = True
+    tts_warmup_enabled: bool = False
+    warmup_active: bool
+    checks: dict[str, ReadinessCheck]
+
+
 class ConfigResponse(BaseModel):
     app_name: str
     ollama_base_url: str
@@ -75,3 +91,5 @@ class ConfigResponse(BaseModel):
     tts_speed: float
     tts_lang_code: str
     local_only: bool = True
+    ollama_warmup_enabled: bool = True
+    tts_warmup_enabled: bool = False

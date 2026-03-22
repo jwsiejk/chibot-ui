@@ -48,7 +48,12 @@ class FakeSttService:
 
 
 def make_app(tmp_path: Path, transport: httpx.AsyncBaseTransport | None = None, webrtc_peer_factory=None, stt_service=None, tts_adapter=None, **settings_overrides):
-    config = Settings(database_path=tmp_path / 'askchip.db', **settings_overrides)
+    config = Settings(
+        database_path=tmp_path / 'askchip.db',
+        ollama_warmup_enabled=settings_overrides.pop('ollama_warmup_enabled', False),
+        tts_warmup_enabled=settings_overrides.pop('tts_warmup_enabled', False),
+        **settings_overrides,
+    )
     return create_app(config=config, ollama_transport=transport, webrtc_peer_factory=webrtc_peer_factory, stt_service=stt_service, tts_adapter=tts_adapter)
 
 
@@ -1154,3 +1159,22 @@ def test_voice_turn_and_typed_chat_still_work_with_speech_enabled(tmp_path: Path
     assert voice.status_code == 201
     assert typed.status_code == 201
     assert [message['source'] for message in transcript['messages'] if message['role'] == 'user'] == ['voice_input', 'typed_input']
+
+
+def test_readiness_endpoint_reports_warmup_state(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'OK'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport, ollama_warmup_enabled=True, tts_warmup_enabled=False)
+    with TestClient(app) as client:
+        for _ in range(20):
+            readiness = client.get('/api/v1/readiness')
+            if readiness.json()['checks']['ollama']['status'] != 'pending':
+                break
+        config = client.get('/api/v1/config')
+
+    assert readiness.status_code == 200
+    body = readiness.json()
+    assert body['local_only'] is True
+    assert body['checks']['ollama']['status'] == 'ready'
+    assert body['checks']['tts']['status'] == 'not_run'
+    assert config.json()['ollama_warmup_enabled'] is True
+    assert config.json()['tts_warmup_enabled'] is False

@@ -78,6 +78,22 @@ export interface ConfigResponse {
   tts_speed: number;
   tts_lang_code: string;
   local_only: boolean;
+  ollama_warmup_enabled: boolean;
+  tts_warmup_enabled: boolean;
+}
+
+export interface ReadinessCheck {
+  label: string;
+  status: string;
+  detail: string | null;
+  checked_at: string | null;
+  optional: boolean;
+}
+
+export interface ReadinessResponse {
+  local_only: boolean;
+  warmup_active: boolean;
+  checks: Record<string, ReadinessCheck>;
 }
 
 export interface CreateSessionRequest {

@@ -174,6 +174,9 @@ export function AskChipShell() {
               webrtcDiagnostics={audio.webrtcDiagnostics}
               events={state.events}
               timings={state.timings}
+              config={state.config}
+              readiness={state.readiness}
+              speechState={{ activeMessageId: speech.activeMessageId, pendingMessageId: speech.pendingMessageId, speechError: speech.speechError }}
               collapsed={!showDiagnostics}
               onToggle={toggleDiagnostics}
             />

@@ -13,6 +13,7 @@ from app.api_models import (
     CreateSessionRequest,
     CreateTurnRequest,
     HealthResponse,
+    ReadinessResponse,
     RenameSessionRequest,
     TranscriptMessageResponse,
     TranscriptResponse,
@@ -22,6 +23,7 @@ from app.domain_models import EventRecord, SessionRecord
 from app.events import EventBus
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
+from app.readiness import ReadinessTracker
 from app.speech import SpeechService
 from app.storage import Database, DatabaseError
 from app.stt import FasterWhisperSttService
@@ -72,6 +74,12 @@ class AppState:
         )))
         self.webrtc_signaling = WebRtcSignalingService(peer_factory=webrtc_peer_factory)
         self.webrtc_websocket = WebRtcWebSocketHandler(self.webrtc_signaling)
+        self.readiness = ReadinessTracker(
+            ollama=self.ollama,
+            tts=self.speech.tts,
+            ollama_warmup_enabled=config.ollama_warmup_enabled,
+            tts_warmup_enabled=config.tts_warmup_enabled,
+        )
 
 
 def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_factory=None, stt_service=None, tts_adapter=None) -> FastAPI:
@@ -86,6 +94,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         state.db.upsert_setting('stt_model', config.stt_model, now)
         state.db.upsert_setting('tts_voice', config.tts_voice, now)
         app.state.askchip = state
+        state.readiness.start()
         yield
         await state.webrtc_signaling.clear()
 
@@ -116,7 +125,14 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             tts_sample_rate_hz=config.tts_sample_rate_hz,
             tts_speed=config.tts_speed,
             tts_lang_code=config.tts_lang_code,
+            ollama_warmup_enabled=config.ollama_warmup_enabled,
+            tts_warmup_enabled=config.tts_warmup_enabled,
         )
+        return JSONResponse(payload.model_dump())
+
+    @app.get('/api/v1/readiness')
+    def get_readiness() -> JSONResponse:
+        payload = ReadinessResponse(**state.readiness.snapshot())
         return JSONResponse(payload.model_dump())
 
     @app.post('/api/v1/webrtc/offer')

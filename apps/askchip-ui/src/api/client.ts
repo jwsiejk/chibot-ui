@@ -1,5 +1,6 @@
 import type {
   ConfigResponse,
+  ReadinessResponse,
   CreateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
@@ -29,6 +30,10 @@ export class AskChipApiClient {
 
   async getConfig(): Promise<ConfigResponse> {
     return this.request<ConfigResponse>('/api/v1/config');
+  }
+
+  async getReadiness(): Promise<ReadinessResponse> {
+    return this.request<ReadinessResponse>('/api/v1/readiness');
   }
 
   async listSessions(): Promise<SessionRecord[]> {

@@ -19,6 +19,7 @@ import type {
   AskChipEvent,
   ConfigResponse,
   EventRecord,
+  ReadinessResponse,
   SessionRecord,
   TimingRecord,
   TranscriptMessage,
@@ -35,6 +36,7 @@ export interface AskChipControllerState {
   events: EventRecord[];
   timings: TimingRecord[];
   config: ConfigResponse | null;
+  readiness: ReadinessResponse | null;
   connectionState: ConnectionState;
   topLevelState: TurnState | null;
   pendingTurn: boolean;
@@ -57,6 +59,7 @@ export function useAskChipController() {
   const [timings, setTimings] = useState<TimingRecord[]>([]);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
+  const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
   const [topLevelState, setTopLevelState] = useState<TurnState | null>(null);
   const [pendingTurn, setPendingTurn] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraftState | null>(null);
@@ -106,8 +109,9 @@ export function useAskChipController() {
   const bootstrap = useCallback(async () => {
     try {
       setAppError(null);
-      const [nextConfig, nextSessions] = await Promise.all([askChipApiClient.getConfig(), loadSessions()]);
+      const [nextConfig, nextReadiness, nextSessions] = await Promise.all([askChipApiClient.getConfig(), askChipApiClient.getReadiness(), loadSessions()]);
       setConfig(nextConfig);
+      setReadiness(nextReadiness);
       const storedId = localStorage.getItem(STORAGE_KEY);
       const preferredId = storedId && nextSessions.some((session) => session.id === storedId)
         ? storedId
@@ -349,6 +353,7 @@ export function useAskChipController() {
       events,
       timings,
       config,
+    readiness,
       connectionState,
       topLevelState,
       pendingTurn,
