@@ -47,3 +47,17 @@ class OllamaClient:
                         }
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             raise OllamaUnavailableError(str(exc)) from exc
+
+
+    async def warmup(self) -> None:
+        payload = {
+            'model': self.model,
+            'messages': [{'role': 'user', 'content': 'Reply with OK.'}],
+            'stream': False,
+        }
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
+                response = await client.post('/api/chat', json=payload)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OllamaUnavailableError(str(exc)) from exc
