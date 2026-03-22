@@ -552,7 +552,7 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
 
     assert config.host == '0.0.0.0'
     assert config.port == 9000
-    assert str(config.database_path) == '/tmp/askchip.db'
+    assert config.database_path == Path('/tmp/askchip.db')
     assert config.prompt_transcript_window == 4
 
 
