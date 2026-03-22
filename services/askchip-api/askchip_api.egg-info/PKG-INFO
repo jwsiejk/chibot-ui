@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: askchip-api
+Version: 0.1.0
+Summary: Local-only AskChip API foundation
+Requires-Python: >=3.11
+Requires-Dist: fastapi<1.0,>=0.115
+Requires-Dist: uvicorn[standard]<1.0,>=0.32
+Requires-Dist: httpx<1.0,>=0.28
+Requires-Dist: faster-whisper<2.0,>=1.1
+Requires-Dist: kokoro-onnx<1.0,>=0.4
+Provides-Extra: dev
+Requires-Dist: pytest<9.0,>=8.3; extra == "dev"
