@@ -45,6 +45,7 @@ class SpeechService:
 
     async def start_playback(self, session_id: str, message_id: str) -> None:
         message = self._require_message(session_id, message_id)
+        self._require_startable_session_state(session_id, message)
         active_message_id = self._active_playback_by_session.get(session_id)
         if active_message_id == message_id:
             return
@@ -78,6 +79,21 @@ class SpeechService:
         self.db.update_message(message.id, text=message.text, status=message.status, updated_at=now, metadata={
             'speech': self._merge_speech_metadata(message, {'last_stopped_at': now, 'stop_reason': reason}),
         })
+
+
+    def _require_startable_session_state(self, session_id: str, message: MessageRecord) -> None:
+        session = self.db.get_session(session_id)
+        if session is None:
+            raise LookupError('session not found')
+        if session.status != 'ready':
+            raise ValueError('assistant speech start is stale for the current session state')
+
+        completed_assistant_messages = [
+            item for item in self.db.list_messages(session_id)
+            if item.role == 'assistant' and item.source == 'model_output' and item.status == 'completed' and item.text
+        ]
+        if not completed_assistant_messages or completed_assistant_messages[-1].id != message.id:
+            raise ValueError('assistant speech start is stale for the current session state')
 
     @staticmethod
     def _merge_speech_metadata(message: MessageRecord, patch: dict[str, object]) -> dict[str, object]:

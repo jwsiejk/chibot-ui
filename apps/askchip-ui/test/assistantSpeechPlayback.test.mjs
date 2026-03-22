@@ -123,6 +123,29 @@ describe('assistant speech playback helper', () => {
     await assert.rejects(wait, AssistantSpeechPlaybackCanceledError);
   });
 
+  it('typed submit invalidates a same-session pending speech reservation before activation', () => {
+    const tracker = createPlaybackAttemptTracker();
+    const pending = tracker.reserve('session-a', 'assistant-1');
+
+    const invalidated = tracker.invalidate();
+
+    assert.equal(invalidated?.token, pending.token);
+    assert.equal(tracker.isCurrent(pending), false);
+    assert.equal(tracker.current(), null);
+  });
+
+  it('PTT press invalidates a same-session pending speech reservation before activation and allows a clean retry', () => {
+    const tracker = createPlaybackAttemptTracker();
+    const pending = tracker.reserve('session-a', 'assistant-1');
+
+    tracker.invalidate(pending);
+    const retried = tracker.reserve('session-a', 'assistant-1');
+
+    assert.equal(tracker.isCurrent(pending), false);
+    assert.equal(tracker.isCurrent(retried), true);
+    assert.notEqual(retried.token, pending.token);
+  });
+
   it('duplicate play attempts while speech fetch is in flight keep only one active reservation per session until superseded', () => {
     const tracker = createPlaybackAttemptTracker();
     const first = tracker.reserve('session-a', 'assistant-1');
@@ -160,6 +183,35 @@ describe('assistant speech playback helper', () => {
     assert.equal(audio.pauseCalls, 1);
     assert.equal(audio.currentTime, 0);
     assert.equal(revoked, 'blob:stale-audio');
+  });
+
+  it('an explicitly invalidated in-flight fetch result is discarded and cleaned up immediately', () => {
+    let revoked = null;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = (value) => {
+      revoked = value;
+    };
+
+    const tracker = createPlaybackAttemptTracker();
+    const staleAttempt = tracker.reserve('session-a', 'assistant-1');
+    tracker.invalidate(staleAttempt);
+
+    const audio = {
+      currentTime: 7,
+      pauseCalls: 0,
+      pause() {
+        this.pauseCalls += 1;
+      },
+    };
+
+    if (!tracker.isCurrent(staleAttempt)) {
+      cleanupFetchedAssistantSpeech({ audio, objectUrl: 'blob:invalidated-audio' });
+    }
+
+    URL.revokeObjectURL = originalRevoke;
+    assert.equal(audio.pauseCalls, 1);
+    assert.equal(audio.currentTime, 0);
+    assert.equal(revoked, 'blob:invalidated-audio');
   });
 
   it('a superseded in-flight fetch result is discarded and cleaned up immediately', () => {
@@ -225,6 +277,44 @@ describe('backend speech start handshake', () => {
 
   it('keeps unmount cleanup deterministic during the handshake window', async () => {
     assert.deepEqual(await resolveAfterCleanup('unmount'), ['unmount']);
+  });
+
+  it('suppresses a late backend start acknowledgement after typed submit invalidates the pending attempt', async () => {
+    const stopCalls = [];
+    const handshake = createBackendSpeechStartHandshake(async (reason) => {
+      stopCalls.push(reason);
+    });
+    const tracker = createPlaybackAttemptTracker();
+    const pending = tracker.reserve('session-a', 'assistant-1');
+
+    handshake.beginStart();
+    tracker.invalidate(pending);
+    if (!tracker.isCurrent(pending)) {
+      await handshake.cancel('typed_submit');
+    }
+    await handshake.acknowledgeStart();
+
+    assert.deepEqual(stopCalls, ['typed_submit']);
+    assert.equal(handshake.state, 'stopped');
+  });
+
+  it('suppresses a late backend start acknowledgement after PTT press invalidates the pending attempt', async () => {
+    const stopCalls = [];
+    const handshake = createBackendSpeechStartHandshake(async (reason) => {
+      stopCalls.push(reason);
+    });
+    const tracker = createPlaybackAttemptTracker();
+    const pending = tracker.reserve('session-a', 'assistant-1');
+
+    handshake.beginStart();
+    tracker.invalidate(pending);
+    if (!tracker.isCurrent(pending)) {
+      await handshake.cancel('ptt_start');
+    }
+    await handshake.acknowledgeStart();
+
+    assert.deepEqual(stopCalls, ['ptt_start']);
+    assert.equal(handshake.state, 'stopped');
   });
 
   it('does not double-stop after cleanup already won the handshake race', async () => {

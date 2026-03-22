@@ -29,7 +29,7 @@ export function AskChipShell() {
   const speech = useAssistantSpeechPlayback(state.currentSessionId, state.messages);
 
   const interruptSpeaking = async (reason: string) => {
-    if (state.topLevelState === 'speaking' && speech.activeMessageId) {
+    if (state.topLevelState === 'speaking' || speech.pendingMessageId || speech.activeMessageId) {
       await speech.stop(reason);
     }
   };

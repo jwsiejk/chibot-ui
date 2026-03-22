@@ -26,6 +26,7 @@ export interface PlaybackAttemptReservation {
 export interface PlaybackAttemptTracker {
   reserve(sessionId: string, messageId: string): PlaybackAttemptReservation;
   isCurrent(attempt: PlaybackAttemptReservation): boolean;
+  invalidate(attempt?: PlaybackAttemptReservation): PlaybackAttemptReservation | null;
   clear(attempt: PlaybackAttemptReservation): void;
   hasCurrent(): boolean;
   current(): PlaybackAttemptReservation | null;
@@ -88,6 +89,14 @@ export function createPlaybackAttemptTracker(): PlaybackAttemptTracker {
     },
     isCurrent(attempt: PlaybackAttemptReservation) {
       return currentAttempt?.token === attempt.token;
+    },
+    invalidate(attempt?: PlaybackAttemptReservation) {
+      if (attempt && currentAttempt?.token !== attempt.token) {
+        return null;
+      }
+      const invalidatedAttempt = currentAttempt;
+      currentAttempt = null;
+      return invalidatedAttempt;
     },
     clear(attempt: PlaybackAttemptReservation) {
       if (currentAttempt?.token === attempt.token) {
