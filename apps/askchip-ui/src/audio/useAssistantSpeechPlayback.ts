@@ -26,7 +26,9 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   const latestSessionIdRef = useRef<string | null>(sessionId);
   const previousMessagesRef = useRef<TranscriptMessage[]>([]);
   const previousSessionIdRef = useRef<string | null>(sessionId);
+  const cleanupSessionIdRef = useRef<string | null>(sessionId);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+  const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
   const [speechError, setSpeechError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -52,6 +54,10 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   }, []);
 
   const stop = useCallback(async (reason: string) => {
+    const invalidatedAttempt = playbackAttemptTrackerRef.current.invalidate();
+    if (invalidatedAttempt) {
+      setPendingMessageId(null);
+    }
     await finalizePlayback(reason);
   }, [finalizePlayback]);
 
@@ -80,11 +86,13 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
 
     try {
       setSpeechError(null);
+      setPendingMessageId(message.id);
       const fetched = await askChipApiClient.getAssistantSpeech(sessionId, message.id);
       const isStaleAttempt = !playbackAttemptTrackerRef.current.isCurrent(attempt) || latestSessionIdRef.current !== sessionId;
       if (isStaleAttempt) {
         cleanupFetchedAssistantSpeech(fetched);
         playbackAttemptTrackerRef.current.clear(attempt);
+        setPendingMessageId(null);
         return;
       }
 
@@ -96,7 +104,6 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
         backendHandshake: createBackendSpeechStartHandshake((reason) => askChipApiClient.stopAssistantSpeech(sessionId, message.id, reason)),
       };
       activePlaybackRef.current = active;
-      playbackAttemptTrackerRef.current.clear(attempt);
       setActiveMessageId(message.id);
       active.audio.addEventListener('ended', () => {
         void finalizePlayback('ended');
@@ -125,12 +132,18 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
         }
         throw error;
       }
+      if (!playbackAttemptTrackerRef.current.isCurrent(attempt)) {
+        await active.backendHandshake.cancel('stale_start');
+      }
       await active.backendHandshake.acknowledgeStart();
+      playbackAttemptTrackerRef.current.clear(attempt);
+      setPendingMessageId(null);
       if (activePlaybackRef.current !== active) {
         return;
       }
     } catch (error) {
       playbackAttemptTrackerRef.current.clear(attempt);
+      setPendingMessageId((current) => (current === message.id ? null : current));
       if (error instanceof AssistantSpeechPlaybackCanceledError) {
         return;
       }
@@ -155,24 +168,19 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   }, [nextMessage, play, sessionId]);
 
   useEffect(() => () => {
-    void finalizePlayback('unmount');
-  }, [finalizePlayback]);
+    void stop('unmount');
+  }, [stop]);
 
   useEffect(() => {
-    const active = activePlaybackRef.current;
-    if (sessionId !== latestSessionIdRef.current) {
-      return;
+    if (cleanupSessionIdRef.current !== sessionId) {
+      cleanupSessionIdRef.current = sessionId;
+      void stop('session_switch');
     }
-    if (!active) {
-      return;
-    }
-    if (sessionId !== active.sessionId) {
-      void finalizePlayback('session_switch');
-    }
-  }, [finalizePlayback, sessionId]);
+  }, [sessionId, stop]);
 
   return {
     activeMessageId,
+    pendingMessageId,
     speechError,
     stop,
   };

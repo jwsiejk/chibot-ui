@@ -985,6 +985,85 @@ def test_assistant_speech_uses_same_canonical_message(tmp_path: Path) -> None:
     assert 'content' not in updated['messages'][-1]
 
 
+def test_stale_speech_start_is_rejected_after_session_moves_into_newer_turn_state(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Older reply'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport, stt_service=FakeSttService(text='voice question'), tts_adapter=FakeTtsService())
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Stale speech state'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
+        assistant_id = turn.json()['assistant_message_id']
+
+        started = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        stale_start = client.post(f'/api/v1/sessions/{session_id}/messages/{assistant_id}/speech/start')
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert started.status_code == 200
+    assert stale_start.status_code == 409
+    assert stale_start.json()['detail'] == 'assistant speech start is stale for the current session state'
+    assert transcript['session']['status'] == 'listening'
+    assert all(event['type'] != 'tts.started' for event in transcript['events'])
+
+
+def test_stale_speech_start_is_rejected_after_a_newer_completed_turn_and_does_not_overwrite_ready_state(tmp_path: Path) -> None:
+    responses = iter([
+        [{'message': {'content': 'First reply'}, 'done': True}],
+        [{'message': {'content': 'Second reply'}, 'done': True}],
+    ])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        chunks = next(responses)
+        body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
+        return httpx.Response(200, content=body)
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), tts_adapter=FakeTtsService())
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Stale speech latest'}).json()['id']
+        first = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'First question'})
+        second = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Second question'})
+        stale_start = client.post(
+            f"/api/v1/sessions/{session_id}/messages/{first.json()['assistant_message_id']}/speech/start"
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert stale_start.status_code == 409
+    assert stale_start.json()['detail'] == 'assistant speech start is stale for the current session state'
+    assert transcript['session']['status'] == 'ready'
+    assert [message['text'] for message in transcript['messages'] if message['role'] == 'assistant'] == ['First reply', 'Second reply']
+    assert len([event for event in transcript['events'] if event['type'] == 'tts.started']) == 0
+
+
+def test_one_active_speech_playback_per_session_still_holds(tmp_path: Path) -> None:
+    responses = iter([
+        [{'message': {'content': 'Reply one'}, 'done': True}],
+        [{'message': {'content': 'Reply two'}, 'done': True}],
+    ])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        chunks = next(responses)
+        body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
+        return httpx.Response(200, content=body)
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), tts_adapter=FakeTtsService())
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'One playback'}).json()['id']
+        first = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'First'})
+        second = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Second'})
+        latest_id = second.json()['assistant_message_id']
+        older_id = first.json()['assistant_message_id']
+
+        start_latest = client.post(f'/api/v1/sessions/{session_id}/messages/{latest_id}/speech/start')
+        start_older_while_active = client.post(f'/api/v1/sessions/{session_id}/messages/{older_id}/speech/start')
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert start_latest.status_code == 200
+    assert start_older_while_active.status_code == 409
+    assert transcript['session']['status'] == 'speaking'
+    assert len([event for event in transcript['events'] if event['type'] == 'tts.started']) == 1
+    assert len([event for event in transcript['events'] if event['type'] == 'state' and event['payload']['state'] == 'speaking']) == 1
+
+
 def test_speaking_state_and_tts_events_only_emit_during_actual_playback(tmp_path: Path) -> None:
     transport = streaming_transport([{'message': {'content': 'Speech state'}, 'done': True}])
     app = make_app(tmp_path, transport=transport, tts_adapter=FakeTtsService())
