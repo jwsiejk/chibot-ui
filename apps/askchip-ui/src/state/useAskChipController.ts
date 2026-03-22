@@ -15,6 +15,7 @@ import {
   MAX_RECENT_TIMINGS,
   type VoiceDraftState,
 } from './controllerHelpers';
+import { createReadinessPoller, isReadinessSettled, loadBootstrapShellData } from './readinessPolling';
 import type {
   AskChipEvent,
   ConfigResponse,
@@ -38,6 +39,7 @@ export interface AskChipControllerState {
   config: ConfigResponse | null;
   readiness: ReadinessResponse | null;
   connectionState: ConnectionState;
+  readinessError: string | null;
   topLevelState: TurnState | null;
   pendingTurn: boolean;
   voiceDraft: VoiceDraftState | null;
@@ -60,6 +62,7 @@ export function useAskChipController() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting');
   const [readiness, setReadiness] = useState<ReadinessResponse | null>(null);
+  const [readinessError, setReadinessError] = useState<string | null>(null);
   const [topLevelState, setTopLevelState] = useState<TurnState | null>(null);
   const [pendingTurn, setPendingTurn] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraftState | null>(null);
@@ -109,9 +112,14 @@ export function useAskChipController() {
   const bootstrap = useCallback(async () => {
     try {
       setAppError(null);
-      const [nextConfig, nextReadiness, nextSessions] = await Promise.all([askChipApiClient.getConfig(), askChipApiClient.getReadiness(), loadSessions()]);
+      const { config: nextConfig, sessions: nextSessions, readiness: nextReadiness, readinessError: nextReadinessError } = await loadBootstrapShellData({
+        getConfig: () => askChipApiClient.getConfig(),
+        getReadiness: () => askChipApiClient.getReadiness(),
+        loadSessions,
+      });
       setConfig(nextConfig);
       setReadiness(nextReadiness);
+      setReadinessError(nextReadinessError);
       const storedId = localStorage.getItem(STORAGE_KEY);
       const preferredId = storedId && nextSessions.some((session) => session.id === storedId)
         ? storedId
@@ -147,6 +155,29 @@ export function useAskChipController() {
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
+
+
+  useEffect(() => {
+    if (!readinessError && (!readiness || isReadinessSettled(readiness))) {
+      return;
+    }
+
+    const poller = createReadinessPoller({
+      getReadiness: () => askChipApiClient.getReadiness(),
+      onUpdate: (nextReadiness) => {
+        setReadiness(nextReadiness);
+        setReadinessError(null);
+      },
+      onError: (message) => {
+        setReadinessError(message);
+      },
+    });
+
+    poller.start();
+    return () => {
+      poller.stop();
+    };
+  }, [readiness, readinessError]);
 
   const handleEvent = useCallback((event: AskChipEvent) => {
     if (event.type === 'state') {
@@ -355,6 +386,7 @@ export function useAskChipController() {
       config,
     readiness,
       connectionState,
+      readinessError,
       topLevelState,
       pendingTurn,
       voiceDraft,

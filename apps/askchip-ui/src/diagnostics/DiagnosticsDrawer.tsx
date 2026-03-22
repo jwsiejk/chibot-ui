@@ -19,7 +19,7 @@ function summarizeStopReason(events: EventRecord[]): string {
   return reason ? `${stopEvent.type}: ${reason}` : stopEvent.type;
 }
 
-export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, audioDiagnostics, webrtcDiagnostics, events, timings, config, readiness, speechState, collapsed, onToggle }: {
+export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, audioDiagnostics, webrtcDiagnostics, events, timings, config, readiness, speechState, readinessError, collapsed, onToggle }: {
   connectionState: ConnectionState;
   topLevelState: TurnState | null;
   modelName: string | null;
@@ -30,6 +30,7 @@ export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, a
   config: ConfigResponse | null;
   readiness: ReadinessResponse | null;
   speechState: { activeMessageId: string | null; pendingMessageId: string | null; speechError: string | null };
+  readinessError: string | null;
   collapsed: boolean;
   onToggle: () => void;
 }) {
@@ -68,6 +69,18 @@ export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, a
 
           <div className="rounded-[1.5rem] border border-slate-900 bg-slate-950/60 p-4">
             <h3 className="mb-3 text-sm font-medium text-white">Readiness and warm-up</h3>
+            <div className="mb-3 space-y-2 text-xs text-slate-300">
+              {speechState.speechError ? (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-100">
+                  Latest speech playback/TTS error: {speechState.speechError}
+                </div>
+              ) : null}
+              {readinessError ? (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-100">
+                  Readiness diagnostics load error: {readinessError}
+                </div>
+              ) : null}
+            </div>
             {!readiness ? <p className="text-xs text-slate-500">No readiness snapshot loaded yet.</p> : <div className="space-y-2 text-xs text-slate-300">
               <p className="text-slate-400">Warm-up active: <span className="text-white">{readiness.warmup_active ? 'yes' : 'no'}</span></p>
               {Object.entries(readiness.checks).map(([key, check]) => (
