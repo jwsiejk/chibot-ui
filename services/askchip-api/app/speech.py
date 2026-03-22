@@ -45,12 +45,12 @@ class SpeechService:
 
     async def start_playback(self, session_id: str, message_id: str) -> None:
         message = self._require_message(session_id, message_id)
-        self._require_startable_session_state(session_id, message)
         active_message_id = self._active_playback_by_session.get(session_id)
         if active_message_id == message_id:
             return
         if active_message_id is not None and active_message_id != message_id:
             raise ValueError('another assistant speech playback is already active for this session')
+        self._require_startable_session_state(session_id, message)
 
         now = datetime.now(timezone.utc).isoformat()
         event = EventRecord(session_id=session_id, turn_id=message.turn_id, type='tts.started', payload={'message_id': message.id})
