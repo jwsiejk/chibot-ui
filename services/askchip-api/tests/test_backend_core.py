@@ -1064,6 +1064,42 @@ def test_one_active_speech_playback_per_session_still_holds(tmp_path: Path) -> N
     assert len([event for event in transcript['events'] if event['type'] == 'state' and event['payload']['state'] == 'speaking']) == 1
 
 
+def test_same_message_duplicate_speech_start_is_a_no_op_without_duplicate_events(tmp_path: Path) -> None:
+    responses = iter([
+        [{'message': {'content': 'Reply one'}, 'done': True}],
+        [{'message': {'content': 'Reply two'}, 'done': True}],
+    ])
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        chunks = next(responses)
+        body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
+        return httpx.Response(200, content=body)
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), tts_adapter=FakeTtsService())
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Speech idempotency'}).json()['id']
+        first = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'First'})
+        second = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Second'})
+        latest_id = second.json()['assistant_message_id']
+        older_id = first.json()['assistant_message_id']
+
+        start_latest = client.post(f'/api/v1/sessions/{session_id}/messages/{latest_id}/speech/start')
+        start_latest_again = client.post(f'/api/v1/sessions/{session_id}/messages/{latest_id}/speech/start')
+        stale_start = client.post(f'/api/v1/sessions/{session_id}/messages/{older_id}/speech/start')
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert start_latest.status_code == 200
+    assert start_latest_again.status_code == 200
+    assert start_latest_again.json() == {'status': 'speaking'}
+    assert stale_start.status_code == 409
+    assert stale_start.json()['detail'] == 'another assistant speech playback is already active for this session'
+    assert transcript['session']['status'] == 'speaking'
+    assert [message['text'] for message in transcript['messages'] if message['role'] == 'assistant'] == ['Reply one', 'Reply two']
+    assert len([message for message in transcript['messages'] if message['role'] == 'assistant']) == 2
+    assert len([event for event in transcript['events'] if event['type'] == 'tts.started']) == 1
+    assert len([event for event in transcript['events'] if event['type'] == 'state' and event['payload']['state'] == 'speaking']) == 1
+
+
 def test_speaking_state_and_tts_events_only_emit_during_actual_playback(tmp_path: Path) -> None:
     transport = streaming_transport([{'message': {'content': 'Speech state'}, 'done': True}])
     app = make_app(tmp_path, transport=transport, tts_adapter=FakeTtsService())
