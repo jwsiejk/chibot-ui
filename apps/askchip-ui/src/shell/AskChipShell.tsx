@@ -177,6 +177,7 @@ export function AskChipShell() {
               config={state.config}
               readiness={state.readiness}
               speechState={{ activeMessageId: speech.activeMessageId, pendingMessageId: speech.pendingMessageId, speechError: speech.speechError }}
+              readinessError={state.readinessError}
               collapsed={!showDiagnostics}
               onToggle={toggleDiagnostics}
             />
