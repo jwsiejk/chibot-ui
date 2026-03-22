@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TranscriptMessage } from '../types/contract';
-import { askChipApiClient } from '../api/client';
+import { ApiError, askChipApiClient } from '../api/client';
 import {
   AssistantSpeechPlaybackCanceledError,
   cleanupFetchedAssistantSpeech,
@@ -156,7 +156,8 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
           cleanupFetchedAssistantSpeech(active);
         }
       }
-      setSpeechError(error instanceof Error ? error.message : 'Assistant speech playback failed.');
+      const detail = error instanceof ApiError ? error.detail : error instanceof Error ? error.message : 'Assistant speech playback failed.';
+      setSpeechError(detail);
     }
   }, [finalizePlayback, sessionId]);
 
