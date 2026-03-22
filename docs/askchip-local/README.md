@@ -3,6 +3,7 @@
 ## Localhost defaults
 - Frontend dev server: `http://127.0.0.1:5173`
 - Backend API and WebSocket host: `http://127.0.0.1:8000` and `ws://127.0.0.1:8000`
+- Local API development expects CORS middleware to allow `http://127.0.0.1:5173` and `http://localhost:5173`.
 
 ## Frontend runtime configuration
 The AskChip frontend is local-first and defaults to localhost when no overrides are provided.

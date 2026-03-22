@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
@@ -99,6 +100,13 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         await state.webrtc_signaling.clear()
 
     app = FastAPI(title=config.app_name, lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=['http://127.0.0.1:5173', 'http://localhost:5173'],
+        allow_credentials=False,
+        allow_methods=['*'],
+        allow_headers=['*'],
+    )
 
     @app.get('/health')
     def health() -> JSONResponse:
