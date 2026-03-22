@@ -62,7 +62,7 @@ export class AskChipApiClient {
   async getAssistantSpeech(sessionId: string, messageId: string): Promise<{ audio: HTMLAudioElement; objectUrl: string; }> {
     const response = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/messages/${messageId}/speech`);
     if (!response.ok) {
-      throw new ApiError(response.status, `Assistant speech request failed with status ${response.status}`);
+      throw new ApiError(response.status, await this.getErrorDetail(response, `Assistant speech request failed with status ${response.status}`));
     }
     const blob = await response.blob();
     const objectUrl = URL.createObjectURL(blob);
@@ -114,6 +114,19 @@ export class AskChipApiClient {
     });
   }
 
+
+  private async getErrorDetail(response: Response, fallbackDetail: string): Promise<string> {
+    try {
+      const body = (await response.json()) as { detail?: string };
+      if (body.detail) {
+        return body.detail;
+      }
+    } catch {
+      // ignored: non-JSON error responses keep the default detail message
+    }
+    return fallbackDetail;
+  }
+
   private async request<T>(path: string, init?: RequestInit & { isJsonRequest?: boolean }): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
@@ -126,16 +139,7 @@ export class AskChipApiClient {
     });
 
     if (!response.ok) {
-      let detail = `Request failed with status ${response.status}`;
-      try {
-        const body = (await response.json()) as { detail?: string };
-        if (body.detail) {
-          detail = body.detail;
-        }
-      } catch {
-        // ignored: non-JSON error responses keep the default detail message
-      }
-      throw new ApiError(response.status, detail);
+      throw new ApiError(response.status, await this.getErrorDetail(response, `Request failed with status ${response.status}`));
     }
 
     return (await response.json()) as T;
