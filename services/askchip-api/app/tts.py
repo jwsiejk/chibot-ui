@@ -87,10 +87,11 @@ def _kokoro_runtime():
         ) from exc
 
     config = _kokoro_config_singleton
-    kwargs = {
-        "model_path": config.model_path,
-        "voices_path": config.voices_path,
-    }
+    kwargs = {}
+    if config.model_path is not None:
+        kwargs["model_path"] = config.model_path
+    if config.voices_path is not None:
+        kwargs["voices_path"] = config.voices_path
 
     if _kokoro_supports_device_kwarg(Kokoro):
         kwargs["device"] = config.device
