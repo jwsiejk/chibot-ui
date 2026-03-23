@@ -6,10 +6,10 @@ import {
   cleanupFetchedAssistantSpeech,
   createBackendSpeechStartHandshake,
   createPlaybackAttemptTracker,
-  findNextSpeechMessage,
+  findNextSpeechChunk,
   waitForPlaybackStart,
+  type SpeechChunkCandidate,
 } from './assistantSpeechHelpers';
-
 
 type ActivePlayback = {
   audio: HTMLAudioElement;
@@ -18,6 +18,7 @@ type ActivePlayback = {
   sessionId: string;
   waitController: AbortController;
   backendHandshake: ReturnType<typeof createBackendSpeechStartHandshake>;
+  spokenThrough: number;
 };
 
 export function useAssistantSpeechPlayback(sessionId: string | null, messages: TranscriptMessage[]) {
@@ -27,6 +28,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   const previousMessagesRef = useRef<TranscriptMessage[]>([]);
   const previousSessionIdRef = useRef<string | null>(sessionId);
   const cleanupSessionIdRef = useRef<string | null>(sessionId);
+  const spokenOffsetsRef = useRef(new Map<string, number>());
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
   const [speechError, setSpeechError] = useState<string | null>(null);
@@ -44,6 +46,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     activePlaybackRef.current = null;
     active.waitController.abort();
     cleanupFetchedAssistantSpeech(active);
+    spokenOffsetsRef.current.set(active.messageId, active.spokenThrough);
     setActiveMessageId(null);
 
     try {
@@ -61,9 +64,10 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     await finalizePlayback(reason);
   }, [finalizePlayback]);
 
-  const nextMessage = useMemo(() => findNextSpeechMessage({
+  const nextChunk = useMemo(() => findNextSpeechChunk({
     messages,
     previousMessages: previousMessagesRef.current,
+    spokenOffsets: spokenOffsetsRef.current,
     sessionChanged: previousSessionIdRef.current !== sessionId,
   }), [messages, sessionId]);
 
@@ -72,7 +76,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     previousSessionIdRef.current = sessionId;
   }, [messages, sessionId]);
 
-  const play = useCallback(async (message: TranscriptMessage) => {
+  const play = useCallback(async (candidate: SpeechChunkCandidate) => {
     if (!sessionId || activePlaybackRef.current) {
       return;
     }
@@ -82,12 +86,12 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       return;
     }
 
-    const attempt = playbackAttemptTrackerRef.current.reserve(sessionId, message.id);
+    const attempt = playbackAttemptTrackerRef.current.reserve(sessionId, candidate.message.id);
 
     try {
       setSpeechError(null);
-      setPendingMessageId(message.id);
-      const fetched = await askChipApiClient.getAssistantSpeech(sessionId, message.id);
+      setPendingMessageId(candidate.message.id);
+      const fetched = await askChipApiClient.getAssistantSpeech(sessionId, candidate.message.id, candidate.chunkText);
       const isStaleAttempt = !playbackAttemptTrackerRef.current.isCurrent(attempt) || latestSessionIdRef.current !== sessionId;
       if (isStaleAttempt) {
         cleanupFetchedAssistantSpeech(fetched);
@@ -98,13 +102,14 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
 
       const active: ActivePlayback = {
         ...fetched,
-        messageId: message.id,
+        messageId: candidate.message.id,
         sessionId,
+        spokenThrough: candidate.spokenThrough,
         waitController: new AbortController(),
-        backendHandshake: createBackendSpeechStartHandshake((reason) => askChipApiClient.stopAssistantSpeech(sessionId, message.id, reason)),
+        backendHandshake: createBackendSpeechStartHandshake((reason) => askChipApiClient.stopAssistantSpeech(sessionId, candidate.message.id, reason)),
       };
       activePlaybackRef.current = active;
-      setActiveMessageId(message.id);
+      setActiveMessageId(candidate.message.id);
       active.audio.addEventListener('ended', () => {
         void finalizePlayback('ended');
       }, { once: true });
@@ -123,7 +128,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
 
       active.backendHandshake.beginStart();
       try {
-        await askChipApiClient.startAssistantSpeech(sessionId, message.id);
+        await askChipApiClient.startAssistantSpeech(sessionId, candidate.message.id);
       } catch (error) {
         try {
           await active.backendHandshake.failStart('start_failed');
@@ -143,11 +148,11 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       }
     } catch (error) {
       playbackAttemptTrackerRef.current.clear(attempt);
-      setPendingMessageId((current) => (current === message.id ? null : current));
+      setPendingMessageId((current) => (current === candidate.message.id ? null : current));
       if (error instanceof AssistantSpeechPlaybackCanceledError) {
         return;
       }
-      const isCurrent = activePlaybackRef.current?.messageId === message.id;
+      const isCurrent = activePlaybackRef.current?.messageId === candidate.message.id;
       if (isCurrent) {
         const active = activePlaybackRef.current;
         activePlaybackRef.current = null;
@@ -162,11 +167,11 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   }, [finalizePlayback, sessionId]);
 
   useEffect(() => {
-    if (!nextMessage || !sessionId || activePlaybackRef.current) {
+    if (!nextChunk || !sessionId || activePlaybackRef.current) {
       return;
     }
-    void play(nextMessage);
-  }, [nextMessage, play, sessionId]);
+    void play(nextChunk);
+  }, [nextChunk, play, sessionId]);
 
   useEffect(() => () => {
     void stop('unmount');
@@ -175,6 +180,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   useEffect(() => {
     if (cleanupSessionIdRef.current !== sessionId) {
       cleanupSessionIdRef.current = sessionId;
+      spokenOffsetsRef.current = new Map();
       void stop('session_switch');
     }
   }, [sessionId, stop]);

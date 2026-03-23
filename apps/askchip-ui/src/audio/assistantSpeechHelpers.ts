@@ -32,35 +32,119 @@ export interface PlaybackAttemptTracker {
   current(): PlaybackAttemptReservation | null;
 }
 
+export interface SpeechChunkCandidate {
+  message: TranscriptMessage;
+  chunkText: string;
+  spokenThrough: number;
+}
+
+const MIN_CHUNK_CHARS = 24;
+const MIN_CHUNK_WORDS = 4;
+
 export function hasSpeechStarted(message: TranscriptMessage): boolean {
   const speech = message.metadata?.speech;
   return typeof speech === 'object' && speech !== null && 'last_started_at' in speech;
 }
 
-export function findNextSpeechMessage(params: {
+export function findNextSpeechChunk(params: {
   messages: TranscriptMessage[];
   previousMessages: TranscriptMessage[];
+  spokenOffsets: Map<string, number>;
   sessionChanged: boolean;
-}): TranscriptMessage | null {
+}): SpeechChunkCandidate | null {
   if (params.sessionChanged || params.previousMessages.length === 0) {
     return null;
   }
 
-  const previousById = new Map(params.previousMessages.map((message) => [message.id, message]));
-  const eligible = [...params.messages]
-    .filter((message) => message.role === 'assistant' && message.status === 'completed' && message.text.trim())
-    .filter((message) => {
-      const previous = previousById.get(message.id);
-      if (!previous) {
-        return false;
-      }
-      if (hasSpeechStarted(message)) {
-        return false;
-      }
-      return previous.status !== 'completed' || !previous.text.trim();
-    });
+  const latestAssistantMessage = [...params.messages].reverse().find(
+    (message) => message.role === 'assistant' && message.source === 'model_output' && message.text.trim(),
+  );
+  if (!latestAssistantMessage) {
+    return null;
+  }
 
-  return eligible.length > 0 ? eligible[eligible.length - 1] : null;
+  const previousById = new Map(params.previousMessages.map((message) => [message.id, message]));
+  const previousMessage = previousById.get(latestAssistantMessage.id);
+  if (!previousMessage) {
+    return null;
+  }
+
+  const spokenOffset = params.spokenOffsets.get(latestAssistantMessage.id) ?? 0;
+  return getNextSpeechChunk(latestAssistantMessage, spokenOffset);
+}
+
+export function getNextSpeechChunk(message: TranscriptMessage, spokenOffset: number): SpeechChunkCandidate | null {
+  if (!message.text.trim()) {
+    return null;
+  }
+
+  const normalizedSpokenOffset = Math.max(0, Math.min(spokenOffset, message.text.length));
+  const remainingText = message.text.slice(normalizedSpokenOffset);
+  if (!remainingText.trim()) {
+    return null;
+  }
+
+  const stableBoundary = findStableBoundaryIndex(remainingText);
+  if (stableBoundary !== null) {
+    const chunkText = remainingText.slice(0, stableBoundary).trim();
+    if (isNaturalSpeechChunk(chunkText)) {
+      return {
+        message,
+        chunkText,
+        spokenThrough: normalizedSpokenOffset + stableBoundary,
+      };
+    }
+  }
+
+  if (message.status === 'completed') {
+    const finalTail = remainingText.trim();
+    if (finalTail) {
+      return {
+        message,
+        chunkText: finalTail,
+        spokenThrough: message.text.length,
+      };
+    }
+  }
+
+  return null;
+}
+
+function isNaturalSpeechChunk(text: string): boolean {
+  return text.length >= MIN_CHUNK_CHARS || text.split(/\s+/).filter(Boolean).length >= MIN_CHUNK_WORDS;
+}
+
+function findStableBoundaryIndex(text: string): number | null {
+  let lastBoundary: number | null = null;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const current = text[index];
+    const next = text[index + 1] ?? '';
+    const trailing = text.slice(index + 1);
+
+    if ((current === '.' || current === '!' || current === '?') && (!next || /\s|["')\]]/.test(next))) {
+      lastBoundary = consumeBoundary(text, index);
+      continue;
+    }
+
+    if ((current === ';' || current === ':' || current === '\n') && trailing.trim()) {
+      const candidate = consumeBoundary(text, index);
+      const chunk = text.slice(0, candidate).trim();
+      if (isNaturalSpeechChunk(chunk)) {
+        lastBoundary = candidate;
+      }
+    }
+  }
+
+  return lastBoundary;
+}
+
+function consumeBoundary(text: string, index: number): number {
+  let cursor = index + 1;
+  while (cursor < text.length && /["')\]\s]/.test(text[cursor] ?? '')) {
+    cursor += 1;
+  }
+  return cursor;
 }
 
 function normalizePlaybackError(error: unknown): Error {

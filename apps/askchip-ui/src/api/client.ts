@@ -65,8 +65,9 @@ export class AskChipApiClient {
     });
   }
 
-  async getAssistantSpeech(sessionId: string, messageId: string): Promise<{ audio: HTMLAudioElement; objectUrl: string; }> {
-    const response = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/messages/${messageId}/speech`);
+  async getAssistantSpeech(sessionId: string, messageId: string, text?: string): Promise<{ audio: HTMLAudioElement; objectUrl: string; }> {
+    const search = text ? `?text=${encodeURIComponent(text)}` : '';
+    const response = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/messages/${messageId}/speech${search}`);
     if (!response.ok) {
       throw new ApiError(response.status, await this.getErrorDetail(response, `Assistant speech request failed with status ${response.status}`));
     }

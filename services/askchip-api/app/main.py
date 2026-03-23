@@ -191,12 +191,12 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
 
 
     @app.get('/api/v1/sessions/{session_id}/messages/{message_id}/speech')
-    def get_assistant_speech(session_id: str, message_id: str) -> Response:
+    def get_assistant_speech(session_id: str, message_id: str, text: str | None = Query(default=None)) -> Response:
         session = state.db.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail='session not found')
         try:
-            speech = state.speech.synthesize_message(session_id, message_id)
+            speech = state.speech.synthesize_message(session_id, message_id, text=text)
             return Response(content=speech.audio_bytes, media_type=speech.content_type)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -226,8 +226,8 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         payload = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
         reason = payload.get('reason') if isinstance(payload, dict) else None
         try:
-            await state.speech.stop_playback(session_id, message_id, reason=str(reason or 'stopped'))
-            return JSONResponse({'status': 'ready'})
+            status = await state.speech.stop_playback(session_id, message_id, reason=str(reason or 'stopped'))
+            return JSONResponse({'status': status})
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
