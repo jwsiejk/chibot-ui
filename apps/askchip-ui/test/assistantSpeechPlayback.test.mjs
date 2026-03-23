@@ -5,7 +5,8 @@ import {
   cleanupFetchedAssistantSpeech,
   createBackendSpeechStartHandshake,
   createPlaybackAttemptTracker,
-  findNextSpeechMessage,
+  findNextSpeechChunk,
+  getNextSpeechChunk,
   waitForPlaybackStart,
 } from '../.test-dist/audio/assistantSpeechHelpers.js';
 
@@ -62,20 +63,23 @@ class HangingAudio extends FakeAudio {
 }
 
 describe('assistant speech playback helper', () => {
-  it('selects only a newly completed assistant message for auto-play', () => {
-    const result = findNextSpeechMessage({
-      previousMessages: [message({ id: 'assistant-2', status: 'streaming', text: 'Hello' })],
-      messages: [message({ id: 'assistant-2', status: 'completed', text: 'Hello there' })],
+  it('selects a stable sentence chunk from the latest streaming assistant message', () => {
+    const result = findNextSpeechChunk({
+      previousMessages: [message({ id: 'assistant-2', status: 'streaming', text: 'Hello there' })],
+      messages: [message({ id: 'assistant-2', status: 'streaming', text: 'Hello there. Nice to see you' })],
+      spokenOffsets: new Map(),
       sessionChanged: false,
     });
 
-    assert.equal(result?.id, 'assistant-2');
+    assert.equal(result?.message.id, 'assistant-2');
+    assert.equal(result?.chunkText, 'Hello there.');
   });
 
   it('does not auto-play historical transcript messages on initial load', () => {
-    const result = findNextSpeechMessage({
+    const result = findNextSpeechChunk({
       previousMessages: [],
       messages: [message({ id: 'assistant-2' })],
+      spokenOffsets: new Map(),
       sessionChanged: false,
     });
 
@@ -83,9 +87,10 @@ describe('assistant speech playback helper', () => {
   });
 
   it('does not auto-play historical transcript messages after session selection', () => {
-    const result = findNextSpeechMessage({
+    const result = findNextSpeechChunk({
       previousMessages: [message({ id: 'assistant-old' })],
       messages: [message({ id: 'assistant-old' })],
+      spokenOffsets: new Map(),
       sessionChanged: true,
     });
 
@@ -95,14 +100,33 @@ describe('assistant speech playback helper', () => {
   it('does not create a second assistant speech row in the selector path', () => {
     const messages = [message({ id: 'assistant-1', text: 'Only one row' })];
 
-    const result = findNextSpeechMessage({
+    const result = findNextSpeechChunk({
       previousMessages: [message({ id: 'assistant-1', status: 'streaming', text: '' })],
       messages,
+      spokenOffsets: new Map(),
       sessionChanged: false,
     });
 
     assert.equal(messages.length, 1);
-    assert.equal(result?.text, 'Only one row');
+    assert.equal(result, null);
+  });
+
+  it('does not repeat already spoken text when a later stable sentence arrives', () => {
+    const result = findNextSpeechChunk({
+      previousMessages: [message({ id: 'assistant-3', status: 'streaming', text: 'First sentence.' })],
+      messages: [message({ id: 'assistant-3', status: 'streaming', text: 'First sentence. Second sentence.' })],
+      spokenOffsets: new Map([['assistant-3', 'First sentence.'.length]]),
+      sessionChanged: false,
+    });
+
+    assert.equal(result?.chunkText, 'Second sentence.');
+  });
+
+  it('speaks the final tail after completion even without trailing sentence punctuation', () => {
+    const result = getNextSpeechChunk(message({ id: 'assistant-tail', status: 'completed', text: 'Short final wrap up' }), 0);
+
+    assert.equal(result?.chunkText, 'Short final wrap up');
+    assert.equal(result?.spokenThrough, 'Short final wrap up'.length);
   });
 
   it('waits for actual playback before resolving speech start acknowledgement sequencing', async () => {

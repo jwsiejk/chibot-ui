@@ -11,7 +11,11 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.config import Settings, load_settings
+from app.events import EventBus
 from app.main import create_app
+from app.speech import SpeechService
+from app.storage import Database
+from app.turns import TurnManager
 from app.prompting import PromptAssembler
 from app.stt import SttError, SttResult
 from app.webrtc.session_store import WebRtcSessionStore
@@ -119,6 +123,35 @@ class FakePeerFactory:
             peer=peer,
         )
 
+
+
+
+def make_speech_service(tmp_path: Path, *, tts_adapter: FakeTtsService | None = None):
+    db = Database(tmp_path / 'speech-service.db')
+    db.initialize()
+    event_bus = EventBus()
+    turn_manager = TurnManager(db, event_bus, ollama=None, prompt_assembler=PromptAssembler())
+    speech = SpeechService(db, event_bus, turn_manager, tts_adapter or FakeTtsService())
+    return db, speech
+
+
+def seed_session_with_assistant_message(db: Database, *, status: str, text: str, detail: str = 'seeded'):
+    from app.domain_models import MessageRecord, SessionRecord
+
+    session = SessionRecord(title='Speech test', status='thinking' if status == 'streaming' else 'ready')
+    db.create_session(session)
+    message = MessageRecord(
+        session_id=session.id,
+        role='assistant',
+        text=text,
+        status=status,
+        turn_id='turn-1',
+        source='model_output',
+        modality='text',
+        metadata={'detail': detail},
+    )
+    db.create_message(message)
+    return session, message
 
 def streaming_transport(chunks: list[dict[str, object]], status_code: int = 200) -> httpx.MockTransport:
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -997,6 +1030,65 @@ def test_cancel_then_typed_turn_keeps_canonical_transcript_flow_unchanged(tmp_pa
     assert [message['source'] for message in data['messages']] == ['typed_input', 'model_output']
     assert [message['text'] for message in data['messages']] == ['typed question', 'typed reply']
 
+
+
+
+def test_early_speech_can_begin_from_streaming_assistant_message_when_sentence_is_stable(tmp_path: Path) -> None:
+    tts = FakeTtsService(audio_bytes=b'RIFFearly')
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(db, status='streaming', text="Well, let's take a look. Still thinking")
+
+    synthesized = speech.synthesize_message(session.id, message.id, text="Well, let's take a look.")
+    start_state = asyncio.run(speech.start_playback(session.id, message.id))
+    stop_state = asyncio.run(speech.stop_playback(session.id, message.id, reason='ended'))
+    transcript = db.get_session(session.id)
+
+    assert synthesized.audio_bytes == b'RIFFearly'
+    assert tts.calls == ["Well, let's take a look."]
+    assert start_state is None
+    assert stop_state == 'thinking'
+    assert transcript is not None
+    assert transcript.status == 'thinking'
+
+
+def test_chunked_speech_does_not_repeat_already_spoken_text_and_speaks_final_tail(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(db, status='streaming', text='')
+
+    speech.synthesize_message(session.id, message.id, text='First sentence.')
+    db.update_message(message.id, text='First sentence. Second sentence without punctuation', status='completed', updated_at=datetime.now(timezone.utc).isoformat(), completed_at=datetime.now(timezone.utc).isoformat(), metadata=message.metadata)
+    speech.synthesize_message(session.id, message.id, text='Second sentence without punctuation')
+    updated = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ['First sentence.', 'Second sentence without punctuation']
+    assert updated.text == 'First sentence. Second sentence without punctuation'
+    assert 'content' not in updated.model_dump()
+
+
+def test_chunked_tts_still_sanitizes_stage_directions_without_mutating_canonical_text(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(db, status='streaming', text='Sure [laughs] hi (pause) there *chuckles* friend')
+
+    speech.synthesize_message(session.id, message.id, text=message.text)
+    stored = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ['Sure, hi, there, friend']
+    assert stored.text == 'Sure [laughs] hi (pause) there *chuckles* friend'
+
+
+def test_playback_stop_returns_ready_when_generation_is_complete(tmp_path: Path) -> None:
+    db, speech = make_speech_service(tmp_path, tts_adapter=FakeTtsService())
+    session, message = seed_session_with_assistant_message(db, status='completed', text='All wrapped up.')
+
+    asyncio.run(speech.start_playback(session.id, message.id))
+    stop_state = asyncio.run(speech.stop_playback(session.id, message.id, reason='ended'))
+    transcript = db.get_session(session.id)
+
+    assert stop_state == 'ready'
+    assert transcript is not None
+    assert transcript.status == 'ready'
 
 def test_assistant_speech_sanitizes_stage_directions_for_tts_only(tmp_path: Path) -> None:
     transport = streaming_transport([{'message': {'content': 'Sure [laughs] hi (pause) there *chuckles* friend'}, 'done': True}])

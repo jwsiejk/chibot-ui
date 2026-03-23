@@ -19,7 +19,7 @@ const STATE_COPY: Record<TurnState, { label: string; detail: string }> = {
   },
   speaking: {
     label: 'Speaking',
-    detail: 'The completed canonical assistant message is actively playing through the local Kokoro speech path.',
+    detail: 'A stable chunk from the canonical assistant message is actively playing through the local Kokoro speech path, even if generation is still finishing.',
   },
   error: {
     label: 'Error',
