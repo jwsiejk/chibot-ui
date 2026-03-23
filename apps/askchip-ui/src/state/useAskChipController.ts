@@ -53,6 +53,16 @@ function sortSessions(items: SessionRecord[]): SessionRecord[] {
   return [...items].sort((left, right) => right.updated_at.localeCompare(left.updated_at));
 }
 
+function clearCurrentSessionState() {
+  return {
+    currentSessionId: null as string | null,
+    messages: [] as TranscriptMessage[],
+    events: [] as EventRecord[],
+    timings: [] as TimingRecord[],
+    topLevelState: null as TurnState | null,
+  };
+}
+
 export function useAskChipController() {
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -128,11 +138,14 @@ export function useAskChipController() {
       if (preferredId) {
         await selectSession(preferredId);
       } else {
-        setCurrentSessionId(null);
-        setMessages([]);
-        setEvents([]);
-        setTimings([]);
-        setTopLevelState(null);
+        localStorage.removeItem(STORAGE_KEY);
+        activeSessionIdRef.current = null;
+        const cleared = clearCurrentSessionState();
+        setCurrentSessionId(cleared.currentSessionId);
+        setMessages(cleared.messages);
+        setEvents(cleared.events);
+        setTimings(cleared.timings);
+        setTopLevelState(cleared.topLevelState);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to reach AskChip API.';
@@ -273,6 +286,39 @@ export function useAskChipController() {
     }
   }, [currentSessionId, loadTranscript]);
 
+  const deleteSession = useCallback(async (sessionId: string) => {
+    if (!window.confirm('Delete this local session and its transcript?')) {
+      return;
+    }
+
+    setAppError(null);
+    await askChipApiClient.deleteSession(sessionId);
+    const nextSessions = await loadSessions();
+
+    if (sessionId !== activeSessionIdRef.current) {
+      return;
+    }
+
+    const nextSession = nextSessions[0] ?? null;
+    if (nextSession) {
+      await selectSession(nextSession.id);
+      return;
+    }
+
+    localStorage.removeItem(STORAGE_KEY);
+    activeSessionIdRef.current = null;
+    setVoiceDraft(null);
+    clearReconnectTimer();
+    setConnectionState('disconnected');
+    setWsNotice(null);
+    const cleared = clearCurrentSessionState();
+    setCurrentSessionId(cleared.currentSessionId);
+    setMessages(cleared.messages);
+    setEvents(cleared.events);
+    setTimings(cleared.timings);
+    setTopLevelState(cleared.topLevelState);
+  }, [clearReconnectTimer, loadSessions, selectSession]);
+
   const restoreVoiceStateFromBackend = useCallback(async (sessionId: string) => {
     try {
       await loadTranscript(sessionId);
@@ -399,6 +445,7 @@ export function useAskChipController() {
       createSession,
       selectSession,
       reloadTranscript,
+      deleteSession,
       sendTurn,
       startVoiceTurn,
       finishVoiceTurn,

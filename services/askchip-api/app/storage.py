@@ -186,6 +186,17 @@ class Database:
             conn.execute('UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?', (title, updated_at, session_id))
         return self.get_session(session_id)
 
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock, self.connect() as conn:
+            exists = conn.execute('SELECT 1 FROM sessions WHERE id = ?', (session_id,)).fetchone()
+            if exists is None:
+                return False
+            conn.execute('DELETE FROM timings WHERE session_id = ?', (session_id,))
+            conn.execute('DELETE FROM events WHERE session_id = ?', (session_id,))
+            conn.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
+            conn.execute('DELETE FROM sessions WHERE id = ?', (session_id,))
+        return True
+
     def update_session_state(
         self,
         session_id: str,

@@ -170,6 +170,12 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             raise HTTPException(status_code=404, detail='session not found')
         return JSONResponse(updated.model_dump(mode='json'))
 
+    @app.delete('/api/v1/sessions/{session_id}')
+    def delete_session(session_id: str) -> JSONResponse:
+        if not state.db.delete_session(session_id):
+            raise HTTPException(status_code=404, detail='session not found')
+        return JSONResponse({'status': 'deleted', 'session_id': session_id})
+
     @app.get('/api/v1/sessions/{session_id}/transcript')
     def get_transcript(session_id: str) -> JSONResponse:
         session = state.db.get_session(session_id)
