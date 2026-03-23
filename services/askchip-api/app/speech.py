@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timezone
 from time import perf_counter
 
@@ -23,7 +25,7 @@ class SpeechService:
         started = perf_counter()
         timing = self.db.create_timing(TimingRecord(session_id=session_id, turn_id=message.turn_id, phase='tts', meta={'message_id': message.id}))
         try:
-            speech = self.tts.synthesize(message.text)
+            speech = self.tts.synthesize(self._sanitize_tts_text(message.text))
         except TtsError as exc:
             ended_at = datetime.now(timezone.utc)
             self.db.update_timing(timing.id, ended_at.isoformat(), int((perf_counter() - started) * 1000), {'error': str(exc), 'message_id': message.id})
@@ -80,6 +82,16 @@ class SpeechService:
             'speech': self._merge_speech_metadata(message, {'last_stopped_at': now, 'stop_reason': reason}),
         })
 
+
+    @staticmethod
+    def _sanitize_tts_text(text: str) -> str:
+        sanitized = re.sub(r'\s*[\[(\*]\s*(?:laughs?|chuckles?|sighs?|pause|pauses?)\s*[\])\*]\s*', ', ', text, flags=re.IGNORECASE)
+        sanitized = re.sub(r'\s*,\s*', ', ', sanitized)
+        sanitized = re.sub(r'(?:,\s*){2,}', ', ', sanitized)
+        sanitized = re.sub(r'\s+([,.!?;:])', r'\1', sanitized)
+        sanitized = re.sub(r'([.!?;,])(?=\S)', r'\1 ', sanitized)
+        sanitized = re.sub(r'\s+', ' ', sanitized).strip(' ,')
+        return sanitized or text
 
     def _require_startable_session_state(self, session_id: str, message: MessageRecord) -> None:
         session = self.db.get_session(session_id)

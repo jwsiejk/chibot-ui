@@ -351,7 +351,12 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     messages = assembler.build_messages(transcript, user_text='new question')
 
     assert messages[0].role == 'system'
-    assert messages[0].text.startswith('You are Marlene, the assistant inside AskChip Local.')
+    assert 'middle-aged Nebraska farmer turned tech geek' in messages[0].text
+    assert 'Keep answers shorter by default' in messages[0].text
+    assert 'Recognize jokes, teasing, sarcasm, and casual banter' in messages[1].text
+    assert "read the room from the user's words, pacing, and tone" in messages[1].text
+    assert 'Do not over-explain, over-talk' in messages[1].text
+    assert 'do not output stage directions like [laughs], (pause), or *chuckles*'.lower() in messages[1].text.lower()
     assert messages[-2].text == 'recent'
     assert messages[-1].model_dump() == {'role': 'user', 'text': 'new question'}
 
@@ -993,8 +998,8 @@ def test_cancel_then_typed_turn_keeps_canonical_transcript_flow_unchanged(tmp_pa
     assert [message['text'] for message in data['messages']] == ['typed question', 'typed reply']
 
 
-def test_assistant_speech_uses_same_canonical_message(tmp_path: Path) -> None:
-    transport = streaming_transport([{'message': {'content': 'Spoken reply'}, 'done': True}])
+def test_assistant_speech_sanitizes_stage_directions_for_tts_only(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Sure [laughs] hi (pause) there *chuckles* friend'}, 'done': True}])
     tts = FakeTtsService(audio_bytes=b'RIFFspeech')
     app = make_app(tmp_path, transport=transport, tts_adapter=tts)
     with TestClient(app) as client:
@@ -1007,9 +1012,9 @@ def test_assistant_speech_uses_same_canonical_message(tmp_path: Path) -> None:
 
     assert speech.status_code == 200
     assert speech.content == b'RIFFspeech'
-    assert tts.calls == ['Spoken reply']
+    assert tts.calls == ['Sure, hi, there, friend']
     assert len([message for message in updated['messages'] if message['role'] == 'assistant']) == 1
-    assert updated['messages'][-1]['text'] == 'Spoken reply'
+    assert updated['messages'][-1]['text'] == 'Sure [laughs] hi (pause) there *chuckles* friend'
     assert 'content' not in updated['messages'][-1]
 
 
