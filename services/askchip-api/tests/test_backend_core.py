@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings, load_settings
@@ -159,6 +160,39 @@ def streaming_transport(chunks: list[dict[str, object]], status_code: int = 200)
         return httpx.Response(status_code, content=body)
 
     return httpx.MockTransport(handler)
+
+
+def test_faster_whisper_stt_closes_tempfile_before_transcribe_and_cleans_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from app.stt import FasterWhisperSttService
+
+    captured: dict[str, object] = {}
+
+    class FakeModel:
+        def transcribe(self, path: str, vad_filter: bool = True):
+            temp_path = Path(path)
+            captured['path'] = temp_path
+            captured['vad_filter'] = vad_filter
+            captured['exists_during_transcribe'] = temp_path.exists()
+            captured['bytes'] = temp_path.read_bytes()
+            temp_path.rename(temp_path.with_suffix(temp_path.suffix + '.checked'))
+            moved_path = temp_path.with_suffix(temp_path.suffix + '.checked')
+            moved_path.rename(temp_path)
+            return iter([SimpleNamespace(text='hello', start=0.0, end=1.0)]), SimpleNamespace(duration=1.0, language='en')
+
+    monkeypatch.setattr(FasterWhisperSttService, '_load_model', staticmethod(lambda *args: FakeModel()))
+
+    service = FasterWhisperSttService(model_name='tiny', device='cpu', compute_type='int8', cpu_threads=1)
+    result = service.transcribe_bytes(b'voice-bytes', filename='voice-turn.webm')
+
+    temp_path = captured['path']
+    assert isinstance(temp_path, Path)
+    assert captured['vad_filter'] is False
+    assert captured['exists_during_transcribe'] is True
+    assert captured['bytes'] == b'voice-bytes'
+    assert result.text == 'hello'
+    assert not temp_path.exists()
 
 
 def test_session_creation_and_listing(tmp_path: Path) -> None:

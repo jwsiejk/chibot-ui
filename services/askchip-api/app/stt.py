@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+import os
+import tempfile
 from typing import Any
 
 
@@ -38,9 +39,11 @@ class FasterWhisperSttService:
             raise SttError('No audio bytes were provided for transcription.')
 
         suffix = Path(filename or 'voice-turn.webm').suffix or '.webm'
-        with NamedTemporaryFile(suffix=suffix, delete=True) as handle:
-            handle.write(audio_bytes)
-            handle.flush()
+        fd, temp_path = tempfile.mkstemp(suffix=suffix)
+        try:
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(audio_bytes)
+
             model = self._load_model(
                 self.model_name,
                 self.device,
@@ -48,7 +51,7 @@ class FasterWhisperSttService:
                 self.cpu_threads,
             )
             try:
-                segments, info = model.transcribe(handle.name, vad_filter=False)
+                segments, info = model.transcribe(temp_path, vad_filter=False)
             except Exception as exc:  # pragma: no cover - exact backend exception varies by runtime
                 raise SttError(f'faster-whisper transcription failed: {exc}') from exc
 
@@ -66,6 +69,8 @@ class FasterWhisperSttService:
                         'text': text,
                     }
                 )
+        finally:
+            Path(temp_path).unlink(missing_ok=True)
 
         return SttResult(
             text=' '.join(part.strip() for part in parts if part.strip()).strip(),
