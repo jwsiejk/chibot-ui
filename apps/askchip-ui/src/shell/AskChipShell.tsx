@@ -131,6 +131,7 @@ export function AskChipShell() {
               onCreate={actions.createSession}
               onSelect={actions.selectSession}
               onReload={actions.reloadTranscript}
+              onDelete={actions.deleteSession}
             />
             <MicSetupPanel
               devices={audio.devices}

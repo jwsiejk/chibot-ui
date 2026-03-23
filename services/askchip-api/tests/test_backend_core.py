@@ -143,6 +143,29 @@ def test_session_creation_and_listing(tmp_path: Path) -> None:
     assert items[0]['ready_at'] is not None
 
 
+def test_delete_session_removes_only_target_session_data(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'Reply'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport)
+    with TestClient(app) as client:
+        first_session_id = client.post('/api/v1/sessions', json={'title': 'Delete me'}).json()['id']
+        second_session_id = client.post('/api/v1/sessions', json={'title': 'Keep me'}).json()['id']
+        client.post(f'/api/v1/sessions/{first_session_id}/turns', json={'text': 'first question'})
+        client.post(f'/api/v1/sessions/{second_session_id}/turns', json={'text': 'second question'})
+
+        deleted = client.delete(f'/api/v1/sessions/{first_session_id}')
+        listed = client.get('/api/v1/sessions')
+        deleted_transcript = client.get(f'/api/v1/sessions/{first_session_id}/transcript')
+        kept_transcript = client.get(f'/api/v1/sessions/{second_session_id}/transcript')
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {'status': 'deleted', 'session_id': first_session_id}
+    assert [item['id'] for item in listed.json()['items']] == [second_session_id]
+    assert deleted_transcript.status_code == 404
+    assert kept_transcript.status_code == 200
+    assert kept_transcript.json()['session']['id'] == second_session_id
+    assert [message['text'] for message in kept_transcript.json()['messages']] == ['second question', 'Reply']
+
+
 def test_typed_turn_commits_and_assembles_assistant_message(tmp_path: Path) -> None:
     transport = streaming_transport(
         [

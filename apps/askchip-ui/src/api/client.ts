@@ -52,6 +52,12 @@ export class AskChipApiClient {
     return this.request<TranscriptResponse>(`/api/v1/sessions/${sessionId}/transcript`);
   }
 
+  async deleteSession(sessionId: string): Promise<{ status: string; session_id: string; }> {
+    return this.request<{ status: string; session_id: string; }>(`/api/v1/sessions/${sessionId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async createTurn(sessionId: string, payload: CreateTurnRequest): Promise<CreateTurnResponse> {
     return this.request<CreateTurnResponse>(`/api/v1/sessions/${sessionId}/turns`, {
       method: 'POST',

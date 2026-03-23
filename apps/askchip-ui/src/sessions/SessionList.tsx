@@ -15,12 +15,14 @@ export function SessionList({
   onCreate,
   onSelect,
   onReload,
+  onDelete,
 }: {
   sessions: SessionRecord[];
   currentSessionId: string | null;
   onCreate: () => Promise<void>;
   onSelect: (sessionId: string) => Promise<void>;
   onReload: () => Promise<void>;
+  onDelete: (sessionId: string) => Promise<void>;
 }) {
   return (
     <section className="rounded-[2rem] border border-slate-800 bg-panel/80 p-5 shadow-panel backdrop-blur">
@@ -47,26 +49,42 @@ export function SessionList({
           sessions.map((session) => {
             const active = session.id === currentSessionId;
             return (
-              <button
+              <div
                 key={session.id}
-                type="button"
-                onClick={() => void onSelect(session.id)}
                 className={[
-                  'w-full rounded-[1.5rem] border px-4 py-3 text-left transition',
+                  'flex items-start gap-2 rounded-[1.5rem] border px-3 py-3 transition',
                   active ? 'border-cyan-400/40 bg-cyan-400/10' : 'border-slate-800 bg-slate-950/50 hover:border-slate-700',
                 ].join(' ')}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-medium text-white">{session.title}</p>
-                  <span className="rounded-full border border-slate-700 px-2 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-400">
-                    {session.status}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-400">
-                  <span>{formatRelative(session.updated_at)}</span>
-                  <span>{session.last_message_at ? 'Has transcript' : 'Empty transcript'}</span>
-                </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => void onSelect(session.id)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium text-white">{session.title}</p>
+                    <span className="rounded-full border border-slate-700 px-2 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                      {session.status}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-400">
+                    <span>{formatRelative(session.updated_at)}</span>
+                    <span>{session.last_message_at ? 'Has transcript' : 'Empty transcript'}</span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Delete ${session.title}`}
+                  title="Delete session"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onDelete(session.id);
+                  }}
+                  className="shrink-0 rounded-full border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400 transition hover:border-rose-400/40 hover:text-rose-200"
+                >
+                  Delete
+                </button>
+              </div>
             );
           })
         )}
