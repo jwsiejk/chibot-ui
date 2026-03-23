@@ -21,7 +21,7 @@ class Settings(BaseModel):
     stt_device: str = 'auto'
     stt_compute_type: str = 'int8'
     stt_cpu_threads: int = 4
-    tts_voice: str = 'af_heart'
+    tts_voice: str = 'am_michael'
     tts_device: str = 'cpu'
     tts_model_path: Path | None = None
     tts_voices_path: Path | None = None
