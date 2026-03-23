@@ -27,7 +27,7 @@ class Settings(BaseModel):
     tts_voices_path: Path | None = None
     tts_sample_rate_hz: int = 24000
     tts_speed: float = 1.0
-    tts_lang_code: str = 'a'
+    tts_lang_code: str = 'en-us'
     ollama_warmup_enabled: bool = True
     tts_warmup_enabled: bool = False
 

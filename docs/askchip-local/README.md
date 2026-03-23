@@ -53,5 +53,6 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - `ASKCHIP_TTS_DEVICE` defaults to `cpu`.
 - `ASKCHIP_TTS_MODEL_PATH` and `ASKCHIP_TTS_VOICES_PATH` can point at local Kokoro assets when your runtime requires explicit paths.
 - `ASKCHIP_TTS_SAMPLE_RATE_HZ`, `ASKCHIP_TTS_SPEED`, and `ASKCHIP_TTS_LANG_CODE` tune local speech synthesis.
+- When using the espeak fallback backend, American English voices should use `en-us` (British English would use `en-gb`).
 - Assistant speech is fetched from a dedicated HTTP endpoint, then the frontend reports real playback start/stop so `speaking` only appears while audio is actually playing.
 - Typed submit and push-to-talk press explicitly stop active assistant playback before the next turn starts. Merely typing in the composer does not interrupt playback.
