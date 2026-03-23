@@ -328,7 +328,7 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     messages = assembler.build_messages(transcript, user_text='new question')
 
     assert messages[0].role == 'system'
-    assert 'middle-aged Nebraska farmer turned tech geek' in messages[0].text
+    assert messages[0].text.startswith('You are Marlene, the assistant inside AskChip Local.')
     assert messages[-2].text == 'recent'
     assert messages[-1].model_dump() == {'role': 'user', 'text': 'new question'}
 
