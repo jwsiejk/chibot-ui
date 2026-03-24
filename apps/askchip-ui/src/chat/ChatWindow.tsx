@@ -57,8 +57,8 @@ export function ChatWindow({
     <section className="flex min-h-[34rem] flex-col rounded-[2rem] border border-slate-800 bg-panel/80 p-5 shadow-panel backdrop-blur">
       <header className="mb-4 flex items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Canonical transcript</p>
-          <h2 className="text-xl font-semibold text-white">Unified typed + voice history</h2>
+          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Conversation</p>
+          <h2 className="text-xl font-semibold text-white">Chat</h2>
         </div>
         <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">{messages.length} messages</span>
       </header>
