@@ -40,6 +40,7 @@ export interface SpeechChunkCandidate {
 
 const MIN_CHUNK_CHARS = 24;
 const MIN_CHUNK_WORDS = 4;
+const MAX_CHUNK_WINDOW_CHARS = 420;
 
 export function hasSpeechStarted(message: TranscriptMessage): boolean {
   const speech = message.metadata?.speech;
@@ -115,28 +116,41 @@ function isNaturalSpeechChunk(text: string): boolean {
 }
 
 function findStableBoundaryIndex(text: string): number | null {
-  let lastBoundary: number | null = null;
+  const maxScanLength = Math.min(text.length, MAX_CHUNK_WINDOW_CHARS);
+  let earliestSentenceBoundary: number | null = null;
+  let earliestPauseBoundary: number | null = null;
 
-  for (let index = 0; index < text.length; index += 1) {
+  for (let index = 0; index < maxScanLength; index += 1) {
     const current = text[index];
     const next = text[index + 1] ?? '';
     const trailing = text.slice(index + 1);
 
     if ((current === '.' || current === '!' || current === '?') && (!next || /\s|["')\]]/.test(next))) {
-      lastBoundary = consumeBoundary(text, index);
+      const candidate = consumeBoundary(text, index);
+      const chunk = text.slice(0, candidate).trim();
+      if (isNaturalSpeechChunk(chunk)) {
+        earliestSentenceBoundary = candidate;
+        break;
+      }
       continue;
     }
 
     if ((current === ';' || current === ':' || current === '\n') && trailing.trim()) {
       const candidate = consumeBoundary(text, index);
       const chunk = text.slice(0, candidate).trim();
-      if (isNaturalSpeechChunk(chunk)) {
-        lastBoundary = candidate;
+      if (earliestPauseBoundary === null && isNaturalSpeechChunk(chunk)) {
+        earliestPauseBoundary = candidate;
       }
     }
   }
 
-  return lastBoundary;
+  if (earliestSentenceBoundary !== null) {
+    return earliestSentenceBoundary;
+  }
+  if (earliestPauseBoundary !== null) {
+    return earliestPauseBoundary;
+  }
+  return null;
 }
 
 function consumeBoundary(text: string, index: number): number {

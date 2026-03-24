@@ -32,6 +32,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
   const [speechError, setSpeechError] = useState<string | null>(null);
+  const [playbackProgressVersion, setPlaybackProgressVersion] = useState(0);
 
   useEffect(() => {
     latestSessionIdRef.current = sessionId;
@@ -47,6 +48,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     active.waitController.abort();
     cleanupFetchedAssistantSpeech(active);
     spokenOffsetsRef.current.set(active.messageId, active.spokenThrough);
+    setPlaybackProgressVersion((version) => version + 1);
     setActiveMessageId(null);
 
     try {
@@ -69,7 +71,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     previousMessages: previousMessagesRef.current,
     spokenOffsets: spokenOffsetsRef.current,
     sessionChanged: previousSessionIdRef.current !== sessionId,
-  }), [messages, sessionId]);
+  }), [messages, sessionId, playbackProgressVersion]);
 
   useEffect(() => {
     previousMessagesRef.current = messages;
