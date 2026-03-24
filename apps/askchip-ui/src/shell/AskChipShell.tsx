@@ -1,21 +1,30 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MicSetupPanel } from '../audio/MicSetupPanel';
 import { useAssistantSpeechPlayback } from '../audio/useAssistantSpeechPlayback';
 import { useAudioFoundation } from '../audio/useAudioFoundation';
 import { createPttLifecycleController } from '../audio/pttLifecycle';
 import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
+import { askChipApiClient } from '../api/client';
+import { ChatWindow } from '../chat/ChatWindow';
 import { ChipStagePane } from '../chip-stage/ChipStagePane';
 import { DiagnosticsDrawer } from '../diagnostics/DiagnosticsDrawer';
 import { SessionList } from '../sessions/SessionList';
 import { useAskChipController } from '../state/useAskChipController';
+import { FloatingTranscriptWindow } from '../transcript/FloatingTranscriptWindow';
+import type { TranscriptMessage } from '../types/contract';
 import { UtilityRail } from '../utility/UtilityRail';
-import { ChatWindow } from '../chat/ChatWindow';
 import { useShellPanels } from './useShellPanels';
 
 function findActiveModelName(messages: ReturnType<typeof useAskChipController>['state']['messages']): string | null {
   const assistant = [...messages].reverse().find((message) => message.role === 'assistant');
   const model = assistant?.metadata.model;
   return typeof model === 'string' ? model : null;
+}
+
+function toChronologicalTranscript(messages: TranscriptMessage[], sessionId: string): TranscriptMessage[] {
+  return messages
+    .filter((message) => message.session_id === sessionId)
+    .sort((left, right) => left.created_at.localeCompare(right.created_at));
 }
 
 export function AskChipShell() {
@@ -25,6 +34,12 @@ export function AskChipShell() {
   const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
   const speech = useAssistantSpeechPlayback(state.currentSessionId, state.messages);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySessionId, setHistorySessionId] = useState<string | null>(null);
+  const [historySessionTitle, setHistorySessionTitle] = useState<string | null>(null);
+  const [historyMessages, setHistoryMessages] = useState<TranscriptMessage[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const interruptSpeaking = async (reason: string) => {
     if (state.topLevelState === 'speaking' || speech.pendingMessageId || speech.activeMessageId) {
@@ -81,6 +96,45 @@ export function AskChipShell() {
     pttLifecycle.dispose();
   }, [pttLifecycle]);
 
+  useEffect(() => {
+    if (!historySessionId) {
+      return;
+    }
+
+    const sessionStillExists = state.sessions.some((session) => session.id === historySessionId);
+    if (!sessionStillExists) {
+      setHistoryOpen(false);
+      setHistorySessionId(null);
+      setHistorySessionTitle(null);
+      setHistoryMessages([]);
+      setHistoryLoading(false);
+      setHistoryError(null);
+      return;
+    }
+
+    const session = state.sessions.find((item) => item.id === historySessionId) ?? null;
+    setHistorySessionTitle(session?.title ?? null);
+  }, [historySessionId, state.sessions]);
+
+  const openTranscriptHistory = async (sessionId: string) => {
+    const session = state.sessions.find((item) => item.id === sessionId) ?? null;
+    setHistoryOpen(true);
+    setHistorySessionId(sessionId);
+    setHistorySessionTitle(session?.title ?? null);
+    setHistoryLoading(true);
+    setHistoryError(null);
+
+    try {
+      const transcript = await askChipApiClient.getTranscript(sessionId);
+      setHistoryMessages(toChronologicalTranscript(transcript.messages, sessionId));
+    } catch (error) {
+      setHistoryMessages([]);
+      setHistoryError(error instanceof Error ? error.message : 'Unable to load transcript history.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-surface px-4 py-6 text-slate-100 md:px-6 md:py-8">
       <div className="mx-auto flex w-full max-w-[1520px] min-w-0 flex-col gap-6">
@@ -130,6 +184,7 @@ export function AskChipShell() {
               onSelect={actions.selectSession}
               onReload={actions.reloadTranscript}
               onDelete={actions.deleteSession}
+              onOpenTranscript={openTranscriptHistory}
             />
             <MicSetupPanel
               devices={audio.devices}
@@ -160,6 +215,16 @@ export function AskChipShell() {
               onPressStart={pttLifecycle.pressStart}
               onPressEnd={pttLifecycle.pressRelease}
               onPressCancel={pttLifecycle.pressCancel}
+              historyOpen={historyOpen}
+              historySessionTitle={historySessionTitle}
+              onOpenHistory={() => {
+                const fallbackSessionId = historySessionId ?? state.currentSessionId;
+                if (!fallbackSessionId) {
+                  return;
+                }
+                void openTranscriptHistory(fallbackSessionId);
+              }}
+              onCloseHistory={() => setHistoryOpen(false)}
             />
           </div>
 
@@ -182,6 +247,14 @@ export function AskChipShell() {
           </div>
         </section>
       </div>
+      <FloatingTranscriptWindow
+        open={historyOpen}
+        sessionTitle={historySessionTitle}
+        messages={historyMessages}
+        loading={historyLoading}
+        error={historyError}
+        onClose={() => setHistoryOpen(false)}
+      />
     </main>
   );
 }
