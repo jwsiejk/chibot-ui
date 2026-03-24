@@ -4,10 +4,12 @@ export function Composer({
   disabledReason,
   pending,
   onSend,
+  compact = false,
 }: {
   disabledReason: string | null;
   pending: boolean;
   onSend: (text: string) => Promise<void>;
+  compact?: boolean;
 }) {
   const [text, setText] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
@@ -29,14 +31,16 @@ export function Composer({
   }
 
   return (
-    <section className="sticky bottom-0 rounded-[2rem] border border-slate-800 bg-slate-950/90 p-4 shadow-panel backdrop-blur">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Composer</p>
-          <h2 className="text-lg font-semibold text-white">Typed turn input</h2>
+    <section className={compact ? '' : 'sticky bottom-0 rounded-[2rem] border border-slate-800 bg-slate-950/90 p-4 shadow-panel backdrop-blur'}>
+      {!compact && (
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Composer</p>
+            <h2 className="text-lg font-semibold text-white">Typed turn input</h2>
+          </div>
+          <div className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">Enter ↵ to send</div>
         </div>
-        <div className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">Enter ↵ to send</div>
-      </div>
+      )}
       <div className="flex gap-3">
         <textarea
           value={text}

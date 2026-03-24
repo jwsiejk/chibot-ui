@@ -20,6 +20,7 @@ export function VoiceInputPanel({
   onPressStart,
   onPressEnd,
   onPressCancel,
+  compact = false,
 }: {
   disabled: boolean;
   disabledReason: string | null;
@@ -27,6 +28,7 @@ export function VoiceInputPanel({
   onPressStart: () => Promise<void>;
   onPressEnd: () => Promise<void>;
   onPressCancel: () => Promise<void>;
+  compact?: boolean;
 }) {
   const pointerIdRef = useRef<number | null>(null);
   const keyboardPressedRef = useRef(false);
@@ -52,14 +54,16 @@ export function VoiceInputPanel({
   }, [onPressCancel]);
 
   return (
-    <section className="rounded-[2rem] border border-slate-800 bg-panel/80 p-5 shadow-panel backdrop-blur">
-      <header className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Voice input</p>
-          <h2 className="text-lg font-semibold text-white">Push to talk</h2>
-        </div>
-        <div className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">Release commits</div>
-      </header>
+    <section className={compact ? '' : 'rounded-[2rem] border border-slate-800 bg-panel/80 p-5 shadow-panel backdrop-blur'}>
+      {!compact && (
+        <header className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Voice input</p>
+            <h2 className="text-lg font-semibold text-white">Push to talk</h2>
+          </div>
+          <div className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">Release commits</div>
+        </header>
+      )}
       <div className="space-y-4 text-sm text-slate-300">
         <button
           type="button"
