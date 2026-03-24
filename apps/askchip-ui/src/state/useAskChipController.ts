@@ -53,6 +53,12 @@ function sortSessions(items: SessionRecord[]): SessionRecord[] {
   return [...items].sort((left, right) => right.updated_at.localeCompare(left.updated_at));
 }
 
+function toChronologicalTranscript(messages: TranscriptMessage[], sessionId: string): TranscriptMessage[] {
+  return messages
+    .filter((message) => message.session_id === sessionId)
+    .sort((left, right) => left.created_at.localeCompare(right.created_at));
+}
+
 function clearCurrentSessionState() {
   return {
     currentSessionId: null as string | null,
@@ -102,7 +108,12 @@ export function useAskChipController() {
 
   const loadTranscript = useCallback(async (sessionId: string) => {
     const transcript = await askChipApiClient.getTranscript(sessionId);
-    setMessages(transcript.messages);
+
+    if (activeSessionIdRef.current !== sessionId) {
+      return transcript;
+    }
+
+    setMessages(toChronologicalTranscript(transcript.messages, sessionId));
     setEvents(dedupeEvents(transcript.events).slice(-MAX_RECENT_EVENTS));
     setTimings(transcript.timings.slice(-MAX_RECENT_TIMINGS));
     setTopLevelState(transcript.session.status);
