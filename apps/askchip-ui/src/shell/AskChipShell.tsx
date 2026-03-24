@@ -4,14 +4,12 @@ import { useAssistantSpeechPlayback } from '../audio/useAssistantSpeechPlayback'
 import { useAudioFoundation } from '../audio/useAudioFoundation';
 import { createPttLifecycleController } from '../audio/pttLifecycle';
 import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
-import { VoiceInputPanel } from '../audio/VoiceInputPanel';
 import { ChipStagePane } from '../chip-stage/ChipStagePane';
-import { Composer } from '../composer/Composer';
 import { DiagnosticsDrawer } from '../diagnostics/DiagnosticsDrawer';
 import { SessionList } from '../sessions/SessionList';
 import { useAskChipController } from '../state/useAskChipController';
-import { TranscriptPane } from '../transcript/TranscriptPane';
 import { UtilityRail } from '../utility/UtilityRail';
+import { ChatWindow } from '../chat/ChatWindow';
 import { useShellPanels } from './useShellPanels';
 
 function findActiveModelName(messages: ReturnType<typeof useAskChipController>['state']['messages']): string | null {
@@ -145,24 +143,23 @@ export function AskChipShell() {
               onConnectWebRtc={audio.actions.connectWebRtc}
               onSelectDevice={audio.actions.selectDevice}
             />
-            <VoiceInputPanel
-              disabled={Boolean(state.voiceDisabledReason)}
-              disabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
-              liveDraft={state.voiceDraft}
-              onPressStart={pttLifecycle.pressStart}
-              onPressEnd={pttLifecycle.pressRelease}
-              onPressCancel={pttLifecycle.pressCancel}
-            />
             <UtilityRail collapsed={!showUtilityRail} onToggle={toggleUtilityRail} />
           </div>
 
           <div className="grid min-w-0 gap-6">
             <ChipStagePane state={state.topLevelState} modelName={modelName} config={state.config} />
-            <TranscriptPane messages={state.messages} empty={!state.currentSession || state.messages.length === 0} />
-            <Composer
+            <ChatWindow
+              messages={state.messages}
+              empty={!state.currentSession || state.messages.length === 0}
               disabledReason={state.sendingDisabledReason}
               pending={state.pendingTurn}
               onSend={sendTypedTurn}
+              voiceDisabled={Boolean(state.voiceDisabledReason)}
+              voiceDisabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
+              liveDraft={state.voiceDraft}
+              onPressStart={pttLifecycle.pressStart}
+              onPressEnd={pttLifecycle.pressRelease}
+              onPressCancel={pttLifecycle.pressCancel}
             />
           </div>
 
