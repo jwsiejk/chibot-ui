@@ -16,6 +16,7 @@ export function SessionList({
   onSelect,
   onReload,
   onDelete,
+  onOpenTranscript,
 }: {
   sessions: SessionRecord[];
   currentSessionId: string | null;
@@ -23,6 +24,7 @@ export function SessionList({
   onSelect: (sessionId: string) => Promise<void>;
   onReload: () => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
+  onOpenTranscript: (sessionId: string) => Promise<void>;
 }) {
   return (
     <section className="rounded-[2rem] border border-slate-800 bg-panel/80 p-5 shadow-panel backdrop-blur">
@@ -48,18 +50,19 @@ export function SessionList({
         ) : (
           sessions.map((session) => {
             const active = session.id === currentSessionId;
+            const hasTranscript = Boolean(session.last_message_at);
             return (
               <div
                 key={session.id}
                 className={[
-                  'flex items-start gap-2 rounded-[1.5rem] border px-3 py-3 transition',
+                  'rounded-[1.5rem] border px-3 py-3 transition',
                   active ? 'border-cyan-400/40 bg-cyan-400/10' : 'border-slate-800 bg-slate-950/50 hover:border-slate-700',
                 ].join(' ')}
               >
                 <button
                   type="button"
                   onClick={() => void onSelect(session.id)}
-                  className="min-w-0 flex-1 text-left"
+                  className="min-w-0 w-full text-left"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <p className="font-medium text-white">{session.title}</p>
@@ -67,23 +70,39 @@ export function SessionList({
                       {session.status}
                     </span>
                   </div>
-                  <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-400">
-                    <span>{formatRelative(session.updated_at)}</span>
-                    <span>{session.last_message_at ? 'Has transcript' : 'Empty transcript'}</span>
-                  </div>
+                  <div className="mt-2 text-xs text-slate-400">{formatRelative(session.updated_at)}</div>
                 </button>
-                <button
-                  type="button"
-                  aria-label={`Delete ${session.title}`}
-                  title="Delete session"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onDelete(session.id);
-                  }}
-                  className="shrink-0 rounded-full border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400 transition hover:border-rose-400/40 hover:text-rose-200"
-                >
-                  Delete
-                </button>
+
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  {hasTranscript ? (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onOpenTranscript(session.id);
+                      }}
+                      className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-400/20"
+                    >
+                      Open history
+                    </button>
+                  ) : (
+                    <span className="rounded-full border border-slate-800 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">
+                      No history
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={`Delete ${session.title}`}
+                    title="Delete session"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onDelete(session.id);
+                    }}
+                    className="shrink-0 rounded-full border border-slate-700 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400 transition hover:border-rose-400/40 hover:text-rose-200"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             );
           })
