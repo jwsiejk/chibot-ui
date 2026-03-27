@@ -5,7 +5,7 @@ import { useAudioFoundation } from '../audio/useAudioFoundation';
 import { createPttLifecycleController } from '../audio/pttLifecycle';
 import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
 import { askChipApiClient } from '../api/client';
-import { ChatWindow } from '../chat/ChatWindow';
+import { FloatingChatWindow } from '../chat/FloatingChatWindow';
 import { ChipStagePane } from '../chip-stage/ChipStagePane';
 import { DiagnosticsDrawer } from '../diagnostics/DiagnosticsDrawer';
 import { SessionList } from '../sessions/SessionList';
@@ -34,6 +34,7 @@ export function AskChipShell() {
   const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
   const speech = useAssistantSpeechPlayback(state.currentSessionId, state.messages);
+  const [chatOpen, setChatOpen] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySessionId, setHistorySessionId] = useState<string | null>(null);
   const [historySessionTitle, setHistorySessionTitle] = useState<string | null>(null);
@@ -203,29 +204,34 @@ export function AskChipShell() {
 
           <div className="grid min-w-0 gap-6">
             <ChipStagePane state={state.topLevelState} modelName={modelName} config={state.config} />
-            <ChatWindow
-              messages={state.messages}
-              empty={!state.currentSession || state.messages.length === 0}
-              disabledReason={state.sendingDisabledReason}
-              pending={state.pendingTurn}
-              onSend={sendTypedTurn}
-              voiceDisabled={Boolean(state.voiceDisabledReason)}
-              voiceDisabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
-              liveDraft={state.voiceDraft}
-              onPressStart={pttLifecycle.pressStart}
-              onPressEnd={pttLifecycle.pressRelease}
-              onPressCancel={pttLifecycle.pressCancel}
-              historyOpen={historyOpen}
-              historySessionTitle={historySessionTitle}
-              onOpenHistory={() => {
-                const fallbackSessionId = historySessionId ?? state.currentSessionId;
-                if (!fallbackSessionId) {
-                  return;
-                }
-                void openTranscriptHistory(fallbackSessionId);
-              }}
-              onCloseHistory={() => setHistoryOpen(false)}
-            />
+            <section className="rounded-[2rem] border border-slate-800 bg-panel/80 p-5 shadow-panel backdrop-blur">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-200/80">Live chat window</p>
+                  <h2 className="text-lg font-semibold text-white">Floating conversation panel</h2>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Status: {chatOpen ? 'Open' : 'Closed'}{state.currentSession ? ` • ${state.currentSession.title}` : ''}
+                  </p>
+                </div>
+                {chatOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => setChatOpen(false)}
+                    className="rounded-full border border-slate-700 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200 transition hover:border-slate-500"
+                  >
+                    Close chat window
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setChatOpen(true)}
+                    className="rounded-full bg-cyan-400 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-950 transition hover:bg-cyan-300"
+                  >
+                    Open chat window
+                  </button>
+                )}
+              </div>
+            </section>
           </div>
 
           <div className="min-w-0">
@@ -247,6 +253,22 @@ export function AskChipShell() {
           </div>
         </section>
       </div>
+      <FloatingChatWindow
+        open={chatOpen}
+        sessionTitle={state.currentSession?.title ?? null}
+        messages={state.messages}
+        empty={!state.currentSession || state.messages.length === 0}
+        disabledReason={state.sendingDisabledReason}
+        pending={state.pendingTurn}
+        voiceDisabled={Boolean(state.voiceDisabledReason)}
+        voiceDisabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
+        liveDraft={state.voiceDraft}
+        onSend={sendTypedTurn}
+        onPressStart={pttLifecycle.pressStart}
+        onPressEnd={pttLifecycle.pressRelease}
+        onPressCancel={pttLifecycle.pressCancel}
+        onClose={() => setChatOpen(false)}
+      />
       <FloatingTranscriptWindow
         open={historyOpen}
         sessionTitle={historySessionTitle}

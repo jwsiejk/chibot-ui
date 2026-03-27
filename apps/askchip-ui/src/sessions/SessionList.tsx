@@ -83,11 +83,11 @@ export function SessionList({
                       }}
                       className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-400/20"
                     >
-                      Open history
+                      Has transcript
                     </button>
                   ) : (
                     <span className="rounded-full border border-slate-800 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">
-                      No history
+                      No transcript
                     </span>
                   )}
                   <button
