@@ -20,12 +20,21 @@ class OllamaClient:
         self.timeout_seconds = timeout_seconds
         self._transport = transport
 
-    async def stream_chat(self, messages: list[PromptMessage]) -> AsyncIterator[dict[str, Any]]:
-        payload = {
+    async def stream_chat(
+        self,
+        messages: list[PromptMessage],
+        *,
+        think: bool,
+        options: dict[str, Any] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        payload: dict[str, Any] = {
             'model': self.model,
             'messages': [{'role': message.role, 'content': message.text} for message in messages],
             'stream': True,
+            'think': think,
         }
+        if options:
+            payload['options'] = options
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
                 async with client.stream('POST', '/api/chat', json=payload) as response:
@@ -35,10 +44,12 @@ class OllamaClient:
                             continue
                         body = json.loads(line)
                         message = body.get('message', {})
+                        thinking_text = message.get('thinking')
                         yield {
                             'text': message.get('content', ''),
                             'done': bool(body.get('done', False)),
                             'done_reason': body.get('done_reason', ''),
+                            'thinking_present': isinstance(thinking_text, str) and bool(thinking_text.strip()),
                             'metrics': {
                                 key: body.get(key)
                                 for key in ('total_duration', 'load_duration', 'prompt_eval_count', 'prompt_eval_duration', 'eval_count', 'eval_duration')
@@ -48,12 +59,12 @@ class OllamaClient:
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             raise OllamaUnavailableError(str(exc)) from exc
 
-
     async def warmup(self) -> None:
         payload = {
             'model': self.model,
             'messages': [{'role': 'user', 'content': 'Reply with OK.'}],
             'stream': False,
+            'think': False,
         }
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:

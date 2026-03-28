@@ -14,7 +14,7 @@ class Settings(BaseModel):
     app_name: str = 'AskChip Local API'
     database_path: Path = Path('data/askchip_local.db')
     ollama_base_url: str = 'http://127.0.0.1:11434'
-    ollama_model: str = 'llama3.2:3b'
+    ollama_model: str = 'qwen3:4b'
     ollama_timeout_seconds: float = 60.0
     prompt_transcript_window: int = 6
     stt_model: str = 'base'
