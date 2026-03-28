@@ -28,3 +28,4 @@ askchip_api.egg-info/requires.txt
 askchip_api.egg-info/top_level.txt
 tests/test_backend_core.py
 tests/test_health.py
+tests/test_tts.py
