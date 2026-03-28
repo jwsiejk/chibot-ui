@@ -156,6 +156,8 @@ def seed_session_with_assistant_message(db: Database, *, status: str, text: str,
 
 def streaming_transport(chunks: list[dict[str, object]], status_code: int = 200) -> httpx.MockTransport:
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/tags':
+            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(status_code, content=body)
 
@@ -280,6 +282,34 @@ def test_manual_think_override_routes_forced_and_strips_command_token(tmp_path: 
     assert user_message['text'] == 'Walk me through this in detail'
     reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
     assert reasoning_events[-1]['payload'] == {'mode': 'forced_think', 'think': True}
+
+
+def test_think_only_turn_returns_422_without_creating_canonical_messages_or_timings(tmp_path: Path) -> None:
+    app = make_app(tmp_path, transport=streaming_transport([{'message': {'content': 'unused'}, 'done': True}]))
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Think only'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': '/think'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert turn.status_code == 422
+    assert turn.json()['detail'] == 'reasoning override requires a real question or prompt'
+    assert transcript['messages'] == []
+    assert transcript['timings'] == []
+    assert transcript['events'] == []
+
+
+def test_deep_only_turn_returns_422_without_creating_canonical_messages_or_timings(tmp_path: Path) -> None:
+    app = make_app(tmp_path, transport=streaming_transport([{'message': {'content': 'unused'}, 'done': True}]))
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Deep only'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': '/deep'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert turn.status_code == 422
+    assert turn.json()['detail'] == 'reasoning override requires a real question or prompt'
+    assert transcript['messages'] == []
+    assert transcript['timings'] == []
+    assert transcript['events'] == []
 
 
 def test_ollama_thinking_field_is_never_persisted_in_canonical_text(tmp_path: Path) -> None:
@@ -1035,6 +1065,26 @@ def test_blank_stt_result_does_not_create_blank_canonical_message(tmp_path: Path
     assert any(event['type'] == 'error' and event['payload']['code'] == 'stt_empty_transcript' for event in data['events'])
 
 
+def test_voice_turn_rejects_override_only_transcript_without_canonical_message(tmp_path: Path) -> None:
+    app = make_app(tmp_path, stt_service=FakeSttService(text='/think'))
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Voice override only'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        released = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'Content-Type': 'audio/webm'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert released.status_code == 422
+    assert released.json()['detail'] == 'reasoning override requires a real question or prompt'
+    assert transcript['messages'] == []
+    assert transcript['timings'] and transcript['timings'][0]['phase'] == 'stt'
+    assert any(event['type'] == 'error' and event['payload']['code'] == 'reasoning_override_empty' for event in transcript['events'])
+
+
 
 def test_voice_start_is_rejected_while_assistant_is_busy(tmp_path: Path) -> None:
     start = threading.Event()
@@ -1440,3 +1490,30 @@ def test_readiness_endpoint_reports_warmup_state(tmp_path: Path) -> None:
     assert body['checks']['tts']['status'] == 'not_run'
     assert config.json()['ollama_warmup_enabled'] is True
     assert config.json()['tts_warmup_enabled'] is False
+
+
+def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_path: Path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/tags':
+            return httpx.Response(200, json={'models': [{'name': 'llama3:8b'}]})
+        return httpx.Response(404, json={'error': 'model qwen3:4b not found'})
+
+    app = make_app(
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+        ollama_model='qwen3:4b',
+        ollama_warmup_enabled=True,
+    )
+    with TestClient(app) as client:
+        for _ in range(20):
+            readiness = client.get('/api/v1/readiness')
+            if readiness.json()['checks']['ollama']['status'] != 'pending':
+                break
+        session_id = client.post('/api/v1/sessions', json={'title': 'Missing model'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
+
+    assert readiness.status_code == 200
+    assert readiness.json()['checks']['ollama']['status'] == 'failed'
+    assert 'configured Ollama model is not installed locally: qwen3:4b' in readiness.json()['checks']['ollama']['detail']
+    assert turn.status_code == 503
+    assert 'configured Ollama model is not installed locally: qwen3:4b' in turn.json()['detail']

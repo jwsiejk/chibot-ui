@@ -13,6 +13,12 @@ class OllamaUnavailableError(RuntimeError):
     pass
 
 
+class OllamaModelUnavailableError(OllamaUnavailableError):
+    def __init__(self, model: str) -> None:
+        self.model = model
+        super().__init__(f'configured Ollama model is not installed locally: {model}. Run `ollama pull {model}`.')
+
+
 class OllamaClient:
     def __init__(self, base_url: str, model: str, timeout_seconds: float = 60.0, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.base_url = base_url.rstrip('/')
@@ -38,7 +44,7 @@ class OllamaClient:
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
                 async with client.stream('POST', '/api/chat', json=payload) as response:
-                    response.raise_for_status()
+                    self._raise_for_status_with_model_hint(response)
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -69,6 +75,30 @@ class OllamaClient:
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
                 response = await client.post('/api/chat', json=payload)
-                response.raise_for_status()
+                self._raise_for_status_with_model_hint(response)
         except httpx.HTTPError as exc:
             raise OllamaUnavailableError(str(exc)) from exc
+
+    async def ensure_model_available(self) -> None:
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
+                response = await client.get('/api/tags')
+                response.raise_for_status()
+                payload = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            raise OllamaUnavailableError(str(exc)) from exc
+
+        models = payload.get('models')
+        if not isinstance(models, list):
+            raise OllamaUnavailableError('unexpected /api/tags response from Ollama')
+        installed_names = {str(item.get('name', '')).strip() for item in models if isinstance(item, dict)}
+        if self.model not in installed_names:
+            raise OllamaModelUnavailableError(self.model)
+
+    def _raise_for_status_with_model_hint(self, response: httpx.Response) -> None:
+        if response.status_code < 400:
+            return
+        body = response.text.lower()
+        if response.status_code in {400, 404} and ('not found' in body or 'no such model' in body) and self.model.lower() in body:
+            raise OllamaModelUnavailableError(self.model)
+        response.raise_for_status()

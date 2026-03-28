@@ -37,7 +37,11 @@ class ReadinessTracker:
 
     def __post_init__(self) -> None:
         self.checks = {
-            'ollama': ReadinessCheckState(label='Ollama model', status='pending' if self.ollama_warmup_enabled else 'not_run', detail='Warm-up not started yet.' if self.ollama_warmup_enabled else 'Warm-up disabled by config.'),
+            'ollama': ReadinessCheckState(
+                label='Ollama model',
+                status='pending' if self.ollama_warmup_enabled else 'not_run',
+                detail='Model availability check not started yet.' if self.ollama_warmup_enabled else 'Warm-up disabled by config.',
+            ),
             'tts': ReadinessCheckState(label='Kokoro speech', status='pending' if self.tts_warmup_enabled else 'not_run', detail='Warm-up not started yet.' if self.tts_warmup_enabled else 'Warm-up disabled by config.', optional=True),
         }
 
@@ -54,7 +58,19 @@ class ReadinessTracker:
         if self.tts_warmup_enabled:
             await self._warm_tts()
 
+    async def _check_ollama_model_available(self) -> bool:
+        try:
+            await self.ollama.ensure_model_available()
+        except OllamaUnavailableError as exc:
+            self.checks['ollama'].mark('failed', str(exc))
+            return False
+        if not self.ollama_warmup_enabled:
+            self.checks['ollama'].mark('ready', f'Model {self.ollama.model} is installed locally.')
+        return True
+
     async def _warm_ollama(self) -> None:
+        if not await self._check_ollama_model_available():
+            return
         try:
             await self.ollama.warmup()
         except OllamaUnavailableError as exc:

@@ -10,7 +10,7 @@ from app.domain_models import EventRecord, SessionRecord, TimingRecord
 from app.events import EventBus
 from app.stt import FasterWhisperSttService, SttError
 from app.storage import Database
-from app.turns import BusyError, TurnManager
+from app.turns import BusyError, InvalidCommittedInputError, TurnManager
 
 
 class VoiceInputError(RuntimeError):
@@ -180,6 +180,18 @@ class VoiceTurnService:
                 },
                 trace_id=effective_trace_id,
             )
+        except InvalidCommittedInputError as exc:
+            now = datetime.now(timezone.utc).isoformat()
+            error_event = EventRecord(
+                session_id=session.id,
+                type='error',
+                payload={'code': 'reasoning_override_empty', 'message': str(exc), **({'trace_id': effective_trace_id} if effective_trace_id else {})},
+            )
+            self.db.create_event(error_event)
+            await self.event_bus.publish(self.turn_manager.event_payload(error_event), session.id)
+            self.turn_manager.set_session_state(session.id, None, 'error', detail='reasoning_override_empty', last_error_at=now)
+            await self.turn_manager.publish_state(session.id, None, 'error', detail='reasoning_override_empty')
+            raise
         except BusyError:
             await self._restore_session_state_after_rejected_release(session.id, preserve_thinking=True)
             raise
