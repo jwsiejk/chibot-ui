@@ -1492,6 +1492,70 @@ def test_readiness_endpoint_reports_warmup_state(tmp_path: Path) -> None:
     assert config.json()['tts_warmup_enabled'] is False
 
 
+def test_readiness_reports_installed_model_even_when_warmup_disabled(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': 'OK'}, 'done': True}])
+    app = make_app(tmp_path, transport=transport, ollama_warmup_enabled=False, tts_warmup_enabled=False)
+    with TestClient(app) as client:
+        for _ in range(20):
+            readiness = client.get('/api/v1/readiness')
+            if readiness.json()['checks']['ollama']['status'] != 'pending':
+                break
+
+    assert readiness.status_code == 200
+    body = readiness.json()
+    assert body['checks']['ollama']['status'] == 'ready'
+    assert body['checks']['ollama']['detail'] == 'Model qwen3:4b is installed locally.'
+    assert body['checks']['tts']['status'] == 'not_run'
+
+
+def test_readiness_fails_when_configured_model_missing_and_warmup_disabled(tmp_path: Path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/tags':
+            return httpx.Response(200, json={'models': [{'name': 'llama3:8b'}]})
+        return httpx.Response(404, json={'error': 'model qwen3:4b not found'})
+
+    app = make_app(
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+        ollama_model='qwen3:4b',
+        ollama_warmup_enabled=False,
+        tts_warmup_enabled=False,
+    )
+    with TestClient(app) as client:
+        for _ in range(20):
+            readiness = client.get('/api/v1/readiness')
+            if readiness.json()['checks']['ollama']['status'] != 'pending':
+                break
+
+    assert readiness.status_code == 200
+    body = readiness.json()
+    assert body['checks']['ollama']['status'] == 'failed'
+    assert 'configured Ollama model is not installed locally: qwen3:4b' in body['checks']['ollama']['detail']
+    assert 'Run `ollama pull qwen3:4b`' in body['checks']['ollama']['detail']
+
+
+def test_readiness_fails_when_ollama_unavailable_and_warmup_disabled(tmp_path: Path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('Connection refused')
+
+    app = make_app(
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+        ollama_warmup_enabled=False,
+        tts_warmup_enabled=False,
+    )
+    with TestClient(app) as client:
+        for _ in range(20):
+            readiness = client.get('/api/v1/readiness')
+            if readiness.json()['checks']['ollama']['status'] != 'pending':
+                break
+
+    assert readiness.status_code == 200
+    body = readiness.json()
+    assert body['checks']['ollama']['status'] == 'failed'
+    assert 'Connection refused' in body['checks']['ollama']['detail']
+
+
 def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_path: Path) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':

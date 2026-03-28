@@ -28,6 +28,7 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
   ```
 - You can still override the model without code changes by setting `OLLAMA_MODEL` in your shell/environment before starting the API.
 - `/api/v1/config` reports the active backend model in `ollama_model`.
+- `/api/v1/readiness` always performs a local installed-model check for the configured `OLLAMA_MODEL`, even when `ASKCHIP_OLLAMA_WARMUP_ENABLED=false`; warm-up requests remain disabled in that mode.
 
 ## Current frontend scope
 - Typed chat is implemented, including transcript loading, session selection, and streaming assistant text updates.
