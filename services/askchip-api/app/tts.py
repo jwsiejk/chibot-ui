@@ -40,6 +40,36 @@ class KokoroTtsAdapter:
     def __init__(self, config: KokoroConfig) -> None:
         self.config = config
 
+    def runtime_details(self) -> dict[str, object]:
+        providers = _available_onnx_providers()
+        requested_device = self.config.device
+        selected_device = requested_device if requested_device in {'cpu', 'cuda'} else 'cpu'
+        selected_provider = 'CPUExecutionProvider'
+        warning: str | None = None
+
+        if selected_device == 'cuda':
+            if not providers:
+                selected_provider = 'unknown'
+            elif 'CUDAExecutionProvider' in providers:
+                selected_provider = 'CUDAExecutionProvider'
+            else:
+                selected_device = 'cpu'
+                warning = 'ASKCHIP_TTS_DEVICE=cuda requested but CUDAExecutionProvider is unavailable; using CPUExecutionProvider.'
+
+        return {
+            'tts_engine': 'kokoro-onnx',
+            'requested_device': requested_device,
+            'selected_device': selected_device,
+            'provider': selected_provider,
+            'available_providers': providers,
+            'voice': self.config.voice,
+            'model_path': self.config.model_path,
+            'voices_path': self.config.voices_path,
+            'speed': self.config.speed,
+            'lang_code': self.config.lang_code,
+            **({'warning': warning} if warning else {}),
+        }
+
     def synthesize(self, text: str) -> SynthesizedSpeech:
         normalized = text.strip()
         if not normalized:
@@ -52,11 +82,10 @@ class KokoroTtsAdapter:
                 speed=self.config.speed,
                 lang=self.config.lang_code,
             )
-        except (
-            Exception
-        ) as exc:  # pragma: no cover - exercised through fake adapters in tests
+        except Exception as exc:  # pragma: no cover - exercised through fake adapters in tests
             raise TtsError(str(exc)) from exc
 
+        runtime = self.runtime_details()
         audio_bytes = pcm_f32_to_wav_bytes(samples, sample_rate_hz)
         duration_ms = (
             int((len(samples) / sample_rate_hz) * 1000)
@@ -71,7 +100,8 @@ class KokoroTtsAdapter:
             metadata={
                 "engine": "kokoro",
                 "voice": self.config.voice,
-                "device": self.config.device,
+                "device": runtime['selected_device'],
+                "provider": runtime['provider'],
                 "sample_rate_hz": sample_rate_hz,
             },
         )
@@ -87,6 +117,7 @@ def _kokoro_runtime():
         ) from exc
 
     config = _kokoro_config_singleton
+    runtime = _kokoro_runtime_details(config)
     kwargs = {}
     if config.model_path is not None:
         kwargs["model_path"] = config.model_path
@@ -94,10 +125,44 @@ def _kokoro_runtime():
         kwargs["voices_path"] = config.voices_path
 
     if _kokoro_supports_device_kwarg(Kokoro):
-        kwargs["device"] = config.device
+        kwargs["device"] = runtime['selected_device']
         return _init_kokoro_runtime(Kokoro, kwargs)
 
     return _init_kokoro_runtime(Kokoro, kwargs)
+
+
+def _available_onnx_providers() -> list[str]:
+    try:
+        import onnxruntime as ort  # type: ignore
+
+        return list(ort.get_available_providers())
+    except Exception:
+        return []
+
+
+def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
+    providers = _available_onnx_providers()
+    requested_device = config.device
+    selected_device = requested_device if requested_device in {'cpu', 'cuda'} else 'cpu'
+    selected_provider = 'CPUExecutionProvider'
+    warning: str | None = None
+
+    if selected_device == 'cuda':
+        if not providers:
+            selected_provider = 'unknown'
+        elif 'CUDAExecutionProvider' in providers:
+            selected_provider = 'CUDAExecutionProvider'
+        else:
+            selected_device = 'cpu'
+            warning = 'ASKCHIP_TTS_DEVICE=cuda requested but CUDAExecutionProvider is unavailable; using CPUExecutionProvider.'
+
+    return {
+        'requested_device': requested_device,
+        'selected_device': selected_device,
+        'provider': selected_provider,
+        'available_providers': providers,
+        **({'warning': warning} if warning else {}),
+    }
 
 
 def _kokoro_supports_device_kwarg(kokoro_cls) -> bool:

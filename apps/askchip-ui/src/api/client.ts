@@ -58,22 +58,27 @@ export class AskChipApiClient {
     });
   }
 
-  async createTurn(sessionId: string, payload: CreateTurnRequest): Promise<CreateTurnResponse> {
+  async createTurn(sessionId: string, payload: CreateTurnRequest, traceId?: string): Promise<CreateTurnResponse> {
     return this.request<CreateTurnResponse>(`/api/v1/sessions/${sessionId}/turns`, {
       method: 'POST',
       body: JSON.stringify(payload),
+      headers: traceId ? { 'X-AskChip-Trace-Id': traceId } : undefined,
     });
   }
 
-  async getAssistantSpeech(sessionId: string, messageId: string, text?: string): Promise<{ audio: HTMLAudioElement; objectUrl: string; }> {
+  async getAssistantSpeech(sessionId: string, messageId: string, text?: string, traceId?: string): Promise<{ audio: HTMLAudioElement; objectUrl: string; fetchStartedAt: number; fetchEndedAt: number; }> {
     const search = text ? `?text=${encodeURIComponent(text)}` : '';
-    const response = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/messages/${messageId}/speech${search}`);
+    const fetchStartedAt = Date.now();
+    const response = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/messages/${messageId}/speech${search}`, {
+      headers: traceId ? { 'X-AskChip-Trace-Id': traceId } : undefined,
+    });
     if (!response.ok) {
       throw new ApiError(response.status, await this.getErrorDetail(response, `Assistant speech request failed with status ${response.status}`));
     }
     const blob = await response.blob();
+    const fetchEndedAt = Date.now();
     const objectUrl = URL.createObjectURL(blob);
-    return { audio: new Audio(objectUrl), objectUrl };
+    return { audio: new Audio(objectUrl), objectUrl, fetchStartedAt, fetchEndedAt };
   }
 
   async startAssistantSpeech(sessionId: string, messageId: string): Promise<void> {
@@ -91,12 +96,15 @@ export class AskChipApiClient {
     });
   }
 
-  async startVoiceTurn(sessionId: string, deviceId: string | null): Promise<void> {
+  async startVoiceTurn(sessionId: string, deviceId: string | null, traceId?: string): Promise<void> {
     await this.request(`/api/v1/sessions/${sessionId}/voice-turns/ptt/start`, {
       method: 'POST',
       body: '',
       isJsonRequest: false,
-      headers: deviceId ? { 'X-AskChip-Device-Id': deviceId } : undefined,
+      headers: {
+        ...(deviceId ? { 'X-AskChip-Device-Id': deviceId } : {}),
+        ...(traceId ? { 'X-AskChip-Trace-Id': traceId } : {}),
+      },
     });
   }
 
@@ -108,7 +116,7 @@ export class AskChipApiClient {
     });
   }
 
-  async createVoiceTurn(sessionId: string, payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; }): Promise<CreateTurnResponse> {
+  async createVoiceTurn(sessionId: string, payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; traceId?: string; }): Promise<CreateTurnResponse> {
     return this.request<CreateTurnResponse>(`/api/v1/sessions/${sessionId}/voice-turns?filename=${encodeURIComponent(payload.filename)}`, {
       method: 'POST',
       body: payload.blob,
@@ -117,6 +125,7 @@ export class AskChipApiClient {
         'Content-Type': payload.blob.type || 'audio/webm',
         'X-AskChip-Duration-Ms': String(payload.durationMs),
         ...(payload.deviceId ? { 'X-AskChip-Device-Id': payload.deviceId } : {}),
+        ...(payload.traceId ? { 'X-AskChip-Trace-Id': payload.traceId } : {}),
       },
     });
   }

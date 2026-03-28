@@ -57,9 +57,12 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - `ASKCHIP_TTS_DEVICE` defaults to `cpu`.
 - `ASKCHIP_TTS_MODEL_PATH` and `ASKCHIP_TTS_VOICES_PATH` can point at local Kokoro assets when your runtime requires explicit paths.
 - `ASKCHIP_TTS_SAMPLE_RATE_HZ`, `ASKCHIP_TTS_SPEED`, and `ASKCHIP_TTS_LANG_CODE` tune local speech synthesis.
+- `ASKCHIP_STT_DEVICE` and `ASKCHIP_STT_COMPUTE_TYPE` explicitly control faster-whisper runtime execution. When `ASKCHIP_STT_DEVICE=auto`, startup diagnostics now report the actual selected execution device.
 - When using the espeak fallback backend, American English voices should use `en-us` (British English would use `en-gb`).
+- Runtime startup diagnostics now report the selected STT device/compute type and Kokoro ONNX provider/device, including explicit warnings when a requested GPU path is unavailable and the runtime falls back to CPU.
 - Assistant speech is fetched from a dedicated HTTP endpoint, then the frontend reports real playback start/stop so `speaking` only appears while audio is actually playing.
 - Speech no longer waits for a fully completed assistant message before the first audio starts; the frontend may request stable sentence-level chunks from the same canonical assistant message while generation is still in progress.
+- Completed turns now emit a compact `turn.latency` diagnostic event (correlated by `trace_id` when provided), and recent per-turn latency summaries are visible in the diagnostics drawer for local inspection.
 - Canonical transcript storage remains unified and unchanged: `text` is still the source of truth, `role` is speaker identity, `source` is origin semantics, and there is no alternate frontend-only message shape.
 - If a spoken chunk ends before generation has produced the next stable sentence, session state may return from `speaking` to `thinking` until the next chunk is ready. Once generation and playback are both complete, state returns to `ready`.
 - Typed submit and push-to-talk press explicitly stop active assistant playback before the next turn starts. Merely typing in the composer does not interrupt playback.

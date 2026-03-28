@@ -34,6 +34,30 @@ class FasterWhisperSttService:
         self.compute_type = compute_type
         self.cpu_threads = cpu_threads
 
+    def runtime_details(self) -> dict[str, object]:
+        requested_device = self.device
+        selected_device = requested_device
+        warning: str | None = None
+
+        if requested_device == 'auto':
+            selected_device = 'cpu'
+            try:
+                import torch  # type: ignore
+
+                if torch.cuda.is_available():
+                    selected_device = 'cuda'
+            except Exception:
+                warning = 'torch CUDA availability probe failed while resolving auto STT device; defaulting to cpu.'
+
+        return {
+            'stt_model': self.model_name,
+            'requested_device': requested_device,
+            'selected_device': selected_device,
+            'compute_type': self.compute_type,
+            'cpu_threads': self.cpu_threads,
+            **({'warning': warning} if warning else {}),
+        }
+
     def transcribe_bytes(self, audio_bytes: bytes, *, filename: str | None = None) -> SttResult:
         if not audio_bytes:
             raise SttError('No audio bytes were provided for transcription.')
@@ -44,9 +68,10 @@ class FasterWhisperSttService:
             with os.fdopen(fd, 'wb') as handle:
                 handle.write(audio_bytes)
 
+            runtime = self.runtime_details()
             model = self._load_model(
                 self.model_name,
-                self.device,
+                str(runtime['selected_device']),
                 self.compute_type,
                 self.cpu_threads,
             )

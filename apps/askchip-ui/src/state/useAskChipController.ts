@@ -47,6 +47,7 @@ export interface AskChipControllerState {
   wsNotice: string | null;
   sendingDisabledReason: string | null;
   voiceDisabledReason: string | null;
+  turnLatencySummaries: Array<Record<string, unknown>>;
 }
 
 function sortSessions(items: SessionRecord[]): SessionRecord[] {
@@ -69,6 +70,18 @@ function clearCurrentSessionState() {
   };
 }
 
+function createTraceId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `trace-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function eventTraceId(event: AskChipEvent): string | null {
+  const trace = event.payload.trace_id;
+  return typeof trace === 'string' ? trace : null;
+}
+
 export function useAskChipController() {
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -83,10 +96,13 @@ export function useAskChipController() {
   const [pendingTurn, setPendingTurn] = useState(false);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraftState | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
+  const [turnLatencySummaries, setTurnLatencySummaries] = useState<Array<Record<string, unknown>>>([]);
   const [wsNotice, setWsNotice] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
+  const activeVoiceTraceIdRef = useRef<string | null>(null);
+  const traceMarksRef = useRef<Map<string, Record<string, unknown>>>(new Map());
 
   const currentSession = useMemo(
     () => sessions.find((session) => session.id === currentSessionId) ?? null,
@@ -176,6 +192,25 @@ export function useAskChipController() {
     }, 1200);
   }, [clearReconnectTimer]);
 
+  const markTrace = useCallback((traceId: string | null, key: string, value: unknown = Date.now()) => {
+    if (!traceId) {
+      return;
+    }
+    const existing = traceMarksRef.current.get(traceId) ?? { trace_id: traceId };
+    existing[key] = value;
+    traceMarksRef.current.set(traceId, existing);
+  }, []);
+
+  const finalizeTrace = useCallback((traceId: string | null, extras: Record<string, unknown> = {}) => {
+    if (!traceId) {
+      return;
+    }
+    const summary = { ...(traceMarksRef.current.get(traceId) ?? { trace_id: traceId }), ...extras, completed_at: new Date().toISOString() };
+    setTurnLatencySummaries((existing) => [...existing, summary].slice(-8));
+    console.info('[askchip][turn-latency]', summary);
+    traceMarksRef.current.delete(traceId);
+  }, []);
+
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
@@ -204,8 +239,10 @@ export function useAskChipController() {
   }, [readiness, readinessError]);
 
   const handleEvent = useCallback((event: AskChipEvent) => {
+    const traceId = eventTraceId(event);
     if (event.type === 'state') {
       const nextState = event.payload.state;
+      markTrace(traceId, `state_${String(nextState)}`, event.created_at);
       if (isTurnState(nextState)) {
         setTopLevelState(nextState);
         setSessions((existing) =>
@@ -219,18 +256,39 @@ export function useAskChipController() {
       return;
     }
 
-    if (event.type === 'assistant.started' || event.type === 'assistant.delta') {
+    if (event.type === 'assistant.started' || event.type === 'assistant.delta' || event.type === 'assistant.first_chunk') {
       setMessages((existing) => applyAssistantStreamEvent(existing, event));
       if (event.type === 'assistant.started') {
+        markTrace(traceId, 'assistant_generation_start', event.created_at);
+        return;
+      }
+      if (event.type === 'assistant.first_chunk') {
+        markTrace(traceId, 'assistant_first_chunk', event.created_at);
         return;
       }
     }
 
     if (event.type === 'turn.committed') {
+      markTrace(traceId, 'transcript_accepted', event.created_at);
       setVoiceDraft(null);
       if (activeSessionIdRef.current) {
         void loadTranscript(activeSessionIdRef.current);
       }
+      return;
+    }
+
+    if (event.type === 'stt.started' || event.type === 'stt.completed' || event.type === 'voice.upload.received') {
+      const keyMap: Record<string, string> = {
+        'stt.started': 'backend_stt_start',
+        'stt.completed': 'backend_stt_end',
+        'voice.upload.received': 'upload_end',
+      };
+      markTrace(traceId, keyMap[event.type] ?? event.type, event.created_at);
+      return;
+    }
+
+    if (event.type === 'turn.latency') {
+      finalizeTrace(traceId, { ...event.payload, event_created_at: event.created_at });
       return;
     }
 
@@ -242,7 +300,7 @@ export function useAskChipController() {
         void loadTranscript(activeSessionIdRef.current);
       }
     }
-  }, [loadTranscript]);
+  }, [finalizeTrace, loadTranscript, markTrace]);
 
   useEffect(() => {
     if (currentSessionId === null) {
@@ -352,8 +410,10 @@ export function useAskChipController() {
 
     setPendingTurn(true);
     setAppError(null);
+    const traceId = createTraceId();
+    markTrace(traceId, 'typed_submit');
     try {
-      await askChipApiClient.createTurn(currentSessionId, { text });
+      await askChipApiClient.createTurn(currentSessionId, { text }, traceId);
       await Promise.all([loadSessions(), loadTranscript(currentSessionId)]);
     } catch (error) {
       if (error instanceof ApiError) {
@@ -365,7 +425,7 @@ export function useAskChipController() {
     } finally {
       setPendingTurn(false);
     }
-  }, [currentSessionId, loadSessions, loadTranscript, topLevelState]);
+  }, [currentSessionId, loadSessions, loadTranscript, markTrace, topLevelState]);
 
   const startVoiceTurn = useCallback(async (deviceId: string | null, startedAt: number | null) => {
     if (!currentSessionId) {
@@ -378,10 +438,14 @@ export function useAskChipController() {
       throw new Error('Push-to-talk capture is already active.');
     }
     setAppError(null);
+    const traceId = createTraceId();
+    activeVoiceTraceIdRef.current = traceId;
+    markTrace(traceId, 'mic_press_start_capture');
+    markTrace(traceId, 'recording_start', startedAt ?? Date.now());
     setVoiceDraft(buildListeningDraft(startedAt));
     setTopLevelState('listening');
     try {
-      await askChipApiClient.startVoiceTurn(currentSessionId, deviceId);
+      await askChipApiClient.startVoiceTurn(currentSessionId, deviceId, traceId);
     } catch (error) {
       setVoiceDraft(null);
       const message = error instanceof ApiError ? error.detail : error instanceof Error ? error.message : 'Failed to start push-to-talk.';
@@ -393,7 +457,7 @@ export function useAskChipController() {
       setAppError(message);
       throw error;
     }
-  }, [currentSessionId, pendingTurn, restoreVoiceStateFromBackend, topLevelState]);
+  }, [currentSessionId, markTrace, pendingTurn, restoreVoiceStateFromBackend, topLevelState]);
 
   const finishVoiceTurn = useCallback(async (payload: { blob: Blob; filename: string; deviceId: string | null; durationMs: number; }) => {
     if (!currentSessionId) {
@@ -404,10 +468,14 @@ export function useAskChipController() {
     }
     setPendingTurn(true);
     setAppError(null);
+    const traceId = activeVoiceTraceIdRef.current ?? createTraceId();
+    activeVoiceTraceIdRef.current = traceId;
+    markTrace(traceId, 'recording_stop');
+    markTrace(traceId, 'upload_start');
     setVoiceDraft(buildTranscribingDraft(payload.durationMs));
     setTopLevelState('transcribing');
     try {
-      await askChipApiClient.createVoiceTurn(currentSessionId, payload);
+      await askChipApiClient.createVoiceTurn(currentSessionId, { ...payload, traceId });
       await Promise.all([loadSessions(), loadTranscript(currentSessionId)]);
       setVoiceDraft(null);
     } catch (error) {
@@ -425,8 +493,9 @@ export function useAskChipController() {
       throw error;
     } finally {
       setPendingTurn(false);
+      activeVoiceTraceIdRef.current = null;
     }
-  }, [currentSessionId, loadSessions, loadTranscript, pendingTurn, restoreVoiceStateFromBackend, topLevelState]);
+  }, [currentSessionId, loadSessions, loadTranscript, markTrace, pendingTurn, restoreVoiceStateFromBackend, topLevelState]);
 
   const sendingDisabledReason = getSendingDisabledReason({ currentSessionId, pendingTurn, topLevelState });
 
@@ -451,6 +520,7 @@ export function useAskChipController() {
       wsNotice,
       sendingDisabledReason,
       voiceDisabledReason,
+      turnLatencySummaries,
     } satisfies AskChipControllerState,
     actions: {
       createSession,

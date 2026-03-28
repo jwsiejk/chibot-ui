@@ -38,8 +38,8 @@ export interface SpeechChunkCandidate {
   spokenThrough: number;
 }
 
-const MIN_CHUNK_CHARS = 24;
-const MIN_CHUNK_WORDS = 4;
+const MIN_CHUNK_CHARS = 12;
+const MIN_CHUNK_WORDS = 2;
 const MAX_CHUNK_WINDOW_CHARS = 420;
 
 export function hasSpeechStarted(message: TranscriptMessage): boolean {
@@ -67,6 +67,14 @@ export function findNextSpeechChunk(params: {
   const previousById = new Map(params.previousMessages.map((message) => [message.id, message]));
   const previousMessage = previousById.get(latestAssistantMessage.id);
   if (!previousMessage) {
+    return null;
+  }
+  if (
+    latestAssistantMessage.status === 'completed'
+    && previousMessage.status === 'streaming'
+    && !previousMessage.text.trim()
+    && !/[.!?]/.test(latestAssistantMessage.text)
+  ) {
     return null;
   }
 
@@ -99,7 +107,7 @@ export function getNextSpeechChunk(message: TranscriptMessage, spokenOffset: num
 
   if (message.status === 'completed') {
     const finalTail = remainingText.trim();
-    if (finalTail) {
+    if (finalTail && (isNaturalSpeechChunk(finalTail) || normalizedSpokenOffset > 0)) {
       return {
         message,
         chunkText: finalTail,

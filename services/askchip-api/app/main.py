@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,9 @@ from app.turns import BusyError, TurnManager
 from app.voice import EmptyTranscriptionError, InvalidVoiceLifecycleError, VoiceInputError, VoiceTurnService
 from app.webrtc import WebRtcSignalingService, WebRtcWebSocketHandler
 from app.webrtc_models import WebRtcOfferRequest
+
+
+logger = logging.getLogger(__name__)
 
 
 class AppState:
@@ -82,6 +86,10 @@ class AppState:
             tts_warmup_enabled=config.tts_warmup_enabled,
         )
 
+        stt_runtime = self.stt.runtime_details() if hasattr(self.stt, 'runtime_details') else {'stt_model': config.stt_model, 'selected_device': config.stt_device, 'compute_type': config.stt_compute_type}
+        tts_runtime = self.speech.tts.runtime_details() if hasattr(self.speech.tts, 'runtime_details') else {'tts_engine': 'kokoro-onnx', 'selected_device': config.tts_device}
+        logger.info('askchip_runtime_selection stt=%s tts=%s', stt_runtime, tts_runtime)
+
 
 def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_factory=None, stt_service=None, tts_adapter=None) -> FastAPI:
     state = AppState(config, ollama_transport=ollama_transport, webrtc_peer_factory=webrtc_peer_factory, stt_service=stt_service, tts_adapter=tts_adapter)
@@ -125,9 +133,9 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             database_path=str(config.database_path),
             stt_model=config.stt_model,
             stt_device=config.stt_device,
-            stt_compute_type=config.stt_compute_type,
+            stt_compute_type=str((state.stt.runtime_details().get('compute_type') if hasattr(state.stt, 'runtime_details') else config.stt_compute_type)),
             tts_voice=config.tts_voice,
-            tts_device=config.tts_device,
+            tts_device=str((state.speech.tts.runtime_details().get('selected_device') if hasattr(state.speech.tts, 'runtime_details') else config.tts_device)),
             tts_model_path=str(config.tts_model_path) if config.tts_model_path else None,
             tts_voices_path=str(config.tts_voices_path) if config.tts_voices_path else None,
             tts_sample_rate_hz=config.tts_sample_rate_hz,
@@ -234,14 +242,14 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post('/api/v1/sessions/{session_id}/turns')
-    async def create_turn(session_id: str, request: CreateTurnRequest) -> JSONResponse:
+    async def create_turn(session_id: str, request: CreateTurnRequest, trace_id: str | None = Header(default=None, alias='X-AskChip-Trace-Id')) -> JSONResponse:
         session = state.db.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail='session not found')
         if not request.text.strip():
             raise HTTPException(status_code=422, detail='text is required')
         try:
-            payload = await state.turn_manager.handle_typed_turn(session, request.text.strip())
+            payload = await state.turn_manager.handle_typed_turn(session, request.text.strip(), trace_id=trace_id)
             return JSONResponse({'status': 'completed', **payload}, status_code=201)
         except BusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -251,12 +259,12 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post('/api/v1/sessions/{session_id}/voice-turns/ptt/start')
-    async def start_voice_turn(session_id: str, device_id: str | None = Header(default=None, alias='X-AskChip-Device-Id')) -> JSONResponse:
+    async def start_voice_turn(session_id: str, device_id: str | None = Header(default=None, alias='X-AskChip-Device-Id'), trace_id: str | None = Header(default=None, alias='X-AskChip-Trace-Id')) -> JSONResponse:
         session = state.db.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail='session not found')
         try:
-            await state.voice_turns.begin_ptt(session, device_id=device_id)
+            await state.voice_turns.begin_ptt(session, device_id=device_id, trace_id=trace_id)
             return JSONResponse({'status': 'listening'})
         except BusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -281,6 +289,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         filename: str | None = Query(default='voice-turn.webm'),
         device_id: str | None = Header(default=None, alias='X-AskChip-Device-Id'),
         duration_ms: int | None = Header(default=None, alias='X-AskChip-Duration-Ms'),
+        trace_id: str | None = Header(default=None, alias='X-AskChip-Trace-Id'),
     ) -> JSONResponse:
         session = state.db.get_session(session_id)
         if session is None:
@@ -296,6 +305,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
                 mime_type=request.headers.get('content-type'),
                 device_id=device_id,
                 duration_ms=duration_ms,
+                trace_id=trace_id,
             )
             return JSONResponse({'status': 'completed', **payload}, status_code=201)
         except BusyError as exc:

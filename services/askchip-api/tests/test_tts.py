@@ -6,6 +6,7 @@ import types
 import pytest
 
 from app.tts import KokoroConfig, KokoroTtsAdapter, TtsError, configure_kokoro_runtime
+import app.tts as tts_module
 
 
 def test_kokoro_runtime_supports_device_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,6 +28,7 @@ def test_kokoro_runtime_supports_device_kwarg(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setitem(
         sys.modules, "kokoro_onnx", types.SimpleNamespace(Kokoro=FakeKokoro)
     )
+    monkeypatch.setattr(tts_module, "_available_onnx_providers", lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"])
     configure_kokoro_runtime(
         KokoroConfig(
             voice="af_heart",
