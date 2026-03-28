@@ -12,6 +12,7 @@ from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.reasoning import route_reasoning
 from app.storage import Database, DatabaseError
+from app.thinking_filter import ThinkingLeakFilter
 
 
 class BusyError(RuntimeError):
@@ -138,11 +139,17 @@ class TurnManager:
             assembled: list[str] = []
             provider_metrics: dict[str, object] = {}
             thinking_present = False
+            thinking_leak_filtered = False
+            thinking_filter = ThinkingLeakFilter()
             try:
                 async for chunk in self.ollama.stream_chat(prompt_messages, think=reasoning.think):
                     provider_metrics.update(chunk.get('metrics', {}))
                     thinking_present = thinking_present or bool(chunk.get('thinking_present', False))
-                    delta_text = str(chunk.get('text', ''))
+                    delta_text = thinking_filter.filter_delta(
+                        str(chunk.get('text', '')),
+                        done=bool(chunk.get('done', False)),
+                    )
+                    thinking_leak_filtered = thinking_leak_filtered or thinking_filter.leak_filtered
                     if delta_text:
                         if first_chunk_ms is None:
                             first_chunk_ms = int((perf_counter() - started) * 1000)
@@ -161,7 +168,14 @@ class TurnManager:
                     status='completed',
                     updated_at=ended_at.isoformat(),
                     completed_at=ended_at.isoformat(),
-                    metadata={'first_chunk_ms': first_chunk_ms, 'provider_metrics': provider_metrics, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present},
+                    metadata={
+                        'first_chunk_ms': first_chunk_ms,
+                        'provider_metrics': provider_metrics,
+                        'reasoning_mode': reasoning.mode,
+                        'thinking_used': reasoning.think,
+                        'thinking_present': thinking_present,
+                        'thinking_leak_filtered': thinking_leak_filtered,
+                    },
                 )
                 completed_event = EventRecord(session_id=session.id, turn_id=turn_id, type='assistant.completed', payload={'message_id': assistant_message.id, 'text': completed_text, 'first_chunk_ms': first_chunk_ms, **({'trace_id': trace_id} if trace_id else {})})
                 self.db.create_event(completed_event)
@@ -169,9 +183,9 @@ class TurnManager:
                 self.set_session_state(session.id, None, 'ready', ready_at=ended_at.isoformat(), detail='turn_complete')
                 await self.publish_state(session.id, turn_id, 'ready', detail='turn_complete')
                 duration_ms = int((perf_counter() - started) * 1000)
-                self.db.update_timing(model_timing.id, ended_at.isoformat(), duration_ms, {'first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present, **provider_metrics})
-                self.db.update_timing(turn_timing.id, ended_at.isoformat(), duration_ms, {'assistant_message_id': assistant_message.id, 'first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present})
-                summary_payload = {'trace_id': trace_id, 'turn_id': turn_id, 'source': source, 'total_turn_ms': duration_ms, 'model_first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present}
+                self.db.update_timing(model_timing.id, ended_at.isoformat(), duration_ms, {'first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present, 'thinking_leak_filtered': thinking_leak_filtered, **provider_metrics})
+                self.db.update_timing(turn_timing.id, ended_at.isoformat(), duration_ms, {'assistant_message_id': assistant_message.id, 'first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present, 'thinking_leak_filtered': thinking_leak_filtered})
+                summary_payload = {'trace_id': trace_id, 'turn_id': turn_id, 'source': source, 'total_turn_ms': duration_ms, 'model_first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present, 'thinking_leak_filtered': thinking_leak_filtered}
                 summary_event = EventRecord(session_id=session.id, turn_id=turn_id, type='turn.latency', payload={k: v for k, v in summary_payload.items() if v is not None})
                 self.db.create_event(summary_event)
                 await self.event_bus.publish(self.event_payload(summary_event), session.id)
