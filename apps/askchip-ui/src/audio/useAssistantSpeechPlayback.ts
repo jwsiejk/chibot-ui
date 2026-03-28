@@ -21,7 +21,7 @@ type ActivePlayback = {
   spokenThrough: number;
 };
 
-export function useAssistantSpeechPlayback(sessionId: string | null, messages: TranscriptMessage[]) {
+export function useAssistantSpeechPlayback(sessionId: string | null, messages: TranscriptMessage[], options?: { onMetric?: (metric: { traceId: string | null; name: string; at: number; info?: Record<string, unknown> }) => void }) {
   const activePlaybackRef = useRef<ActivePlayback | null>(null);
   const playbackAttemptTrackerRef = useRef(createPlaybackAttemptTracker());
   const latestSessionIdRef = useRef<string | null>(sessionId);
@@ -93,7 +93,10 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     try {
       setSpeechError(null);
       setPendingMessageId(candidate.message.id);
-      const fetched = await askChipApiClient.getAssistantSpeech(sessionId, candidate.message.id, candidate.chunkText);
+      const traceId = typeof candidate.message.metadata?.trace_id === 'string' ? candidate.message.metadata.trace_id : null;
+      const fetched = await askChipApiClient.getAssistantSpeech(sessionId, candidate.message.id, candidate.chunkText, traceId ?? undefined);
+      options?.onMetric?.({ traceId, name: 'audio_fetch_start', at: fetched.fetchStartedAt });
+      options?.onMetric?.({ traceId, name: 'audio_fetch_end', at: fetched.fetchEndedAt, info: { chunk_chars: candidate.chunkText.length } });
       const isStaleAttempt = !playbackAttemptTrackerRef.current.isCurrent(attempt) || latestSessionIdRef.current !== sessionId;
       if (isStaleAttempt) {
         cleanupFetchedAssistantSpeech(fetched);
@@ -113,6 +116,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       activePlaybackRef.current = active;
       setActiveMessageId(candidate.message.id);
       active.audio.addEventListener('ended', () => {
+        options?.onMetric?.({ traceId, name: 'audio_playback_end', at: Date.now() });
         void finalizePlayback('ended');
       }, { once: true });
       active.audio.addEventListener('error', () => {
@@ -123,6 +127,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
         signal: active.waitController.signal,
         cancellationError: new AssistantSpeechPlaybackCanceledError(),
       });
+      options?.onMetric?.({ traceId, name: 'audio_playback_start', at: Date.now() });
       if (activePlaybackRef.current !== active || latestSessionIdRef.current !== sessionId) {
         await finalizePlayback('session_switch');
         return;
@@ -166,7 +171,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       const detail = error instanceof ApiError ? error.detail : error instanceof Error ? error.message : 'Assistant speech playback failed.';
       setSpeechError(detail);
     }
-  }, [finalizePlayback, sessionId]);
+  }, [finalizePlayback, options, sessionId]);
 
   useEffect(() => {
     if (!nextChunk || !sessionId || activePlaybackRef.current) {

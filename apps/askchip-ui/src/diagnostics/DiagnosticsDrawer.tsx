@@ -19,7 +19,7 @@ function summarizeStopReason(events: EventRecord[]): string {
   return reason ? `${stopEvent.type}: ${reason}` : stopEvent.type;
 }
 
-export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, audioDiagnostics, webrtcDiagnostics, events, timings, config, readiness, speechState, readinessError, collapsed, onToggle }: {
+export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, audioDiagnostics, webrtcDiagnostics, events, timings, config, readiness, speechState, turnLatencySummaries, readinessError, collapsed, onToggle }: {
   connectionState: ConnectionState;
   topLevelState: TurnState | null;
   modelName: string | null;
@@ -30,6 +30,7 @@ export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, a
   config: ConfigResponse | null;
   readiness: ReadinessResponse | null;
   speechState: { activeMessageId: string | null; pendingMessageId: string | null; speechError: string | null };
+  turnLatencySummaries: Array<Record<string, unknown>>;
   readinessError: string | null;
   collapsed: boolean;
   onToggle: () => void;
@@ -101,6 +102,13 @@ export function DiagnosticsDrawer({ connectionState, topLevelState, modelName, a
           <div className="rounded-[1.5rem] border border-slate-900 bg-slate-950/60 p-4">
             <h3 className="mb-3 text-sm font-medium text-white">Recent events</h3>
             <div className="space-y-2 text-xs text-slate-300">{events.length === 0 ? <p className="text-slate-500">No backend events received yet.</p> : [...events].slice(-8).reverse().map((event) => <div key={event.id} className="rounded-xl border border-slate-800 px-3 py-2"><div className="flex items-center justify-between gap-3"><span className="font-medium text-white">{event.type}</span><span className="text-slate-500">{formatTime(event.created_at)}</span></div><div className="mt-1 text-slate-500">turn {event.turn_id ?? '—'}</div><pre className="mt-2 overflow-auto whitespace-pre-wrap break-words text-[11px] text-slate-400">{JSON.stringify(event.payload, null, 2)}</pre></div>)}</div>
+          </div>
+
+          <div className="rounded-[1.5rem] border border-slate-900 bg-slate-950/60 p-4">
+            <h3 className="mb-3 text-sm font-medium text-white">Per-turn latency summaries</h3>
+            <div className="space-y-2 text-xs text-slate-300">
+              {turnLatencySummaries.length === 0 ? <p className="text-slate-500">No completed turn summaries yet.</p> : [...turnLatencySummaries].reverse().map((summary, index) => <pre key={index} className="overflow-auto whitespace-pre-wrap break-words rounded-xl border border-slate-800 px-3 py-2 text-[11px] text-slate-400">{JSON.stringify(summary, null, 2)}</pre>)}
+            </div>
           </div>
 
           <div className="rounded-[1.5rem] border border-slate-900 bg-slate-950/60 p-4">

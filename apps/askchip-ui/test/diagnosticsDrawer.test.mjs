@@ -29,6 +29,7 @@ const baseProps = {
   config: null,
   readiness: null,
   speechState: { activeMessageId: null, pendingMessageId: null, speechError: null },
+  turnLatencySummaries: [],
   readinessError: null,
   collapsed: false,
   onToggle: () => {},
