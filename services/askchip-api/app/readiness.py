@@ -39,8 +39,8 @@ class ReadinessTracker:
         self.checks = {
             'ollama': ReadinessCheckState(
                 label='Ollama model',
-                status='pending' if self.ollama_warmup_enabled else 'not_run',
-                detail='Model availability check not started yet.' if self.ollama_warmup_enabled else 'Warm-up disabled by config.',
+                status='pending',
+                detail='Model availability check not started yet.',
             ),
             'tts': ReadinessCheckState(label='Kokoro speech', status='pending' if self.tts_warmup_enabled else 'not_run', detail='Warm-up not started yet.' if self.tts_warmup_enabled else 'Warm-up disabled by config.', optional=True),
         }
@@ -55,6 +55,8 @@ class ReadinessTracker:
     async def _run_warmups(self) -> None:
         if self.ollama_warmup_enabled:
             await self._warm_ollama()
+        else:
+            await self._check_ollama_model_available()
         if self.tts_warmup_enabled:
             await self._warm_tts()
 
