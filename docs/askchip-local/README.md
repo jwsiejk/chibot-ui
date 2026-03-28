@@ -19,6 +19,12 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - Canonical WebRTC signaling resolves against `${VITE_ASKCHIP_WS_BASE_URL}/ws/webrtc`
 - `POST /api/v1/webrtc/offer` remains compatibility-only and is not the primary signaling path
 
+
+## Ollama model defaults
+- AskChip Local now defaults to `OLLAMA_MODEL=qwen3:4b` for local generation.
+- You can still override the model without code changes by setting `OLLAMA_MODEL` in your shell/environment before starting the API.
+- `/api/v1/config` reports the active backend model in `ollama_model`.
+
 ## Current frontend scope
 - Typed chat is implemented, including transcript loading, session selection, and streaming assistant text updates.
 - WebRTC foundation work is implemented for mic readiness, peer negotiation, explicit disconnect cleanup, and transport diagnostics only.

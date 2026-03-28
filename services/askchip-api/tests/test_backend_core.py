@@ -195,6 +195,112 @@ def test_faster_whisper_stt_closes_tempfile_before_transcribe_and_cleans_up(tmp_
     assert not temp_path.exists()
 
 
+
+
+def test_default_settings_use_qwen_model() -> None:
+    config = Settings()
+
+    assert config.ollama_model == 'qwen3:4b'
+
+
+def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.get('/api/v1/config')
+
+    assert response.status_code == 200
+    assert response.json()['ollama_model'] == 'qwen3:4b'
+
+
+def test_turns_send_explicit_think_false_for_small_talk(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Hey there!'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Think false'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'hey'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert turn.status_code == 201
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+    assert payload['think'] is False
+    reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
+    assert reasoning_events[-1]['payload'] == {'mode': 'auto_normal', 'think': False}
+
+
+def test_turns_send_explicit_think_true_for_auto_think_prompt(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        body = json.dumps({'message': {'content': 'Start with logs and check stack traces.'}, 'done': True}).encode() + b'\n'
+        return httpx.Response(200, content=body)
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Auto think'}).json()['id']
+        text = 'Help me debug this crash and compare tradeoffs between two fixes.'
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': text})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert turn.status_code == 201
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+    assert payload['think'] is True
+    reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
+    assert reasoning_events[-1]['payload'] == {'mode': 'auto_think', 'think': True}
+
+
+def test_manual_think_override_routes_forced_and_strips_command_token(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        body = json.dumps({'message': {'content': 'Here is the deeper breakdown.'}, 'done': True}).encode() + b'\n'
+        return httpx.Response(200, content=body)
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Forced think'}).json()['id']
+        text = '/think Walk me through this in detail'
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': text})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert turn.status_code == 201
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+    assert payload['think'] is True
+    user_message = transcript['messages'][0]
+    assert user_message['role'] == 'user'
+    assert user_message['text'] == 'Walk me through this in detail'
+    reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
+    assert reasoning_events[-1]['payload'] == {'mode': 'forced_think', 'think': True}
+
+
+def test_ollama_thinking_field_is_never_persisted_in_canonical_text(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'thinking': 'private chain of thought', 'content': ''}, 'done': False},
+        {'message': {'thinking': 'still private', 'content': 'Final answer'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'No cot leak'}).json()['id']
+        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'solve this carefully'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assistant = transcript['messages'][-1]
+    assert assistant['role'] == 'assistant'
+    assert assistant['text'] == 'Final answer'
+    assert 'private chain of thought' not in assistant['text']
+    assert assistant['metadata']['thinking_present'] is True
+
 def test_session_creation_and_listing(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
@@ -642,6 +748,7 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
     monkeypatch.setenv('ASKCHIP_API_PORT', '9000')
     monkeypatch.setenv('ASKCHIP_API_DATABASE_PATH', '/tmp/askchip.db')
     monkeypatch.setenv('ASKCHIP_PROMPT_TRANSCRIPT_WINDOW', '4')
+    monkeypatch.setenv('OLLAMA_MODEL', 'custom:model')
 
     config = load_settings()
 
@@ -649,6 +756,7 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
     assert config.port == 9000
     assert config.database_path == Path('/tmp/askchip.db')
     assert config.prompt_transcript_window == 4
+    assert config.ollama_model == 'custom:model'
 
 
 def test_startup_migrates_legacy_message_content_column_to_text(tmp_path: Path) -> None:

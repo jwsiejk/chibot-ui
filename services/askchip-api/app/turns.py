@@ -10,6 +10,7 @@ from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingR
 from app.events import EventBus
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
+from app.reasoning import route_reasoning
 from app.storage import Database, DatabaseError
 
 
@@ -58,28 +59,30 @@ class TurnManager:
             turn_id = str(uuid4())
             turn_started_at = datetime.now(timezone.utc)
             started = perf_counter()
-            turn_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='turn', meta={'state': 'thinking', 'source': source, 'modality': modality, **({'trace_id': trace_id} if trace_id else {})}))
-            model_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='model_stream', meta={'source': source, 'modality': modality, **({'trace_id': trace_id} if trace_id else {})}))
+            reasoning = route_reasoning(text)
+            user_text = reasoning.user_text or text.strip()
+            turn_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='turn', meta={'state': 'thinking', 'source': source, 'modality': modality, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, **({'trace_id': trace_id} if trace_id else {})}))
+            model_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='model_stream', meta={'source': source, 'modality': modality, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, **({'trace_id': trace_id} if trace_id else {})}))
             self.set_session_state(session.id, turn_id, 'thinking', detail=detail)
             await self.publish_state(session.id, turn_id, 'thinking', detail=detail)
 
             user_message = MessageRecord(
                 session_id=session.id,
                 role='user',
-                text=text,
+                text=user_text,
                 status='committed',
                 turn_id=turn_id,
                 source=source,
                 modality=modality,
                 committed_at=turn_started_at,
-                metadata=input_metadata,
+                metadata={**input_metadata, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think},
             )
             self.db.create_message(user_message)
             committed_event = EventRecord(
                 session_id=session.id,
                 turn_id=turn_id,
                 type='turn.committed',
-                payload={'message_id': user_message.id, 'text': text, 'source': source, 'modality': modality, **({'trace_id': trace_id} if trace_id else {})},
+                payload={'message_id': user_message.id, 'text': user_text, 'source': source, 'modality': modality, **({'trace_id': trace_id} if trace_id else {})},
             )
             self.db.create_event(committed_event)
             await self.event_bus.publish(self.event_payload(committed_event), session.id)
@@ -92,12 +95,12 @@ class TurnManager:
                 turn_id=turn_id,
                 source='model_output',
                 modality='text',
-                metadata={'model': self.ollama.model, **({'trace_id': trace_id} if trace_id else {})},
+                metadata={'model': self.ollama.model, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, **({'trace_id': trace_id} if trace_id else {})},
             )
             self.db.create_message(assistant_message)
 
             transcript = self.db.list_messages(session.id)
-            prompt_messages = self.prompt_assembler.build_messages(transcript=transcript, user_text=text)
+            prompt_messages = self.prompt_assembler.build_messages(transcript=transcript, user_text=user_text)
             prompt_event = EventRecord(
                 session_id=session.id,
                 turn_id=turn_id,
@@ -107,11 +110,20 @@ class TurnManager:
             self.db.create_event(prompt_event)
             await self.event_bus.publish(self.event_payload(prompt_event), session.id)
 
+            reasoning_event = EventRecord(
+                session_id=session.id,
+                turn_id=turn_id,
+                type='reasoning.selected',
+                payload={'mode': reasoning.mode, 'think': reasoning.think, **({'trace_id': trace_id} if trace_id else {})},
+            )
+            self.db.create_event(reasoning_event)
+            await self.event_bus.publish(self.event_payload(reasoning_event), session.id)
+
             started_event = EventRecord(
                 session_id=session.id,
                 turn_id=turn_id,
                 type='assistant.started',
-                payload={'message_id': assistant_message.id, 'model': self.ollama.model, **({'trace_id': trace_id} if trace_id else {})},
+                payload={'message_id': assistant_message.id, 'model': self.ollama.model, 'reasoning_mode': reasoning.mode, 'think': reasoning.think, **({'trace_id': trace_id} if trace_id else {})},
             )
             self.db.create_event(started_event)
             await self.event_bus.publish(self.event_payload(started_event), session.id)
@@ -119,9 +131,11 @@ class TurnManager:
             first_chunk_ms: int | None = None
             assembled: list[str] = []
             provider_metrics: dict[str, object] = {}
+            thinking_present = False
             try:
-                async for chunk in self.ollama.stream_chat(prompt_messages):
+                async for chunk in self.ollama.stream_chat(prompt_messages, think=reasoning.think):
                     provider_metrics.update(chunk.get('metrics', {}))
+                    thinking_present = thinking_present or bool(chunk.get('thinking_present', False))
                     delta_text = str(chunk.get('text', ''))
                     if delta_text:
                         if first_chunk_ms is None:
@@ -141,7 +155,7 @@ class TurnManager:
                     status='completed',
                     updated_at=ended_at.isoformat(),
                     completed_at=ended_at.isoformat(),
-                    metadata={'first_chunk_ms': first_chunk_ms, 'provider_metrics': provider_metrics},
+                    metadata={'first_chunk_ms': first_chunk_ms, 'provider_metrics': provider_metrics, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present},
                 )
                 completed_event = EventRecord(session_id=session.id, turn_id=turn_id, type='assistant.completed', payload={'message_id': assistant_message.id, 'text': completed_text, 'first_chunk_ms': first_chunk_ms, **({'trace_id': trace_id} if trace_id else {})})
                 self.db.create_event(completed_event)
@@ -149,9 +163,9 @@ class TurnManager:
                 self.set_session_state(session.id, None, 'ready', ready_at=ended_at.isoformat(), detail='turn_complete')
                 await self.publish_state(session.id, turn_id, 'ready', detail='turn_complete')
                 duration_ms = int((perf_counter() - started) * 1000)
-                self.db.update_timing(model_timing.id, ended_at.isoformat(), duration_ms, {'first_chunk_ms': first_chunk_ms, **provider_metrics})
-                self.db.update_timing(turn_timing.id, ended_at.isoformat(), duration_ms, {'assistant_message_id': assistant_message.id, 'first_chunk_ms': first_chunk_ms})
-                summary_payload = {'trace_id': trace_id, 'turn_id': turn_id, 'source': source, 'total_turn_ms': duration_ms, 'model_first_chunk_ms': first_chunk_ms}
+                self.db.update_timing(model_timing.id, ended_at.isoformat(), duration_ms, {'first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present, **provider_metrics})
+                self.db.update_timing(turn_timing.id, ended_at.isoformat(), duration_ms, {'assistant_message_id': assistant_message.id, 'first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present})
+                summary_payload = {'trace_id': trace_id, 'turn_id': turn_id, 'source': source, 'total_turn_ms': duration_ms, 'model_first_chunk_ms': first_chunk_ms, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, 'thinking_present': thinking_present}
                 summary_event = EventRecord(session_id=session.id, turn_id=turn_id, type='turn.latency', payload={k: v for k, v in summary_payload.items() if v is not None})
                 self.db.create_event(summary_event)
                 await self.event_bus.publish(self.event_payload(summary_event), session.id)
@@ -164,7 +178,7 @@ class TurnManager:
                     text=''.join(assembled),
                     status='error',
                     updated_at=ended_at.isoformat(),
-                    metadata={'provider_metrics': provider_metrics},
+                    metadata={'provider_metrics': provider_metrics, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think},
                 )
                 error_event = EventRecord(session_id=session.id, turn_id=turn_id, type='error', payload={'code': 'ollama_unavailable', 'message': str(exc)})
                 self.db.create_event(error_event)
