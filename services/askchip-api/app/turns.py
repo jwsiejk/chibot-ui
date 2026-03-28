@@ -18,6 +18,10 @@ class BusyError(RuntimeError):
     pass
 
 
+class InvalidCommittedInputError(RuntimeError):
+    pass
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,7 +64,9 @@ class TurnManager:
             turn_started_at = datetime.now(timezone.utc)
             started = perf_counter()
             reasoning = route_reasoning(text)
-            user_text = reasoning.user_text or text.strip()
+            user_text = reasoning.user_text
+            if not user_text:
+                raise InvalidCommittedInputError('reasoning override requires a real question or prompt')
             turn_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='turn', meta={'state': 'thinking', 'source': source, 'modality': modality, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, **({'trace_id': trace_id} if trace_id else {})}))
             model_timing = self.db.create_timing(TimingRecord(session_id=session.id, turn_id=turn_id, phase='model_stream', meta={'source': source, 'modality': modality, 'reasoning_mode': reasoning.mode, 'thinking_used': reasoning.think, **({'trace_id': trace_id} if trace_id else {})}))
             self.set_session_state(session.id, turn_id, 'thinking', detail=detail)

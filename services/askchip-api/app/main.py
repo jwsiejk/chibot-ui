@@ -30,7 +30,7 @@ from app.speech import SpeechService
 from app.storage import Database, DatabaseError
 from app.stt import FasterWhisperSttService
 from app.tts import KokoroConfig, KokoroTtsAdapter, TtsError, configure_kokoro_runtime
-from app.turns import BusyError, TurnManager
+from app.turns import BusyError, InvalidCommittedInputError, TurnManager
 from app.voice import EmptyTranscriptionError, InvalidVoiceLifecycleError, VoiceInputError, VoiceTurnService
 from app.webrtc import WebRtcSignalingService, WebRtcWebSocketHandler
 from app.webrtc_models import WebRtcOfferRequest
@@ -253,6 +253,8 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             return JSONResponse({'status': 'completed', **payload}, status_code=201)
         except BusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except InvalidCommittedInputError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except OllamaUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except DatabaseError as exc:
@@ -311,6 +313,8 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         except BusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except EmptyTranscriptionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except InvalidCommittedInputError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except InvalidVoiceLifecycleError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

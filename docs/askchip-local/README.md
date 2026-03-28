@@ -22,6 +22,10 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 
 ## Ollama model defaults
 - AskChip Local now defaults to `OLLAMA_MODEL=qwen3:4b` for local generation.
+- Pull the default model locally before starting the API:
+  ```bash
+  ollama pull qwen3:4b
+  ```
 - You can still override the model without code changes by setting `OLLAMA_MODEL` in your shell/environment before starting the API.
 - `/api/v1/config` reports the active backend model in `ollama_model`.
 
