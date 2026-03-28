@@ -331,6 +331,30 @@ def test_ollama_thinking_field_is_never_persisted_in_canonical_text(tmp_path: Pa
     assert 'private chain of thought' not in assistant['text']
     assert assistant['metadata']['thinking_present'] is True
 
+def test_think_block_leak_in_content_is_filtered_from_deltas_transcript_and_final_text(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': '<think>I should not leak this'}, 'done': False},
+        {'message': {'content': ' private reasoning</think>Final answer begins. '}, 'done': False},
+        {'message': {'content': 'And continues.'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Filter think block'}).json()['id']
+        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'answer carefully'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assistant = transcript['messages'][-1]
+    assert assistant['role'] == 'assistant'
+    assert assistant['text'] == 'Final answer begins. And continues.'
+    assert 'reasoning' not in assistant['text'].lower()
+    assert assistant['metadata']['thinking_leak_filtered'] is True
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert all('think' not in chunk.lower() for chunk in delta_payloads)
+    assert all('reasoning' not in chunk.lower() for chunk in delta_payloads)
+
+
 def test_session_creation_and_listing(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
@@ -1282,6 +1306,52 @@ def test_playback_stop_returns_ready_when_generation_is_complete(tmp_path: Path)
     assert transcript is not None
     assert transcript.status == 'ready'
 
+def test_short_chunk_gap_holds_speaking_and_avoids_thinking_bounce(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import speech as speech_module
+
+    monkeypatch.setattr(speech_module, 'SPEECH_GAP_HOLD_SECONDS', 0.06)
+    db, speech = make_speech_service(tmp_path, tts_adapter=FakeTtsService())
+    session, message = seed_session_with_assistant_message(db, status='streaming', text='First sentence. Second sentence.')
+
+    async def exercise() -> str:
+        await speech.start_playback(session.id, message.id)
+        stop_state = await speech.stop_playback(session.id, message.id, reason='ended')
+        await asyncio.sleep(0.02)
+        await speech.start_playback(session.id, message.id)
+        await asyncio.sleep(0.08)
+        return stop_state
+
+    stop_state = asyncio.run(exercise())
+    refreshed = db.get_session(session.id)
+    state_events = [event for event in db.list_events(session.id) if event.type == 'state']
+    assert stop_state == 'speaking'
+    assert refreshed is not None
+    assert refreshed.status == 'speaking'
+    assert all(event.payload['state'] != 'thinking' for event in state_events)
+
+
+def test_long_chunk_gap_falls_back_from_speaking_to_thinking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import speech as speech_module
+
+    monkeypatch.setattr(speech_module, 'SPEECH_GAP_HOLD_SECONDS', 0.04)
+    db, speech = make_speech_service(tmp_path, tts_adapter=FakeTtsService())
+    session, message = seed_session_with_assistant_message(db, status='streaming', text='First sentence only.')
+
+    async def exercise() -> str:
+        await speech.start_playback(session.id, message.id)
+        stop_state = await speech.stop_playback(session.id, message.id, reason='ended')
+        await asyncio.sleep(0.07)
+        return stop_state
+
+    stop_state = asyncio.run(exercise())
+    refreshed = db.get_session(session.id)
+    state_events = [event for event in db.list_events(session.id) if event.type == 'state']
+    assert stop_state == 'speaking'
+    assert refreshed is not None
+    assert refreshed.status == 'thinking'
+    assert any(event.payload['state'] == 'thinking' and event.payload['detail'] == 'tts_stopped_waiting_for_more' for event in state_events)
+
+
 def test_assistant_speech_sanitizes_stage_directions_for_tts_only(tmp_path: Path) -> None:
     transport = streaming_transport([{'message': {'content': 'Sure [laughs] hi (pause) there *chuckles* friend'}, 'done': True}])
     tts = FakeTtsService(audio_bytes=b'RIFFspeech')
@@ -1300,6 +1370,25 @@ def test_assistant_speech_sanitizes_stage_directions_for_tts_only(tmp_path: Path
     assert len([message for message in updated['messages'] if message['role'] == 'assistant']) == 1
     assert updated['messages'][-1]['text'] == 'Sure [laughs] hi (pause) there *chuckles* friend'
     assert 'content' not in updated['messages'][-1]
+
+
+def test_filtered_think_trace_never_reaches_tts_input(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': '<think>hidden inner monologue'}, 'done': False},
+        {'message': {'content': ' still hidden</think>Spoken final answer.'}, 'done': True},
+    ])
+    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
+    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'No think in speech'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant = transcript['messages'][-1]
+        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
+
+    assert speech.status_code == 200
+    assert assistant['text'] == 'Spoken final answer.'
+    assert tts.calls == ['Spoken final answer.']
 
 
 def test_stale_speech_start_is_rejected_after_session_moves_into_newer_turn_state(tmp_path: Path) -> None:
