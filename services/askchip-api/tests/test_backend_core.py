@@ -258,6 +258,47 @@ def test_turns_send_explicit_think_true_for_auto_think_prompt(tmp_path: Path) ->
     assert reasoning_events[-1]['payload'] == {'mode': 'auto_think', 'think': True}
 
 
+def test_auto_normal_turns_inject_qwen_no_think_control_message(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Hey there!'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), ollama_model='qwen3:4b')
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'No think control'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'hey'})
+
+    assert turn.status_code == 201
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+    contents = [message['content'] for message in payload['messages']]
+    assert '/no_think' in contents
+
+
+def test_auto_think_turns_inject_qwen_think_control_message(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Start with logs.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), ollama_model='qwen3:4b')
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Think control'}).json()['id']
+        turn = client.post(
+            f'/api/v1/sessions/{session_id}/turns',
+            json={'text': 'Help me debug this crash and compare tradeoffs between two fixes.'},
+        )
+
+    assert turn.status_code == 201
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+    contents = [message['content'] for message in payload['messages']]
+    assert '/think' in contents
+
+
 def test_manual_think_override_routes_forced_and_strips_command_token(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
@@ -422,6 +463,71 @@ def test_suspicious_monologue_without_open_or_close_tag_is_dropped_on_completion
     assert assistant['metadata']['thinking_leak_filtered'] is True
     delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
     assert delta_payloads == []
+
+
+def test_sample_style_planner_leak_is_buffered_and_not_emitted_to_delta_or_transcript(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': "We just had a quick exchange. The user asked for help. They're being rushed.\n"}, 'done': False},
+        {'message': {'content': 'Key points to hit: short answer.\nAvoid: over-explaining.\n'}, 'done': False},
+        {'message': {'content': 'Final answer: You can restart the service and clear the cache.'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Sample planner leak'}).json()['id']
+        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Give me the fix'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assistant = transcript['messages'][-1]
+    assert assistant['text'] == 'You can restart the service and clear the cache.'
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == ['You can restart the service and clear the cache.']
+    assert all('we just had a quick exchange' not in chunk.lower() for chunk in delta_payloads)
+    assert all('key points to hit' not in chunk.lower() for chunk in delta_payloads)
+
+
+def test_sample_style_response_drafted_quote_is_extracted_without_planner_text(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': 'First thought: keep it concise.\nResponse drafted: "Thanks for the context — update your app and sign in again."\nFinal check: keep tone warm.'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Draft extract'}).json()['id']
+        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'What should I tell them?'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assistant = transcript['messages'][-1]
+    assert assistant['text'] == 'Thanks for the context — update your app and sign in again.'
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == ['Thanks for the context — update your app and sign in again.']
+    assert all('first thought' not in chunk.lower() for chunk in delta_payloads)
+    assert all('final check' not in chunk.lower() for chunk in delta_payloads)
+
+
+def test_planner_only_output_never_reaches_delta_transcript_or_tts(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': 'We just had a quick exchange. Key points to hit: be clear. Avoid: sounding harsh.'}, 'done': True},
+    ])
+    tts = FakeTtsService()
+    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Planner only'}).json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Need a reply'})
+        assistant_message_id = turn.json()['assistant_message_id']
+        speech = client.get(f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech')
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert turn.status_code == 201
+    assert speech.status_code == 409
+    assistant = transcript['messages'][-1]
+    assert assistant['text'] == ''
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == []
+    assert tts.calls == []
 
 
 def test_session_creation_and_listing(tmp_path: Path) -> None:
@@ -716,6 +822,8 @@ def test_tts_failure_preserves_completed_assistant_text_and_keeps_typed_and_voic
     ])
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/tags':
+            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)
@@ -1552,6 +1660,8 @@ def test_stale_speech_start_is_rejected_after_a_newer_completed_turn_and_does_no
     ])
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/tags':
+            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)
@@ -1582,6 +1692,8 @@ def test_one_active_speech_playback_per_session_still_holds(tmp_path: Path) -> N
     ])
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/tags':
+            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)
@@ -1612,6 +1724,8 @@ def test_same_message_duplicate_speech_start_is_a_no_op_without_duplicate_events
     ])
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/tags':
+            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)

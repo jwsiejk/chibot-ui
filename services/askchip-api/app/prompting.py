@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from app.domain_models import MessageRecord, PromptMessage
 
 SYSTEM_PROMPT = (
@@ -16,11 +18,20 @@ SYSTEM_PROMPT = (
 )
 
 
+QwenThinkMode = Literal['think', 'no_think']
+
+
 class PromptAssembler:
     def __init__(self, transcript_window: int = 6) -> None:
         self.transcript_window = transcript_window
 
-    def build_messages(self, transcript: list[MessageRecord], user_text: str) -> list[PromptMessage]:
+    def build_messages(
+        self,
+        transcript: list[MessageRecord],
+        user_text: str,
+        *,
+        qwen_think_mode: QwenThinkMode | None = None,
+    ) -> list[PromptMessage]:
         recent = transcript[-self.transcript_window :]
         messages: list[PromptMessage] = [
             PromptMessage(role='system', text=SYSTEM_PROMPT),
@@ -29,6 +40,9 @@ class PromptAssembler:
                 text="Conversation style: read the room from the user's words, pacing, and tone. Recognize jokes, teasing, sarcasm, and casual banter, and respond naturally. If the user is frustrated, acknowledge it briefly and help. If the user is casual, be conversational. If the user is direct, be direct. Ask a natural follow-up only when it helps. Keep the wording human, capable, and grounded. Do not over-explain, over-talk, sound overly formal, and do not output stage directions like [laughs], (pause), or *chuckles*. Express tone through wording and punctuation instead.",
             ),
         ]
+        if qwen_think_mode is not None:
+            messages.append(PromptMessage(role='system', text=f'/{qwen_think_mode}'))
+
         for item in recent:
             if item.role == 'assistant' and not item.text:
                 continue
