@@ -4,6 +4,16 @@ import re
 
 THINK_OPEN_TAG = '<think>'
 THINK_CLOSE_TAG = '</think>'
+SUSPICIOUS_LEAD_MAX_CHARS = 360
+
+SUSPICIOUS_REASONING_PREFIX = re.compile(
+    r"^\s*(?:"
+    r"(?:okay[,:\s]+i|alright[,:\s]+i|hmm[,:\s]+i|let me|i need to|i should|i'll|first(?:,|\s)|step\s+\d+|thinking\s*:|analysis\s*:|reasoning\s*:|"
+    r"i(?:'m| am)\s+(?:thinking|going to think|going to work|working\s+through)|"
+    r"to solve this|i can(?:\'t|not)?\s+share|internal(?:\s+monologue)?|chain of thought)"
+    r")",
+    flags=re.IGNORECASE,
+)
 
 
 class ThinkingLeakFilter:
@@ -11,8 +21,8 @@ class ThinkingLeakFilter:
 
     def __init__(self) -> None:
         self._buffer = ''
-        self._in_think_block = False
         self._emitted_chars = 0
+        self._holding_suspicious_prefix = False
         self.leak_filtered = False
 
     def filter_delta(self, delta_text: str, *, done: bool) -> str:
@@ -20,7 +30,7 @@ class ThinkingLeakFilter:
             return ''
 
         self._buffer += delta_text
-        sanitized = self._strip_thinking_blocks(self._buffer, done=done)
+        sanitized = self._sanitize_stream(done=done)
         if self._emitted_chars >= len(sanitized):
             return ''
 
@@ -28,43 +38,85 @@ class ThinkingLeakFilter:
         self._emitted_chars = len(sanitized)
         return output
 
-    def _strip_thinking_blocks(self, text: str, *, done: bool) -> str:
-        working = text
-        leaked_prefix = self._strip_leaked_prefix_before_closing_tag(working)
-        if leaked_prefix is not working:
-            self.leak_filtered = True
-            working = leaked_prefix
+    def _sanitize_stream(self, *, done: bool) -> str:
+        text = self._buffer
+        cleaned, saw_unmatched_close, has_open_without_close = self._strip_think_markup(text, done=done)
 
-        cleaned, in_think = self._remove_complete_and_partial_think_blocks(working, done=done)
-        self._in_think_block = in_think
+        if saw_unmatched_close:
+            self.leak_filtered = True
+            self._holding_suspicious_prefix = False
+            return cleaned
+
+        if has_open_without_close:
+            self.leak_filtered = True
+            self._holding_suspicious_prefix = True
+            if done:
+                self._holding_suspicious_prefix = False
+                return cleaned
+            return cleaned
+
+        if self._is_suspicious_leading_prefix(text):
+            self._holding_suspicious_prefix = True
+
+        if self._holding_suspicious_prefix and not done and THINK_CLOSE_TAG not in text.lower():
+            if len(text) <= SUSPICIOUS_LEAD_MAX_CHARS:
+                return ''
+            self._holding_suspicious_prefix = False
+
+        if done:
+            self._holding_suspicious_prefix = False
+
         return cleaned
 
-    @staticmethod
-    def _strip_leaked_prefix_before_closing_tag(text: str) -> str:
+    def _strip_think_markup(self, text: str, *, done: bool) -> tuple[str, bool, bool]:
+        output: list[str] = []
+        cursor = 0
         lower = text.lower()
-        close_index = lower.find(THINK_CLOSE_TAG)
-        if close_index < 0:
-            return text
+        in_think_block = False
+        saw_unmatched_close = False
+        has_open_without_close = False
 
-        open_index = lower.find(THINK_OPEN_TAG)
-        if open_index == -1 or close_index < open_index:
-            return text[close_index + len(THINK_CLOSE_TAG):]
-        return text
+        while cursor < len(text):
+            if not in_think_block:
+                next_open = lower.find(THINK_OPEN_TAG, cursor)
+                next_close = lower.find(THINK_CLOSE_TAG, cursor)
 
-    def _remove_complete_and_partial_think_blocks(self, text: str, *, done: bool) -> tuple[str, bool]:
-        complete = re.sub(r'<think>.*?</think>', self._mark_filtered, text, flags=re.IGNORECASE | re.DOTALL)
-        if done:
-            complete = re.sub(r'<think>.*$', self._mark_filtered, complete, flags=re.IGNORECASE | re.DOTALL)
-            complete = re.sub(r'</think>', self._mark_filtered, complete, flags=re.IGNORECASE)
-            return complete, False
+                if next_close != -1 and (next_open == -1 or next_close < next_open):
+                    saw_unmatched_close = True
+                    output.clear()
+                    cursor = next_close + len(THINK_CLOSE_TAG)
+                    continue
 
-        open_match = re.search(r'<think>', complete, flags=re.IGNORECASE)
-        if open_match:
-            self.leak_filtered = True
-            return complete[:open_match.start()], True
-        return complete, False
+                if next_open == -1:
+                    output.append(text[cursor:])
+                    break
 
-    def _mark_filtered(self, match: re.Match[str]) -> str:
-        self.leak_filtered = True
-        return ''
+                output.append(text[cursor:next_open])
+                cursor = next_open + len(THINK_OPEN_TAG)
+                in_think_block = True
+                self.leak_filtered = True
+                continue
 
+            close_index = lower.find(THINK_CLOSE_TAG, cursor)
+            if close_index == -1:
+                has_open_without_close = True
+                if done:
+                    cursor = len(text)
+                break
+
+            cursor = close_index + len(THINK_CLOSE_TAG)
+            in_think_block = False
+
+        return ''.join(output), saw_unmatched_close, has_open_without_close
+
+    @staticmethod
+    def _is_suspicious_leading_prefix(text: str) -> bool:
+        sample = text.strip()
+        if not sample:
+            return False
+        if sample.startswith('<'):
+            return False
+        if THINK_CLOSE_TAG in sample.lower():
+            return True
+        prefix = sample[:140]
+        return bool(SUSPICIOUS_REASONING_PREFIX.match(prefix))

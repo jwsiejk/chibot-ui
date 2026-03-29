@@ -355,6 +355,29 @@ def test_think_block_leak_in_content_is_filtered_from_deltas_transcript_and_fina
     assert all('reasoning' not in chunk.lower() for chunk in delta_payloads)
 
 
+def test_plain_leaked_monologue_before_closing_think_tag_is_buffered_then_discarded(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': "Okay, I need to think this through step by step. First I'll compare options."}, 'done': False},
+        {'message': {'content': ' Then I can check constraints before deciding.</think>Here is the actual answer. '}, 'done': False},
+        {'message': {'content': 'It is safe to proceed now.'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Leak without open tag'}).json()['id']
+        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'What should we do?'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assistant = transcript['messages'][-1]
+    assert assistant['text'] == 'Here is the actual answer. It is safe to proceed now.'
+    assert assistant['metadata']['thinking_leak_filtered'] is True
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == ['Here is the actual answer. ', 'It is safe to proceed now.']
+    assert all('i need to think' not in chunk.lower() for chunk in delta_payloads)
+    assert all('step by step' not in chunk.lower() for chunk in delta_payloads)
+
+
 def test_session_creation_and_listing(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
@@ -1389,6 +1412,28 @@ def test_filtered_think_trace_never_reaches_tts_input(tmp_path: Path) -> None:
     assert speech.status_code == 200
     assert assistant['text'] == 'Spoken final answer.'
     assert tts.calls == ['Spoken final answer.']
+
+
+def test_plain_leaked_monologue_without_open_tag_never_reaches_tts_or_transcript(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': "Let me think out loud. I should weigh tradeoffs first."}, 'done': False},
+        {'message': {'content': ' Then I can pick the best one.</think>Final spoken answer.'}, 'done': True},
+    ])
+    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
+    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'No leaked think in speech'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant = transcript['messages'][-1]
+        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
+
+    assert speech.status_code == 200
+    assert assistant['text'] == 'Final spoken answer.'
+    assert assistant['metadata']['thinking_leak_filtered'] is True
+    assert tts.calls == ['Final spoken answer.']
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == ['Final spoken answer.']
 
 
 def test_stale_speech_start_is_rejected_after_session_moves_into_newer_turn_state(tmp_path: Path) -> None:
