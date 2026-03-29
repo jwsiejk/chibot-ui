@@ -205,7 +205,7 @@ def test_default_settings_use_gemma_model_and_eric_voice() -> None:
 
     assert config.ollama_model == 'gemma3:4b'
     assert config.ollama_num_parallel == 1
-    assert config.tts_voice == 'am_eric'
+    assert config.tts_voice == 'am_michael'
 
 
 def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
@@ -220,7 +220,7 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
     assert response.json()['ollama_num_parallel'] == 1
     assert response.json()['stt_requested_device'] == 'auto'
     assert response.json()['stt_requested_compute_type'] == 'auto'
-    assert response.json()['tts_voice'] == 'am_eric'
+    assert response.json()['tts_voice'] == 'am_michael'
 
 
 def test_local_readme_documents_ollama_num_parallel_pin() -> None:
