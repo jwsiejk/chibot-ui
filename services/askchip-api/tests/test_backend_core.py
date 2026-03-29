@@ -629,6 +629,9 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     messages = assembler.build_messages(transcript, user_text='new question')
 
     assert messages[0].role == 'user'
+    assert 'You are Marlene inside AskChip Local, a woman' in messages[0].text
+    assert 'refer to yourself with she/her pronouns' in messages[0].text
+    assert 'Never describe yourself as a man, male, guy, or with any other male self-reference' in messages[0].text
     assert 'middle-aged Nebraska farmer turned tech geek' in messages[0].text
     assert 'Keep answers direct and shorter by default' in messages[0].text
     assert 'Write like you are speaking out loud to one person' in messages[0].text
