@@ -143,6 +143,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     activePlaybackRef.current = active;
     setActiveMessageId(clip.messageId);
     setPendingMessageId((current) => (current === clip.messageId ? null : current));
+    setPlaybackProgressVersion((version) => version + 1);
 
     const onEnded = () => {
       options?.onMetric?.({ traceId: clip.traceId, name: 'audio_playback_end', at: Date.now(), info: { source } });
