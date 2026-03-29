@@ -17,6 +17,7 @@ class Settings(BaseModel):
     ollama_model: str = 'gemma3:4b'
     ollama_keep_alive: str = '30m'
     ollama_num_ctx: int = 8192
+    ollama_num_parallel: int = 1
     ollama_timeout_seconds: float = 60.0
     prompt_transcript_window: int = 6
     stt_model: str = 'base'
@@ -43,6 +44,7 @@ _ENV_MAP: dict[str, tuple[str, callable]] = {
     'ollama_model': ('OLLAMA_MODEL', str),
     'ollama_keep_alive': ('OLLAMA_KEEP_ALIVE', str),
     'ollama_num_ctx': ('OLLAMA_NUM_CTX', int),
+    'ollama_num_parallel': ('OLLAMA_NUM_PARALLEL', int),
     'ollama_timeout_seconds': ('OLLAMA_TIMEOUT_SECONDS', float),
     'prompt_transcript_window': ('ASKCHIP_PROMPT_TRANSCRIPT_WINDOW', int),
     'stt_model': ('ASKCHIP_STT_MODEL', str),

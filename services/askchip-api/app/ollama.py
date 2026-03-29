@@ -27,6 +27,7 @@ class OllamaClient:
         timeout_seconds: float = 60.0,
         keep_alive: str = '30m',
         num_ctx: int = 8192,
+        num_parallel: int = 1,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip('/')
@@ -34,6 +35,7 @@ class OllamaClient:
         self.timeout_seconds = timeout_seconds
         self.keep_alive = keep_alive
         self.num_ctx = num_ctx
+        self.num_parallel = num_parallel
         self._transport = transport
 
     async def stream_chat(

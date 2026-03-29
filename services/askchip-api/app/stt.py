@@ -44,12 +44,15 @@ class FasterWhisperSttService:
         if requested_device == 'auto':
             selected_device = 'cpu'
             try:
-                import torch  # type: ignore
+                import ctranslate2  # type: ignore
 
-                if torch.cuda.is_available():
+                if int(ctranslate2.get_cuda_device_count()) > 0:
                     selected_device = 'cuda'
             except Exception:
-                warning = 'torch CUDA availability probe failed while resolving auto STT device; defaulting to cpu.'
+                warning = (
+                    'ctranslate2 CUDA device probe failed while resolving auto STT device; '
+                    'defaulting to cpu.'
+                )
         if requested_compute_type == 'auto':
             resolved_compute_type = 'int8_float16' if selected_device == 'cuda' else 'int8'
 
