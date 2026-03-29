@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.tts import TtsAdapter, TtsError
@@ -30,6 +31,7 @@ class ReadinessCheckState:
 class ReadinessTracker:
     ollama: OllamaClient
     tts: TtsAdapter
+    stt: Any | None
     ollama_warmup_enabled: bool
     tts_warmup_enabled: bool
     checks: dict[str, ReadinessCheckState] = field(default_factory=dict)
@@ -93,13 +95,16 @@ class ReadinessTracker:
             'model': self.ollama.model,
             'keep_alive': self.ollama.keep_alive,
             'num_ctx': self.ollama.num_ctx,
+            'num_parallel': self.ollama.num_parallel,
         }
+        stt_runtime = self.stt.runtime_details() if self.stt is not None and hasattr(self.stt, 'runtime_details') else {}
         tts_runtime = self.tts.runtime_details() if hasattr(self.tts, 'runtime_details') else {}
         return {
             'local_only': True,
             'warmup_active': self.warmup_active(),
             'runtime': {
                 'ollama': ollama_runtime,
+                'stt': stt_runtime,
                 'tts': tts_runtime,
             },
             'checks': {

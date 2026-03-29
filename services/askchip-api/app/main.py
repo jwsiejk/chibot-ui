@@ -51,6 +51,7 @@ class AppState:
             timeout_seconds=config.ollama_timeout_seconds,
             keep_alive=config.ollama_keep_alive,
             num_ctx=config.ollama_num_ctx,
+            num_parallel=config.ollama_num_parallel,
             transport=ollama_transport,
         )
         self.turn_manager = TurnManager(self.db, self.event_bus, self.ollama, self.prompt_assembler)
@@ -84,11 +85,18 @@ class AppState:
         self.readiness = ReadinessTracker(
             ollama=self.ollama,
             tts=self.speech.tts,
+            stt=self.stt,
             ollama_warmup_enabled=config.ollama_warmup_enabled,
             tts_warmup_enabled=config.tts_warmup_enabled,
         )
 
-        stt_runtime = self.stt.runtime_details() if hasattr(self.stt, 'runtime_details') else {'stt_model': config.stt_model, 'selected_device': config.stt_device, 'resolved_compute_type': config.stt_compute_type}
+        stt_runtime = self.stt.runtime_details() if hasattr(self.stt, 'runtime_details') else {
+            'stt_model': config.stt_model,
+            'requested_device': config.stt_device,
+            'selected_device': config.stt_device,
+            'requested_compute_type': config.stt_compute_type,
+            'resolved_compute_type': config.stt_compute_type,
+        }
         tts_runtime = self.speech.tts.runtime_details() if hasattr(self.speech.tts, 'runtime_details') else {'tts_engine': 'kokoro-onnx', 'selected_device': config.tts_device, 'provider': 'CPUExecutionProvider'}
         logger.info('askchip_runtime_selection stt=%s tts=%s', stt_runtime, tts_runtime)
 
@@ -136,9 +144,12 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             ollama_model=config.ollama_model,
             ollama_keep_alive=config.ollama_keep_alive,
             ollama_num_ctx=config.ollama_num_ctx,
+            ollama_num_parallel=config.ollama_num_parallel,
             database_path=str(config.database_path),
             stt_model=config.stt_model,
+            stt_requested_device=str((stt_runtime.get('requested_device') if stt_runtime else config.stt_device)),
             stt_device=str((stt_runtime.get('selected_device') if stt_runtime else config.stt_device)),
+            stt_requested_compute_type=str((stt_runtime.get('requested_compute_type') if stt_runtime else config.stt_compute_type)),
             stt_compute_type=str((stt_runtime.get('resolved_compute_type') if stt_runtime else config.stt_compute_type)),
             tts_voice=config.tts_voice,
             tts_device=str((tts_runtime.get('selected_device') if tts_runtime else config.tts_device)),

@@ -204,6 +204,7 @@ def test_default_settings_use_gemma_model() -> None:
     config = Settings()
 
     assert config.ollama_model == 'gemma3:4b'
+    assert config.ollama_num_parallel == 1
 
 
 def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
@@ -215,6 +216,16 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
     assert response.json()['ollama_model'] == 'gemma3:4b'
     assert response.json()['ollama_keep_alive'] == '30m'
     assert response.json()['ollama_num_ctx'] == 8192
+    assert response.json()['ollama_num_parallel'] == 1
+    assert response.json()['stt_requested_device'] == 'auto'
+    assert response.json()['stt_requested_compute_type'] == 'auto'
+
+
+def test_local_readme_documents_ollama_num_parallel_pin() -> None:
+    readme_text = (Path(__file__).resolve().parents[3] / 'docs/askchip-local/README.md').read_text(encoding='utf-8')
+
+    assert 'OLLAMA_NUM_PARALLEL=1' in readme_text
+    assert 'Ollama memory use scales' in readme_text
 
 
 def test_turns_send_explicit_think_false_for_small_talk(tmp_path: Path) -> None:
@@ -655,15 +666,12 @@ def test_thinking_filter_strips_unmatched_close_tag() -> None:
 def test_stt_auto_compute_type_prefers_cuda_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.stt import FasterWhisperSttService
 
-    class FakeCuda:
+    class FakeCtranslate2:
         @staticmethod
-        def is_available() -> bool:
-            return True
+        def get_cuda_device_count() -> int:
+            return 1
 
-    class FakeTorch:
-        cuda = FakeCuda()
-
-    monkeypatch.setitem(sys.modules, 'torch', FakeTorch())
+    monkeypatch.setitem(sys.modules, 'ctranslate2', FakeCtranslate2())
     service = FasterWhisperSttService(model_name='base', device='auto', compute_type='auto', cpu_threads=2)
     runtime = service.runtime_details()
 
@@ -674,20 +682,34 @@ def test_stt_auto_compute_type_prefers_cuda_profile(monkeypatch: pytest.MonkeyPa
 def test_stt_auto_compute_type_uses_cpu_profile_without_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.stt import FasterWhisperSttService
 
-    class FakeCuda:
+    class FakeCtranslate2:
         @staticmethod
-        def is_available() -> bool:
-            return False
+        def get_cuda_device_count() -> int:
+            return 0
 
-    class FakeTorch:
-        cuda = FakeCuda()
-
-    monkeypatch.setitem(sys.modules, 'torch', FakeTorch())
+    monkeypatch.setitem(sys.modules, 'ctranslate2', FakeCtranslate2())
     service = FasterWhisperSttService(model_name='base', device='auto', compute_type='auto', cpu_threads=2)
     runtime = service.runtime_details()
 
     assert runtime['selected_device'] == 'cpu'
     assert runtime['resolved_compute_type'] == 'int8'
+
+
+def test_stt_auto_runtime_no_longer_depends_on_torch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.stt import FasterWhisperSttService
+
+    class FakeCtranslate2:
+        @staticmethod
+        def get_cuda_device_count() -> int:
+            return 1
+
+    monkeypatch.delitem(sys.modules, 'torch', raising=False)
+    monkeypatch.setitem(sys.modules, 'ctranslate2', FakeCtranslate2())
+    service = FasterWhisperSttService(model_name='base', device='auto', compute_type='auto', cpu_threads=2)
+    runtime = service.runtime_details()
+
+    assert runtime['selected_device'] == 'cuda'
+    assert 'warning' not in runtime
 
 
 def test_tts_auto_mode_selects_cuda_provider_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -925,6 +947,7 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
     monkeypatch.setenv('ASKCHIP_API_DATABASE_PATH', '/tmp/askchip.db')
     monkeypatch.setenv('ASKCHIP_PROMPT_TRANSCRIPT_WINDOW', '4')
     monkeypatch.setenv('OLLAMA_MODEL', 'custom:model')
+    monkeypatch.setenv('OLLAMA_NUM_PARALLEL', '1')
 
     config = load_settings()
 
@@ -933,6 +956,7 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
     assert config.database_path == Path('/tmp/askchip.db')
     assert config.prompt_transcript_window == 4
     assert config.ollama_model == 'custom:model'
+    assert config.ollama_num_parallel == 1
 
 
 def test_startup_migrates_legacy_message_content_column_to_text(tmp_path: Path) -> None:
@@ -1707,6 +1731,13 @@ def test_readiness_endpoint_reports_warmup_state(tmp_path: Path) -> None:
     assert body['local_only'] is True
     assert body['checks']['ollama']['status'] == 'ready'
     assert body['checks']['tts']['status'] == 'not_run'
+    assert body['runtime']['ollama']['keep_alive'] == '30m'
+    assert body['runtime']['ollama']['num_ctx'] == 8192
+    assert body['runtime']['ollama']['num_parallel'] == 1
+    assert body['runtime']['stt']['requested_device'] == 'auto'
+    assert body['runtime']['stt']['selected_device'] in {'cpu', 'cuda'}
+    assert body['runtime']['stt']['requested_compute_type'] == 'auto'
+    assert body['runtime']['stt']['resolved_compute_type'] in {'int8', 'int8_float16'}
     assert config.json()['ollama_warmup_enabled'] is True
     assert config.json()['tts_warmup_enabled'] is False
 

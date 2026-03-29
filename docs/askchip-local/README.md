@@ -29,12 +29,16 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - AskChip Local also sets explicit Ollama runtime request defaults for local responsiveness:
   - `OLLAMA_KEEP_ALIVE=30m`
   - `OLLAMA_NUM_CTX=8192`
+  - `OLLAMA_NUM_PARALLEL=1`
+- `OLLAMA_NUM_PARALLEL=1` is intentional for this local, voice-first assistant profile: it keeps memory pressure predictable so streaming chat + STT/TTS stay responsive on a single machine.
+- Ollama memory use scales with effective parallelism × context length. Increasing `OLLAMA_NUM_PARALLEL` and/or `OLLAMA_NUM_CTX` raises peak memory requirements.
+- `OLLAMA_NUM_PARALLEL` is an Ollama server/runtime setting. It is not a per-request `/api/chat` payload field in AskChip.
 - Verify where Gemma is loaded (CPU/GPU split) with:
   ```bash
   ollama ps
   ```
 - You can still override the model without code changes by setting `OLLAMA_MODEL` in your shell/environment before starting the API.
-- `/api/v1/config` reports the active backend model and resolved Ollama runtime request settings (`ollama_model`, `ollama_keep_alive`, `ollama_num_ctx`).
+- `/api/v1/config` reports the active backend model and resolved Ollama runtime settings (`ollama_model`, `ollama_keep_alive`, `ollama_num_ctx`, `ollama_num_parallel`), plus requested/selected STT device and compute type.
 - `/api/v1/readiness` always performs a local installed-model check for the configured `OLLAMA_MODEL`, even when `ASKCHIP_OLLAMA_WARMUP_ENABLED=false`; warm-up requests remain disabled in that mode.
 
 ## Current frontend scope

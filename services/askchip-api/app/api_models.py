@@ -82,9 +82,12 @@ class ConfigResponse(BaseModel):
     ollama_model: str
     ollama_keep_alive: str
     ollama_num_ctx: int
+    ollama_num_parallel: int
     database_path: str
     stt_model: str
+    stt_requested_device: str
     stt_device: str
+    stt_requested_compute_type: str
     stt_compute_type: str
     tts_voice: str
     tts_device: str
