@@ -4,7 +4,6 @@ import re
 
 THINK_OPEN_TAG = '<think>'
 THINK_CLOSE_TAG = '</think>'
-SUSPICIOUS_LEAD_MAX_CHARS = 360
 
 SUSPICIOUS_REASONING_PREFIX = re.compile(
     r"^\s*(?:"
@@ -58,10 +57,12 @@ class ThinkingLeakFilter:
         if self._is_suspicious_leading_prefix(text):
             self._holding_suspicious_prefix = True
 
-        if self._holding_suspicious_prefix and not done and THINK_CLOSE_TAG not in text.lower():
-            if len(text) <= SUSPICIOUS_LEAD_MAX_CHARS:
+        if self._holding_suspicious_prefix and THINK_CLOSE_TAG not in text.lower():
+            self.leak_filtered = True
+            if not done:
                 return ''
             self._holding_suspicious_prefix = False
+            return self._extract_safe_tail_from_suspicious_done(cleaned)
 
         if done:
             self._holding_suspicious_prefix = False
@@ -120,3 +121,27 @@ class ThinkingLeakFilter:
             return True
         prefix = sample[:140]
         return bool(SUSPICIOUS_REASONING_PREFIX.match(prefix))
+
+    @staticmethod
+    def _extract_safe_tail_from_suspicious_done(text: str) -> str:
+        trimmed = text.strip()
+        if not trimmed:
+            return ''
+
+        safe_markers = (
+            'final answer:',
+            'answer:',
+            'response:',
+            '\n\n',
+        )
+        lower = text.lower()
+        for marker in safe_markers:
+            index = lower.rfind(marker)
+            if index == -1:
+                continue
+            start = index + len(marker)
+            tail = text[start:].strip()
+            if tail and not ThinkingLeakFilter._is_suspicious_leading_prefix(tail):
+                return tail
+
+        return ''

@@ -134,6 +134,29 @@ describe('assistant speech playback helper', () => {
     assert.equal(result?.chunkText, 'Second sentence.');
   });
 
+  it('supports deterministic FIFO queue prefetch across 3+ chunks without skipping', () => {
+    const text = 'First sentence. Second sentence. Third sentence.';
+    const result = findNextSpeechChunk({
+      previousMessages: [message({ id: 'assistant-queue', status: 'streaming', text })],
+      messages: [message({ id: 'assistant-queue', status: 'streaming', text })],
+      // First chunk is active and second chunk is already guaranteed as queued.
+      spokenOffsets: new Map([['assistant-queue', 'First sentence. Second sentence.'.length]]),
+      sessionChanged: false,
+    });
+
+    assert.equal(result?.chunkText, 'Third sentence.');
+  });
+
+  it('preserves sequential chunk discovery order when multiple future chunks are available', () => {
+    const text = 'First sentence. Second sentence. Third sentence.';
+
+    const second = getNextSpeechChunk(message({ id: 'assistant-seq', status: 'streaming', text }), 'First sentence.'.length);
+    assert.equal(second?.chunkText, 'Second sentence.');
+
+    const third = getNextSpeechChunk(message({ id: 'assistant-seq', status: 'streaming', text }), 'First sentence. Second sentence.'.length);
+    assert.equal(third?.chunkText, 'Third sentence.');
+  });
+
   it('speaks the final tail after completion even without trailing sentence punctuation', () => {
     const result = getNextSpeechChunk(message({ id: 'assistant-tail', status: 'completed', text: 'Short final wrap up' }), 0);
 
