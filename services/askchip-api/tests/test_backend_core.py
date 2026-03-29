@@ -200,12 +200,12 @@ def test_faster_whisper_stt_closes_tempfile_before_transcribe_and_cleans_up(tmp_
 
 
 
-def test_default_settings_use_gemma_model_and_bm_george_voice() -> None:
+def test_default_settings_use_gemma_model_and_am_fenrir_voice() -> None:
     config = Settings()
 
     assert config.ollama_model == 'gemma3:4b'
     assert config.ollama_num_parallel == 1
-    assert config.tts_voice == 'bm_george'
+    assert config.tts_voice == 'am_fenrir'
 
 
 def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
@@ -220,7 +220,7 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
     assert response.json()['ollama_num_parallel'] == 1
     assert response.json()['stt_requested_device'] == 'auto'
     assert response.json()['stt_requested_compute_type'] == 'auto'
-    assert response.json()['tts_voice'] == 'bm_george'
+    assert response.json()['tts_voice'] == 'am_fenrir'
 
 
 def test_local_readme_documents_ollama_num_parallel_pin() -> None:
