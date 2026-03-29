@@ -20,10 +20,20 @@ class OllamaModelUnavailableError(OllamaUnavailableError):
 
 
 class OllamaClient:
-    def __init__(self, base_url: str, model: str, timeout_seconds: float = 60.0, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout_seconds: float = 60.0,
+        keep_alive: str = '30m',
+        num_ctx: int = 8192,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip('/')
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.keep_alive = keep_alive
+        self.num_ctx = num_ctx
         self._transport = transport
 
     async def stream_chat(
@@ -38,9 +48,11 @@ class OllamaClient:
             'messages': [{'role': message.role, 'content': message.text} for message in messages],
             'stream': True,
             'think': think,
+            'keep_alive': self.keep_alive,
+            'options': {'num_ctx': self.num_ctx},
         }
         if options:
-            payload['options'] = options
+            payload['options'].update(options)
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:
                 async with client.stream('POST', '/api/chat', json=payload) as response:
@@ -71,6 +83,8 @@ class OllamaClient:
             'messages': [{'role': 'user', 'content': 'Reply with OK.'}],
             'stream': False,
             'think': False,
+            'keep_alive': self.keep_alive,
+            'options': {'num_ctx': self.num_ctx},
         }
         try:
             async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds, transport=self._transport) as client:

@@ -19,7 +19,7 @@ class PromptAssembler:
 
     def build_messages(self, transcript: list[MessageRecord], user_text: str) -> list[PromptMessage]:
         recent = transcript[-self.transcript_window :]
-        messages: list[PromptMessage] = []
+        messages: list[PromptMessage] = [PromptMessage(role='user', text=MARLENE_INSTRUCTION_BLOCK)]
 
         for item in recent:
             if item.role == 'assistant' and not item.text:
@@ -27,9 +27,5 @@ class PromptAssembler:
             messages.append(PromptMessage(role=item.role, text=item.text))
 
         if not recent or recent[-1].role != 'user' or recent[-1].text != user_text:
-            messages.append(PromptMessage(role='user', text=self._instruction_wrapped_user_text(user_text)))
+            messages.append(PromptMessage(role='user', text=user_text))
         return messages
-
-    @staticmethod
-    def _instruction_wrapped_user_text(user_text: str) -> str:
-        return f'{MARLENE_INSTRUCTION_BLOCK}\n\nUser request:\n{user_text}'

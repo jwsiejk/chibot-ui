@@ -26,8 +26,15 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
   ```bash
   ollama pull gemma3:4b
   ```
+- AskChip Local also sets explicit Ollama runtime request defaults for local responsiveness:
+  - `OLLAMA_KEEP_ALIVE=30m`
+  - `OLLAMA_NUM_CTX=8192`
+- Verify where Gemma is loaded (CPU/GPU split) with:
+  ```bash
+  ollama ps
+  ```
 - You can still override the model without code changes by setting `OLLAMA_MODEL` in your shell/environment before starting the API.
-- `/api/v1/config` reports the active backend model in `ollama_model`.
+- `/api/v1/config` reports the active backend model and resolved Ollama runtime request settings (`ollama_model`, `ollama_keep_alive`, `ollama_num_ctx`).
 - `/api/v1/readiness` always performs a local installed-model check for the configured `OLLAMA_MODEL`, even when `ASKCHIP_OLLAMA_WARMUP_ENABLED=false`; warm-up requests remain disabled in that mode.
 
 ## Current frontend scope
@@ -65,10 +72,19 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 
 ## Phase 6 speech configuration
 - `ASKCHIP_TTS_VOICE` defaults to `af_heart`.
-- `ASKCHIP_TTS_DEVICE` defaults to `cpu`.
+- `ASKCHIP_TTS_DEVICE` defaults to `auto`.
 - `ASKCHIP_TTS_MODEL_PATH` and `ASKCHIP_TTS_VOICES_PATH` can point at local Kokoro assets when your runtime requires explicit paths.
 - `ASKCHIP_TTS_SAMPLE_RATE_HZ`, `ASKCHIP_TTS_SPEED`, and `ASKCHIP_TTS_LANG_CODE` tune local speech synthesis.
-- `ASKCHIP_STT_DEVICE` and `ASKCHIP_STT_COMPUTE_TYPE` explicitly control faster-whisper runtime execution. When `ASKCHIP_STT_DEVICE=auto`, startup diagnostics now report the actual selected execution device.
+- `ASKCHIP_STT_DEVICE` and `ASKCHIP_STT_COMPUTE_TYPE` explicitly control faster-whisper runtime execution.
+  - `ASKCHIP_STT_DEVICE=auto` resolves to CUDA when available, otherwise CPU.
+  - `ASKCHIP_STT_COMPUTE_TYPE=auto` resolves to `int8_float16` on CUDA and `int8` on CPU.
+- GPU-enabled STT expectations:
+  - If CUDA is not actually selected by faster-whisper at runtime, diagnostics honestly report CPU selection.
+  - `/api/v1/config` surfaces the selected STT device and resolved compute type.
+- GPU-enabled Kokoro expectations:
+  - `ASKCHIP_TTS_DEVICE=auto` chooses CUDA only when ONNX Runtime reports `CUDAExecutionProvider`; otherwise it falls back to CPU.
+  - On Windows, when `onnxruntime-gpu` exposes CUDA support, AskChip preloads the ONNX Runtime CUDA DLLs before session initialization.
+  - If CUDA is explicitly requested but unavailable, runtime diagnostics include a warning and show CPU fallback.
 - When using the espeak fallback backend, American English voices should use `en-us` (British English would use `en-gb`).
 - Runtime startup diagnostics now report the selected STT device/compute type and Kokoro ONNX provider/device, including explicit warnings when a requested GPU path is unavailable and the runtime falls back to CPU.
 - Assistant speech is fetched from a dedicated HTTP endpoint, then the frontend reports real playback start/stop so `speaking` only appears while audio is actually playing.
