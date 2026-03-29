@@ -1504,6 +1504,55 @@ def test_tts_sanitization_normalizes_ellipses_dashes_and_repeated_punctuation_fo
     assert stored.text == 'Well... this — maybe?? yes!!'
 
 
+
+def test_tts_sanitization_lightens_semicolons_and_colons_for_speech_only(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(
+        db,
+        status='streaming',
+        text='First: check this; then keep going.',
+    )
+
+    speech.synthesize_message(session.id, message.id, text=message.text)
+    stored = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ['First, check this, then keep going.']
+    assert stored.text == 'First: check this; then keep going.'
+
+
+def test_tts_sanitization_smooths_parenthetical_asides_for_speech_only(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(
+        db,
+        status='streaming',
+        text="That plan is workable (honestly), and it'll save time.",
+    )
+
+    speech.synthesize_message(session.id, message.id, text=message.text)
+    stored = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ["That plan is workable, honestly, and it'll save time."]
+    assert stored.text == "That plan is workable (honestly), and it'll save time."
+
+
+def test_tts_sanitization_flattens_multiline_listy_text_for_speech_only(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(
+        db,
+        status='streaming',
+        text='Here is the plan\n- prep the field\n- water lightly\n1. gather tools',
+    )
+
+    speech.synthesize_message(session.id, message.id, text=message.text)
+    stored = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ['Here is the plan, prep the field, water lightly, gather tools']
+    assert stored.text == 'Here is the plan\n- prep the field\n- water lightly\n1. gather tools'
+
+
 def test_chunked_speech_strips_markdown_emphasis_without_mutating_canonical_text(tmp_path: Path) -> None:
     tts = FakeTtsService()
     db, speech = make_speech_service(tmp_path, tts_adapter=tts)

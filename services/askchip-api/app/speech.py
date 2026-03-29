@@ -104,14 +104,29 @@ class SpeechService:
 
     @staticmethod
     def _sanitize_tts_text(text: str) -> str:
+        def _smooth_parenthetical(match: re.Match[str]) -> str:
+            aside = match.group(1).strip()
+            if not aside:
+                return ' '
+            words = aside.split()
+            if len(words) > 6 or re.search(r'[.!?;:]', aside):
+                return f' {aside} '
+            return f', {aside}, '
+
         sanitized = re.sub(r'\s*[\[(\*]\s*(?:laughs?|chuckles?|sighs?|pause|pauses?)\s*[\])\*]\s*', ', ', text, flags=re.IGNORECASE)
         sanitized = re.sub(r'(?<!\w)(\*\*\*|___)(?=\S)(.+?)(?<=\S)\1(?!\w)', r'\2', sanitized)
         sanitized = re.sub(r'(?<!\w)(\*\*|__)(?=\S)(.+?)(?<=\S)\1(?!\w)', r'\2', sanitized)
         sanitized = re.sub(r'(?<!\w)(\*|_)(?=\S)(.+?)(?<=\S)\1(?!\w)', r'\2', sanitized)
+        sanitized = re.sub(r'(?m)^\s*(?:[-*•]+|\d+[.)])\s+', '', sanitized)
+        sanitized = re.sub(r'\s*\n+\s*', ', ', sanitized)
+        sanitized = re.sub(r'\(([^()]+)\)', _smooth_parenthetical, sanitized)
+        sanitized = re.sub(r'\s*[;:]\s*', ', ', sanitized)
         sanitized = re.sub(r'\s*(?:\.{3,}|…)\s*', ', ', sanitized)
         sanitized = re.sub(r'\s*[—–]+\s*', ', ', sanitized)
         sanitized = re.sub(r'([!?])\1+', r'\1', sanitized)
         sanitized = re.sub(r'([,.;:])\1+', r'\1', sanitized)
+        sanitized = re.sub(r'([!?.,;:])\s*([!?.,;:])+', r'\1', sanitized)
+        sanitized = re.sub(r'"\s+([^"\n]*?)\s+"', r'"\1"', sanitized)
         sanitized = re.sub(r'\s*,\s*', ', ', sanitized)
         sanitized = re.sub(r'(?:,\s*){2,}', ', ', sanitized)
         sanitized = re.sub(r'\s+([,.!?;:])', r'\1', sanitized)
