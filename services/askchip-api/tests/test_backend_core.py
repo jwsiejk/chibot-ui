@@ -200,11 +200,12 @@ def test_faster_whisper_stt_closes_tempfile_before_transcribe_and_cleans_up(tmp_
 
 
 
-def test_default_settings_use_gemma_model() -> None:
+def test_default_settings_use_gemma_model_and_sarah_voice() -> None:
     config = Settings()
 
     assert config.ollama_model == 'gemma3:4b'
     assert config.ollama_num_parallel == 1
+    assert config.tts_voice == 'af_sarah'
 
 
 def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
@@ -219,6 +220,7 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
     assert response.json()['ollama_num_parallel'] == 1
     assert response.json()['stt_requested_device'] == 'auto'
     assert response.json()['stt_requested_compute_type'] == 'auto'
+    assert response.json()['tts_voice'] == 'af_sarah'
 
 
 def test_local_readme_documents_ollama_num_parallel_pin() -> None:
@@ -957,6 +959,7 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
     monkeypatch.setenv('ASKCHIP_PROMPT_TRANSCRIPT_WINDOW', '4')
     monkeypatch.setenv('OLLAMA_MODEL', 'custom:model')
     monkeypatch.setenv('OLLAMA_NUM_PARALLEL', '1')
+    monkeypatch.setenv('ASKCHIP_TTS_VOICE', 'af_heart')
 
     config = load_settings()
 
@@ -966,6 +969,7 @@ def test_load_settings_reads_environment_overrides(monkeypatch) -> None:
     assert config.prompt_transcript_window == 4
     assert config.ollama_model == 'custom:model'
     assert config.ollama_num_parallel == 1
+    assert config.tts_voice == 'af_heart'
 
 
 def test_startup_migrates_legacy_message_content_column_to_text(tmp_path: Path) -> None:
