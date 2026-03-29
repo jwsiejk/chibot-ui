@@ -90,9 +90,10 @@ class SpeechService:
             'speech': self._merge_speech_metadata(message, {'last_stopped_at': now, 'stop_reason': reason}),
         })
 
-        should_hold_speaking = next_state == 'thinking' and reason == 'ended'
+        should_hold_speaking = reason == 'ended' and next_state in {'thinking', 'ready'}
         if should_hold_speaking:
-            self._schedule_speech_gap_hold(session_id, message)
+            next_detail = 'tts_stopped_waiting_for_more' if next_state == 'thinking' else 'tts_stopped'
+            self._schedule_speech_gap_hold(session_id, message, target_state=next_state, target_detail=next_detail)
             return 'speaking'
 
         self._cancel_speech_gap_hold(session_id)
@@ -143,13 +144,18 @@ class SpeechService:
     def _resolve_idle_state(message: MessageRecord) -> str:
         return 'ready' if message.status == 'completed' else 'thinking'
 
-    def _schedule_speech_gap_hold(self, session_id: str, message: MessageRecord) -> None:
+    def _schedule_speech_gap_hold(self, session_id: str, message: MessageRecord, *, target_state: str, target_detail: str) -> None:
         self._cancel_speech_gap_hold(session_id)
         self._speech_gap_hold_tasks[session_id] = asyncio.create_task(
-            self._expire_speech_gap_hold(session_id=session_id, message=message)
+            self._expire_speech_gap_hold(
+                session_id=session_id,
+                message=message,
+                target_state=target_state,
+                target_detail=target_detail,
+            )
         )
 
-    async def _expire_speech_gap_hold(self, *, session_id: str, message: MessageRecord) -> None:
+    async def _expire_speech_gap_hold(self, *, session_id: str, message: MessageRecord, target_state: str, target_detail: str) -> None:
         try:
             await asyncio.sleep(SPEECH_GAP_HOLD_SECONDS)
             if self._active_playback_by_session.get(session_id) is not None:
@@ -159,15 +165,16 @@ class SpeechService:
                 return
             self.turn_manager.set_session_state(
                 session_id,
-                message.turn_id,
-                'thinking',
-                detail='tts_stopped_waiting_for_more',
+                message.turn_id if target_state == 'thinking' else None,
+                target_state,
+                detail=target_detail,
+                ready_at=datetime.now(timezone.utc).isoformat() if target_state == 'ready' else None,
             )
             await self.turn_manager.publish_state(
                 session_id,
                 message.turn_id,
-                'thinking',
-                detail='tts_stopped_waiting_for_more',
+                target_state,
+                detail=target_detail,
             )
         finally:
             self._speech_gap_hold_tasks.pop(session_id, None)

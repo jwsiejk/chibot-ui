@@ -1416,9 +1416,9 @@ def test_early_speech_can_begin_from_streaming_assistant_message_when_sentence_i
     assert synthesized.audio_bytes == b'RIFFearly'
     assert tts.calls == ["Well, let's take a look."]
     assert start_state is None
-    assert stop_state == 'thinking'
+    assert stop_state == 'speaking'
     assert transcript is not None
-    assert transcript.status == 'thinking'
+    assert transcript.status == 'speaking'
 
 
 def test_chunked_speech_does_not_repeat_already_spoken_text_and_speaks_final_tail(tmp_path: Path) -> None:
@@ -1518,17 +1518,52 @@ def test_chunked_speech_strips_markdown_emphasis_without_mutating_canonical_text
     assert stored.text == 'First *chunk*. Then **second** _chunk_ and __tail__.'
 
 
-def test_playback_stop_returns_ready_when_generation_is_complete(tmp_path: Path) -> None:
+def test_completed_chunk_handoff_holds_speaking_briefly_before_returning_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import speech as speech_module
+
+    monkeypatch.setattr(speech_module, 'SPEECH_GAP_HOLD_SECONDS', 0.04)
     db, speech = make_speech_service(tmp_path, tts_adapter=FakeTtsService())
     session, message = seed_session_with_assistant_message(db, status='completed', text='All wrapped up.')
 
-    asyncio.run(speech.start_playback(session.id, message.id))
-    stop_state = asyncio.run(speech.stop_playback(session.id, message.id, reason='ended'))
-    transcript = db.get_session(session.id)
+    async def exercise() -> str:
+        await speech.start_playback(session.id, message.id)
+        stop_state = await speech.stop_playback(session.id, message.id, reason='ended')
+        await asyncio.sleep(0.06)
+        return stop_state
 
-    assert stop_state == 'ready'
+    stop_state = asyncio.run(exercise())
+    transcript = db.get_session(session.id)
+    state_events = [event for event in db.list_events(session.id) if event.type == 'state']
+
+    assert stop_state == 'speaking'
     assert transcript is not None
     assert transcript.status == 'ready'
+    assert any(event.payload['state'] == 'ready' and event.payload['detail'] == 'tts_stopped' for event in state_events)
+
+
+def test_completed_chunk_handoff_cancels_ready_fallback_when_next_playback_starts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import speech as speech_module
+
+    monkeypatch.setattr(speech_module, 'SPEECH_GAP_HOLD_SECONDS', 0.06)
+    db, speech = make_speech_service(tmp_path, tts_adapter=FakeTtsService())
+    session, message = seed_session_with_assistant_message(db, status='completed', text='First sentence. Second sentence.')
+
+    async def exercise() -> str:
+        await speech.start_playback(session.id, message.id)
+        stop_state = await speech.stop_playback(session.id, message.id, reason='ended')
+        await asyncio.sleep(0.02)
+        await speech.start_playback(session.id, message.id)
+        await asyncio.sleep(0.08)
+        return stop_state
+
+    stop_state = asyncio.run(exercise())
+    refreshed = db.get_session(session.id)
+    state_events = [event for event in db.list_events(session.id) if event.type == 'state']
+
+    assert stop_state == 'speaking'
+    assert refreshed is not None
+    assert refreshed.status == 'speaking'
+    assert all(event.payload['state'] != 'ready' for event in state_events)
 
 def test_short_chunk_gap_holds_speaking_and_avoids_thinking_bounce(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app import speech as speech_module

@@ -134,6 +134,28 @@ describe('assistant speech playback helper', () => {
     assert.equal(result?.chunkText, 'Second sentence.');
   });
 
+  it('recomputes next chunk from playback progress even when transcript text has not changed', () => {
+    const text = 'First sentence. Second sentence. Third sentence.';
+    const previousMessages = [message({ id: 'assistant-direct', status: 'streaming', text })];
+    const messages = [message({ id: 'assistant-direct', status: 'streaming', text })];
+
+    const second = findNextSpeechChunk({
+      previousMessages,
+      messages,
+      spokenOffsets: new Map([['assistant-direct', 'First sentence.'.length]]),
+      sessionChanged: false,
+    });
+    const third = findNextSpeechChunk({
+      previousMessages,
+      messages,
+      spokenOffsets: new Map([['assistant-direct', 'First sentence. Second sentence.'.length]]),
+      sessionChanged: false,
+    });
+
+    assert.equal(second?.chunkText, 'Second sentence.');
+    assert.equal(third?.chunkText, 'Third sentence.');
+  });
+
   it('supports deterministic FIFO queue prefetch across 3+ chunks without skipping', () => {
     const text = 'First sentence. Second sentence. Third sentence.';
     const result = findNextSpeechChunk({
