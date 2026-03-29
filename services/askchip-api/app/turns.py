@@ -107,13 +107,9 @@ class TurnManager:
             self.db.create_message(assistant_message)
 
             transcript = self.db.list_messages(session.id)
-            qwen_think_mode: str | None = None
-            if self.ollama.model.lower().startswith('qwen'):
-                qwen_think_mode = 'think' if reasoning.think else 'no_think'
             prompt_messages = self.prompt_assembler.build_messages(
                 transcript=transcript,
                 user_text=user_text,
-                qwen_think_mode=qwen_think_mode,
             )
             prompt_event = EventRecord(
                 session_id=session.id,
@@ -147,9 +143,9 @@ class TurnManager:
             provider_metrics: dict[str, object] = {}
             thinking_present = False
             thinking_leak_filtered = False
-            thinking_filter = ThinkingLeakFilter(buffer_until_safe=(reasoning.mode == 'auto_normal'))
+            thinking_filter = ThinkingLeakFilter()
             try:
-                async for chunk in self.ollama.stream_chat(prompt_messages, think=reasoning.think):
+                async for chunk in self.ollama.stream_chat(prompt_messages, think=False):
                     provider_metrics.update(chunk.get('metrics', {}))
                     thinking_present = thinking_present or bool(chunk.get('thinking_present', False))
                     delta_text = thinking_filter.filter_delta(
