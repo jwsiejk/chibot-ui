@@ -75,7 +75,7 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 5. Open the UI at `http://127.0.0.1:5173`.
 
 ## Phase 6 speech configuration
-- `ASKCHIP_TTS_VOICE` defaults to `am_puck`.
+- `ASKCHIP_TTS_VOICE` defaults to `bm_daniel`.
 - `ASKCHIP_TTS_DEVICE` defaults to `auto`.
 - `ASKCHIP_TTS_MODEL_PATH` and `ASKCHIP_TTS_VOICES_PATH` can point at local Kokoro assets when your runtime requires explicit paths.
 - `ASKCHIP_TTS_SAMPLE_RATE_HZ`, `ASKCHIP_TTS_SPEED`, and `ASKCHIP_TTS_LANG_CODE` tune local speech synthesis.
