@@ -422,4 +422,31 @@ describe('backend speech start handshake', () => {
 
     assert.deepEqual(cleanupCalls, ['start_failed']);
   });
+
+  it('allows continuity handoff to proceed without waiting for ended-stop acknowledgement', async () => {
+    let resolveStop;
+    let stopCalls = 0;
+    const stopSettled = { value: false };
+    const handshake = createBackendSpeechStartHandshake(() => {
+      stopCalls += 1;
+      return new Promise((resolve) => {
+        resolveStop = () => {
+          stopSettled.value = true;
+          resolve();
+        };
+      });
+    });
+
+    handshake.beginStart();
+    await handshake.acknowledgeStart();
+    const deferredStop = handshake.cancel('ended');
+
+    assert.equal(stopCalls, 1);
+    assert.equal(stopSettled.value, false);
+    assert.equal(handshake.state, 'stopped');
+
+    resolveStop();
+    await deferredStop;
+    assert.equal(stopSettled.value, true);
+  });
 });

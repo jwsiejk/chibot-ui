@@ -1482,6 +1482,50 @@ def test_plain_leaked_monologue_without_open_tag_never_reaches_tts_or_transcript
     assert delta_payloads == ['Final spoken answer.']
 
 
+def test_we_are_planner_leak_is_buffered_until_safe_answer_and_never_reaches_tts(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': 'We are Marlene, a Nebraska farmer turned tech geek, planning the reply. Key points: stay concise. Alternative: explain every tradeoff. Final decision: summarize first.'}, 'done': False},
+        {'message': {'content': 'Final answer: Let’s restart Ollama and retry your request.'}, 'done': True},
+    ])
+    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
+    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'We are planner leak'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'How do I recover quickly?'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant = transcript['messages'][-1]
+        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
+
+    assert speech.status_code == 200
+    assert assistant['text'] == 'Let’s restart Ollama and retry your request.'
+    assert assistant['metadata']['thinking_leak_filtered'] is True
+    assert tts.calls == ['Let’s restart Ollama and retry your request.']
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == ['Let’s restart Ollama and retry your request.']
+
+
+def test_the_user_just_said_planner_leak_is_buffered_until_safe_answer_and_never_reaches_tts(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': 'Okay, the user just said they lost audio. User started with a playback gap report. First, acknowledge the issue before fixing it.'}, 'done': False},
+        {'message': {'content': 'Here is the answer: I removed the stop round-trip block so queued speech starts immediately.'}, 'done': True},
+    ])
+    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
+    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'User just said leak'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Why is speech pausing?'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant = transcript['messages'][-1]
+        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
+
+    assert speech.status_code == 200
+    assert assistant['text'] == 'I removed the stop round-trip block so queued speech starts immediately.'
+    assert assistant['metadata']['thinking_leak_filtered'] is True
+    assert tts.calls == ['I removed the stop round-trip block so queued speech starts immediately.']
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == ['I removed the stop round-trip block so queued speech starts immediately.']
+
+
 def test_stale_speech_start_is_rejected_after_session_moves_into_newer_turn_state(tmp_path: Path) -> None:
     transport = streaming_transport([{'message': {'content': 'Older reply'}, 'done': True}])
     app = make_app(tmp_path, transport=transport, stt_service=FakeSttService(text='voice question'), tts_adapter=FakeTtsService())

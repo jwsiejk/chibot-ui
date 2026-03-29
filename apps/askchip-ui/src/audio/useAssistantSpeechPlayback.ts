@@ -67,7 +67,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     }
   }, []);
 
-  const finalizePlayback = useCallback(async (reason: string) => {
+  const finalizePlayback = useCallback(async (reason: string, options?: { awaitBackendStop?: boolean }) => {
     const active = activePlaybackRef.current;
     if (!active) {
       return;
@@ -80,8 +80,15 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     setPlaybackProgressVersion((version) => version + 1);
     setActiveMessageId(null);
 
+    const stopPromise = active.backendHandshake.cancel(reason);
+    if (options?.awaitBackendStop === false) {
+      void stopPromise.catch((error) => {
+        setSpeechError(error instanceof Error ? error.message : 'Assistant speech playback cleanup failed.');
+      });
+      return;
+    }
     try {
-      await active.backendHandshake.cancel(reason);
+      await stopPromise;
     } catch (error) {
       setSpeechError(error instanceof Error ? error.message : 'Assistant speech playback cleanup failed.');
     }
@@ -140,12 +147,14 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     const onEnded = () => {
       options?.onMetric?.({ traceId: clip.traceId, name: 'audio_playback_end', at: Date.now(), info: { source } });
       void (async () => {
-        await finalizePlayback('ended');
         const next = playbackQueueRef.current.shift();
         if (next) {
+          await finalizePlayback('ended', { awaitBackendStop: false });
           setPlaybackProgressVersion((version) => version + 1);
           await activatePreparedClip(next, 'queued');
+          return;
         }
+        await finalizePlayback('ended');
       })();
     };
     active.audio.addEventListener('ended', onEnded, { once: true });
