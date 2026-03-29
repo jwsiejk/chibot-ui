@@ -37,6 +37,8 @@ class FasterWhisperSttService:
     def runtime_details(self) -> dict[str, object]:
         requested_device = self.device
         selected_device = requested_device
+        requested_compute_type = self.compute_type
+        resolved_compute_type = requested_compute_type
         warning: str | None = None
 
         if requested_device == 'auto':
@@ -48,12 +50,15 @@ class FasterWhisperSttService:
                     selected_device = 'cuda'
             except Exception:
                 warning = 'torch CUDA availability probe failed while resolving auto STT device; defaulting to cpu.'
+        if requested_compute_type == 'auto':
+            resolved_compute_type = 'int8_float16' if selected_device == 'cuda' else 'int8'
 
         return {
             'stt_model': self.model_name,
             'requested_device': requested_device,
             'selected_device': selected_device,
-            'compute_type': self.compute_type,
+            'requested_compute_type': requested_compute_type,
+            'resolved_compute_type': resolved_compute_type,
             'cpu_threads': self.cpu_threads,
             **({'warning': warning} if warning else {}),
         }
@@ -72,7 +77,7 @@ class FasterWhisperSttService:
             model = self._load_model(
                 self.model_name,
                 str(runtime['selected_device']),
-                self.compute_type,
+                str(runtime['resolved_compute_type']),
                 self.cpu_threads,
             )
             try:

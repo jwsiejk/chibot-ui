@@ -15,14 +15,16 @@ class Settings(BaseModel):
     database_path: Path = Path('data/askchip_local.db')
     ollama_base_url: str = 'http://127.0.0.1:11434'
     ollama_model: str = 'gemma3:4b'
+    ollama_keep_alive: str = '30m'
+    ollama_num_ctx: int = 8192
     ollama_timeout_seconds: float = 60.0
     prompt_transcript_window: int = 6
     stt_model: str = 'base'
     stt_device: str = 'auto'
-    stt_compute_type: str = 'int8'
+    stt_compute_type: str = 'auto'
     stt_cpu_threads: int = 4
     tts_voice: str = 'af_heart'
-    tts_device: str = 'cpu'
+    tts_device: str = 'auto'
     tts_model_path: Path | None = None
     tts_voices_path: Path | None = None
     tts_sample_rate_hz: int = 24000
@@ -39,6 +41,8 @@ _ENV_MAP: dict[str, tuple[str, callable]] = {
     'database_path': ('ASKCHIP_API_DATABASE_PATH', Path),
     'ollama_base_url': ('OLLAMA_BASE_URL', str),
     'ollama_model': ('OLLAMA_MODEL', str),
+    'ollama_keep_alive': ('OLLAMA_KEEP_ALIVE', str),
+    'ollama_num_ctx': ('OLLAMA_NUM_CTX', int),
     'ollama_timeout_seconds': ('OLLAMA_TIMEOUT_SECONDS', float),
     'prompt_transcript_window': ('ASKCHIP_PROMPT_TRANSCRIPT_WINDOW', int),
     'stt_model': ('ASKCHIP_STT_MODEL', str),

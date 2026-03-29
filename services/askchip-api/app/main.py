@@ -49,6 +49,8 @@ class AppState:
             base_url=config.ollama_base_url,
             model=config.ollama_model,
             timeout_seconds=config.ollama_timeout_seconds,
+            keep_alive=config.ollama_keep_alive,
+            num_ctx=config.ollama_num_ctx,
             transport=ollama_transport,
         )
         self.turn_manager = TurnManager(self.db, self.event_bus, self.ollama, self.prompt_assembler)
@@ -86,8 +88,8 @@ class AppState:
             tts_warmup_enabled=config.tts_warmup_enabled,
         )
 
-        stt_runtime = self.stt.runtime_details() if hasattr(self.stt, 'runtime_details') else {'stt_model': config.stt_model, 'selected_device': config.stt_device, 'compute_type': config.stt_compute_type}
-        tts_runtime = self.speech.tts.runtime_details() if hasattr(self.speech.tts, 'runtime_details') else {'tts_engine': 'kokoro-onnx', 'selected_device': config.tts_device}
+        stt_runtime = self.stt.runtime_details() if hasattr(self.stt, 'runtime_details') else {'stt_model': config.stt_model, 'selected_device': config.stt_device, 'resolved_compute_type': config.stt_compute_type}
+        tts_runtime = self.speech.tts.runtime_details() if hasattr(self.speech.tts, 'runtime_details') else {'tts_engine': 'kokoro-onnx', 'selected_device': config.tts_device, 'provider': 'CPUExecutionProvider'}
         logger.info('askchip_runtime_selection stt=%s tts=%s', stt_runtime, tts_runtime)
 
 
@@ -126,16 +128,21 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
 
     @app.get('/api/v1/config')
     def get_config() -> JSONResponse:
+        stt_runtime = state.stt.runtime_details() if hasattr(state.stt, 'runtime_details') else {}
+        tts_runtime = state.speech.tts.runtime_details() if hasattr(state.speech.tts, 'runtime_details') else {}
         payload = ConfigResponse(
             app_name=config.app_name,
             ollama_base_url=config.ollama_base_url,
             ollama_model=config.ollama_model,
+            ollama_keep_alive=config.ollama_keep_alive,
+            ollama_num_ctx=config.ollama_num_ctx,
             database_path=str(config.database_path),
             stt_model=config.stt_model,
-            stt_device=config.stt_device,
-            stt_compute_type=str((state.stt.runtime_details().get('compute_type') if hasattr(state.stt, 'runtime_details') else config.stt_compute_type)),
+            stt_device=str((stt_runtime.get('selected_device') if stt_runtime else config.stt_device)),
+            stt_compute_type=str((stt_runtime.get('resolved_compute_type') if stt_runtime else config.stt_compute_type)),
             tts_voice=config.tts_voice,
-            tts_device=str((state.speech.tts.runtime_details().get('selected_device') if hasattr(state.speech.tts, 'runtime_details') else config.tts_device)),
+            tts_device=str((tts_runtime.get('selected_device') if tts_runtime else config.tts_device)),
+            tts_provider=str((tts_runtime.get('provider') if tts_runtime else 'CPUExecutionProvider')),
             tts_model_path=str(config.tts_model_path) if config.tts_model_path else None,
             tts_voices_path=str(config.tts_voices_path) if config.tts_voices_path else None,
             tts_sample_rate_hz=config.tts_sample_rate_hz,

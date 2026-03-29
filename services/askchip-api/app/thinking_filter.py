@@ -27,9 +27,12 @@ class ThinkingLeakFilter:
 
     def _sanitize_stream(self, *, done: bool) -> str:
         text, has_open_without_close = self._strip_think_blocks(self._buffer, done=done)
+        cleaned_text = text.replace(THINK_CLOSE_TAG, '').replace(THINK_CLOSE_TAG.upper(), '')
+        if cleaned_text != text:
+            self.leak_filtered = True
         if has_open_without_close:
             self.leak_filtered = True
-        return text
+        return cleaned_text
 
     @staticmethod
     def _strip_think_blocks(text: str, *, done: bool) -> tuple[str, bool]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -212,6 +213,8 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json()['ollama_model'] == 'gemma3:4b'
+    assert response.json()['ollama_keep_alive'] == '30m'
+    assert response.json()['ollama_num_ctx'] == 8192
 
 
 def test_turns_send_explicit_think_false_for_small_talk(tmp_path: Path) -> None:
@@ -231,6 +234,8 @@ def test_turns_send_explicit_think_false_for_small_talk(tmp_path: Path) -> None:
     payload = captured['payload']
     assert isinstance(payload, dict)
     assert payload['think'] is False
+    assert payload['keep_alive'] == '30m'
+    assert payload['options']['num_ctx'] == 8192
     reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
     assert reasoning_events[-1]['payload'] == {'mode': 'default', 'think': False}
 
@@ -612,12 +617,95 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     ]
     messages = assembler.build_messages(transcript, user_text='new question')
 
+    assert messages[0].role == 'user'
+    assert 'middle-aged Nebraska farmer turned tech geek' in messages[0].text
+    assert 'Keep answers direct and shorter by default' in messages[0].text
+    assert 'Do not reveal private/internal reasoning' in messages[0].text
     assert messages[-2].text == 'recent'
     assert messages[-1].role == 'user'
-    assert 'middle-aged Nebraska farmer turned tech geek' in messages[-1].text
-    assert 'Keep answers direct and shorter by default' in messages[-1].text
-    assert 'Do not reveal private/internal reasoning' in messages[-1].text
-    assert messages[-1].text.endswith('User request:\nnew question')
+    assert messages[-1].text == 'new question'
+
+
+def test_prompt_assembler_keeps_canonical_transcript_user_text_plain() -> None:
+    assembler = PromptAssembler(transcript_window=4)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', text='plain prior text', turn_id='t1', source='typed_input'),
+        MessageRecord(session_id='s', role='assistant', text='answer', turn_id='t1', source='model_output'),
+    ]
+    messages = assembler.build_messages(transcript, user_text='fresh plain input')
+
+    user_entries = [message.text for message in messages if message.role == 'user']
+    assert user_entries == [messages[0].text, 'plain prior text', 'fresh plain input']
+
+
+def test_thinking_filter_strips_unmatched_close_tag() -> None:
+    from app.thinking_filter import ThinkingLeakFilter
+
+    filterer = ThinkingLeakFilter()
+    first = filterer.filter_delta('Final answer starts </think>', done=False)
+    second = filterer.filter_delta(' and finishes cleanly.', done=True)
+
+    assert first == 'Final answer starts '
+    assert second == ' and finishes cleanly.'
+    assert filterer.leak_filtered is True
+
+
+def test_stt_auto_compute_type_prefers_cuda_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.stt import FasterWhisperSttService
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+    class FakeTorch:
+        cuda = FakeCuda()
+
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorch())
+    service = FasterWhisperSttService(model_name='base', device='auto', compute_type='auto', cpu_threads=2)
+    runtime = service.runtime_details()
+
+    assert runtime['selected_device'] == 'cuda'
+    assert runtime['resolved_compute_type'] == 'int8_float16'
+
+
+def test_stt_auto_compute_type_uses_cpu_profile_without_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.stt import FasterWhisperSttService
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class FakeTorch:
+        cuda = FakeCuda()
+
+    monkeypatch.setitem(sys.modules, 'torch', FakeTorch())
+    service = FasterWhisperSttService(model_name='base', device='auto', compute_type='auto', cpu_threads=2)
+    runtime = service.runtime_details()
+
+    assert runtime['selected_device'] == 'cpu'
+    assert runtime['resolved_compute_type'] == 'int8'
+
+
+def test_tts_auto_mode_selects_cuda_provider_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.tts import KokoroConfig, KokoroTtsAdapter
+
+    monkeypatch.setattr('app.tts._available_onnx_providers', lambda: ['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    runtime = KokoroTtsAdapter(KokoroConfig(voice='af_heart', model_path=None, voices_path=None, device='auto')).runtime_details()
+    assert runtime['selected_device'] == 'cuda'
+    assert runtime['provider'] == 'CUDAExecutionProvider'
+
+
+def test_tts_auto_mode_falls_back_to_cpu_without_cuda_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.tts import KokoroConfig, KokoroTtsAdapter
+
+    monkeypatch.setattr('app.tts._available_onnx_providers', lambda: ['CPUExecutionProvider'])
+    runtime = KokoroTtsAdapter(KokoroConfig(voice='af_heart', model_path=None, voices_path=None, device='auto')).runtime_details()
+    assert runtime['selected_device'] == 'cpu'
+    assert runtime['provider'] == 'CPUExecutionProvider'
 
 
 def test_speech_start_and_stop_merge_metadata_without_replacing_canonical_fields(tmp_path: Path) -> None:

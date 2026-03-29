@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import io
+import platform
 import wave
 from dataclasses import dataclass
 from functools import lru_cache
@@ -41,33 +42,20 @@ class KokoroTtsAdapter:
         self.config = config
 
     def runtime_details(self) -> dict[str, object]:
-        providers = _available_onnx_providers()
-        requested_device = self.config.device
-        selected_device = requested_device if requested_device in {'cpu', 'cuda'} else 'cpu'
-        selected_provider = 'CPUExecutionProvider'
-        warning: str | None = None
-
-        if selected_device == 'cuda':
-            if not providers:
-                selected_provider = 'unknown'
-            elif 'CUDAExecutionProvider' in providers:
-                selected_provider = 'CUDAExecutionProvider'
-            else:
-                selected_device = 'cpu'
-                warning = 'ASKCHIP_TTS_DEVICE=cuda requested but CUDAExecutionProvider is unavailable; using CPUExecutionProvider.'
+        runtime = _kokoro_runtime_details(self.config)
 
         return {
             'tts_engine': 'kokoro-onnx',
-            'requested_device': requested_device,
-            'selected_device': selected_device,
-            'provider': selected_provider,
-            'available_providers': providers,
+            'requested_device': runtime['requested_device'],
+            'selected_device': runtime['selected_device'],
+            'provider': runtime['provider'],
+            'available_providers': runtime['available_providers'],
             'voice': self.config.voice,
             'model_path': self.config.model_path,
             'voices_path': self.config.voices_path,
             'speed': self.config.speed,
             'lang_code': self.config.lang_code,
-            **({'warning': warning} if warning else {}),
+            **({'warning': runtime['warning']} if runtime.get('warning') else {}),
         }
 
     def synthesize(self, text: str) -> SynthesizedSpeech:
@@ -118,6 +106,7 @@ def _kokoro_runtime():
 
     config = _kokoro_config_singleton
     runtime = _kokoro_runtime_details(config)
+    _prepare_windows_onnxruntime_cuda(runtime)
     kwargs = {}
     if config.model_path is not None:
         kwargs["model_path"] = config.model_path
@@ -143,9 +132,12 @@ def _available_onnx_providers() -> list[str]:
 def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
     providers = _available_onnx_providers()
     requested_device = config.device
-    selected_device = requested_device if requested_device in {'cpu', 'cuda'} else 'cpu'
+    selected_device = requested_device if requested_device in {'cpu', 'cuda'} else 'auto'
     selected_provider = 'CPUExecutionProvider'
     warning: str | None = None
+
+    if selected_device == 'auto':
+        selected_device = 'cuda' if 'CUDAExecutionProvider' in providers else 'cpu'
 
     if selected_device == 'cuda':
         if not providers:
@@ -163,6 +155,21 @@ def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
         'available_providers': providers,
         **({'warning': warning} if warning else {}),
     }
+
+
+def _prepare_windows_onnxruntime_cuda(runtime_details: dict[str, object]) -> None:
+    if platform.system() != 'Windows':
+        return
+    if runtime_details.get('provider') != 'CUDAExecutionProvider':
+        return
+    try:
+        import onnxruntime as ort  # type: ignore
+
+        preload = getattr(ort, 'preload_dlls', None)
+        if callable(preload):
+            preload()
+    except Exception:
+        return
 
 
 def _kokoro_supports_device_kwarg(kokoro_cls) -> bool:

@@ -89,9 +89,19 @@ class ReadinessTracker:
             self.checks['tts'].mark('ready', 'Kokoro synthesized a short local warm-up clip.')
 
     def snapshot(self) -> dict[str, object]:
+        ollama_runtime = {
+            'model': self.ollama.model,
+            'keep_alive': self.ollama.keep_alive,
+            'num_ctx': self.ollama.num_ctx,
+        }
+        tts_runtime = self.tts.runtime_details() if hasattr(self.tts, 'runtime_details') else {}
         return {
             'local_only': True,
             'warmup_active': self.warmup_active(),
+            'runtime': {
+                'ollama': ollama_runtime,
+                'tts': tts_runtime,
+            },
             'checks': {
                 key: {
                     'label': value.label,

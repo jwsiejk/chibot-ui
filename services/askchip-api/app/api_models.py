@@ -72,6 +72,7 @@ class ReadinessResponse(BaseModel):
     ollama_warmup_enabled: bool = True
     tts_warmup_enabled: bool = False
     warmup_active: bool
+    runtime: dict[str, object] | None = None
     checks: dict[str, ReadinessCheck]
 
 
@@ -79,12 +80,15 @@ class ConfigResponse(BaseModel):
     app_name: str
     ollama_base_url: str
     ollama_model: str
+    ollama_keep_alive: str
+    ollama_num_ctx: int
     database_path: str
     stt_model: str
     stt_device: str
     stt_compute_type: str
     tts_voice: str
     tts_device: str
+    tts_provider: str
     tts_model_path: str | None = None
     tts_voices_path: str | None = None
     tts_sample_rate_hz: int
