@@ -157,7 +157,7 @@ def seed_session_with_assistant_message(db: Database, *, status: str, text: str,
 def streaming_transport(chunks: list[dict[str, object]], status_code: int = 200) -> httpx.MockTransport:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':
-            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
+            return httpx.Response(200, json={'models': [{'name': 'gemma3:4b'}]})
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(status_code, content=body)
 
@@ -199,10 +199,10 @@ def test_faster_whisper_stt_closes_tempfile_before_transcribe_and_cleans_up(tmp_
 
 
 
-def test_default_settings_use_qwen_model() -> None:
+def test_default_settings_use_gemma_model() -> None:
     config = Settings()
 
-    assert config.ollama_model == 'qwen3:4b'
+    assert config.ollama_model == 'gemma3:4b'
 
 
 def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
         response = client.get('/api/v1/config')
 
     assert response.status_code == 200
-    assert response.json()['ollama_model'] == 'qwen3:4b'
+    assert response.json()['ollama_model'] == 'gemma3:4b'
 
 
 def test_turns_send_explicit_think_false_for_small_talk(tmp_path: Path) -> None:
@@ -232,10 +232,10 @@ def test_turns_send_explicit_think_false_for_small_talk(tmp_path: Path) -> None:
     assert isinstance(payload, dict)
     assert payload['think'] is False
     reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
-    assert reasoning_events[-1]['payload'] == {'mode': 'auto_normal', 'think': False}
+    assert reasoning_events[-1]['payload'] == {'mode': 'default', 'think': False}
 
 
-def test_turns_send_explicit_think_true_for_auto_think_prompt(tmp_path: Path) -> None:
+def test_turns_keep_think_false_even_for_complex_prompt(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -253,19 +253,19 @@ def test_turns_send_explicit_think_true_for_auto_think_prompt(tmp_path: Path) ->
     assert turn.status_code == 201
     payload = captured['payload']
     assert isinstance(payload, dict)
-    assert payload['think'] is True
+    assert payload['think'] is False
     reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
-    assert reasoning_events[-1]['payload'] == {'mode': 'auto_think', 'think': True}
+    assert reasoning_events[-1]['payload'] == {'mode': 'default', 'think': False}
 
 
-def test_auto_normal_turns_inject_qwen_no_think_control_message(tmp_path: Path) -> None:
+def test_turns_do_not_inject_qwen_no_think_control_message(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
         captured['payload'] = json.loads(request.content.decode())
         return httpx.Response(200, content=json.dumps({'message': {'content': 'Hey there!'}, 'done': True}).encode() + b'\n')
 
-    app = make_app(tmp_path, transport=httpx.MockTransport(handler), ollama_model='qwen3:4b')
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), ollama_model='gemma3:4b')
     with TestClient(app) as client:
         session_id = client.post('/api/v1/sessions', json={'title': 'No think control'}).json()['id']
         turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'hey'})
@@ -274,17 +274,17 @@ def test_auto_normal_turns_inject_qwen_no_think_control_message(tmp_path: Path) 
     payload = captured['payload']
     assert isinstance(payload, dict)
     contents = [message['content'] for message in payload['messages']]
-    assert '/no_think' in contents
+    assert '/no_think' not in contents
 
 
-def test_auto_think_turns_inject_qwen_think_control_message(tmp_path: Path) -> None:
+def test_turns_do_not_inject_qwen_think_control_message(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
         captured['payload'] = json.loads(request.content.decode())
         return httpx.Response(200, content=json.dumps({'message': {'content': 'Start with logs.'}, 'done': True}).encode() + b'\n')
 
-    app = make_app(tmp_path, transport=httpx.MockTransport(handler), ollama_model='qwen3:4b')
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), ollama_model='gemma3:4b')
     with TestClient(app) as client:
         session_id = client.post('/api/v1/sessions', json={'title': 'Think control'}).json()['id']
         turn = client.post(
@@ -296,10 +296,10 @@ def test_auto_think_turns_inject_qwen_think_control_message(tmp_path: Path) -> N
     payload = captured['payload']
     assert isinstance(payload, dict)
     contents = [message['content'] for message in payload['messages']]
-    assert '/think' in contents
+    assert '/think' not in contents
 
 
-def test_manual_think_override_routes_forced_and_strips_command_token(tmp_path: Path) -> None:
+def test_manual_think_token_is_treated_as_plain_text(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -317,40 +317,34 @@ def test_manual_think_override_routes_forced_and_strips_command_token(tmp_path: 
     assert turn.status_code == 201
     payload = captured['payload']
     assert isinstance(payload, dict)
-    assert payload['think'] is True
+    assert payload['think'] is False
     user_message = transcript['messages'][0]
     assert user_message['role'] == 'user'
-    assert user_message['text'] == 'Walk me through this in detail'
+    assert user_message['text'] == '/think Walk me through this in detail'
     reasoning_events = [event for event in transcript['events'] if event['type'] == 'reasoning.selected']
-    assert reasoning_events[-1]['payload'] == {'mode': 'forced_think', 'think': True}
+    assert reasoning_events[-1]['payload'] == {'mode': 'default', 'think': False}
 
 
-def test_think_only_turn_returns_422_without_creating_canonical_messages_or_timings(tmp_path: Path) -> None:
+def test_think_only_turn_is_treated_as_plain_text(tmp_path: Path) -> None:
     app = make_app(tmp_path, transport=streaming_transport([{'message': {'content': 'unused'}, 'done': True}]))
     with TestClient(app) as client:
         session_id = client.post('/api/v1/sessions', json={'title': 'Think only'}).json()['id']
         turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': '/think'})
         transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
 
-    assert turn.status_code == 422
-    assert turn.json()['detail'] == 'reasoning override requires a real question or prompt'
-    assert transcript['messages'] == []
-    assert transcript['timings'] == []
-    assert transcript['events'] == []
+    assert turn.status_code == 201
+    assert transcript['messages'][0]['text'] == '/think'
 
 
-def test_deep_only_turn_returns_422_without_creating_canonical_messages_or_timings(tmp_path: Path) -> None:
+def test_deep_only_turn_is_treated_as_plain_text(tmp_path: Path) -> None:
     app = make_app(tmp_path, transport=streaming_transport([{'message': {'content': 'unused'}, 'done': True}]))
     with TestClient(app) as client:
         session_id = client.post('/api/v1/sessions', json={'title': 'Deep only'}).json()['id']
         turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': '/deep'})
         transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
 
-    assert turn.status_code == 422
-    assert turn.json()['detail'] == 'reasoning override requires a real question or prompt'
-    assert transcript['messages'] == []
-    assert transcript['timings'] == []
-    assert transcript['events'] == []
+    assert turn.status_code == 201
+    assert transcript['messages'][0]['text'] == '/deep'
 
 
 def test_ollama_thinking_field_is_never_persisted_in_canonical_text(tmp_path: Path) -> None:
@@ -394,140 +388,6 @@ def test_think_block_leak_in_content_is_filtered_from_deltas_transcript_and_fina
     delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
     assert all('think' not in chunk.lower() for chunk in delta_payloads)
     assert all('reasoning' not in chunk.lower() for chunk in delta_payloads)
-
-
-def test_plain_leaked_monologue_before_closing_think_tag_is_buffered_then_discarded(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': "Okay, I need to think this through step by step. First I'll compare options."}, 'done': False},
-        {'message': {'content': ' Then I can check constraints before deciding.</think>Here is the actual answer. '}, 'done': False},
-        {'message': {'content': 'It is safe to proceed now.'}, 'done': True},
-    ])
-    app = make_app(tmp_path, transport=transport)
-
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Leak without open tag'}).json()['id']
-        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'What should we do?'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-
-    assert response.status_code == 201
-    assistant = transcript['messages'][-1]
-    assert assistant['text'] == 'Here is the actual answer. It is safe to proceed now.'
-    assert assistant['metadata']['thinking_leak_filtered'] is True
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == ['Here is the actual answer. ', 'It is safe to proceed now.']
-    assert all('i need to think' not in chunk.lower() for chunk in delta_payloads)
-    assert all('step by step' not in chunk.lower() for chunk in delta_payloads)
-
-
-def test_long_suspicious_monologue_is_not_released_before_late_closing_think_tag(tmp_path: Path) -> None:
-    long_leak = (
-        "Okay, I need to think this through step by step. "
-        + ("I should inspect every option in detail before answering. " * 12)
-    )
-    transport = streaming_transport([
-        {'message': {'content': long_leak}, 'done': False},
-        {'message': {'content': 'Still reasoning silently right now.</think>Final answer starts here. '}, 'done': False},
-        {'message': {'content': 'It is now safe to proceed.'}, 'done': True},
-    ])
-    app = make_app(tmp_path, transport=transport)
-
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Long suspicious leak'}).json()['id']
-        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Give me the answer'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-
-    assert response.status_code == 201
-    assistant = transcript['messages'][-1]
-    assert assistant['text'] == 'Final answer starts here. It is now safe to proceed.'
-    assert assistant['metadata']['thinking_leak_filtered'] is True
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == ['Final answer starts here. ', 'It is now safe to proceed.']
-    assert all('i should inspect every option' not in chunk.lower() for chunk in delta_payloads)
-
-
-def test_suspicious_monologue_without_open_or_close_tag_is_dropped_on_completion(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': "Let me think this through. I should compare a few options first. "}, 'done': False},
-        {'message': {'content': 'Then I can pick one and explain tradeoffs clearly.'}, 'done': True},
-    ])
-    app = make_app(tmp_path, transport=transport)
-
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'No close tag leak'}).json()['id']
-        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Need recommendation'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-
-    assert response.status_code == 201
-    assistant = transcript['messages'][-1]
-    assert assistant['text'] == ''
-    assert assistant['metadata']['thinking_leak_filtered'] is True
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == []
-
-
-def test_sample_style_planner_leak_is_buffered_and_not_emitted_to_delta_or_transcript(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': "We just had a quick exchange. The user asked for help. They're being rushed.\n"}, 'done': False},
-        {'message': {'content': 'Key points to hit: short answer.\nAvoid: over-explaining.\n'}, 'done': False},
-        {'message': {'content': 'Final answer: You can restart the service and clear the cache.'}, 'done': True},
-    ])
-    app = make_app(tmp_path, transport=transport)
-
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Sample planner leak'}).json()['id']
-        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Give me the fix'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-
-    assert response.status_code == 201
-    assistant = transcript['messages'][-1]
-    assert assistant['text'] == 'You can restart the service and clear the cache.'
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == ['You can restart the service and clear the cache.']
-    assert all('we just had a quick exchange' not in chunk.lower() for chunk in delta_payloads)
-    assert all('key points to hit' not in chunk.lower() for chunk in delta_payloads)
-
-
-def test_sample_style_response_drafted_quote_is_extracted_without_planner_text(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': 'First thought: keep it concise.\nResponse drafted: "Thanks for the context — update your app and sign in again."\nFinal check: keep tone warm.'}, 'done': True},
-    ])
-    app = make_app(tmp_path, transport=transport)
-
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Draft extract'}).json()['id']
-        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'What should I tell them?'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-
-    assert response.status_code == 201
-    assistant = transcript['messages'][-1]
-    assert assistant['text'] == 'Thanks for the context — update your app and sign in again.'
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == ['Thanks for the context — update your app and sign in again.']
-    assert all('first thought' not in chunk.lower() for chunk in delta_payloads)
-    assert all('final check' not in chunk.lower() for chunk in delta_payloads)
-
-
-def test_planner_only_output_never_reaches_delta_transcript_or_tts(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': 'We just had a quick exchange. Key points to hit: be clear. Avoid: sounding harsh.'}, 'done': True},
-    ])
-    tts = FakeTtsService()
-    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
-
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Planner only'}).json()['id']
-        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Need a reply'})
-        assistant_message_id = turn.json()['assistant_message_id']
-        speech = client.get(f'/api/v1/sessions/{session_id}/messages/{assistant_message_id}/speech')
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-
-    assert turn.status_code == 201
-    assert speech.status_code == 409
-    assistant = transcript['messages'][-1]
-    assert assistant['text'] == ''
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == []
-    assert tts.calls == []
 
 
 def test_session_creation_and_listing(tmp_path: Path) -> None:
@@ -752,15 +612,12 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     ]
     messages = assembler.build_messages(transcript, user_text='new question')
 
-    assert messages[0].role == 'system'
-    assert 'middle-aged Nebraska farmer turned tech geek' in messages[0].text
-    assert 'Keep answers shorter by default' in messages[0].text
-    assert 'Recognize jokes, teasing, sarcasm, and casual banter' in messages[1].text
-    assert "read the room from the user's words, pacing, and tone" in messages[1].text
-    assert 'Do not over-explain, over-talk' in messages[1].text
-    assert 'do not output stage directions like [laughs], (pause), or *chuckles*'.lower() in messages[1].text.lower()
     assert messages[-2].text == 'recent'
-    assert messages[-1].model_dump() == {'role': 'user', 'text': 'new question'}
+    assert messages[-1].role == 'user'
+    assert 'middle-aged Nebraska farmer turned tech geek' in messages[-1].text
+    assert 'Keep answers direct and shorter by default' in messages[-1].text
+    assert 'Do not reveal private/internal reasoning' in messages[-1].text
+    assert messages[-1].text.endswith('User request:\nnew question')
 
 
 def test_speech_start_and_stop_merge_metadata_without_replacing_canonical_fields(tmp_path: Path) -> None:
@@ -823,7 +680,7 @@ def test_tts_failure_preserves_completed_assistant_text_and_keeps_typed_and_voic
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':
-            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
+            return httpx.Response(200, json={'models': [{'name': 'gemma3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)
@@ -1266,8 +1123,12 @@ def test_blank_stt_result_does_not_create_blank_canonical_message(tmp_path: Path
     assert any(event['type'] == 'error' and event['payload']['code'] == 'stt_empty_transcript' for event in data['events'])
 
 
-def test_voice_turn_rejects_override_only_transcript_without_canonical_message(tmp_path: Path) -> None:
-    app = make_app(tmp_path, stt_service=FakeSttService(text='/think'))
+def test_voice_turn_with_think_token_transcript_is_treated_as_plain_text(tmp_path: Path) -> None:
+    app = make_app(
+        tmp_path,
+        stt_service=FakeSttService(text='/think'),
+        transport=streaming_transport([{'message': {'content': 'Voice reply'}, 'done': True}]),
+    )
 
     with TestClient(app) as client:
         session_id = client.post('/api/v1/sessions', json={'title': 'Voice override only'}).json()['id']
@@ -1279,11 +1140,9 @@ def test_voice_turn_rejects_override_only_transcript_without_canonical_message(t
         )
         transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
 
-    assert released.status_code == 422
-    assert released.json()['detail'] == 'reasoning override requires a real question or prompt'
-    assert transcript['messages'] == []
-    assert transcript['timings'] and transcript['timings'][0]['phase'] == 'stt'
-    assert any(event['type'] == 'error' and event['payload']['code'] == 'reasoning_override_empty' for event in transcript['events'])
+    assert released.status_code == 201
+    assert transcript['messages'][0]['text'] == '/think'
+    assert transcript['messages'][1]['text'] == 'Voice reply'
 
 
 
@@ -1568,72 +1427,6 @@ def test_filtered_think_trace_never_reaches_tts_input(tmp_path: Path) -> None:
     assert tts.calls == ['Spoken final answer.']
 
 
-def test_plain_leaked_monologue_without_open_tag_never_reaches_tts_or_transcript(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': "Let me think out loud. I should weigh tradeoffs first."}, 'done': False},
-        {'message': {'content': ' Then I can pick the best one.</think>Final spoken answer.'}, 'done': True},
-    ])
-    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
-    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'No leaked think in speech'}).json()['id']
-        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-        assistant = transcript['messages'][-1]
-        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
-
-    assert speech.status_code == 200
-    assert assistant['text'] == 'Final spoken answer.'
-    assert assistant['metadata']['thinking_leak_filtered'] is True
-    assert tts.calls == ['Final spoken answer.']
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == ['Final spoken answer.']
-
-
-def test_we_are_planner_leak_is_buffered_until_safe_answer_and_never_reaches_tts(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': 'We are Marlene, a Nebraska farmer turned tech geek, planning the reply. Key points: stay concise. Alternative: explain every tradeoff. Final decision: summarize first.'}, 'done': False},
-        {'message': {'content': 'Final answer: Let’s restart Ollama and retry your request.'}, 'done': True},
-    ])
-    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
-    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'We are planner leak'}).json()['id']
-        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'How do I recover quickly?'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-        assistant = transcript['messages'][-1]
-        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
-
-    assert speech.status_code == 200
-    assert assistant['text'] == 'Let’s restart Ollama and retry your request.'
-    assert assistant['metadata']['thinking_leak_filtered'] is True
-    assert tts.calls == ['Let’s restart Ollama and retry your request.']
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == ['Let’s restart Ollama and retry your request.']
-
-
-def test_the_user_just_said_planner_leak_is_buffered_until_safe_answer_and_never_reaches_tts(tmp_path: Path) -> None:
-    transport = streaming_transport([
-        {'message': {'content': 'Okay, the user just said they lost audio. User started with a playback gap report. First, acknowledge the issue before fixing it.'}, 'done': False},
-        {'message': {'content': 'Here is the answer: I removed the stop round-trip block so queued speech starts immediately.'}, 'done': True},
-    ])
-    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
-    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
-    with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'User just said leak'}).json()['id']
-        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Why is speech pausing?'})
-        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
-        assistant = transcript['messages'][-1]
-        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
-
-    assert speech.status_code == 200
-    assert assistant['text'] == 'I removed the stop round-trip block so queued speech starts immediately.'
-    assert assistant['metadata']['thinking_leak_filtered'] is True
-    assert tts.calls == ['I removed the stop round-trip block so queued speech starts immediately.']
-    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
-    assert delta_payloads == ['I removed the stop round-trip block so queued speech starts immediately.']
-
-
 def test_stale_speech_start_is_rejected_after_session_moves_into_newer_turn_state(tmp_path: Path) -> None:
     transport = streaming_transport([{'message': {'content': 'Older reply'}, 'done': True}])
     app = make_app(tmp_path, transport=transport, stt_service=FakeSttService(text='voice question'), tts_adapter=FakeTtsService())
@@ -1661,7 +1454,7 @@ def test_stale_speech_start_is_rejected_after_a_newer_completed_turn_and_does_no
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':
-            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
+            return httpx.Response(200, json={'models': [{'name': 'gemma3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)
@@ -1693,7 +1486,7 @@ def test_one_active_speech_playback_per_session_still_holds(tmp_path: Path) -> N
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':
-            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
+            return httpx.Response(200, json={'models': [{'name': 'gemma3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)
@@ -1725,7 +1518,7 @@ def test_same_message_duplicate_speech_start_is_a_no_op_without_duplicate_events
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':
-            return httpx.Response(200, json={'models': [{'name': 'qwen3:4b'}]})
+            return httpx.Response(200, json={'models': [{'name': 'gemma3:4b'}]})
         chunks = next(responses)
         body = b''.join(json.dumps(chunk).encode() + b'\n' for chunk in chunks)
         return httpx.Response(200, content=body)
@@ -1842,7 +1635,7 @@ def test_readiness_reports_installed_model_even_when_warmup_disabled(tmp_path: P
     assert readiness.status_code == 200
     body = readiness.json()
     assert body['checks']['ollama']['status'] == 'ready'
-    assert body['checks']['ollama']['detail'] == 'Model qwen3:4b is installed locally.'
+    assert body['checks']['ollama']['detail'] == 'Model gemma3:4b is installed locally.'
     assert body['checks']['tts']['status'] == 'not_run'
 
 
@@ -1850,12 +1643,12 @@ def test_readiness_fails_when_configured_model_missing_and_warmup_disabled(tmp_p
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':
             return httpx.Response(200, json={'models': [{'name': 'llama3:8b'}]})
-        return httpx.Response(404, json={'error': 'model qwen3:4b not found'})
+        return httpx.Response(404, json={'error': 'model gemma3:4b not found'})
 
     app = make_app(
         tmp_path,
         transport=httpx.MockTransport(handler),
-        ollama_model='qwen3:4b',
+        ollama_model='gemma3:4b',
         ollama_warmup_enabled=False,
         tts_warmup_enabled=False,
     )
@@ -1868,8 +1661,8 @@ def test_readiness_fails_when_configured_model_missing_and_warmup_disabled(tmp_p
     assert readiness.status_code == 200
     body = readiness.json()
     assert body['checks']['ollama']['status'] == 'failed'
-    assert 'configured Ollama model is not installed locally: qwen3:4b' in body['checks']['ollama']['detail']
-    assert 'Run `ollama pull qwen3:4b`' in body['checks']['ollama']['detail']
+    assert 'configured Ollama model is not installed locally: gemma3:4b' in body['checks']['ollama']['detail']
+    assert 'Run `ollama pull gemma3:4b`' in body['checks']['ollama']['detail']
 
 
 def test_readiness_fails_when_ollama_unavailable_and_warmup_disabled(tmp_path: Path) -> None:
@@ -1898,12 +1691,12 @@ def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_pa
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == '/api/tags':
             return httpx.Response(200, json={'models': [{'name': 'llama3:8b'}]})
-        return httpx.Response(404, json={'error': 'model qwen3:4b not found'})
+        return httpx.Response(404, json={'error': 'model gemma3:4b not found'})
 
     app = make_app(
         tmp_path,
         transport=httpx.MockTransport(handler),
-        ollama_model='qwen3:4b',
+        ollama_model='gemma3:4b',
         ollama_warmup_enabled=True,
     )
     with TestClient(app) as client:
@@ -1916,6 +1709,6 @@ def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_pa
 
     assert readiness.status_code == 200
     assert readiness.json()['checks']['ollama']['status'] == 'failed'
-    assert 'configured Ollama model is not installed locally: qwen3:4b' in readiness.json()['checks']['ollama']['detail']
+    assert 'configured Ollama model is not installed locally: gemma3:4b' in readiness.json()['checks']['ollama']['detail']
     assert turn.status_code == 503
-    assert 'configured Ollama model is not installed locally: qwen3:4b' in turn.json()['detail']
+    assert 'configured Ollama model is not installed locally: gemma3:4b' in turn.json()['detail']
