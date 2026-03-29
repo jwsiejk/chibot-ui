@@ -42,7 +42,7 @@ function speechChunkKey(candidate: SpeechChunkCandidate): string {
 
 export function useAssistantSpeechPlayback(sessionId: string | null, messages: TranscriptMessage[], options?: { onMetric?: (metric: { traceId: string | null; name: string; at: number; info?: Record<string, unknown> }) => void }) {
   const activePlaybackRef = useRef<ActivePlayback | null>(null);
-  const prefetchedPlaybackRef = useRef<PreparedSpeechClip | null>(null);
+  const playbackQueueRef = useRef<PreparedSpeechClip[]>([]);
   const pendingFetchRef = useRef<PendingFetch | null>(null);
   const playbackAttemptTrackerRef = useRef(createPlaybackAttemptTracker());
   const latestSessionIdRef = useRef<string | null>(sessionId);
@@ -59,13 +59,12 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     latestSessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  const cleanupPrefetchedClip = useCallback(() => {
-    const prefetched = prefetchedPlaybackRef.current;
-    if (!prefetched) {
-      return;
+  const cleanupQueuedClips = useCallback(() => {
+    const queued = playbackQueueRef.current;
+    playbackQueueRef.current = [];
+    for (const clip of queued) {
+      cleanupFetchedAssistantSpeech(clip);
     }
-    prefetchedPlaybackRef.current = null;
-    cleanupFetchedAssistantSpeech(prefetched);
   }, []);
 
   const finalizePlayback = useCallback(async (reason: string) => {
@@ -94,9 +93,9 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       setPendingMessageId(null);
     }
     pendingFetchRef.current = null;
-    cleanupPrefetchedClip();
+    cleanupQueuedClips();
     await finalizePlayback(reason);
-  }, [cleanupPrefetchedClip, finalizePlayback]);
+  }, [cleanupQueuedClips, finalizePlayback]);
 
   const nextChunk = useMemo(() => {
     const effectiveOffsets = new Map(spokenOffsetsRef.current);
@@ -105,18 +104,9 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       const existing = effectiveOffsets.get(active.messageId) ?? 0;
       effectiveOffsets.set(active.messageId, Math.max(existing, active.spokenThrough));
     }
-    if (prefetchedPlaybackRef.current) {
-      const prefetched = prefetchedPlaybackRef.current;
-      const existing = effectiveOffsets.get(prefetched.messageId) ?? 0;
-      effectiveOffsets.set(prefetched.messageId, Math.max(existing, prefetched.spokenThrough));
-    }
-    if (pendingFetchRef.current) {
-      const pending = pendingFetchRef.current;
-      const candidateThrough = Number.parseInt(pending.chunkKey.split(':')[1] ?? '0', 10);
-      if (!Number.isNaN(candidateThrough)) {
-        const existing = effectiveOffsets.get(pending.messageId) ?? 0;
-        effectiveOffsets.set(pending.messageId, Math.max(existing, candidateThrough));
-      }
+    for (const queued of playbackQueueRef.current) {
+      const existing = effectiveOffsets.get(queued.messageId) ?? 0;
+      effectiveOffsets.set(queued.messageId, Math.max(existing, queued.spokenThrough));
     }
 
     return findNextSpeechChunk({
@@ -132,7 +122,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     previousSessionIdRef.current = sessionId;
   }, [messages, sessionId]);
 
-  const activatePrefetchedClip = useCallback(async (clip: PreparedSpeechClip, source: 'prefetched' | 'direct') => {
+  const activatePreparedClip = useCallback(async (clip: PreparedSpeechClip, source: 'queued' | 'direct') => {
     if (!sessionId || clip.sessionId !== sessionId || latestSessionIdRef.current !== sessionId) {
       cleanupFetchedAssistantSpeech(clip);
       return;
@@ -149,7 +139,14 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
 
     const onEnded = () => {
       options?.onMetric?.({ traceId: clip.traceId, name: 'audio_playback_end', at: Date.now(), info: { source } });
-      void finalizePlayback('ended');
+      void (async () => {
+        await finalizePlayback('ended');
+        const next = playbackQueueRef.current.shift();
+        if (next) {
+          setPlaybackProgressVersion((version) => version + 1);
+          await activatePreparedClip(next, 'queued');
+        }
+      })();
     };
     active.audio.addEventListener('ended', onEnded, { once: true });
     active.audio.addEventListener('error', () => {
@@ -187,7 +184,11 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
     }
 
     const chunkKey = speechChunkKey(candidate);
-    if (activePlaybackRef.current?.chunkKey === chunkKey || prefetchedPlaybackRef.current?.chunkKey === chunkKey || pendingFetchRef.current?.chunkKey === chunkKey) {
+    if (
+      activePlaybackRef.current?.chunkKey === chunkKey
+      || playbackQueueRef.current.some((queued) => queued.chunkKey === chunkKey)
+      || pendingFetchRef.current?.chunkKey === chunkKey
+    ) {
       return;
     }
 
@@ -234,12 +235,11 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       setPendingMessageId(null);
 
       if (!activePlaybackRef.current) {
-        await activatePrefetchedClip(clip, 'direct');
+        await activatePreparedClip(clip, 'direct');
         return;
       }
 
-      cleanupPrefetchedClip();
-      prefetchedPlaybackRef.current = clip;
+      playbackQueueRef.current.push(clip);
       setPlaybackProgressVersion((version) => version + 1);
     } catch (error) {
       playbackAttemptTrackerRef.current.clear(attempt);
@@ -253,7 +253,7 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
       const detail = error instanceof ApiError ? error.detail : error instanceof Error ? error.message : 'Assistant speech playback failed.';
       setSpeechError(detail);
     }
-  }, [activatePrefetchedClip, cleanupPrefetchedClip, options, sessionId]);
+  }, [activatePreparedClip, options, sessionId]);
 
   useEffect(() => {
     if (!nextChunk || !sessionId) {
@@ -263,15 +263,14 @@ export function useAssistantSpeechPlayback(sessionId: string | null, messages: T
   }, [nextChunk, prefetchChunk, sessionId]);
 
   useEffect(() => {
-    const active = activePlaybackRef.current;
-    if (!active) {
-      const prefetched = prefetchedPlaybackRef.current;
-      if (prefetched) {
-        prefetchedPlaybackRef.current = null;
-        void activatePrefetchedClip(prefetched, 'prefetched');
+    if (!activePlaybackRef.current && playbackQueueRef.current.length > 0) {
+      const next = playbackQueueRef.current.shift();
+      if (next) {
+        setPlaybackProgressVersion((version) => version + 1);
+        void activatePreparedClip(next, 'queued');
       }
     }
-  }, [activatePrefetchedClip, playbackProgressVersion]);
+  }, [activatePreparedClip, playbackProgressVersion]);
 
   useEffect(() => () => {
     void stop('unmount');

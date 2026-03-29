@@ -378,6 +378,52 @@ def test_plain_leaked_monologue_before_closing_think_tag_is_buffered_then_discar
     assert all('step by step' not in chunk.lower() for chunk in delta_payloads)
 
 
+def test_long_suspicious_monologue_is_not_released_before_late_closing_think_tag(tmp_path: Path) -> None:
+    long_leak = (
+        "Okay, I need to think this through step by step. "
+        + ("I should inspect every option in detail before answering. " * 12)
+    )
+    transport = streaming_transport([
+        {'message': {'content': long_leak}, 'done': False},
+        {'message': {'content': 'Still reasoning silently right now.</think>Final answer starts here. '}, 'done': False},
+        {'message': {'content': 'It is now safe to proceed.'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Long suspicious leak'}).json()['id']
+        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Give me the answer'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assistant = transcript['messages'][-1]
+    assert assistant['text'] == 'Final answer starts here. It is now safe to proceed.'
+    assert assistant['metadata']['thinking_leak_filtered'] is True
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == ['Final answer starts here. ', 'It is now safe to proceed.']
+    assert all('i should inspect every option' not in chunk.lower() for chunk in delta_payloads)
+
+
+def test_suspicious_monologue_without_open_or_close_tag_is_dropped_on_completion(tmp_path: Path) -> None:
+    transport = streaming_transport([
+        {'message': {'content': "Let me think this through. I should compare a few options first. "}, 'done': False},
+        {'message': {'content': 'Then I can pick one and explain tradeoffs clearly.'}, 'done': True},
+    ])
+    app = make_app(tmp_path, transport=transport)
+
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'No close tag leak'}).json()['id']
+        response = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Need recommendation'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assistant = transcript['messages'][-1]
+    assert assistant['text'] == ''
+    assert assistant['metadata']['thinking_leak_filtered'] is True
+    delta_payloads = [event['payload']['delta'] for event in transcript['events'] if event['type'] == 'assistant.delta']
+    assert delta_payloads == []
+
+
 def test_session_creation_and_listing(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
