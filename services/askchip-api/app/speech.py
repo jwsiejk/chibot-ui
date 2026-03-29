@@ -104,6 +104,9 @@ class SpeechService:
     @staticmethod
     def _sanitize_tts_text(text: str) -> str:
         sanitized = re.sub(r'\s*[\[(\*]\s*(?:laughs?|chuckles?|sighs?|pause|pauses?)\s*[\])\*]\s*', ', ', text, flags=re.IGNORECASE)
+        sanitized = re.sub(r'(?<!\w)(\*\*\*|___)(?=\S)(.+?)(?<=\S)\1(?!\w)', r'\2', sanitized)
+        sanitized = re.sub(r'(?<!\w)(\*\*|__)(?=\S)(.+?)(?<=\S)\1(?!\w)', r'\2', sanitized)
+        sanitized = re.sub(r'(?<!\w)(\*|_)(?=\S)(.+?)(?<=\S)\1(?!\w)', r'\2', sanitized)
         sanitized = re.sub(r'\s*,\s*', ', ', sanitized)
         sanitized = re.sub(r'(?:,\s*){2,}', ', ', sanitized)
         sanitized = re.sub(r'\s+([,.!?;:])', r'\1', sanitized)
