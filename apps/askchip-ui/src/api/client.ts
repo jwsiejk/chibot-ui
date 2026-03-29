@@ -78,7 +78,9 @@ export class AskChipApiClient {
     const blob = await response.blob();
     const fetchEndedAt = Date.now();
     const objectUrl = URL.createObjectURL(blob);
-    return { audio: new Audio(objectUrl), objectUrl, fetchStartedAt, fetchEndedAt };
+    const audio = new Audio(objectUrl);
+    audio.preload = 'auto';
+    return { audio, objectUrl, fetchStartedAt, fetchEndedAt };
   }
 
   async startAssistantSpeech(sessionId: string, messageId: string): Promise<void> {

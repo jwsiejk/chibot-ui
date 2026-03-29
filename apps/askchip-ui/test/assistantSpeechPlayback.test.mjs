@@ -122,6 +122,18 @@ describe('assistant speech playback helper', () => {
     assert.equal(result?.chunkText, 'Second sentence.');
   });
 
+  it('allows queue prefetch selection for the next sentence from current playback progress', () => {
+    const text = 'First sentence. Second sentence.';
+    const result = findNextSpeechChunk({
+      previousMessages: [message({ id: 'assistant-prefetch', status: 'streaming', text })],
+      messages: [message({ id: 'assistant-prefetch', status: 'streaming', text })],
+      spokenOffsets: new Map([['assistant-prefetch', 'First sentence.'.length]]),
+      sessionChanged: false,
+    });
+
+    assert.equal(result?.chunkText, 'Second sentence.');
+  });
+
   it('speaks the final tail after completion even without trailing sentence punctuation', () => {
     const result = getNextSpeechChunk(message({ id: 'assistant-tail', status: 'completed', text: 'Short final wrap up' }), 0);
 
