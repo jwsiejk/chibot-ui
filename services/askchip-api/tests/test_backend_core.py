@@ -1442,6 +1442,60 @@ def test_chunked_tts_still_sanitizes_stage_directions_without_mutating_canonical
     assert stored.text == 'Sure [laughs] hi (pause) there *chuckles* friend'
 
 
+def test_assistant_speech_strips_markdown_emphasis_for_tts_only(tmp_path: Path) -> None:
+    transport = streaming_transport([{'message': {'content': "table didn't even *breathe* when"}, 'done': True}])
+    tts = FakeTtsService(audio_bytes=b'RIFFspeech')
+    app = make_app(tmp_path, transport=transport, tts_adapter=tts)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Speech markdown emphasis'}).json()['id']
+        client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hello'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        assistant = transcript['messages'][-1]
+        speech = client.get(f"/api/v1/sessions/{session_id}/messages/{assistant['id']}/speech")
+        updated = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert speech.status_code == 200
+    assert tts.calls == ["table didn't even breathe when"]
+    assert updated['messages'][-1]['text'] == "table didn't even *breathe* when"
+
+
+def test_tts_sanitization_strips_double_asterisk_and_underscore_emphasis(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(
+        db,
+        status='streaming',
+        text='This is **really** _important_ and __very__ clear.',
+    )
+
+    speech.synthesize_message(session.id, message.id, text=message.text)
+    stored = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ['This is really important and very clear.']
+    assert stored.text == 'This is **really** _important_ and __very__ clear.'
+
+
+def test_chunked_speech_strips_markdown_emphasis_without_mutating_canonical_text(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(db, status='streaming', text='')
+
+    speech.synthesize_message(session.id, message.id, text='First *chunk*.')
+    db.update_message(
+        message.id,
+        text='First *chunk*. Then **second** _chunk_ and __tail__.',
+        status='completed',
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        completed_at=datetime.now(timezone.utc).isoformat(),
+        metadata=message.metadata,
+    )
+    speech.synthesize_message(session.id, message.id, text='Then **second** _chunk_ and __tail__.')
+    stored = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ['First chunk.', 'Then second chunk and tail.']
+    assert stored.text == 'First *chunk*. Then **second** _chunk_ and __tail__.'
+
+
 def test_playback_stop_returns_ready_when_generation_is_complete(tmp_path: Path) -> None:
     db, speech = make_speech_service(tmp_path, tts_adapter=FakeTtsService())
     session, message = seed_session_with_assistant_message(db, status='completed', text='All wrapped up.')
