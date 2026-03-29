@@ -631,6 +631,12 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     assert messages[0].role == 'user'
     assert 'middle-aged Nebraska farmer turned tech geek' in messages[0].text
     assert 'Keep answers direct and shorter by default' in messages[0].text
+    assert 'Write like you are speaking out loud to one person' in messages[0].text
+    assert 'Prefer contractions when natural' in messages[0].text
+    assert 'Prefer short, connected sentences over list-like phrasing unless the user asks for a list' in messages[0].text
+    assert 'Avoid markdown emphasis, decorative formatting, headings, and bullet formatting unless requested' in messages[0].text
+    assert 'Keep the tone human and conversational, not performative' in messages[0].text
+    assert 'Be helpful first and personality second' in messages[0].text
     assert 'Do not reveal private/internal reasoning' in messages[0].text
     assert messages[-2].text == 'recent'
     assert messages[-1].role == 'user'
@@ -1473,6 +1479,22 @@ def test_tts_sanitization_strips_double_asterisk_and_underscore_emphasis(tmp_pat
 
     assert tts.calls == ['This is really important and very clear.']
     assert stored.text == 'This is **really** _important_ and __very__ clear.'
+
+
+def test_tts_sanitization_normalizes_ellipses_dashes_and_repeated_punctuation_for_speech_only(tmp_path: Path) -> None:
+    tts = FakeTtsService()
+    db, speech = make_speech_service(tmp_path, tts_adapter=tts)
+    session, message = seed_session_with_assistant_message(
+        db,
+        status='streaming',
+        text='Well... this — maybe?? yes!!',
+    )
+
+    speech.synthesize_message(session.id, message.id, text=message.text)
+    stored = db.list_messages(session.id)[-1]
+
+    assert tts.calls == ['Well, this, maybe? yes!']
+    assert stored.text == 'Well... this — maybe?? yes!!'
 
 
 def test_chunked_speech_strips_markdown_emphasis_without_mutating_canonical_text(tmp_path: Path) -> None:
