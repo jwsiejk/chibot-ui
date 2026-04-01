@@ -241,7 +241,7 @@ export function ExpertDeskIntakeView({
               Continue to recommendation handoff
             </a>
             {!readyForRecommendation ? (
-              <p className="mt-2 text-xs text-slate-500">Recommendation flow is a Phase 7 step and not implemented in this patch.</p>
+              <p className="mt-2 text-xs text-slate-500">Recommendation logic unlocks after this intake draft is saved.</p>
             ) : null}
           </section>
         </aside>
