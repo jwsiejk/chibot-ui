@@ -12,13 +12,20 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
           </p>
           <h1 className="mt-3 text-3xl font-semibold text-white">Session {sessionId}</h1>
           <p className="mt-2 text-sm text-slate-300">
-            This route is scaffolded for a dedicated Zoom-like meeting surface and is ready for incremental UI work.
+            Visual collaboration surface is initializing. This session route is ready for phased UI expansion.
           </p>
         </header>
 
         <section className="rounded-[2rem] border border-slate-800 bg-panel/80 p-6">
-          <div className="aspect-video rounded-[1.5rem] border border-dashed border-cyan-300/40 bg-slate-900/60 p-6">
-            <p className="text-sm text-slate-300">Primary visual meeting canvas placeholder for session {sessionId}.</p>
+          <div className="aspect-video rounded-[1.5rem] border border-dashed border-cyan-300/40 bg-slate-900/60 p-8">
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+              <p className="text-base font-semibold text-slate-100">Meeting canvas coming in Patch 2</p>
+              <p className="max-w-xl text-sm text-slate-300">
+                Live video layout, participant tiles, and controls will be introduced here while preserving this dedicated
+                route contract.
+              </p>
+              <p className="text-xs uppercase tracking-[0.2em] text-cyan-200/80">Session ID: {sessionId}</p>
+            </div>
           </div>
           <div className="mt-4">
             <a
