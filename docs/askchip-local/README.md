@@ -3,6 +3,7 @@
 ## Contract artifact
 - The authoritative, reviewable AskChip Local v1 contract now lives in the repo root at `AskChip Local v1 Contract.md`.
 - The legacy `AskChip Local v1 Contract.docx` remains as an export artifact, but pull-request contract updates should be made in the markdown file.
+- Expert Desk frontstage progress is tracked in `docs/askchip-local/expert-desk-demo.md`.
 
 ## Localhost defaults
 - Frontend dev server: `http://127.0.0.1:5173`
@@ -98,3 +99,5 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - If a spoken chunk ends before generation has produced the next stable sentence, session state may return from `speaking` to `thinking` until the next chunk is ready. Once generation and playback are both complete, state returns to `ready`.
 - Typed submit and push-to-talk press explicitly stop active assistant playback before the next turn starts. Merely typing in the composer does not interrupt playback.
 - This still uses plain-text Kokoro TTS only. It does not add SSML or injected laugh/chuckle audio clips, and it does not increase `ASKCHIP_TTS_SPEED`.
+- Visual Session is now in an interview-ready polish pass with improved header/stage/toolbar/drawer treatment while retaining the existing shared runtime and chat architecture.
+- Visual stage assistant naming is configurable in the frontend using `VITE_ASKCHIP_ASSISTANT_DISPLAY_NAME` (default: `Chip`).

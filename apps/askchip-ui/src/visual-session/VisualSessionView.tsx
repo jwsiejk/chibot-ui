@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ChatPanel } from '../chat/ChatPanel';
+import { runtimeConfig } from '../config/runtime';
 import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
 import { VisualSessionStage } from './VisualSessionStage';
 import { VisualSessionToolbar } from './VisualSessionToolbar';
@@ -12,6 +13,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   const runtime = useSessionInteractionRuntime({ initialSessionId: sessionId });
   const { state, actions, pushToTalk, pttLifecycle, sendTypedTurn, stopInteraction, stopDisabled } = runtime;
   const [chatOpen, setChatOpen] = useState(false);
+  const assistantName = runtimeConfig.assistantDisplayName;
 
   useEffect(() => {
     const title = state.currentSession?.title?.trim();
@@ -19,18 +21,26 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   }, [state.currentSession?.title]);
 
   useEffect(() => {
-    if (!chatOpen) {
-      return;
-    }
-
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (chatOpen && event.key === 'Escape') {
+        event.preventDefault();
         setChatOpen(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [chatOpen]);
+
+  useEffect(() => {
+    if (!chatOpen) {
+      return;
+    }
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
   }, [chatOpen]);
 
   useEffect(() => {
@@ -51,8 +61,10 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   if (state.bootstrapping) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] px-6 text-slate-100">
-        <div className="rounded-3xl border border-slate-800 bg-slate-900/60 px-6 py-5 text-sm text-slate-200">
-          Loading session…
+        <div className="w-full max-w-lg rounded-3xl border border-slate-700/80 bg-slate-900/70 px-6 py-6 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-100/80">Preparing visual session</p>
+          <h1 className="mt-2 text-lg font-semibold text-white">Loading session context…</h1>
+          <p className="mt-2 text-sm text-slate-300">We’re syncing transcript, controls, and assistant stage state.</p>
         </div>
       </main>
     );
@@ -83,18 +95,23 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] text-slate-100">
-      <header className="mx-auto flex w-full max-w-[1400px] items-center justify-between gap-4 px-6 pb-3 pt-5">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200/80">AskChip visual session</p>
-          <h1 className="mt-1 text-xl font-semibold text-white">{state.currentSession?.title ?? `Session ${sessionId}`}</h1>
-        </div>
-        <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs uppercase tracking-[0.16em] text-slate-300">
-          Chip · {state.topLevelState ?? 'ready'}
+      <header className="mx-auto w-full max-w-[1400px] px-6 pb-4 pt-5">
+        <div className="rounded-3xl border border-slate-800/90 bg-slate-900/45 px-5 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200/80">AskChip visual session</p>
+              <h1 className="mt-1 text-xl font-semibold text-white">{state.currentSession?.title ?? `Session ${sessionId}`}</h1>
+            </div>
+            <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs uppercase tracking-[0.16em] text-slate-300">
+              {assistantName} · {state.topLevelState ?? 'ready'}
+            </div>
+          </div>
+          <p className="mt-2 text-sm text-slate-300">Local-first interview demo shell with shared transcript + voice runtime.</p>
         </div>
       </header>
 
       <section className="mx-auto grid w-full max-w-[1400px] gap-5 px-6 pb-28 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <VisualSessionStage state={state.topLevelState} />
+        <VisualSessionStage state={state.topLevelState} assistantName={assistantName} />
 
         <aside className="hidden rounded-[1.6rem] border border-slate-800 bg-slate-900/45 p-5 lg:block">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100/80">Session controls</p>
@@ -133,6 +150,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
         voiceDisabled={Boolean(state.voiceDisabledReason)}
         voiceActive={pushToTalk.active}
         stopDisabled={stopDisabled}
+        voiceDisabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
         onToggleChat={() => setChatOpen((current) => !current)}
         onVoice={() => {
           if (pushToTalk.active) {
