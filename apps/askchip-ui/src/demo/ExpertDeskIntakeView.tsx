@@ -1,9 +1,13 @@
 import type { ChangeEvent, FormEvent } from 'react';
+import { DEMO_ROUTES } from '../routing';
 import type { ExpertDeskIntakeDraft, IntakeUrgency } from './types';
 
 type ExpertDeskIntakeViewProps = {
   draft: ExpertDeskIntakeDraft;
   onChange: (next: ExpertDeskIntakeDraft) => void;
+  onSave: () => void;
+  readyForRecommendation: boolean;
+  hasSessionPersistence: boolean;
 };
 
 const urgencyLabels: Record<IntakeUrgency, string> = {
@@ -12,7 +16,13 @@ const urgencyLabels: Record<IntakeUrgency, string> = {
   planned: 'Planned (no immediate outage)',
 };
 
-export function ExpertDeskIntakeView({ draft, onChange }: ExpertDeskIntakeViewProps) {
+export function ExpertDeskIntakeView({
+  draft,
+  onChange,
+  onSave,
+  readyForRecommendation,
+  hasSessionPersistence,
+}: ExpertDeskIntakeViewProps) {
   const updateField = (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = event.target;
     onChange({ ...draft, [name]: value });
@@ -20,7 +30,7 @@ export function ExpertDeskIntakeView({ draft, onChange }: ExpertDeskIntakeViewPr
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onChange({ ...draft, submittedAt: new Date().toISOString() });
+    onSave();
   };
 
   const submitDisabled =
@@ -40,14 +50,14 @@ export function ExpertDeskIntakeView({ draft, onChange }: ExpertDeskIntakeViewPr
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">Expert Desk Intake</p>
               <h1 className="mt-1 text-2xl font-semibold text-slate-950">Issue Intake & Expert Routing</h1>
             </div>
-            <a href="/demo" className="text-sm font-medium text-indigo-700 hover:text-indigo-600">
+            <a href={DEMO_ROUTES.home} className="text-sm font-medium text-indigo-700 hover:text-indigo-600">
               ← Demo landing
             </a>
           </div>
 
           <p className="mt-3 text-sm leading-6 text-slate-600">
-            This form stores intake details in frontend state for demo purposes only. No CRM, calendar, or backend
-            intake submission is performed.
+            This form stores intake details in frontend sessionStorage for demo purposes only. No CRM, calendar, or
+            backend intake submission is performed.
           </p>
 
           <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
@@ -196,9 +206,43 @@ export function ExpertDeskIntakeView({ draft, onChange }: ExpertDeskIntakeViewPr
           <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 shadow-sm">
             <p className="font-semibold">Demo integrity note</p>
             <p className="mt-2 leading-6">
-              This intake flow only persists data in frontend state for demo walkthroughs. No backend write, CRM sync,
-              or calendar booking is implied.
+              Intake persistence is frontend-only in this browser session via sessionStorage. No backend write, CRM
+              sync, or calendar booking is implied.
             </p>
+            {hasSessionPersistence ? (
+              <p className="mt-2 text-xs text-amber-800">Persistence scope: this tab session only; it resets when the browser session ends.</p>
+            ) : null}
+          </section>
+
+          <section
+            className={`rounded-3xl border p-5 text-sm shadow-sm ${
+              readyForRecommendation
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : 'border-slate-200 bg-white text-slate-700'
+            }`}
+          >
+            <p className="font-semibold">
+              {readyForRecommendation ? 'Intake saved and ready for next step' : 'Next step'}
+            </p>
+            <p className="mt-2 leading-6">
+              {readyForRecommendation
+                ? 'This intake draft is ready to hand off into Expert Desk recommendation/routing work.'
+                : 'Complete required fields and save the intake draft to mark it ready for recommendation/routing.'}
+            </p>
+            <a
+              href={readyForRecommendation ? DEMO_ROUTES.recommendation : undefined}
+              className={`mt-3 inline-flex rounded-full px-4 py-2 text-xs font-semibold ${
+                readyForRecommendation
+                  ? 'bg-emerald-700 text-white hover:bg-emerald-600'
+                  : 'pointer-events-none border border-slate-300 bg-white text-slate-500'
+              }`}
+              aria-disabled={!readyForRecommendation}
+            >
+              Continue to recommendation handoff
+            </a>
+            {!readyForRecommendation ? (
+              <p className="mt-2 text-xs text-slate-500">Recommendation flow is a Phase 7 step and not implemented in this patch.</p>
+            ) : null}
           </section>
         </aside>
       </div>
