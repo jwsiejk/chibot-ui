@@ -16,6 +16,7 @@ The current demo framing is:
 
 - `/demo` — Expert Desk landing screen for concept framing and handoff into intake.
 - `/demo/intake` — structured intake flow for issue capture and expert routing setup.
+- `/demo/recommendation` — explicit Phase 7 handoff stub (no recommendation logic yet).
 
 Both routes run entirely in frontend demo mode and do **not** claim backend intake, CRM, or calendar integration.
 
@@ -40,7 +41,8 @@ Both routes run entirely in frontend demo mode and do **not** claim backend inta
   - contact preference
   - free-text issue description
 - Added optional architecture notes and error text capture areas.
-- Intake persistence is frontend-state only for demo integrity; no backend handoff is implied.
+- Intake persistence now uses frontend `sessionStorage` (browser session scope) through a dedicated frontstage demo-state layer; no backend handoff is implied.
+- Added explicit saved-state feedback and a clear “ready for recommendation/routing” affordance that points to the Phase 7 handoff stub.
 
 ## Remaining planned phases
 
@@ -63,6 +65,11 @@ Both routes run entirely in frontend demo mode and do **not** claim backend inta
   - shipped `/demo` landing and `/demo/intake` structured intake flow
   - kept backstage shell routes and behavior intact
   - documented frontend-only state persistence and no-fake-integration guardrails
+- **2026-04-01 — Phase 6.1 intake durability hardening**
+  - moved intake draft state into a small frontstage demo-state hook
+  - persisted canonical intake draft payload via `sessionStorage` (refresh-safe and cross-frontstage-route within same browser session)
+  - added saved-state readiness messaging and recommendation handoff affordance
+  - added `/demo/recommendation` as an honest Phase 7 placeholder route (no routing logic yet)
 
 ---
 
@@ -70,4 +77,4 @@ Both routes run entirely in frontend demo mode and do **not** claim backend inta
 
 - Backstage/dev shell behavior must remain intact.
 - Transcript/state/WebRTC contract remains unchanged and authoritative.
-- Intake data is persisted only in frontend state for this demo phase.
+- Intake data is persisted only in frontend `sessionStorage` for this demo phase (same browser session, refresh-safe, no backend persistence).

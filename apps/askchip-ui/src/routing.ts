@@ -1,3 +1,9 @@
+export const DEMO_ROUTES = {
+  home: '/demo',
+  intake: '/demo/intake',
+  recommendation: '/demo/recommendation',
+} as const;
+
 export type AppRoute =
   | {
       kind: 'shell';
@@ -11,6 +17,9 @@ export type AppRoute =
     }
   | {
       kind: 'demo-intake';
+    }
+  | {
+      kind: 'demo-recommendation';
     };
 
 function decodePathSegment(segment: string): string {
@@ -22,12 +31,16 @@ function decodePathSegment(segment: string): string {
 }
 
 export function resolveAppRoute(pathname: string): AppRoute {
-  if (pathname === '/demo') {
+  if (pathname === DEMO_ROUTES.home) {
     return { kind: 'demo-home' };
   }
 
-  if (pathname === '/demo/intake') {
+  if (pathname === DEMO_ROUTES.intake) {
     return { kind: 'demo-intake' };
+  }
+
+  if (pathname === DEMO_ROUTES.recommendation) {
+    return { kind: 'demo-recommendation' };
   }
 
   const visualSessionMatch = pathname.match(/^\/visual-session\/([^/]+)$/);

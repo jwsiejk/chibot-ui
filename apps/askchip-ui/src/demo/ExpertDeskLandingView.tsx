@@ -1,3 +1,5 @@
+import { DEMO_ROUTES } from '../routing';
+
 export function ExpertDeskLandingView() {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#eef2ff_0%,#e2e8f0_40%,#f8fafc_100%)] px-6 py-8 text-slate-900">
@@ -11,7 +13,7 @@ export function ExpertDeskLandingView() {
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
             <a
-              href="/demo/intake"
+              href={DEMO_ROUTES.intake}
               className="inline-flex rounded-full bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500"
             >
               Start intake
