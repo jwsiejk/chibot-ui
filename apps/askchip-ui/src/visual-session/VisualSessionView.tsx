@@ -17,13 +17,16 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
     if (state.bootstrapping) {
       return;
     }
+    if (!state.sessions.some((session) => session.id === sessionId)) {
+      return;
+    }
     if (state.currentSessionId === sessionId) {
       return;
     }
     void actions.selectSession(sessionId).catch(() => {
       // selection failures surface through controller appError state
     });
-  }, [actions, sessionId, state.bootstrapping, state.currentSessionId]);
+  }, [actions, sessionId, state.bootstrapping, state.currentSessionId, state.sessions]);
 
   if (state.bootstrapping) {
     return (
