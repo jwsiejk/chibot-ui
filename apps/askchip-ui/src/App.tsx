@@ -32,7 +32,7 @@ function App() {
   }
 
   if (route.kind === 'demo-recommendation') {
-    return <ExpertDeskRecommendationStubView />;
+    return <ExpertDeskRecommendationStubView draft={intakeDraft} readyForRecommendation={readyForRecommendation} />;
   }
 
   return <AskChipShell />;
