@@ -117,6 +117,15 @@ export function AskChipShell() {
     setHistorySessionTitle(session?.title ?? null);
   }, [historySessionId, state.sessions]);
 
+  const openVisualSession = async (sessionId: string) => {
+    if (state.currentSessionId !== sessionId) {
+      await actions.selectSession(sessionId);
+    }
+
+    const visualSessionUrl = `${window.location.origin}/visual-session/${encodeURIComponent(sessionId)}`;
+    window.open(visualSessionUrl, '_blank', 'noopener,noreferrer');
+  };
+
   const openTranscriptHistory = async (sessionId: string) => {
     const session = state.sessions.find((item) => item.id === sessionId) ?? null;
     setHistoryOpen(true);
@@ -186,6 +195,7 @@ export function AskChipShell() {
               onReload={actions.reloadTranscript}
               onDelete={actions.deleteSession}
               onOpenTranscript={openTranscriptHistory}
+              onOpenVisualSession={openVisualSession}
             />
             <MicSetupPanel
               devices={audio.devices}
