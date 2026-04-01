@@ -1,21 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { MicSetupPanel } from '../audio/MicSetupPanel';
-import { useAssistantSpeechPlayback } from '../audio/useAssistantSpeechPlayback';
-import { useAudioFoundation } from '../audio/useAudioFoundation';
-import { createPttLifecycleController } from '../audio/pttLifecycle';
-import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
 import { askChipApiClient } from '../api/client';
 import { FloatingChatWindow } from '../chat/FloatingChatWindow';
 import { ChipStagePane } from '../chip-stage/ChipStagePane';
 import { DiagnosticsDrawer } from '../diagnostics/DiagnosticsDrawer';
 import { SessionList } from '../sessions/SessionList';
-import { useAskChipController } from '../state/useAskChipController';
+import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
 import { FloatingTranscriptWindow } from '../transcript/FloatingTranscriptWindow';
 import type { TranscriptMessage } from '../types/contract';
 import { UtilityRail } from '../utility/UtilityRail';
 import { useShellPanels } from './useShellPanels';
 
-function findActiveModelName(messages: ReturnType<typeof useAskChipController>['state']['messages']): string | null {
+function findActiveModelName(messages: TranscriptMessage[]): string | null {
   const assistant = [...messages].reverse().find((message) => message.role === 'assistant');
   const model = assistant?.metadata.model;
   return typeof model === 'string' ? model : null;
@@ -28,12 +24,10 @@ function toChronologicalTranscript(messages: TranscriptMessage[], sessionId: str
 }
 
 export function AskChipShell() {
-  const { state, actions } = useAskChipController();
-  const audio = useAudioFoundation(state.currentSessionId);
-  const pushToTalk = usePushToTalkRecorder(audio.selectedDeviceId);
+  const runtime = useSessionInteractionRuntime();
+  const { state, actions, audio, pushToTalk, speech, pttLifecycle, sendTypedTurn } = runtime;
   const { showDiagnostics, showUtilityRail, toggleDiagnostics, toggleUtilityRail } = useShellPanels();
   const modelName = findActiveModelName(state.messages) ?? state.config?.ollama_model ?? null;
-  const speech = useAssistantSpeechPlayback(state.currentSessionId, state.messages);
   const [chatOpen, setChatOpen] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySessionId, setHistorySessionId] = useState<string | null>(null);
@@ -41,61 +35,6 @@ export function AskChipShell() {
   const [historyMessages, setHistoryMessages] = useState<TranscriptMessage[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-
-  const interruptSpeaking = async (reason: string) => {
-    if (state.topLevelState === 'speaking' || speech.pendingMessageId || speech.activeMessageId) {
-      await speech.stop(reason);
-    }
-  };
-
-  const sendTypedTurn = async (text: string) => {
-    await interruptSpeaking('typed_submit');
-    await actions.sendTurn(text);
-  };
-
-  const pttRuntimeRef = useRef({ actions, audioSelectedDeviceId: audio.selectedDeviceId, pushToTalkActions: pushToTalk.actions, pushToTalkActive: pushToTalk.active, voiceDisabledReason: state.voiceDisabledReason, interruptSpeaking });
-
-  useEffect(() => {
-    pttRuntimeRef.current = {
-      actions,
-      audioSelectedDeviceId: audio.selectedDeviceId,
-      pushToTalkActions: pushToTalk.actions,
-      pushToTalkActive: pushToTalk.active,
-      voiceDisabledReason: state.voiceDisabledReason,
-      interruptSpeaking,
-    };
-  }, [actions, audio.selectedDeviceId, interruptSpeaking, pushToTalk.actions, pushToTalk.active, state.voiceDisabledReason]);
-
-  const pttLifecycle = useMemo(() => createPttLifecycleController({
-    beginLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.beginCapture(),
-    finishLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.finishCapture(),
-    cancelLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.cancelCapture(),
-    startBackendVoiceTurn: async () => {
-      await pttRuntimeRef.current.interruptSpeaking('ptt_start');
-      return pttRuntimeRef.current.actions.startVoiceTurn(
-        pttRuntimeRef.current.audioSelectedDeviceId,
-        pttRuntimeRef.current.pushToTalkActions.getStartedAt(),
-      );
-    },
-    cancelBackendVoiceTurn: () => pttRuntimeRef.current.actions.cancelVoiceTurn(),
-    submitVoiceTurn: async (recorded) => {
-      try {
-        await pttRuntimeRef.current.actions.finishVoiceTurn({
-          blob: recorded.blob,
-          filename: recorded.mimeType.includes('mp4') ? 'voice-turn.mp4' : 'voice-turn.webm',
-          deviceId: pttRuntimeRef.current.audioSelectedDeviceId,
-          durationMs: recorded.durationMs,
-        });
-      } finally {
-        pttRuntimeRef.current.pushToTalkActions.markComplete();
-      }
-    },
-    isInteractionBlocked: () => Boolean(pttRuntimeRef.current.voiceDisabledReason) || pttRuntimeRef.current.pushToTalkActive,
-  }), []);
-
-  useEffect(() => () => {
-    pttLifecycle.dispose();
-  }, [pttLifecycle]);
 
   useEffect(() => {
     if (!historySessionId) {
