@@ -1,9 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPttLifecycleController } from '../audio/pttLifecycle';
-import { useAudioFoundation } from '../audio/useAudioFoundation';
-import { usePushToTalkRecorder } from '../audio/usePushToTalkRecorder';
+import { useEffect, useState } from 'react';
 import { FloatingChatWindow } from '../chat/FloatingChatWindow';
-import { useAskChipController } from '../state/useAskChipController';
+import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
 import { VisualSessionStage } from './VisualSessionStage';
 import { VisualSessionToolbar } from './VisualSessionToolbar';
 
@@ -12,50 +9,9 @@ type VisualSessionViewProps = {
 };
 
 export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
-  const { state, actions } = useAskChipController();
-  const audio = useAudioFoundation(state.currentSessionId);
-  const pushToTalk = usePushToTalkRecorder(audio.selectedDeviceId);
+  const runtime = useSessionInteractionRuntime();
+  const { state, actions, pushToTalk, pttLifecycle, sendTypedTurn, stopInteraction, stopDisabled } = runtime;
   const [chatOpen, setChatOpen] = useState(false);
-
-  const pttRuntimeRef = useRef({ actions, audioSelectedDeviceId: audio.selectedDeviceId, pushToTalkActions: pushToTalk.actions, pushToTalkActive: pushToTalk.active, voiceDisabledReason: state.voiceDisabledReason });
-
-  useEffect(() => {
-    pttRuntimeRef.current = {
-      actions,
-      audioSelectedDeviceId: audio.selectedDeviceId,
-      pushToTalkActions: pushToTalk.actions,
-      pushToTalkActive: pushToTalk.active,
-      voiceDisabledReason: state.voiceDisabledReason,
-    };
-  }, [actions, audio.selectedDeviceId, pushToTalk.actions, pushToTalk.active, state.voiceDisabledReason]);
-
-  const pttLifecycle = useMemo(() => createPttLifecycleController({
-    beginLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.beginCapture(),
-    finishLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.finishCapture(),
-    cancelLocalCapture: () => pttRuntimeRef.current.pushToTalkActions.cancelCapture(),
-    startBackendVoiceTurn: () => pttRuntimeRef.current.actions.startVoiceTurn(
-      pttRuntimeRef.current.audioSelectedDeviceId,
-      pttRuntimeRef.current.pushToTalkActions.getStartedAt(),
-    ),
-    cancelBackendVoiceTurn: () => pttRuntimeRef.current.actions.cancelVoiceTurn(),
-    submitVoiceTurn: async (recorded) => {
-      try {
-        await pttRuntimeRef.current.actions.finishVoiceTurn({
-          blob: recorded.blob,
-          filename: recorded.mimeType.includes('mp4') ? 'voice-turn.mp4' : 'voice-turn.webm',
-          deviceId: pttRuntimeRef.current.audioSelectedDeviceId,
-          durationMs: recorded.durationMs,
-        });
-      } finally {
-        pttRuntimeRef.current.pushToTalkActions.markComplete();
-      }
-    },
-    isInteractionBlocked: () => Boolean(pttRuntimeRef.current.voiceDisabledReason) || pttRuntimeRef.current.pushToTalkActive,
-  }), []);
-
-  useEffect(() => () => {
-    pttLifecycle.dispose();
-  }, [pttLifecycle]);
 
   useEffect(() => {
     if (state.currentSessionId === sessionId) {
@@ -97,7 +53,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
         chatOpen={chatOpen}
         voiceDisabled={Boolean(state.voiceDisabledReason)}
         voiceActive={pushToTalk.active}
-        stopDisabled={state.topLevelState !== 'listening' && state.topLevelState !== 'transcribing' && state.topLevelState !== 'speaking'}
+        stopDisabled={stopDisabled}
         onToggleChat={() => setChatOpen((current) => !current)}
         onVoice={() => {
           if (pushToTalk.active) {
@@ -107,8 +63,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
           void pttLifecycle.pressStart();
         }}
         onStop={() => {
-          void actions.cancelVoiceTurn();
-          void pttLifecycle.pressCancel();
+          void stopInteraction('toolbar_stop');
         }}
       />
 
@@ -120,9 +75,9 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
         disabledReason={state.sendingDisabledReason}
         pending={state.pendingTurn}
         voiceDisabled={Boolean(state.voiceDisabledReason)}
-        voiceDisabledReason={state.voiceDisabledReason}
+        voiceDisabledReason={state.voiceDisabledReason ?? pushToTalk.status.error}
         liveDraft={state.voiceDraft}
-        onSend={actions.sendTurn}
+        onSend={sendTypedTurn}
         onPressStart={pttLifecycle.pressStart}
         onPressEnd={pttLifecycle.pressRelease}
         onPressCancel={pttLifecycle.pressCancel}
