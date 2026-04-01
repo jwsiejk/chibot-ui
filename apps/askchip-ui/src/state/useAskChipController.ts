@@ -146,13 +146,39 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
   }, []);
 
   const selectSession = useCallback(async (sessionId: string) => {
+    const previousSessionId = activeSessionIdRef.current;
+    const previousMessages = messages;
+    const previousEvents = events;
+    const previousTimings = timings;
+    const previousTopLevelState = topLevelState;
+    const previousAppError = appError;
+
     activeSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
     setVoiceDraft(null);
-    localStorage.setItem(STORAGE_KEY, sessionId);
     setAppError(null);
-    await loadTranscript(sessionId);
-  }, [loadTranscript]);
+
+    try {
+      await loadTranscript(sessionId);
+      localStorage.setItem(STORAGE_KEY, sessionId);
+    } catch (error) {
+      activeSessionIdRef.current = previousSessionId;
+      setCurrentSessionId(previousSessionId);
+      setMessages(previousMessages);
+      setEvents(previousEvents);
+      setTimings(previousTimings);
+      setTopLevelState(previousTopLevelState);
+      localStorage.removeItem(STORAGE_KEY);
+
+      const message = error instanceof ApiError
+        ? error.detail
+        : error instanceof Error
+          ? error.message
+          : 'Failed to load session transcript.';
+      setAppError(previousAppError ?? message);
+      throw error;
+    }
+  }, [appError, events, loadTranscript, messages, timings, topLevelState]);
 
   const bootstrap = useCallback(async () => {
     try {
