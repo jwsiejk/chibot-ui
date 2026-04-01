@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FloatingChatWindow } from '../chat/FloatingChatWindow';
+import { ChatPanel } from '../chat/ChatPanel';
 import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
 import { VisualSessionStage } from './VisualSessionStage';
 import { VisualSessionToolbar } from './VisualSessionToolbar';
@@ -41,7 +41,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100/80">Chat panel</p>
           <h2 className="mt-2 text-base font-semibold text-white">Right drawer reserved for live chat</h2>
           <p className="mt-2 text-sm leading-6 text-slate-300">
-            Keep this surface for in-meeting transcript and controls. For this patch, chat opens as a floating panel from the toolbar.
+            Keep this surface for in-meeting transcript and controls. Use the toolbar to open the shared live chat drawer with transcript and voice controls.
           </p>
           <div className="mt-4 rounded-2xl border border-dashed border-slate-700 px-3 py-2 text-xs text-slate-400">
             {hasMessages ? `${state.messages.length} transcript messages synced` : 'No transcript messages yet.'}
@@ -67,7 +67,8 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
         }}
       />
 
-      <FloatingChatWindow
+      <ChatPanel
+        mode="drawer"
         open={chatOpen}
         sessionTitle={state.currentSession?.title ?? null}
         messages={state.messages}
