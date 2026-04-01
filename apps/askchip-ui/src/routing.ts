@@ -5,6 +5,12 @@ export type AppRoute =
   | {
       kind: 'visual-session';
       sessionId: string;
+    }
+  | {
+      kind: 'demo-home';
+    }
+  | {
+      kind: 'demo-intake';
     };
 
 function decodePathSegment(segment: string): string {
@@ -16,6 +22,14 @@ function decodePathSegment(segment: string): string {
 }
 
 export function resolveAppRoute(pathname: string): AppRoute {
+  if (pathname === '/demo') {
+    return { kind: 'demo-home' };
+  }
+
+  if (pathname === '/demo/intake') {
+    return { kind: 'demo-intake' };
+  }
+
   const visualSessionMatch = pathname.match(/^\/visual-session\/([^/]+)$/);
 
   if (visualSessionMatch) {

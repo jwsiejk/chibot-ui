@@ -100,4 +100,5 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - Typed submit and push-to-talk press explicitly stop active assistant playback before the next turn starts. Merely typing in the composer does not interrupt playback.
 - This still uses plain-text Kokoro TTS only. It does not add SSML or injected laugh/chuckle audio clips, and it does not increase `ASKCHIP_TTS_SPEED`.
 - Visual Session is now in an interview-ready polish pass with improved header/stage/toolbar/drawer treatment while retaining the existing shared runtime and chat architecture.
+- Frontstage Expert Desk demo routes are available at `/demo` (landing) and `/demo/intake` (structured intake persisted in frontend state only).
 - Visual stage assistant naming is configurable in the frontend using `VITE_ASKCHIP_ASSISTANT_DISPLAY_NAME` (default: `Chip`).
