@@ -3,26 +3,26 @@ import type { TurnState } from '../types/contract';
 export const TURN_STATE_COPY: Record<TurnState, { label: string; detail: string }> = {
   ready: {
     label: 'Ready',
-    detail: 'The backend is idle and available for typed or push-to-talk input.',
+    detail: 'Chip is ready for your next message.',
   },
   listening: {
     label: 'Listening',
-    detail: 'Push-to-talk capture is active and waiting for release before any voice turn can commit.',
+    detail: 'Mic is live. Release to send your voice turn.',
   },
   transcribing: {
     label: 'Transcribing',
-    detail: 'The released push-to-talk audio is being transcribed into one final user transcript before commit.',
+    detail: 'Converting your audio into text.',
   },
   thinking: {
     label: 'Thinking',
-    detail: 'A canonical user turn is committed and the assistant is generating a text response.',
+    detail: 'Chip is preparing a response.',
   },
   speaking: {
     label: 'Speaking',
-    detail: 'A stable chunk from the canonical assistant message is actively playing through the local Kokoro speech path, even if generation is still finishing.',
+    detail: 'Chip is speaking now.',
   },
   error: {
     label: 'Error',
-    detail: 'The backend reported an assistant or voice-input failure that needs attention.',
+    detail: 'Something went wrong. Try again.',
   },
 };

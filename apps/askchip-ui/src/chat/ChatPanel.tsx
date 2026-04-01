@@ -268,13 +268,20 @@ export function ChatPanel({ mode, open, ...props }: ChatPanelProps) {
     };
   }, [mode, open]);
 
-  if (!open) {
+  if (!open && mode !== 'drawer') {
     return null;
   }
 
   if (mode === 'drawer') {
     return (
-      <aside className="fixed inset-y-0 right-0 z-30 flex w-full max-w-[460px] flex-col border-l border-cyan-400/20 bg-slate-950/95 shadow-2xl backdrop-blur" aria-label="Live chat drawer">
+      <aside
+        className={[
+          'fixed inset-y-0 right-0 z-30 flex w-full max-w-[460px] flex-col border-l border-cyan-400/20 bg-slate-950/95 shadow-2xl backdrop-blur transition-transform duration-200',
+          open ? 'translate-x-0' : 'translate-x-full pointer-events-none',
+        ].join(' ')}
+        aria-label="Live chat drawer"
+        aria-hidden={!open}
+      >
         <ChatPanelCore {...props} />
       </aside>
     );
