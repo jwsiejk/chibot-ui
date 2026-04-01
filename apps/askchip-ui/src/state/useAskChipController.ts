@@ -30,6 +30,7 @@ import type {
 const STORAGE_KEY = 'askchip-ui.current-session-id';
 
 export interface AskChipControllerState {
+  bootstrapping: boolean;
   sessions: SessionRecord[];
   currentSessionId: string | null;
   currentSession: SessionRecord | null;
@@ -48,6 +49,10 @@ export interface AskChipControllerState {
   sendingDisabledReason: string | null;
   voiceDisabledReason: string | null;
   turnLatencySummaries: Array<Record<string, unknown>>;
+}
+
+interface AskChipControllerOptions {
+  initialSessionId?: string | null;
 }
 
 function sortSessions(items: SessionRecord[]): SessionRecord[] {
@@ -82,7 +87,10 @@ function eventTraceId(event: AskChipEvent): string | null {
   return typeof trace === 'string' ? trace : null;
 }
 
-export function useAskChipController() {
+export function useAskChipController({ initialSessionId = null }: AskChipControllerOptions = {}) {
+  const requestedInitialSessionId = initialSessionId?.trim() || null;
+  const hasAppliedInitialSessionRef = useRef(false);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
@@ -148,6 +156,7 @@ export function useAskChipController() {
 
   const bootstrap = useCallback(async () => {
     try {
+      setBootstrapping(true);
       setAppError(null);
       const { config: nextConfig, sessions: nextSessions, readiness: nextReadiness, readinessError: nextReadinessError } = await loadBootstrapShellData({
         getConfig: () => askChipApiClient.getConfig(),
@@ -157,10 +166,33 @@ export function useAskChipController() {
       setConfig(nextConfig);
       setReadiness(nextReadiness);
       setReadinessError(nextReadinessError);
+      const canUseRequestedInitialSessionId = requestedInitialSessionId
+        && !hasAppliedInitialSessionRef.current
+        && nextSessions.some((session) => session.id === requestedInitialSessionId);
       const storedId = localStorage.getItem(STORAGE_KEY);
-      const preferredId = storedId && nextSessions.some((session) => session.id === storedId)
-        ? storedId
-        : nextSessions[0]?.id ?? null;
+      const preferredId = canUseRequestedInitialSessionId
+        ? requestedInitialSessionId
+        : storedId && nextSessions.some((session) => session.id === storedId)
+          ? storedId
+          : nextSessions[0]?.id ?? null;
+
+      if (requestedInitialSessionId && !hasAppliedInitialSessionRef.current) {
+        hasAppliedInitialSessionRef.current = true;
+        if (!canUseRequestedInitialSessionId) {
+          localStorage.removeItem(STORAGE_KEY);
+          activeSessionIdRef.current = null;
+          const cleared = clearCurrentSessionState();
+          setCurrentSessionId(cleared.currentSessionId);
+          setMessages(cleared.messages);
+          setEvents(cleared.events);
+          setTimings(cleared.timings);
+          setTopLevelState(cleared.topLevelState);
+          setConnectionState('disconnected');
+          setWsNotice(null);
+          setAppError(`Session "${requestedInitialSessionId}" was not found. It may have been deleted.`);
+          return;
+        }
+      }
 
       if (preferredId) {
         await selectSession(preferredId);
@@ -177,8 +209,10 @@ export function useAskChipController() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to reach AskChip API.';
       setAppError(message);
+    } finally {
+      setBootstrapping(false);
     }
-  }, [loadSessions, selectSession]);
+  }, [loadSessions, requestedInitialSessionId, selectSession]);
 
   const scheduleReconnect = useCallback((notice: string) => {
     clearReconnectTimer();
@@ -503,6 +537,7 @@ export function useAskChipController() {
 
   return {
     state: {
+      bootstrapping,
       sessions,
       currentSessionId,
       currentSession,

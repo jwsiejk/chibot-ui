@@ -9,8 +9,12 @@ function isVoiceLifecycleState(state: string | null): state is 'listening' | 'tr
   return state === 'listening' || state === 'transcribing';
 }
 
-export function useSessionInteractionRuntime() {
-  const { state, actions } = useAskChipController();
+interface SessionInteractionRuntimeOptions {
+  initialSessionId?: string | null;
+}
+
+export function useSessionInteractionRuntime(options: SessionInteractionRuntimeOptions = {}) {
+  const { state, actions } = useAskChipController({ initialSessionId: options.initialSessionId });
   const audio = useAudioFoundation(state.currentSessionId);
   const pushToTalk = usePushToTalkRecorder(audio.selectedDeviceId);
   const speech = useAssistantSpeechPlayback(state.currentSessionId, state.messages);

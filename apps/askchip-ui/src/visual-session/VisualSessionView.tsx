@@ -9,16 +9,52 @@ type VisualSessionViewProps = {
 };
 
 export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
-  const runtime = useSessionInteractionRuntime();
+  const runtime = useSessionInteractionRuntime({ initialSessionId: sessionId });
   const { state, actions, pushToTalk, pttLifecycle, sendTypedTurn, stopInteraction, stopDisabled } = runtime;
   const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
+    if (state.bootstrapping) {
+      return;
+    }
     if (state.currentSessionId === sessionId) {
       return;
     }
-    void actions.selectSession(sessionId);
-  }, [actions, sessionId, state.currentSessionId]);
+    void actions.selectSession(sessionId).catch(() => {
+      // selection failures surface through controller appError state
+    });
+  }, [actions, sessionId, state.bootstrapping, state.currentSessionId]);
+
+  if (state.bootstrapping) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] px-6 text-slate-100">
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/60 px-6 py-5 text-sm text-slate-200">
+          Loading visual session…
+        </div>
+      </main>
+    );
+  }
+
+  const sessionNotAvailable = !state.currentSession || state.currentSession.id !== sessionId;
+  if (sessionNotAvailable) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] px-6 text-slate-100">
+        <div className="w-full max-w-xl rounded-3xl border border-rose-400/30 bg-rose-500/10 p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-100/80">Visual session unavailable</p>
+          <h1 className="mt-2 text-xl font-semibold text-white">We couldn’t open this session.</h1>
+          <p className="mt-2 text-sm leading-6 text-rose-50/90">
+            {state.appError ?? `Session "${sessionId}" no longer exists or could not be loaded.`}
+          </p>
+          <a
+            href="/"
+            className="mt-4 inline-flex rounded-full border border-slate-200/30 bg-slate-900/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-100 transition hover:border-slate-200/60"
+          >
+            Return to AskChip shell
+          </a>
+        </div>
+      </main>
+    );
+  }
 
   const hasMessages = state.messages.length > 0;
 
