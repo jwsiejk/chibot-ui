@@ -124,8 +124,9 @@ function ChatPanelCore({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-4">
         {empty ? (
-          <div className="flex h-full min-h-[14rem] items-center justify-center rounded-2xl border border-dashed border-slate-700 px-4 text-center text-sm text-slate-300">
-            Start chatting by typing a message or using push-to-talk.
+          <div className="flex h-full min-h-[14rem] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-900/30 px-4 text-center">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">No transcript yet</p>
+            <p className="mt-2 text-sm text-slate-300">Start chatting by typing a message or using push-to-talk.</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -276,8 +277,9 @@ export function ChatPanel({ mode, open, ...props }: ChatPanelProps) {
     return (
       <aside
         className={[
-          'fixed inset-y-0 right-0 z-30 flex w-full max-w-[460px] flex-col border-l border-cyan-400/20 bg-slate-950/95 shadow-2xl backdrop-blur transition-transform duration-200',
+          'fixed inset-y-0 right-0 z-30 flex w-full max-w-[460px] flex-col border-l border-cyan-400/20 bg-slate-950/95 shadow-2xl backdrop-blur transition-[transform,opacity] duration-200',
           open ? 'translate-x-0' : 'translate-x-full pointer-events-none',
+          open ? 'opacity-100' : 'opacity-0',
         ].join(' ')}
         aria-label="Live chat drawer"
         aria-hidden={!open}

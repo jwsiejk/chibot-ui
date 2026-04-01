@@ -34,37 +34,52 @@ const STATE_STYLE: Record<TurnState, { ring: string; glow: string; badge: string
   },
 };
 
-export function VisualSessionStage({ state }: { state: TurnState | null }) {
+export function VisualSessionStage({
+  state,
+  assistantName,
+}: {
+  state: TurnState | null;
+  assistantName: string;
+}) {
   const resolvedState = state ?? 'ready';
   const copy = TURN_STATE_COPY[resolvedState];
   const style = STATE_STYLE[resolvedState];
   const speaking = resolvedState === 'speaking';
 
   return (
-    <section className="relative flex min-h-[64vh] flex-col items-center justify-center overflow-hidden rounded-[2.2rem] border border-slate-800/90 bg-[radial-gradient(circle_at_50%_18%,rgba(56,189,248,0.14),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.98))] px-6 py-10 lg:px-10">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_72%,rgba(59,130,246,0.12),transparent_44%)]" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/35 to-transparent" />
-      <div className="relative z-10 flex flex-col items-center gap-8 text-center">
-        <div className={`relative rounded-full p-4 ring-2 ${style.ring} ${style.glow}`}>
+    <section className="relative flex min-h-[68vh] flex-col justify-between overflow-hidden rounded-[2.2rem] border border-slate-800/90 bg-[radial-gradient(circle_at_50%_16%,rgba(56,189,248,0.15),transparent_34%),linear-gradient(180deg,rgba(15,23,42,0.94),rgba(2,6,23,0.99))] px-6 py-8 lg:px-10 lg:py-10">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_72%,rgba(59,130,246,0.13),transparent_44%)]" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/45 to-transparent" />
+      <div className="relative z-10 flex items-start justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400">Assistant stage</p>
+          <h2 className="mt-2 text-lg font-semibold text-slate-100">{assistantName}</h2>
+        </div>
+        <div className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${style.badge}`}>
+          {copy.label}
+        </div>
+      </div>
+      <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-8 text-center">
+        <div className={`relative rounded-full p-5 ring-2 ${style.ring} ${style.glow}`}>
           {speaking && (
             <span
               aria-hidden
               className="absolute inset-0 rounded-full border border-fuchsia-300/40 animate-ping"
             />
           )}
-          <div className="flex h-44 w-44 items-center justify-center rounded-full border border-white/15 bg-gradient-to-br from-slate-700 to-slate-900 text-6xl font-semibold text-cyan-100">
-            C
-          </div>
-          <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${style.badge}`}>
-            {copy.label}
+          <div className="flex h-48 w-48 items-center justify-center rounded-full border border-white/15 bg-gradient-to-br from-slate-700 to-slate-900 text-6xl font-semibold text-cyan-100">
+            {assistantName.slice(0, 1).toUpperCase()}
           </div>
         </div>
         <div className="max-w-xl space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">AskChip assistant stage</p>
           <p className="text-lg leading-8 text-slate-100">{copy.detail}</p>
         </div>
-        <div className="rounded-full border border-slate-600/80 bg-slate-900/75 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">
-          Chip · Live Assistant
+      </div>
+      <div className="relative z-10 rounded-2xl border border-slate-700/80 bg-slate-950/60 px-5 py-4">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-100/85">Live lower-third</p>
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-white">{assistantName} · Local Assistant</p>
+          <p className="text-xs text-slate-300">State: {copy.label}</p>
         </div>
       </div>
     </section>
