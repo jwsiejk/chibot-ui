@@ -221,14 +221,20 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 
 ### Phase 18 — VMware live follow-through conversation tuning
 - Tuned VMware-only live runtime guidance after kickoff to feel more like an experienced VMware engineer in an active troubleshooting session.
+- Tightened first-response behavior for VMware live sessions so kickoff is conversational instead of playbook-style:
+  - default first reply length is 2-3 short sentences
+  - no “initial assessment / diagnosis path / immediate next actions” heading-style framing
+  - no numbered checklist by default unless the operator asks for one
+  - one focused next question to move triage forward
 - Added explicit post-kickoff behavior guardrails for VMware persona responses:
   - ask one focused next question at a time
   - keep responses shorter by default
-  - provide one or two likely issue paths
+  - provide one or two likely issue paths when grounded by available evidence
   - provide one or two practical verification steps
   - avoid long lecture/policy-style responses
 - Strengthened honesty language for metadata-only log receipt:
   - if uploaded file metadata is present but parsed content is not, the assistant must say logs were received but not parsed yet
+  - if logs are not yet received, assistant should say so briefly, recommend relevant VMware logs, and point to the live-session upload control
   - the assistant may state what it would check next, but must not claim parsed-log findings.
 - Typed and voice runtime alignment is preserved because both continue to use the same backend turn prompt assembly path.
 - No transcript shape, session-state contract, or WebRTC scope changes were introduced in this phase.

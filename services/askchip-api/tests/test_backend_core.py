@@ -839,11 +839,46 @@ def test_prompt_assembler_vmware_kickoff_guidance_reflects_log_receipt() -> None
 
     assert messages[3].role == 'system'
     assert 'This is your first VMware response in the live session.' in messages[3].text
+    assert 'The first response is a conversational opener, not an assessment dump.' in messages[3].text
+    assert 'Keep the first response to 2-3 short sentences by default.' in messages[3].text
+    assert 'Do not use headings (for example: initial assessment, likely diagnosis path, immediate next actions).' in messages[3].text
+    assert 'Do not use numbered checklists unless the user explicitly asks for one.' in messages[3].text
+    assert 'End with one focused next question.' in messages[3].text
     assert 'Uploaded logs available: yes.' in messages[3].text
     assert 'Uploaded log file names: vpxd.log, vmkernel.log.' in messages[3].text
-    assert 'offer to review them now' in messages[3].text
+    assert 'acknowledge receipt, say you can review them' in messages[3].text
     assert 'Keep responses short by default: usually 2-4 sentences unless the user asks for more.' in messages[3].text
     assert 'Ask one focused next question at a time to move triage forward.' in messages[3].text
+
+
+def test_prompt_assembler_vmware_kickoff_guidance_explicit_no_logs_path() -> None:
+    assembler = PromptAssembler(transcript_window=3)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', text='Need help with latency', turn_id='t1', source='typed_input'),
+    ]
+    session_metadata = {
+        'expert_desk': {
+            'environment_platform': 'VMware',
+            'recommended_path': 'launch_live_session_now',
+            'issue_description': 'Storage latency',
+            'issue_category': 'Performance issue',
+            'urgency': 'Medium',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'uploaded_logs_available': False,
+            'uploaded_logs_count': 0,
+        }
+    }
+
+    messages = assembler.build_messages(transcript, user_text='Can we start now?', session_metadata=session_metadata)
+
+    assert messages[3].role == 'system'
+    assert 'Uploaded logs available: no.' in messages[3].text
+    assert 'If logs were not received, briefly say that' in messages[3].text
+    assert 'point to the live-session upload control.' in messages[3].text
+    assert 'recommend uploading: vCenter logs, ESXi host/support bundle, vmkernel.log, and vpxd.log,' in messages[3].text
 
 
 def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> None:
@@ -875,7 +910,8 @@ def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> Non
     assert messages[3].role == 'system'
     assert 'If logs were just uploaded during this live session' in messages[3].text
     assert 'Do not fabricate findings from logs that were not parsed.' in messages[3].text
-    assert 'After kickoff, give one or two likely issue paths and one or two short verification steps.' in messages[3].text
+    assert 'For follow-up turns, give one or two likely issue paths and one or two short verification steps when grounded by evidence.' in messages[3].text
+    assert 'Avoid broad speculation or generic outage declarations without concrete evidence from user context.' in messages[3].text
 
 
 
