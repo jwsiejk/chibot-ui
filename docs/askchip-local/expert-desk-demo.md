@@ -124,6 +124,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - clearer fallback state when visual session is opened without Expert Desk context
   - explicit return links between recommendation/live-session and summary/live-session steps.
 
+### Phase 11 — backend session metadata handoff foundation
+- Added optional typed session-create metadata handoff for Expert Desk context (`metadata.expert_desk`) from the recommendation launch path.
+- Backend session creation now accepts and persists that optional Expert Desk metadata on the real session record, while preserving title-only session creation compatibility.
+- This phase intentionally does **not** change transcript message shape, turn-submit contract, or runtime prompting behavior; it only establishes pre-turn, session-scoped context persistence for future runtime pre-briefing.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -188,6 +193,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - renamed the implemented recommendation screen component/file from `ExpertDeskRecommendationStubView` to `ExpertDeskRecommendationView`
   - updated app route import/usage references to match and removed stale "stub" identifier wording
   - no runtime, routing, UI, transcript, or session contract behavior changes
+- **2026-04-02 — Phase 11 backend metadata handoff plumbing**
+  - extended recommendation launch to send optional typed `metadata.expert_desk` on `POST /api/v1/sessions`
+  - extended backend session-create API model/path to accept and persist optional Expert Desk session metadata
+  - preserved backward compatibility for existing title-only session creation and backstage shell behavior
+  - kept transcript contract and turn-submit contract unchanged (no prompt/runtime behavior changes yet)
 
 ---
 
@@ -198,5 +208,6 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Intake data is persisted only in frontend `sessionStorage` for this demo phase (same browser session, refresh-safe, no backend persistence).
 - Recommendation routing is deterministic and frontend-local; it is not a machine-learned policy engine.
 - `/demo/recommendation` provides routing rationale and handoff-model copy only; no calendar/queue request capture is performed there.
-- Session-linked frontstage context for Visual Session is frontend-local (`sessionStorage`) and browser-session scoped; it is not persisted to backend systems or shared across browsers/devices.
+- Session-linked frontstage context for Visual Session is still frontend-local (`sessionStorage`) and browser-session scoped for current demo UI rendering.
+- Recommendation launch now also supports an optional backend session-scoped metadata handoff (`metadata.expert_desk`) persisted on the AskChip session record for future runtime pre-briefing.
 - Summary handoff requests (follow-up/escalation) are frontend-local (`sessionStorage`) by session id and are not sent to backend CRM, scheduling, or ticketing systems.

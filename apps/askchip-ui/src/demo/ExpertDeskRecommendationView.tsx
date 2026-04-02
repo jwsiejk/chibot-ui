@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { askChipApiClient } from '../api/client';
 import { DEMO_ROUTES } from '../routing';
 import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
+import { buildExpertDeskCreateSessionMetadata } from './expertDeskSessionMetadata';
 import {
   buildExpertDeskSessionContextFromDraft,
   saveExpertDeskSessionContext,
@@ -32,6 +33,7 @@ export function ExpertDeskRecommendationView({ draft, readyForRecommendation }: 
     try {
       const session = await askChipApiClient.createSession({
         title: `Expert Desk: ${getIssueCategoryLabel(draft.issueCategory)}`,
+        metadata: buildExpertDeskCreateSessionMetadata(draft, recommendation),
       });
 
       const sessionContext = buildExpertDeskSessionContextFromDraft(draft, recommendation);
