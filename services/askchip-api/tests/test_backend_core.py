@@ -813,6 +813,108 @@ def test_prompt_assembler_uses_expert_desk_preface_and_persona_overlay() -> None
     assert messages[-1].text == 'What should we do first?'
 
 
+def test_prompt_assembler_vmware_kickoff_guidance_reflects_log_receipt() -> None:
+    assembler = PromptAssembler(transcript_window=3)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', text='Need help with outage', turn_id='t1', source='typed_input'),
+    ]
+    session_metadata = {
+        'expert_desk': {
+            'environment_platform': 'VMware',
+            'recommended_path': 'launch_live_session_now',
+            'issue_description': 'Hosts disconnected',
+            'issue_category': 'Production outage',
+            'urgency': 'High',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'uploaded_logs_available': True,
+            'uploaded_logs_count': 2,
+            'uploaded_log_names': ['vpxd.log', 'vmkernel.log'],
+        }
+    }
+
+    messages = assembler.build_messages(transcript, user_text='What should we do first?', session_metadata=session_metadata)
+
+    assert messages[3].role == 'system'
+    assert 'This is your first VMware response in the live session.' in messages[3].text
+    assert 'Uploaded logs available: yes.' in messages[3].text
+    assert 'Uploaded log file names: vpxd.log, vmkernel.log.' in messages[3].text
+    assert 'offer to review them now' in messages[3].text
+
+
+def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> None:
+    assembler = PromptAssembler(transcript_window=4)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', text='Need help with outage', turn_id='t1', source='typed_input'),
+        MessageRecord(session_id='s', role='assistant', text='Tell me more.', turn_id='t1', source='model_output'),
+        MessageRecord(session_id='s', role='user', text='I just uploaded logs.', turn_id='t2', source='typed_input'),
+    ]
+    session_metadata = {
+        'expert_desk': {
+            'environment_platform': 'VMware',
+            'recommended_path': 'launch_live_session_now',
+            'issue_description': 'Hosts disconnected',
+            'issue_category': 'Production outage',
+            'urgency': 'High',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'uploaded_logs_available': True,
+            'uploaded_logs_count': 1,
+            'uploaded_log_names': ['support-bundle.tgz'],
+        }
+    }
+
+    messages = assembler.build_messages(transcript, user_text='Can you review them?', session_metadata=session_metadata)
+
+    assert messages[3].role == 'system'
+    assert 'If logs were just uploaded during this live session' in messages[3].text
+    assert 'Do not fabricate findings from logs that were not parsed.' in messages[3].text
+
+
+def test_session_patch_can_update_expert_desk_metadata_without_renaming(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post('/api/v1/sessions', json={'title': 'Metadata patch'})
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Request: Production outage',
+                        'issue_category': 'Production outage',
+                        'environment_platform': 'VMware',
+                        'urgency': 'Same day',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'launch-live-expert-now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': 'VMware specialist',
+                        'issue_description': 'Host isolation',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['vmkernel.log'],
+                        'uploaded_logs_available': True,
+                        'recommended_vmware_logs': ['vCenter Server logs', 'vmkernel.log'],
+                    }
+                }
+            },
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert patched.status_code == 200
+    assert patched.json()['title'] == 'Metadata patch'
+    assert patched.json()['metadata']['expert_desk']['uploaded_logs_available'] is True
+    assert transcript.status_code == 200
+    assert transcript.json()['session']['metadata']['expert_desk']['uploaded_log_names'] == ['vmkernel.log']
+
+
 def test_prompt_assembler_uses_general_expert_fallback_overlay() -> None:
     assembler = PromptAssembler()
     messages = assembler.build_messages(

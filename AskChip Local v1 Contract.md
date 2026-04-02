@@ -27,7 +27,13 @@ The only allowed top-level states are:
   - `expert_persona_id` (stable routing identity)
   - `expert_persona_label` (display label)
   - optional `expert_persona_summary` (descriptive helper text)
+- Expert Desk metadata may also include uploaded-log summary fields for runtime-aware triage:
+  - `uploaded_logs_count` (number)
+  - `uploaded_log_names` (string array)
+  - `uploaded_logs_available` (boolean)
+  - optional `recommended_vmware_logs` (string array guidance list)
 - This metadata is stored on the session record and is available before the first assistant turn.
+- Session metadata updates (`PATCH /api/v1/sessions/{session_id}`) may update `metadata.expert_desk` during live sessions (for example when new log-file metadata is added), and this runtime metadata is used for later typed + voice turns.
 - During live turn runtime, AskChip may use session-scoped `metadata.expert_desk` as prompt preface/system-context pre-briefing before transcript history and current user turn (typed and voice paths), without changing stored transcript message shape.
 - Runtime persona overlay selection must use `expert_persona_id` first; legacy prose-only fields may be used only as backward-compatible fallback.
 - Canonical transcript rules remain unchanged: transcript messages still use `text` (never `content`), with `role` as speaker identity and `source` as origin semantics.

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
+import { askChipApiClient } from '../api/client';
 import { ChatPanel } from '../chat/ChatPanel';
 import { runtimeConfig } from '../config/runtime';
 import { ExpertDeskFlowProgress } from '../demo/ExpertDeskFlowProgress';
 import { ExpertDeskLogUploadPanel } from '../demo/ExpertDeskLogUploadPanel';
+import { buildUploadedLogSummaryFromFiles } from '../demo/expertDeskSessionMetadata';
 import { addExpertDeskSessionLogFiles, getExpertDeskSessionContext } from '../demo/expertDeskSessionContext';
 import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
 import { DEMO_ROUTES, getDemoSummaryRoute } from '../routing';
@@ -107,6 +109,10 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
 
   const hasMessages = state.messages.length > 0;
   const uploadedLogCount = frontstageContext?.uploadedLogFiles.length ?? 0;
+  const expertDeskMetadata = state.currentSession?.metadata && typeof state.currentSession.metadata === 'object'
+    ? (state.currentSession.metadata as { expert_desk?: Record<string, unknown> }).expert_desk
+    : undefined;
+  const isVmwareSession = String(expertDeskMetadata?.environment_platform ?? '').toLowerCase() === 'vmware';
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] text-slate-100">
@@ -196,6 +202,20 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                 onAddFiles={(files, source) => {
                   const updatedContext = addExpertDeskSessionLogFiles(sessionId, files, source);
                   if (updatedContext) {
+                    const uploadedLogSummary = buildUploadedLogSummaryFromFiles(
+                      updatedContext.uploadedLogFiles,
+                      isVmwareSession ? 'vmware' : 'aws',
+                    );
+                    if (expertDeskMetadata) {
+                      void askChipApiClient.updateSession(sessionId, {
+                        metadata: {
+                          expert_desk: {
+                            ...expertDeskMetadata,
+                            ...uploadedLogSummary,
+                          },
+                        },
+                      });
+                    }
                     setContextVersion((current) => current + 1);
                   }
                 }}

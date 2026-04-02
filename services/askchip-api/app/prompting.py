@@ -74,7 +74,7 @@ class PromptAssembler:
 
         expert_desk = self._extract_expert_desk_metadata(session_metadata)
         if expert_desk:
-            messages.extend(self._build_expert_desk_preface(expert_desk))
+            messages.extend(self._build_expert_desk_preface(expert_desk, transcript))
         else:
             messages.append(PromptMessage(role='system', text=MARLENE_INSTRUCTION_BLOCK))
 
@@ -94,17 +94,32 @@ class PromptAssembler:
         raw = session_metadata.get('expert_desk')
         if not isinstance(raw, dict):
             return None
-        cleaned = {
-            key: str(value).strip()
-            for key, value in raw.items()
-            if isinstance(key, str) and value is not None and str(value).strip()
-        }
+        cleaned: dict[str, str] = {}
+        for key, value in raw.items():
+            if not isinstance(key, str) or value is None:
+                continue
+            if isinstance(value, list):
+                flattened = ', '.join(str(item).strip() for item in value if str(item).strip())
+                if flattened:
+                    cleaned[key] = flattened
+                continue
+            normalized = str(value).strip()
+            if normalized:
+                cleaned[key] = normalized
         return cleaned or None
 
-    def _build_expert_desk_preface(self, expert_desk: dict[str, str]) -> list[PromptMessage]:
+    def _build_expert_desk_preface(self, expert_desk: dict[str, str], transcript: list[MessageRecord]) -> list[PromptMessage]:
         persona_id = expert_desk.get('expert_persona_id', '')
         persona_label = expert_desk.get('expert_persona_label', '') or expert_desk.get('expert_persona', '')
         overlay = self._persona_overlay(persona_id=persona_id, persona_label=persona_label)
+        is_vmware_persona = persona_id == 'ai-vmware-engineer' or persona_label.lower() == 'ai vmware engineer'
+        has_prior_assistant_turn = any(item.role == 'assistant' and item.text.strip() for item in transcript)
+        try:
+            uploaded_logs_count = int(expert_desk.get('uploaded_logs_count', '0') or '0')
+        except ValueError:
+            uploaded_logs_count = 0
+        uploaded_logs_available = expert_desk.get('uploaded_logs_available', '').lower() in {'true', '1', 'yes'}
+        uploaded_log_names = expert_desk.get('uploaded_log_names', '').strip()
         context_lines = [
             f"selected expert persona id: {persona_id or 'general-infrastructure-expert'}",
             f"selected expert persona label: {persona_label or 'General Infrastructure Expert'}",
@@ -124,12 +139,44 @@ class PromptAssembler:
             context_lines.append(f"recommended expert type: {expert_desk['recommended_expert_type']}")
         if expert_desk.get('preferred_expert_type'):
             context_lines.append(f"preferred expert type: {expert_desk['preferred_expert_type']}")
+        if uploaded_log_names:
+            context_lines.append(f"uploaded log names: {uploaded_log_names}")
 
-        return [
+        vmware_runtime_guidance = None
+        if is_vmware_persona:
+            vmware_runtime_guidance_lines = [
+                'VMware live-session guidance:',
+                '- Keep tone calm, direct, conversational, and professional.',
+                '- Be honest about logs: you only have uploaded file metadata unless parsed content is explicitly provided.',
+                f"- Uploaded logs available: {'yes' if (uploaded_logs_available or uploaded_logs_count > 0) else 'no'}.",
+                f'- Uploaded logs count: {uploaded_logs_count}.',
+            ]
+            if uploaded_log_names:
+                vmware_runtime_guidance_lines.append(f'- Uploaded log file names: {uploaded_log_names}.')
+            if not has_prior_assistant_turn:
+                vmware_runtime_guidance_lines.extend([
+                    '- This is your first VMware response in the live session.',
+                    '- Start by acknowledging the issue professionally.',
+                    "- Explicitly state whether VMware logs were received.",
+                    "- If logs were received, offer to review them now.",
+                    "- If logs were not received, recommend uploading: vCenter logs, ESXi host/support bundle, vmkernel.log, and vpxd.log.",
+                    '- Keep the kickoff brief and natural, not robotic.',
+                ])
+            else:
+                vmware_runtime_guidance_lines.extend([
+                    '- If logs were just uploaded during this live session, acknowledge they were received and offer to review them now.',
+                    '- Do not fabricate findings from logs that were not parsed.',
+                ])
+            vmware_runtime_guidance = '\n'.join(vmware_runtime_guidance_lines)
+
+        preface_messages = [
             PromptMessage(role='system', text=EXPERT_DESK_BASE_INSTRUCTION_BLOCK),
             PromptMessage(role='system', text=overlay),
             PromptMessage(role='system', text='Expert Desk session pre-brief:\n' + '\n'.join(f'- {line}' for line in context_lines)),
         ]
+        if vmware_runtime_guidance:
+            preface_messages.append(PromptMessage(role='system', text=vmware_runtime_guidance))
+        return preface_messages
 
     def _persona_overlay(self, *, persona_id: str, persona_label: str) -> str:
         normalized_id = '-'.join(persona_id.lower().split())
