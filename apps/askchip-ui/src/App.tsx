@@ -1,6 +1,7 @@
 import { ExpertDeskIntakeView } from './demo/ExpertDeskIntakeView';
 import { ExpertDeskLandingView } from './demo/ExpertDeskLandingView';
 import { ExpertDeskRecommendationStubView } from './demo/ExpertDeskRecommendationStubView';
+import { ExpertDeskSummaryView } from './demo/ExpertDeskSummaryView';
 import { useExpertDeskDemoState } from './demo/useExpertDeskDemoState';
 import { resolveAppRoute } from './routing';
 import { AskChipShell } from './shell/AskChipShell';
@@ -33,6 +34,10 @@ function App() {
 
   if (route.kind === 'demo-recommendation') {
     return <ExpertDeskRecommendationStubView draft={intakeDraft} readyForRecommendation={readyForRecommendation} />;
+  }
+
+  if (route.kind === 'demo-summary') {
+    return <ExpertDeskSummaryView sessionId={route.sessionId} />;
   }
 
   return <AskChipShell />;
