@@ -2,10 +2,12 @@ import type { ExpertDeskIntakeDraft } from './types';
 import type { ExpertDeskRecommendation } from './recommendation';
 import {
   getContactPreferenceLabel,
+  getEnvironmentPlatformLabel,
   getIssueCategoryLabel,
   getRecommendedPathLabel,
   getUrgencyLabel,
 } from './recommendation';
+import type { ExpertDeskUploadedLogMetadata, ExpertDeskUploadedLogSource } from './types';
 
 const SESSION_CONTEXT_STORAGE_KEY = 'askchip.expertDesk.sessionContextBySessionId.v1';
 const SESSION_CONTEXT_MAX_AGE_MS = 1000 * 60 * 60 * 12;
@@ -30,6 +32,7 @@ export type ExpertDeskSessionContext = {
   escalationNote: string;
   retrievedCaseContext: string[];
   sourceNote: string;
+  uploadedLogFiles: ExpertDeskUploadedLogMetadata[];
 };
 
 export type ExpertDeskLocalHandoffRequestType = 'human-escalation' | 'follow-up-session';
@@ -101,6 +104,48 @@ export function saveExpertDeskSessionContext(sessionId: string, context: ExpertD
   };
 
   writeStorage(nextStorage);
+}
+
+export function addExpertDeskSessionLogFiles(
+  sessionId: string,
+  files: FileList,
+  source: ExpertDeskUploadedLogSource,
+): ExpertDeskSessionContext | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const storage = readStorage();
+  const existing = storage[sessionId];
+  if (!existing || isExpired(existing.storedAt)) {
+    if (existing) {
+      delete storage[sessionId];
+      writeStorage(storage);
+    }
+    return null;
+  }
+
+  const uploadedAt = new Date().toISOString();
+  const newMetadata: ExpertDeskUploadedLogMetadata[] = Array.from(files).map((file) => ({
+    name: file.name,
+    size: file.size,
+    type: file.type || '',
+    uploaded_at: uploadedAt,
+    uploaded_in: source,
+  }));
+
+  const nextContext: ExpertDeskSessionContext = {
+    ...existing.context,
+    uploadedLogFiles: [...existing.context.uploadedLogFiles, ...newMetadata],
+  };
+
+  storage[sessionId] = {
+    ...existing,
+    context: nextContext,
+    storedAt: new Date().toISOString(),
+  };
+  writeStorage(storage);
+  return nextContext;
 }
 
 export function getExpertDeskSessionContext(sessionId: string): ExpertDeskSessionContext | null {
@@ -224,7 +269,7 @@ export function buildExpertDeskSessionContextFromDraft(
   return {
     requestLabel: `Request: ${issueCategoryLabel}`,
     issueCategoryLabel,
-    environment: draft.environmentPlatform.trim() || 'Not specified',
+    environment: getEnvironmentPlatformLabel(draft.environmentPlatform),
     urgencyLabel,
     expertPersona: recommendation.expertPersonaLabel,
     recommendedPathLabel,
@@ -238,5 +283,6 @@ export function buildExpertDeskSessionContextFromDraft(
       draft.errorText.trim() ? `Error text: ${draft.errorText.trim()}` : 'Error text: not provided',
     ],
     sourceNote: 'Retrieved case context is sourced from saved intake and recommendation data in this browser session.',
+    uploadedLogFiles: draft.uploadedLogFiles,
   };
 }

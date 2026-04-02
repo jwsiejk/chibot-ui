@@ -1,12 +1,14 @@
 import type { ChangeEvent, FormEvent } from 'react';
 import { DEMO_ROUTES } from '../routing';
 import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
-import type { ExpertDeskIntakeDraft, ExpertPersonaId, IntakeUrgency } from './types';
+import { ExpertDeskLogUploadPanel } from './ExpertDeskLogUploadPanel';
+import type { EnvironmentPlatform, ExpertDeskIntakeDraft, ExpertPersonaId, IntakeUrgency } from './types';
 
 type ExpertDeskIntakeViewProps = {
   draft: ExpertDeskIntakeDraft;
   onChange: (next: ExpertDeskIntakeDraft) => void;
   onSave: () => void;
+  onAddUploadedLogs: (files: FileList) => void;
   readyForRecommendation: boolean;
   hasSessionPersistence: boolean;
 };
@@ -25,10 +27,16 @@ const expertPersonaLabels: Record<ExpertPersonaId, string> = {
   'general-infrastructure-expert': 'General Infrastructure Expert',
 };
 
+const environmentLabels: Record<EnvironmentPlatform, string> = {
+  vmware: 'VMware',
+  aws: 'AWS',
+};
+
 export function ExpertDeskIntakeView({
   draft,
   onChange,
   onSave,
+  onAddUploadedLogs,
   readyForRecommendation,
   hasSessionPersistence,
 }: ExpertDeskIntakeViewProps) {
@@ -92,14 +100,17 @@ export function ExpertDeskIntakeView({
 
               <label className="grid gap-2 text-sm font-medium text-slate-700">
                 Environment / platform
-                <input
+                <select
                   required
                   name="environmentPlatform"
                   value={draft.environmentPlatform}
                   onChange={updateField}
-                  placeholder="e.g., Azure + AKS + Postgres"
                   className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                />
+                >
+                  <option value="">Select environment</option>
+                  <option value="vmware">VMware</option>
+                  <option value="aws">AWS</option>
+                </select>
               </label>
 
               <label className="grid gap-2 text-sm font-medium text-slate-700">
@@ -193,6 +204,27 @@ export function ExpertDeskIntakeView({
               </label>
             </div>
 
+            {draft.environmentPlatform === 'vmware' ? (
+              <section className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+                <p className="text-sm font-semibold text-indigo-900">Recommended log files to upload</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-indigo-950">
+                  <li>vCenter logs</li>
+                  <li>ESXi host logs / support bundle</li>
+                  <li>vmkernel.log</li>
+                  <li>vpxd.log</li>
+                  <li>Relevant datastore/network error logs (if available)</li>
+                </ul>
+                <div className="mt-4">
+                  <ExpertDeskLogUploadPanel
+                    files={draft.uploadedLogFiles}
+                    uploadSource="intake"
+                    onAddFiles={(files) => onAddUploadedLogs(files)}
+                    title="Attach VMware logs"
+                  />
+                </div>
+              </section>
+            ) : null}
+
             <button
               type="submit"
               disabled={submitDisabled}
@@ -208,9 +240,11 @@ export function ExpertDeskIntakeView({
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Local state snapshot</p>
             <dl className="mt-3 space-y-2 text-sm text-slate-700">
               <div className="flex justify-between gap-2"><dt>Category</dt><dd className="font-medium">{draft.issueCategory || '—'}</dd></div>
+              <div className="flex justify-between gap-2"><dt>Environment</dt><dd className="font-medium">{draft.environmentPlatform ? environmentLabels[draft.environmentPlatform] : '—'}</dd></div>
               <div className="flex justify-between gap-2"><dt>Urgency</dt><dd className="font-medium">{draft.urgency ? urgencyLabels[draft.urgency] : '—'}</dd></div>
               <div className="flex justify-between gap-2"><dt>Expert</dt><dd className="font-medium">{draft.preferredExpertPersonaId ? expertPersonaLabels[draft.preferredExpertPersonaId] : '—'}</dd></div>
               <div className="flex justify-between gap-2"><dt>Contact</dt><dd className="font-medium">{draft.contactPreference || '—'}</dd></div>
+              <div className="flex justify-between gap-2"><dt>Log files</dt><dd className="font-medium">{draft.uploadedLogFiles.length || 0}</dd></div>
             </dl>
             <p className="mt-4 text-xs text-slate-500">Saved timestamp: {draft.submittedAt ?? 'Not submitted yet'}</p>
           </section>

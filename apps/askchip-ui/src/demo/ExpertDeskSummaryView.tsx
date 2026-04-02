@@ -52,6 +52,7 @@ function buildFallbackContext(session: SessionRecord | null): ExpertDeskSessionC
     escalationNote: 'Escalation can be requested from this summary, but requests are local-only in this browser session.',
     retrievedCaseContext: ['No session-linked intake context was found for this session id.'],
     sourceNote: 'Fallback summary context is derived from session metadata only.',
+    uploadedLogFiles: [],
   };
 }
 

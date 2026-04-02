@@ -10,6 +10,7 @@ import {
 import {
   buildExpertDeskRecommendation,
   getContactPreferenceLabel,
+  getEnvironmentPlatformLabel,
   getIssueCategoryLabel,
   getRecommendedPathLabel,
   getUrgencyLabel,
@@ -76,7 +77,7 @@ export function ExpertDeskRecommendationView({ draft, readyForRecommendation }: 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             {[
               ['Issue type', getIssueCategoryLabel(draft.issueCategory)],
-              ['Environment', draft.environmentPlatform],
+              ['Environment', getEnvironmentPlatformLabel(draft.environmentPlatform)],
               ['Urgency', getUrgencyLabel(draft.urgency)],
               ['Expert persona', recommendation.expertPersonaLabel],
               ['Recommended expert type', recommendation.recommendedExpertType],

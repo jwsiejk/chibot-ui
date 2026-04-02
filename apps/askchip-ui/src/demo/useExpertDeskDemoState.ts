@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { DEFAULT_EXPERT_DESK_INTAKE_DRAFT, type ExpertDeskIntakeDraft } from './types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  DEFAULT_EXPERT_DESK_INTAKE_DRAFT,
+  type ExpertDeskIntakeDraft,
+  type ExpertDeskUploadedLogMetadata,
+  type ExpertDeskUploadedLogSource,
+} from './types';
 
 const SESSION_STORAGE_KEY = 'askchip.expertDesk.intakeDraft.v1';
 
@@ -7,6 +12,7 @@ type ExpertDeskDemoState = {
   intakeDraft: ExpertDeskIntakeDraft;
   updateIntakeDraft: (next: ExpertDeskIntakeDraft) => void;
   saveIntakeDraft: () => void;
+  addUploadedLogs: (files: FileList, source: ExpertDeskUploadedLogSource) => void;
   readyForRecommendation: boolean;
   hasSessionPersistence: boolean;
 };
@@ -35,6 +41,13 @@ function readIntakeDraftFromSessionStorage(): ExpertDeskIntakeDraft {
 
   try {
     const parsed = JSON.parse(raw) as Partial<ExpertDeskIntakeDraft> & { preferredExpertType?: string };
+    const migratedEnvironmentPlatform = parsed.environmentPlatform === 'vmware' || parsed.environmentPlatform === 'aws'
+      ? parsed.environmentPlatform
+      : typeof parsed.environmentPlatform === 'string' && /vmware|vsphere|esxi|vcenter/i.test(parsed.environmentPlatform)
+        ? 'vmware'
+        : typeof parsed.environmentPlatform === 'string' && /aws|ec2|eks|rds|iam|vpc/i.test(parsed.environmentPlatform)
+          ? 'aws'
+          : '';
     const migratedPreferredPersonaId = parsed.preferredExpertPersonaId
       ?? (parsed.preferredExpertType === 'platform-architect'
         ? 'general-infrastructure-expert'
@@ -49,7 +62,24 @@ function readIntakeDraftFromSessionStorage(): ExpertDeskIntakeDraft {
     return {
       ...DEFAULT_EXPERT_DESK_INTAKE_DRAFT,
       ...parsed,
+      environmentPlatform: migratedEnvironmentPlatform,
       preferredExpertPersonaId: migratedPreferredPersonaId ?? '',
+      uploadedLogFiles: Array.isArray(parsed.uploadedLogFiles)
+        ? parsed.uploadedLogFiles.filter((entry) =>
+          Boolean(entry)
+          && typeof entry === 'object'
+          && typeof entry.name === 'string'
+          && typeof entry.size === 'number'
+          && typeof entry.uploaded_at === 'string'
+          && (entry.uploaded_in === 'intake' || entry.uploaded_in === 'live-session'))
+            .map((entry) => ({
+              name: entry.name,
+              size: entry.size,
+              type: typeof entry.type === 'string' ? entry.type : '',
+              uploaded_at: entry.uploaded_at,
+              uploaded_in: entry.uploaded_in,
+            }))
+        : [],
     };
   } catch {
     return DEFAULT_EXPERT_DESK_INTAKE_DRAFT;
@@ -58,6 +88,22 @@ function readIntakeDraftFromSessionStorage(): ExpertDeskIntakeDraft {
 
 export function useExpertDeskDemoState(): ExpertDeskDemoState {
   const [intakeDraft, setIntakeDraft] = useState<ExpertDeskIntakeDraft>(() => readIntakeDraftFromSessionStorage());
+
+  const addUploadedLogs = useCallback((files: FileList, source: ExpertDeskUploadedLogSource) => {
+    const now = new Date().toISOString();
+    const nextFiles: ExpertDeskUploadedLogMetadata[] = Array.from(files).map((file) => ({
+      name: file.name,
+      size: file.size,
+      type: file.type || '',
+      uploaded_at: now,
+      uploaded_in: source,
+    }));
+
+    setIntakeDraft((previous) => ({
+      ...previous,
+      uploadedLogFiles: [...previous.uploadedLogFiles, ...nextFiles],
+    }));
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -81,9 +127,10 @@ export function useExpertDeskDemoState(): ExpertDeskDemoState {
       intakeDraft,
       updateIntakeDraft: setIntakeDraft,
       saveIntakeDraft,
+      addUploadedLogs,
       readyForRecommendation: Boolean(intakeDraft.submittedAt) && intakeValid,
       hasSessionPersistence: true,
     }),
-    [intakeDraft, intakeValid],
+    [addUploadedLogs, intakeDraft, intakeValid],
   );
 }

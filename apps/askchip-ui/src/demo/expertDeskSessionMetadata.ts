@@ -1,7 +1,7 @@
 import type { CreateSessionMetadata } from '../types/contract';
 import type { ExpertDeskRecommendation } from './recommendation';
 import type { ExpertDeskIntakeDraft } from './types';
-import { getIssueCategoryLabel, getUrgencyLabel } from './recommendation';
+import { getEnvironmentPlatformLabel, getIssueCategoryLabel, getUrgencyLabel } from './recommendation';
 
 export function buildExpertDeskCreateSessionMetadata(
   draft: ExpertDeskIntakeDraft,
@@ -13,7 +13,7 @@ export function buildExpertDeskCreateSessionMetadata(
     expert_desk: {
       request_label: `Request: ${issueCategoryLabel}`,
       issue_category: issueCategoryLabel,
-      environment_platform: draft.environmentPlatform.trim() || 'Not specified',
+      environment_platform: getEnvironmentPlatformLabel(draft.environmentPlatform),
       urgency: getUrgencyLabel(draft.urgency),
       preferred_expert_type: draft.preferredExpertPersonaId || 'Not specified',
       recommended_expert_type: recommendation.recommendedExpertType,

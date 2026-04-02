@@ -170,6 +170,25 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - transcript load timeout/failure
 - Successful bootstrap behavior for valid sessions remains unchanged, and transcript + turn-submit contract shapes remain intact.
 
+### Phase 15 — VMware-first intake + frontend-local log upload metadata
+- Replaced free-text **Environment / platform** intake input with a typed dropdown containing:
+  - VMware
+  - AWS
+- Added VMware-first guidance in intake:
+  - a concise **Recommended log files to upload** section
+  - recommended artifacts (vCenter logs, ESXi host logs/support bundle, `vmkernel.log`, `vpxd.log`, and relevant datastore/network error logs)
+- Added frontend-local log upload surfaces in both:
+  - `/demo/intake` (pre-session upload)
+  - `/visual-session/:sessionId` (upload during live session)
+- Added typed uploaded-log metadata capture for the current local-first app model:
+  - `name`
+  - `size`
+  - `type` (if available)
+  - `uploaded_at`
+  - upload origin (`intake` or `live-session`)
+- Session-linked Expert Desk context now carries uploaded-log metadata so live session UI can show whether logs were provided.
+- Current limitation (explicitly labeled in UI): log file handling is frontend-local only in this phase (browser `sessionStorage` context); no backend file ingestion/parsing pipeline is claimed.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.

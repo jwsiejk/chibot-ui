@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChatPanel } from '../chat/ChatPanel';
 import { runtimeConfig } from '../config/runtime';
 import { ExpertDeskFlowProgress } from '../demo/ExpertDeskFlowProgress';
-import { getExpertDeskSessionContext } from '../demo/expertDeskSessionContext';
+import { ExpertDeskLogUploadPanel } from '../demo/ExpertDeskLogUploadPanel';
+import { addExpertDeskSessionLogFiles, getExpertDeskSessionContext } from '../demo/expertDeskSessionContext';
 import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
 import { DEMO_ROUTES, getDemoSummaryRoute } from '../routing';
 import { VisualSessionStage } from './VisualSessionStage';
@@ -17,7 +18,8 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   const { state, actions, pushToTalk, pttLifecycle, sendTypedTurn, stopInteraction, stopDisabled } = runtime;
   const [chatOpen, setChatOpen] = useState(false);
   const assistantName = runtimeConfig.assistantDisplayName;
-  const frontstageContext = useMemo(() => getExpertDeskSessionContext(sessionId), [sessionId]);
+  const [contextVersion, setContextVersion] = useState(0);
+  const frontstageContext = useMemo(() => getExpertDeskSessionContext(sessionId), [contextVersion, sessionId]);
 
   useEffect(() => {
     const title = state.currentSession?.title?.trim();
@@ -104,6 +106,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   }
 
   const hasMessages = state.messages.length > 0;
+  const uploadedLogCount = frontstageContext?.uploadedLogFiles.length ?? 0;
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] text-slate-100">
@@ -143,6 +146,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Urgency</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.urgencyLabel}</p></div>
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Expert persona</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.expertPersona}</p></div>
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Recommended path</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.recommendedPathLabel}</p></div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Log files provided</span><p className="mt-1 text-sm font-medium text-white">{uploadedLogCount}</p></div>
             </div>
           </div>
         ) : (
@@ -183,6 +187,18 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                 <p className="text-xs uppercase tracking-[0.16em] text-amber-100">Escalation note</p>
                 <p className="mt-2 text-amber-50">{frontstageContext.escalationNote}</p>
               </article>
+              <ExpertDeskLogUploadPanel
+                compact
+                files={frontstageContext.uploadedLogFiles}
+                uploadSource="live-session"
+                title="Upload logs during live session"
+                onAddFiles={(files, source) => {
+                  const updatedContext = addExpertDeskSessionLogFiles(sessionId, files, source);
+                  if (updatedContext) {
+                    setContextVersion((current) => current + 1);
+                  }
+                }}
+              />
             </div>
           </aside>
         ) : null}
@@ -198,6 +214,9 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
           <div className="mt-4 space-y-2 text-xs text-slate-300">
             <div className="rounded-2xl border border-slate-700/80 bg-slate-900/65 px-3 py-2">
               {hasMessages ? `${state.messages.length} messages in this session` : 'No messages yet.'}
+            </div>
+            <div className="rounded-2xl border border-slate-700/80 bg-slate-900/65 px-3 py-2">
+              {uploadedLogCount > 0 ? `${uploadedLogCount} log file(s) attached in frontend-local context` : 'No log files attached yet.'}
             </div>
             <p className="text-slate-400">Press <span className="rounded border border-slate-600 px-1 py-0.5 text-[10px]">Esc</span> to close chat.</p>
           </div>
