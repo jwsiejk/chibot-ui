@@ -80,16 +80,24 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
       <main className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] px-6 text-slate-100">
         <div className="w-full max-w-xl rounded-3xl border border-rose-400/30 bg-rose-500/10 p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-100/80">Session unavailable</p>
-          <h1 className="mt-2 text-xl font-semibold text-white">We couldn’t open this visual session.</h1>
+          <h1 className="mt-2 text-xl font-semibold text-white">Session not found / deleted</h1>
           <p className="mt-2 text-sm leading-6 text-rose-50/90">
             {state.appError ?? `Session "${sessionId}" no longer exists or could not be loaded.`}
           </p>
-          <a
-            href="/"
-            className="mt-4 inline-flex rounded-full border border-slate-200/30 bg-slate-900/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-100 transition hover:border-slate-200/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70"
-          >
-            Return to AskChip shell
-          </a>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <a
+              href={DEMO_ROUTES.recommendation}
+              className="inline-flex rounded-full border border-slate-200/30 bg-slate-900/60 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-100 transition hover:border-slate-200/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70"
+            >
+              Back to Expert Desk
+            </a>
+            <a
+              href="/"
+              className="inline-flex rounded-full border border-cyan-300/40 bg-cyan-300/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 transition hover:border-cyan-200/70 hover:bg-cyan-300/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70"
+            >
+              Start new session
+            </a>
+          </div>
         </div>
       </main>
     );
