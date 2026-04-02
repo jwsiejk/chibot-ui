@@ -147,7 +147,13 @@ class PromptAssembler:
             vmware_runtime_guidance_lines = [
                 'VMware live-session guidance:',
                 '- Keep tone calm, direct, conversational, and professional.',
+                '- Keep responses short by default: usually 2-4 sentences unless the user asks for more.',
+                '- Ask one focused next question at a time to move triage forward.',
+                '- After kickoff, give one or two likely issue paths and one or two short verification steps.',
+                '- Keep troubleshooting practical and ordered; avoid long lectures or policy-like disclaimers.',
                 '- Be honest about logs: you only have uploaded file metadata unless parsed content is explicitly provided.',
+                '- Never claim parsed-log findings unless parsed content is explicitly present in context.',
+                "- If only metadata is available, say logs were received but not parsed yet, and state what you would check next.",
                 f"- Uploaded logs available: {'yes' if (uploaded_logs_available or uploaded_logs_count > 0) else 'no'}.",
                 f'- Uploaded logs count: {uploaded_logs_count}.',
             ]

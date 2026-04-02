@@ -842,6 +842,8 @@ def test_prompt_assembler_vmware_kickoff_guidance_reflects_log_receipt() -> None
     assert 'Uploaded logs available: yes.' in messages[3].text
     assert 'Uploaded log file names: vpxd.log, vmkernel.log.' in messages[3].text
     assert 'offer to review them now' in messages[3].text
+    assert 'Keep responses short by default: usually 2-4 sentences unless the user asks for more.' in messages[3].text
+    assert 'Ask one focused next question at a time to move triage forward.' in messages[3].text
 
 
 def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> None:
@@ -873,6 +875,37 @@ def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> Non
     assert messages[3].role == 'system'
     assert 'If logs were just uploaded during this live session' in messages[3].text
     assert 'Do not fabricate findings from logs that were not parsed.' in messages[3].text
+    assert 'After kickoff, give one or two likely issue paths and one or two short verification steps.' in messages[3].text
+
+
+
+def test_prompt_assembler_vmware_metadata_only_guidance_is_honest() -> None:
+    assembler = PromptAssembler(transcript_window=4)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', text='Need help with outage', turn_id='t1', source='typed_input'),
+        MessageRecord(session_id='s', role='assistant', text='I can help. What changed right before impact?', turn_id='t1', source='model_output'),
+    ]
+    session_metadata = {
+        'expert_desk': {
+            'environment_platform': 'VMware',
+            'issue_description': 'Hosts disconnected',
+            'issue_category': 'Production outage',
+            'urgency': 'High',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'uploaded_logs_available': True,
+            'uploaded_logs_count': 1,
+            'uploaded_log_names': ['esxi-support-bundle.tgz'],
+        }
+    }
+
+    messages = assembler.build_messages(transcript, user_text='Any early read from those logs?', session_metadata=session_metadata)
+
+    assert messages[3].role == 'system'
+    assert 'Never claim parsed-log findings unless parsed content is explicitly present in context.' in messages[3].text
+    assert 'If only metadata is available, say logs were received but not parsed yet, and state what you would check next.' in messages[3].text
 
 
 def test_session_patch_can_update_expert_desk_metadata_without_renaming(tmp_path: Path) -> None:
