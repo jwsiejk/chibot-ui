@@ -25,6 +25,10 @@ const contactPreferenceLabelByValue: Record<string, string> = {
   'scheduled-session': 'Scheduled guided session',
   'async-brief': 'Async written brief first',
 };
+const environmentPlatformLabelByValue: Record<'vmware' | 'aws', string> = {
+  vmware: 'VMware',
+  aws: 'AWS',
+};
 
 const pathLabelByValue: Record<RecommendationPath, string> = {
   'continue-ai-now': 'Continue with AI now',
@@ -70,6 +74,13 @@ export function getContactPreferenceLabel(contactPreference: string): string {
   return contactPreferenceLabelByValue[contactPreference] ?? contactPreference ?? 'Not set';
 }
 
+export function getEnvironmentPlatformLabel(environmentPlatform: ExpertDeskIntakeDraft['environmentPlatform']): string {
+  if (!environmentPlatform) {
+    return 'Not set';
+  }
+  return environmentPlatformLabelByValue[environmentPlatform] ?? environmentPlatform;
+}
+
 export function getRecommendedPathLabel(path: RecommendationPath): string {
   return pathLabelByValue[path];
 }
@@ -106,10 +117,10 @@ export function buildExpertDeskRecommendation(draft: ExpertDeskIntakeDraft): Exp
     recommendedPath = draft.urgency === 'planned' ? 'request-follow-up-session' : 'escalate-human-expert';
     reasons.push('Security review requests require explicit human oversight and accountability.');
   } else if (draft.issueCategory === 'integration-failure') {
-    if (/aws|ec2|eks|rds|iam|vpc/i.test(draft.environmentPlatform)) {
+    if (draft.environmentPlatform === 'aws') {
       expertPersonaId = 'ai-aws-engineer';
       reasons.push('Integration failure in AWS-like environment maps to AWS specialist triage.');
-    } else if (/vmware|vsphere|esxi|vcenter/i.test(draft.environmentPlatform)) {
+    } else if (draft.environmentPlatform === 'vmware') {
       expertPersonaId = 'ai-vmware-engineer';
       reasons.push('Integration failure in VMware-like environment maps to VMware specialist triage.');
     } else {
@@ -151,7 +162,7 @@ export function buildExpertDeskRecommendation(draft: ExpertDeskIntakeDraft): Exp
     reasons.push('Intake context is partial, so recommendation confidence is medium.');
   }
 
-  const issueSummary = `${getIssueCategoryLabel(draft.issueCategory)} in ${draft.environmentPlatform.trim() || 'unspecified environment'} with ${getUrgencyLabel(draft.urgency).toLowerCase()} urgency.`;
+  const issueSummary = `${getIssueCategoryLabel(draft.issueCategory)} in ${getEnvironmentPlatformLabel(draft.environmentPlatform)} with ${getUrgencyLabel(draft.urgency).toLowerCase()} urgency.`;
 
   return {
     issueSummary,

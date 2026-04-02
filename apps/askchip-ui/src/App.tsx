@@ -9,7 +9,7 @@ import { VisualSessionView } from './visual-session/VisualSessionView';
 
 function App() {
   const route = resolveAppRoute(window.location.pathname);
-  const { intakeDraft, updateIntakeDraft, saveIntakeDraft, readyForRecommendation, hasSessionPersistence } =
+  const { intakeDraft, updateIntakeDraft, saveIntakeDraft, addUploadedLogs, readyForRecommendation, hasSessionPersistence } =
     useExpertDeskDemoState();
 
   if (route.kind === 'visual-session') {
@@ -26,6 +26,7 @@ function App() {
         draft={intakeDraft}
         onChange={updateIntakeDraft}
         onSave={saveIntakeDraft}
+        onAddUploadedLogs={(files) => addUploadedLogs(files, 'intake')}
         readyForRecommendation={readyForRecommendation}
         hasSessionPersistence={hasSessionPersistence}
       />
