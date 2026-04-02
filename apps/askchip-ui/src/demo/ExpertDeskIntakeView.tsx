@@ -1,7 +1,7 @@
 import type { ChangeEvent, FormEvent } from 'react';
 import { DEMO_ROUTES } from '../routing';
 import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
-import type { ExpertDeskIntakeDraft, IntakeUrgency } from './types';
+import type { ExpertDeskIntakeDraft, ExpertPersonaId, IntakeUrgency } from './types';
 
 type ExpertDeskIntakeViewProps = {
   draft: ExpertDeskIntakeDraft;
@@ -15,6 +15,14 @@ const urgencyLabels: Record<IntakeUrgency, string> = {
   'same-day': 'Same day (service impact now)',
   'this-week': 'This week (priority issue)',
   planned: 'Planned (no immediate outage)',
+};
+
+const expertPersonaLabels: Record<ExpertPersonaId, string> = {
+  'ai-vmware-engineer': 'AI VMware Engineer',
+  'ai-aws-engineer': 'AI AWS Engineer',
+  'ai-backup-recovery-engineer': 'AI Backup / Recovery Engineer',
+  'ai-data-center-engineer': 'AI Data Center Engineer',
+  'general-infrastructure-expert': 'General Infrastructure Expert',
 };
 
 export function ExpertDeskIntakeView({
@@ -38,7 +46,7 @@ export function ExpertDeskIntakeView({
     !draft.issueCategory ||
     !draft.environmentPlatform ||
     !draft.urgency ||
-    !draft.preferredExpertType ||
+    !draft.preferredExpertPersonaId ||
     !draft.contactPreference ||
     draft.issueDescription.trim().length < 20;
 
@@ -111,19 +119,20 @@ export function ExpertDeskIntakeView({
               </label>
 
               <label className="grid gap-2 text-sm font-medium text-slate-700">
-                Preferred expert type
+                Preferred expert persona
                 <select
                   required
-                  name="preferredExpertType"
-                  value={draft.preferredExpertType}
+                  name="preferredExpertPersonaId"
+                  value={draft.preferredExpertPersonaId}
                   onChange={updateField}
                   className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
                 >
-                  <option value="">Select expert type</option>
-                  <option value="platform-architect">Platform architect</option>
-                  <option value="incident-commander">Incident commander</option>
-                  <option value="integration-specialist">Integration specialist</option>
-                  <option value="data-engineer">Data engineer</option>
+                  <option value="">Select expert persona</option>
+                  <option value="ai-vmware-engineer">AI VMware Engineer</option>
+                  <option value="ai-aws-engineer">AI AWS Engineer</option>
+                  <option value="ai-backup-recovery-engineer">AI Backup / Recovery Engineer</option>
+                  <option value="ai-data-center-engineer">AI Data Center Engineer</option>
+                  <option value="general-infrastructure-expert">General Infrastructure Expert</option>
                 </select>
               </label>
 
@@ -200,7 +209,7 @@ export function ExpertDeskIntakeView({
             <dl className="mt-3 space-y-2 text-sm text-slate-700">
               <div className="flex justify-between gap-2"><dt>Category</dt><dd className="font-medium">{draft.issueCategory || '—'}</dd></div>
               <div className="flex justify-between gap-2"><dt>Urgency</dt><dd className="font-medium">{draft.urgency ? urgencyLabels[draft.urgency] : '—'}</dd></div>
-              <div className="flex justify-between gap-2"><dt>Expert</dt><dd className="font-medium">{draft.preferredExpertType || '—'}</dd></div>
+              <div className="flex justify-between gap-2"><dt>Expert</dt><dd className="font-medium">{draft.preferredExpertPersonaId ? expertPersonaLabels[draft.preferredExpertPersonaId] : '—'}</dd></div>
               <div className="flex justify-between gap-2"><dt>Contact</dt><dd className="font-medium">{draft.contactPreference || '—'}</dd></div>
             </dl>
             <p className="mt-4 text-xs text-slate-500">Saved timestamp: {draft.submittedAt ?? 'Not submitted yet'}</p>

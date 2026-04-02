@@ -16,7 +16,7 @@ export function isExpertDeskIntakeValid(draft: ExpertDeskIntakeDraft): boolean {
     draft.issueCategory
       && draft.environmentPlatform.trim()
       && draft.urgency
-      && draft.preferredExpertType
+      && draft.preferredExpertPersonaId
       && draft.contactPreference
       && draft.issueDescription.trim().length >= 20,
   );
@@ -34,11 +34,22 @@ function readIntakeDraftFromSessionStorage(): ExpertDeskIntakeDraft {
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<ExpertDeskIntakeDraft>;
+    const parsed = JSON.parse(raw) as Partial<ExpertDeskIntakeDraft> & { preferredExpertType?: string };
+    const migratedPreferredPersonaId = parsed.preferredExpertPersonaId
+      ?? (parsed.preferredExpertType === 'platform-architect'
+        ? 'general-infrastructure-expert'
+        : parsed.preferredExpertType === 'incident-commander'
+          ? 'ai-data-center-engineer'
+          : parsed.preferredExpertType === 'integration-specialist'
+            ? 'ai-aws-engineer'
+            : parsed.preferredExpertType === 'data-engineer'
+              ? 'ai-backup-recovery-engineer'
+              : undefined);
 
     return {
       ...DEFAULT_EXPERT_DESK_INTAKE_DRAFT,
       ...parsed,
+      preferredExpertPersonaId: migratedPreferredPersonaId ?? '',
     };
   } catch {
     return DEFAULT_EXPERT_DESK_INTAKE_DRAFT;

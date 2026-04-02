@@ -78,8 +78,9 @@ export function ExpertDeskRecommendationView({ draft, readyForRecommendation }: 
               ['Issue type', getIssueCategoryLabel(draft.issueCategory)],
               ['Environment', draft.environmentPlatform],
               ['Urgency', getUrgencyLabel(draft.urgency)],
-              ['Expert persona', recommendation.expertPersona],
+              ['Expert persona', recommendation.expertPersonaLabel],
               ['Recommended expert type', recommendation.recommendedExpertType],
+              ['Persona profile', recommendation.expertPersonaSummary],
               ['Recommended path', getRecommendedPathLabel(recommendation.recommendedPath)],
             ].map(([label, value]) => (
               <article key={label} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">

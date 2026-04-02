@@ -1,4 +1,4 @@
-import type { ExpertDeskIntakeDraft, IntakeUrgency } from './types';
+import type { ExpertDeskIntakeDraft, ExpertPersonaId, IntakeUrgency } from './types';
 
 export type RecommendationPath = 'continue-ai-now' | 'launch-live-expert-now' | 'request-follow-up-session' | 'escalate-human-expert';
 
@@ -6,7 +6,9 @@ export type ExpertDeskRecommendation = {
   issueSummary: string;
   recommendedExpertType: string;
   recommendedPath: RecommendationPath;
-  expertPersona: string;
+  expertPersonaId: ExpertPersonaId;
+  expertPersonaLabel: string;
+  expertPersonaSummary: string;
   whyRecommended: string[];
   confidence: 'high' | 'medium';
 };
@@ -37,11 +39,20 @@ const urgencyLabelByValue: Record<IntakeUrgency, string> = {
   planned: 'Planned',
 };
 
-const expertPersonaByType: Record<string, string> = {
-  'platform-architect': 'Platform architect focused on distributed systems and resilience.',
-  'incident-commander': 'Incident commander who drives mitigation, owners, and communication cadence.',
-  'integration-specialist': 'Integration specialist for API contracts, message flow, and dependency failures.',
-  'data-engineer': 'Data engineer focused on pipelines, storage reliability, and query performance.',
+const expertPersonaLabelById: Record<ExpertPersonaId, string> = {
+  'ai-vmware-engineer': 'AI VMware Engineer',
+  'ai-aws-engineer': 'AI AWS Engineer',
+  'ai-backup-recovery-engineer': 'AI Backup / Recovery Engineer',
+  'ai-data-center-engineer': 'AI Data Center Engineer',
+  'general-infrastructure-expert': 'General Infrastructure Expert',
+};
+
+const expertPersonaSummaryById: Record<ExpertPersonaId, string> = {
+  'ai-vmware-engineer': 'VMware specialist focused on vSphere/ESXi operations and recovery sequencing.',
+  'ai-aws-engineer': 'AWS specialist focused on cloud architecture, incident response, and blast-radius control.',
+  'ai-backup-recovery-engineer': 'Backup and recovery specialist focused on recoverability, integrity, and restore confidence.',
+  'ai-data-center-engineer': 'Data center specialist focused on infrastructure dependencies and operational safety.',
+  'general-infrastructure-expert': 'General infrastructure specialist for cross-domain triage and practical next actions.',
 };
 
 export function getIssueCategoryLabel(issueCategory: string): string {
@@ -63,10 +74,15 @@ export function getRecommendedPathLabel(path: RecommendationPath): string {
   return pathLabelByValue[path];
 }
 
+export function getExpertPersonaLabel(personaId: ExpertPersonaId): string {
+  return expertPersonaLabelById[personaId];
+}
+
 export function buildExpertDeskRecommendation(draft: ExpertDeskIntakeDraft): ExpertDeskRecommendation {
   const reasons: string[] = [];
   let recommendedPath: RecommendationPath = 'continue-ai-now';
-  let recommendedExpertType = draft.preferredExpertType || 'platform-architect';
+  let expertPersonaId: ExpertPersonaId = draft.preferredExpertPersonaId || 'general-infrastructure-expert';
+  let recommendedExpertType = expertPersonaLabelById[expertPersonaId];
   let confidence: 'high' | 'medium' = 'high';
 
   const errorSignal = draft.errorText.trim().length > 0;
@@ -74,8 +90,9 @@ export function buildExpertDeskRecommendation(draft: ExpertDeskIntakeDraft): Exp
   const descriptionLength = draft.issueDescription.trim().length;
 
   if (draft.issueCategory === 'production-outage') {
-    recommendedExpertType = 'incident-commander';
-    reasons.push('Production outage is best handled by an incident commander persona.');
+    expertPersonaId = 'ai-data-center-engineer';
+    recommendedExpertType = expertPersonaLabelById[expertPersonaId];
+    reasons.push('Production outage maps to data-center stabilization and dependency-first triage.');
     if (draft.urgency === 'same-day') {
       recommendedPath = 'launch-live-expert-now';
       reasons.push('Same-day urgency indicates immediate live coordination is appropriate.');
@@ -84,12 +101,22 @@ export function buildExpertDeskRecommendation(draft: ExpertDeskIntakeDraft): Exp
       reasons.push('Outage pattern still benefits from direct human escalation.');
     }
   } else if (draft.issueCategory === 'security-review') {
-    recommendedExpertType = draft.preferredExpertType || 'platform-architect';
+    expertPersonaId = draft.preferredExpertPersonaId || 'general-infrastructure-expert';
+    recommendedExpertType = expertPersonaLabelById[expertPersonaId];
     recommendedPath = draft.urgency === 'planned' ? 'request-follow-up-session' : 'escalate-human-expert';
     reasons.push('Security review requests require explicit human oversight and accountability.');
   } else if (draft.issueCategory === 'integration-failure') {
-    recommendedExpertType = 'integration-specialist';
-    reasons.push('Integration failure maps directly to an integration specialist persona.');
+    if (/aws|ec2|eks|rds|iam|vpc/i.test(draft.environmentPlatform)) {
+      expertPersonaId = 'ai-aws-engineer';
+      reasons.push('Integration failure in AWS-like environment maps to AWS specialist triage.');
+    } else if (/vmware|vsphere|esxi|vcenter/i.test(draft.environmentPlatform)) {
+      expertPersonaId = 'ai-vmware-engineer';
+      reasons.push('Integration failure in VMware-like environment maps to VMware specialist triage.');
+    } else {
+      expertPersonaId = draft.preferredExpertPersonaId || 'general-infrastructure-expert';
+      reasons.push('Integration failure maps to specialist routing based on available intake environment signals.');
+    }
+    recommendedExpertType = expertPersonaLabelById[expertPersonaId];
     if (draft.urgency === 'same-day') {
       recommendedPath = 'launch-live-expert-now';
       reasons.push('Same-day integration impact favors immediate live troubleshooting.');
@@ -98,7 +125,8 @@ export function buildExpertDeskRecommendation(draft: ExpertDeskIntakeDraft): Exp
       reasons.push('Non-emergency integration failures can start with AI triage before escalation.');
     }
   } else if (draft.issueCategory === 'migration-planning') {
-    recommendedExpertType = draft.preferredExpertType || 'platform-architect';
+    expertPersonaId = draft.preferredExpertPersonaId || 'general-infrastructure-expert';
+    recommendedExpertType = expertPersonaLabelById[expertPersonaId];
     recommendedPath = draft.urgency === 'planned' ? 'request-follow-up-session' : 'continue-ai-now';
     reasons.push('Migration planning is usually structured work that can begin with scoped guidance.');
   }
@@ -129,7 +157,9 @@ export function buildExpertDeskRecommendation(draft: ExpertDeskIntakeDraft): Exp
     issueSummary,
     recommendedExpertType,
     recommendedPath,
-    expertPersona: expertPersonaByType[recommendedExpertType] ?? 'General expert able to triage and route next steps.',
+    expertPersonaId,
+    expertPersonaLabel: expertPersonaLabelById[expertPersonaId],
+    expertPersonaSummary: expertPersonaSummaryById[expertPersonaId],
     whyRecommended: reasons,
     confidence,
   };
