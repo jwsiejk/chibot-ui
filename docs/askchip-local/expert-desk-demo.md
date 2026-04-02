@@ -63,6 +63,28 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
 - Added a real launch CTA that creates a local AskChip session via the existing API and routes directly into `/visual-session/:sessionId`.
 - Added optional follow-up preference capture on the recommendation screen with explicit copy that it is **request capture only** in local view state and is **not persisted** to backend/calendar/queue systems.
 
+### Phase 8 — session-linked frontstage context handoff
+- Added a dedicated frontend-local session context utility keyed by visual-session id (`sessionStorage`) to carry frontstage Expert Desk context across redirect.
+- Recommendation launch now performs a deterministic handoff flow:
+  1. create a real AskChip local session
+  2. build Expert Desk frontstage context from saved intake + deterministic recommendation output
+  3. store that context under the created session id
+  4. redirect to `/visual-session/:sessionId` where the context is read back by session id
+- Visual Session now renders a compact Expert Desk context strip when handoff data is present, including:
+  - customer/request label
+  - issue category
+  - environment
+  - urgency
+  - expert persona
+  - recommended path
+- Visual Session now includes an **Expert Assist** rail that surfaces:
+  - recommended next step
+  - likely topic/root-cause hint
+  - retrieved case context explicitly labeled as sourced from saved intake/recommendation data in this browser session
+  - escalation note
+- Intake “ready for recommendation” logic now requires **current valid intake fields + saved state**, so stale ready status no longer persists after fields become invalid.
+
+
 ## Remaining planned phases
 
 > This sequence is intentionally high-level and may be updated as implementation proceeds.
@@ -94,6 +116,11 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
   - added context-card layout and recommendation rationale panel
   - added live session launch action that creates a real local session and opens Visual Session
   - kept scheduling preference capture explicitly non-integrated and demo-only
+- **2026-04-01 — Phase 8 session-linked frontstage handoff + visual expert assist**
+  - added deterministic sessionStorage-backed context binding from recommendation launch to visual-session id
+  - rendered Expert Desk context strip and Expert Assist rail in Visual Session while keeping assistant stage as the focal point
+  - fixed readiness gating so recommendation readiness reflects current valid intake fields instead of historical save alone
+  - kept runtime/transcript contract intact with no backend integration claims
 
 ---
 
@@ -104,3 +131,4 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
 - Intake data is persisted only in frontend `sessionStorage` for this demo phase (same browser session, refresh-safe, no backend persistence).
 - Recommendation routing is deterministic and frontend-local; it is not a machine-learned policy engine.
 - Follow-up “scheduling preference” capture on `/demo/recommendation` is not persisted and does not integrate with real calendar/queue services.
+- Session-linked frontstage context for Visual Session is frontend-local (`sessionStorage`) and browser-session scoped; it is not persisted to backend systems or shared across browsers/devices.

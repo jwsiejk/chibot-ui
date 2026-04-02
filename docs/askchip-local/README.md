@@ -101,4 +101,6 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - This still uses plain-text Kokoro TTS only. It does not add SSML or injected laugh/chuckle audio clips, and it does not increase `ASKCHIP_TTS_SPEED`.
 - Visual Session is now in an interview-ready polish pass with improved header/stage/toolbar/drawer treatment while retaining the existing shared runtime and chat architecture.
 - Frontstage Expert Desk demo routes are available at `/demo` (landing), `/demo/intake` (structured intake persisted in frontend `sessionStorage` only), and `/demo/recommendation` (deterministic recommendation/routing with a real live-session launch CTA).
+- Frontstage recommendation launch now binds saved intake + recommendation context to the created visual-session id via frontend `sessionStorage`, and Visual Session reads that session-linked context to render an Expert Desk context strip plus an Expert Assist rail (local-only, no backend persistence).
+- Expert Desk intake readiness now reflects current field validity plus save state; stale “ready” status is cleared if required fields become invalid again.
 - Visual stage assistant naming is configurable in the frontend using `VITE_ASKCHIP_ASSISTANT_DISPLAY_NAME` (default: `Chip`).

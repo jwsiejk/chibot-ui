@@ -11,6 +11,17 @@ type ExpertDeskDemoState = {
   hasSessionPersistence: boolean;
 };
 
+export function isExpertDeskIntakeValid(draft: ExpertDeskIntakeDraft): boolean {
+  return Boolean(
+    draft.issueCategory
+      && draft.environmentPlatform.trim()
+      && draft.urgency
+      && draft.preferredExpertType
+      && draft.contactPreference
+      && draft.issueDescription.trim().length >= 20,
+  );
+}
+
 function readIntakeDraftFromSessionStorage(): ExpertDeskIntakeDraft {
   if (typeof window === 'undefined') {
     return DEFAULT_EXPERT_DESK_INTAKE_DRAFT;
@@ -52,14 +63,16 @@ export function useExpertDeskDemoState(): ExpertDeskDemoState {
     }));
   };
 
+  const intakeValid = isExpertDeskIntakeValid(intakeDraft);
+
   return useMemo(
     () => ({
       intakeDraft,
       updateIntakeDraft: setIntakeDraft,
       saveIntakeDraft,
-      readyForRecommendation: Boolean(intakeDraft.submittedAt),
+      readyForRecommendation: Boolean(intakeDraft.submittedAt) && intakeValid,
       hasSessionPersistence: true,
     }),
-    [intakeDraft],
+    [intakeDraft, intakeValid],
   );
 }
