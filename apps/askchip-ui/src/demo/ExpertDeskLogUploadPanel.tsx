@@ -7,6 +7,7 @@ type ExpertDeskLogUploadPanelProps = {
   onAddFiles: (files: FileList, source: ExpertDeskUploadedLogSource) => void;
   title?: string;
   compact?: boolean;
+  helperNote?: string;
 };
 
 function formatBytes(size: number): string {
@@ -25,6 +26,7 @@ export function ExpertDeskLogUploadPanel({
   onAddFiles,
   title = 'Log file upload',
   compact = false,
+  helperNote,
 }: ExpertDeskLogUploadPanelProps) {
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files || event.target.files.length === 0) {
@@ -41,6 +43,7 @@ export function ExpertDeskLogUploadPanel({
       <p className="mt-1 text-xs leading-5 text-slate-600">
         Frontend-local only for now: files are not uploaded to backend storage or parsed by AskChip in this phase.
       </p>
+      {helperNote ? <p className="mt-1 text-xs leading-5 text-slate-600">{helperNote}</p> : null}
       <label className="mt-3 inline-flex cursor-pointer rounded-full border border-indigo-300 bg-indigo-50 px-4 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">
         Add log files
         <input

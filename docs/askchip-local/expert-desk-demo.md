@@ -189,6 +189,19 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Session-linked Expert Desk context now carries uploaded-log metadata so live session UI can show whether logs were provided.
 - Current limitation (explicitly labeled in UI): log file handling is frontend-local only in this phase (browser `sessionStorage` context); no backend file ingestion/parsing pipeline is claimed.
 
+### Phase 16 — VMware-first recommendation clarity + optional upload guidance
+- Tightened the VMware intake recommendation panel so it is explicitly environment-driven:
+  - “Since you selected VMware…” recommendation language now appears when VMware is selected.
+  - recommendation list wording is now more operator-practical (what each log helps with in triage).
+- Clarified optional upload behavior in intake copy:
+  - users are told the live AI VMware expert can still help without logs
+  - users are also told the expert may request specific logs during the live session.
+- Added explicit “what happens next” guidance:
+  - upload now → files are available in frontend live-session context
+  - upload later → AI VMware expert can request logs in live session.
+- Added a connected helper note in the live-session log upload panel so intake and live-session upload expectations remain consistent.
+- No contract-relevant transcript/session behavior changes were made in this phase.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -258,6 +271,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - extended backend session-create API model/path to accept and persist optional Expert Desk session metadata
   - preserved backward compatibility for existing title-only session creation and backstage shell behavior
   - kept transcript contract and turn-submit contract unchanged (no prompt/runtime behavior changes yet)
+- **2026-04-02 — Phase 16 VMware recommendation UX clarity**
+  - made VMware log recommendation language explicit and environment-driven in intake
+  - clarified that log upload is optional and that AI VMware expert support still works without immediate upload
+  - added “uploaded now vs upload later in live session” expectation copy in intake and live-session upload surfaces
+  - preserved existing frontend-local upload behavior (no backend ingestion/parsing claims added)
 - **2026-04-02 — Phase 12 live expert runtime pre-briefing**
   - wired typed + voice turn runtime to read backend session-scoped Expert Desk metadata during real turn handling
   - expanded prompt assembly to prepend Expert Desk persona + intake/session pre-brief system context before transcript/current user input
