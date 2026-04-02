@@ -1,5 +1,6 @@
 import type { ChangeEvent, FormEvent } from 'react';
 import { DEMO_ROUTES } from '../routing';
+import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
 import type { ExpertDeskIntakeDraft, IntakeUrgency } from './types';
 
 type ExpertDeskIntakeViewProps = {
@@ -45,6 +46,8 @@ export function ExpertDeskIntakeView({
     <main className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 md:px-6">
       <div className="mx-auto grid w-full max-w-6xl gap-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <ExpertDeskFlowProgress currentStep="intake" />
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">Expert Desk Intake</p>
