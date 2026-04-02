@@ -2,6 +2,10 @@ import { useMemo, useState } from 'react';
 import { askChipApiClient } from '../api/client';
 import { DEMO_ROUTES } from '../routing';
 import {
+  buildExpertDeskSessionContextFromDraft,
+  saveExpertDeskSessionContext,
+} from './expertDeskSessionContext';
+import {
   buildExpertDeskRecommendation,
   getContactPreferenceLabel,
   getIssueCategoryLabel,
@@ -29,6 +33,10 @@ export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation
       const session = await askChipApiClient.createSession({
         title: `Expert Desk: ${getIssueCategoryLabel(draft.issueCategory)}`,
       });
+
+      const sessionContext = buildExpertDeskSessionContextFromDraft(draft, recommendation);
+      saveExpertDeskSessionContext(session.id, sessionContext);
+
       window.location.href = `/visual-session/${encodeURIComponent(session.id)}`;
     } catch (error) {
       setLaunchError(error instanceof Error ? error.message : 'Unable to launch live session right now.');
@@ -41,9 +49,9 @@ export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation
       <main className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 md:px-6">
         <div className="mx-auto w-full max-w-4xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">Expert Desk Routing</p>
-          <h1 className="mt-2 text-2xl font-semibold text-slate-950">Recommendation requires saved intake data</h1>
+          <h1 className="mt-2 text-2xl font-semibold text-slate-950">Recommendation requires current valid intake</h1>
           <p className="mt-4 text-sm leading-6 text-slate-700">
-            Save the intake draft first so this route can compute a deterministic recommendation from your entered fields.
+            Save the intake draft with all required fields currently valid so this route can compute a deterministic recommendation.
           </p>
           <a href={DEMO_ROUTES.intake} className="mt-6 inline-flex text-sm font-medium text-indigo-700 hover:text-indigo-600">
             ← Back to intake
@@ -115,7 +123,8 @@ export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation
           <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
             <p className="text-sm font-semibold text-emerald-900">Launch live expert flow</p>
             <p className="mt-2 text-sm leading-6 text-emerald-900">
-              This creates a real AskChip local session and opens the visual-session route immediately.
+              This creates a real AskChip local session, binds recommendation context to that session id in local session storage,
+              and opens the visual-session route.
             </p>
             <button
               type="button"

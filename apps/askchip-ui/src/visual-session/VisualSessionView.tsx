@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChatPanel } from '../chat/ChatPanel';
 import { runtimeConfig } from '../config/runtime';
+import { getExpertDeskSessionContext } from '../demo/expertDeskSessionContext';
 import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
 import { VisualSessionStage } from './VisualSessionStage';
 import { VisualSessionToolbar } from './VisualSessionToolbar';
@@ -14,6 +15,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   const { state, actions, pushToTalk, pttLifecycle, sendTypedTurn, stopInteraction, stopDisabled } = runtime;
   const [chatOpen, setChatOpen] = useState(false);
   const assistantName = runtimeConfig.assistantDisplayName;
+  const frontstageContext = useMemo(() => getExpertDeskSessionContext(sessionId), [sessionId]);
 
   useEffect(() => {
     const title = state.currentSession?.title?.trim();
@@ -95,7 +97,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] text-slate-100">
-      <header className="mx-auto w-full max-w-[1400px] px-6 pb-4 pt-5">
+      <header className="mx-auto w-full max-w-[1460px] px-6 pb-4 pt-5">
         <div className="rounded-3xl border border-slate-800/90 bg-slate-900/45 px-5 py-4">
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -106,14 +108,58 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
               {assistantName} · {state.topLevelState ?? 'ready'}
             </div>
           </div>
-          <p className="mt-2 text-sm text-slate-300">Local-first interview demo shell with shared transcript + voice runtime.</p>
+          <p className="mt-2 text-sm text-slate-300">Live specialist engagement surface with shared transcript + voice runtime.</p>
         </div>
+
+        {frontstageContext ? (
+          <div className="mt-3 rounded-3xl border border-cyan-300/25 bg-slate-900/70 px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-100/80">Expert desk context</p>
+            <div className="mt-2 grid gap-2 text-xs text-slate-200 md:grid-cols-2 xl:grid-cols-3">
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Request</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.requestLabel}</p></div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Issue category</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.issueCategoryLabel}</p></div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Environment</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.environment}</p></div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Urgency</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.urgencyLabel}</p></div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Expert persona</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.expertPersona}</p></div>
+              <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Recommended path</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.recommendedPathLabel}</p></div>
+            </div>
+          </div>
+        ) : null}
       </header>
 
-      <section className="mx-auto grid w-full max-w-[1400px] gap-5 px-6 pb-28 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <section className="mx-auto grid w-full max-w-[1460px] gap-5 px-6 pb-28 xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+        {frontstageContext ? (
+          <aside className="rounded-[1.6rem] border border-cyan-300/20 bg-slate-900/45 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100/80">Expert Assist</p>
+            <h2 className="mt-2 text-base font-semibold text-white">Session briefing rail</h2>
+            <div className="mt-4 space-y-3 text-sm">
+              <article className="rounded-2xl border border-slate-700/80 bg-slate-950/60 p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Recommended next step</p>
+                <p className="mt-2 text-slate-100">{frontstageContext.recommendedNextStep}</p>
+              </article>
+              <article className="rounded-2xl border border-slate-700/80 bg-slate-950/60 p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Likely topic / root-cause hint</p>
+                <p className="mt-2 text-slate-100">{frontstageContext.likelyTopicHint}</p>
+              </article>
+              <article className="rounded-2xl border border-slate-700/80 bg-slate-950/60 p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">Retrieved case context (saved intake/recommendation)</p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-200">
+                  {frontstageContext.retrievedCaseContext.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[11px] text-slate-400">{frontstageContext.sourceNote}</p>
+              </article>
+              <article className="rounded-2xl border border-amber-300/30 bg-amber-300/10 p-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-amber-100">Escalation note</p>
+                <p className="mt-2 text-amber-50">{frontstageContext.escalationNote}</p>
+              </article>
+            </div>
+          </aside>
+        ) : null}
+
         <VisualSessionStage state={state.topLevelState} assistantName={assistantName} />
 
-        <aside className="hidden rounded-[1.6rem] border border-slate-800 bg-slate-900/45 p-5 lg:block">
+        <aside className="hidden rounded-[1.6rem] border border-slate-800 bg-slate-900/45 p-5 xl:block">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-100/80">Session controls</p>
           <h2 className="mt-2 text-base font-semibold text-white">Chat and interaction</h2>
           <p className="mt-2 text-sm leading-6 text-slate-300">
