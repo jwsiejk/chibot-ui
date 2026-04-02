@@ -55,6 +55,7 @@ class KokoroTtsAdapter:
             'voices_path': self.config.voices_path,
             'speed': self.config.speed,
             'lang_code': self.config.lang_code,
+            **({'fallback_reason': runtime['fallback_reason']} if runtime.get('fallback_reason') else {}),
             **({'warning': runtime['warning']} if runtime.get('warning') else {}),
         }
 
@@ -133,11 +134,17 @@ def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
     providers = _available_onnx_providers()
     requested_device = config.device
     selected_device = requested_device if requested_device in {'cpu', 'cuda'} else 'auto'
-    selected_provider = 'CPUExecutionProvider'
+    selected_provider = 'CPUExecutionProvider' if 'CPUExecutionProvider' in providers else 'unknown'
     warning: str | None = None
+    fallback_reason: str | None = None
 
     if selected_device == 'auto':
-        selected_device = 'cuda' if 'CUDAExecutionProvider' in providers else 'cpu'
+        if 'CUDAExecutionProvider' in providers:
+            selected_device = 'cuda'
+        else:
+            selected_device = 'cpu'
+            fallback_reason = 'ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable.'
+            warning = f'{fallback_reason} Using CPUExecutionProvider.'
 
     if selected_device == 'cuda':
         if not providers:
@@ -146,13 +153,15 @@ def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
             selected_provider = 'CUDAExecutionProvider'
         else:
             selected_device = 'cpu'
-            warning = 'ASKCHIP_TTS_DEVICE=cuda requested but CUDAExecutionProvider is unavailable; using CPUExecutionProvider.'
+            fallback_reason = 'ASKCHIP_TTS_DEVICE=cuda requested but CUDAExecutionProvider is unavailable.'
+            warning = f'{fallback_reason} Using CPUExecutionProvider.'
 
     return {
         'requested_device': requested_device,
         'selected_device': selected_device,
         'provider': selected_provider,
         'available_providers': providers,
+        **({'fallback_reason': fallback_reason} if fallback_reason else {}),
         **({'warning': warning} if warning else {}),
     }
 

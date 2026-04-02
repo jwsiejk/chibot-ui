@@ -63,7 +63,7 @@ function createScheduler() {
 describe('readiness bootstrap hardening', () => {
   it('treats readiness loading as best-effort while core config and sessions still initialize', async () => {
     const result = await loadBootstrapShellData({
-      getConfig: async () => ({ app_name: 'AskChip', ollama_base_url: '', ollama_model: 'phi4', database_path: '', stt_model: '', stt_device: '', stt_compute_type: '', tts_voice: '', tts_device: '', tts_model_path: null, tts_voices_path: null, tts_sample_rate_hz: 24000, tts_speed: 1, tts_lang_code: 'en', local_only: true, ollama_warmup_enabled: true, tts_warmup_enabled: true }),
+      getConfig: async () => ({ app_name: 'AskChip', ollama_base_url: '', ollama_model: 'phi4', database_path: '', stt_model: '', stt_device: '', stt_compute_type: '', tts_voice: '', tts_requested_device: 'auto', tts_device: 'cpu', tts_provider: 'CPUExecutionProvider', tts_available_providers: ['CPUExecutionProvider'], tts_warning: null, tts_fallback_reason: null, tts_model_path: null, tts_voices_path: null, tts_sample_rate_hz: 24000, tts_speed: 1, tts_lang_code: 'en', local_only: true, ollama_warmup_enabled: true, tts_warmup_enabled: true }),
       loadSessions: async () => ([{ id: 'session-1', title: 'Chat', status: 'ready', created_at: '', updated_at: '', last_message_at: null, active_turn_id: null, ready_at: null, last_error_at: null, metadata: {} }]),
       getReadiness: async () => { throw new Error('readiness fetch failed'); },
     });

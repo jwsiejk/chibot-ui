@@ -1,5 +1,6 @@
 import type { ConfigResponse, TurnState } from '../types/contract';
 import { TURN_STATE_COPY } from './stateCopy';
+import { formatTtsRuntimeSummary, formatTtsRuntimeWarning } from './ttsRuntimeLabel';
 
 export function ChipStagePane({
   state,
@@ -11,6 +12,7 @@ export function ChipStagePane({
   config: ConfigResponse | null;
 }) {
   const resolved = state ? TURN_STATE_COPY[state] : null;
+  const ttsWarning = config ? formatTtsRuntimeWarning(config) : null;
 
   return (
     <section className="rounded-[2rem] border border-slate-800 bg-panel/80 p-6 shadow-panel backdrop-blur">
@@ -53,8 +55,13 @@ export function ChipStagePane({
             </div>
             <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 px-4 py-3">
               <dt>TTS</dt>
-              <dd className="font-medium text-white">{config ? `${config.tts_voice} · ${config.tts_device}` : 'Unavailable'}</dd>
+              <dd className="font-medium text-white">{config ? formatTtsRuntimeSummary(config) : 'Unavailable'}</dd>
             </div>
+            {ttsWarning ? (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs leading-5 text-amber-100">
+                TTS fallback: {ttsWarning}
+              </div>
+            ) : null}
             <div className="rounded-2xl border border-dashed border-slate-800 px-4 py-3 text-xs leading-5 text-slate-400">
               Voice input uses push-to-talk plus faster-whisper after release. Assistant speech stays on a separate Kokoro playback path and does not ride the transcript WebSocket.
             </div>
