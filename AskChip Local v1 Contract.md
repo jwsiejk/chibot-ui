@@ -20,6 +20,13 @@ The only allowed top-level states are:
 - `speaking`
 - `error`
 
+## Session creation metadata (optional)
+- `POST /api/v1/sessions` may include an optional typed `metadata` object.
+- For Expert Desk frontstage handoff, session creation may include `metadata.expert_desk` as session-scoped pre-brief context.
+- This metadata is stored on the session record and is available before the first assistant turn.
+- Canonical transcript rules remain unchanged: transcript messages still use `text` (never `content`), with `role` as speaker identity and `source` as origin semantics.
+- `CreateTurnRequest` and transcript message shape are unchanged.
+
 ## Assistant speech contract
 - Assistant speech is derived from the same canonical assistant message that is shown in the transcript.
 - Speech may begin before the full assistant message is complete, as soon as a stable sentence-level chunk is available from that canonical assistant message.

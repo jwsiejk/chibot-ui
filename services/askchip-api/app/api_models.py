@@ -5,8 +5,27 @@ from pydantic import BaseModel
 from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
 
 
+class ExpertDeskSessionMetadata(BaseModel):
+    request_label: str
+    issue_category: str
+    environment_platform: str
+    urgency: str
+    preferred_expert_type: str
+    recommended_expert_type: str
+    recommended_path: str
+    expert_persona: str
+    issue_description: str
+    architecture_notes: str
+    error_text: str
+
+
+class CreateSessionMetadata(BaseModel):
+    expert_desk: ExpertDeskSessionMetadata | None = None
+
+
 class CreateSessionRequest(BaseModel):
     title: str | None = None
+    metadata: CreateSessionMetadata | None = None
 
 
 class RenameSessionRequest(BaseModel):

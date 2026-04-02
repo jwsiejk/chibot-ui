@@ -98,6 +98,25 @@ export interface ReadinessResponse {
 
 export interface CreateSessionRequest {
   title?: string;
+  metadata?: CreateSessionMetadata;
+}
+
+export interface ExpertDeskSessionMetadata {
+  request_label: string;
+  issue_category: string;
+  environment_platform: string;
+  urgency: string;
+  preferred_expert_type: string;
+  recommended_expert_type: string;
+  recommended_path: string;
+  expert_persona: string;
+  issue_description: string;
+  architecture_notes: string;
+  error_text: string;
+}
+
+export interface CreateSessionMetadata {
+  expert_desk?: ExpertDeskSessionMetadata;
 }
 
 export interface CreateTurnRequest {
