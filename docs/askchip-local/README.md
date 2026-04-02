@@ -113,5 +113,6 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - Expert Desk intake readiness now reflects current field validity plus save state; stale “ready” status is cleared if required fields become invalid again.
 - Summary now surfaces the latest saved local handoff request type/timestamp/note and explicitly labels it as frontend-local-only (not sent to backend/CRM/calendar/queue/ticketing systems).
 - Expert Desk intake now uses a typed environment dropdown (`VMware`, `AWS`) and shows VMware-first recommended log guidance with frontend-local upload capture.
+- VMware intake guidance is explicitly environment-driven and states that log upload is optional: the AI VMware expert can still assist without logs and may request them during live session as needed.
 - Live visual session now includes frontend-local log upload capture tied to session-linked Expert Desk context so operators can see whether logs were provided.
 - Visual stage assistant naming is configurable in the frontend using `VITE_ASKCHIP_ASSISTANT_DISPLAY_NAME` (default: `Chip`).

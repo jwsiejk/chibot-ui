@@ -205,21 +205,39 @@ export function ExpertDeskIntakeView({
             </div>
 
             {draft.environmentPlatform === 'vmware' ? (
-              <section className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
-                <p className="text-sm font-semibold text-indigo-900">Recommended log files to upload</p>
-                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-indigo-950">
-                  <li>vCenter logs</li>
-                  <li>ESXi host logs / support bundle</li>
-                  <li>vmkernel.log</li>
-                  <li>vpxd.log</li>
-                  <li>Relevant datastore/network error logs (if available)</li>
+              <section className="rounded-2xl border border-indigo-300 bg-gradient-to-br from-indigo-50 to-blue-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-700">VMware log guidance</p>
+                <p className="mt-2 text-sm font-semibold text-indigo-950">
+                  Since you selected VMware, I recommend uploading these logs if you have them available.
+                </p>
+                <p className="mt-2 text-sm leading-6 text-indigo-900">
+                  Upload is optional. The live AI VMware expert can still help without logs, but may ask for specific
+                  files during the session if deeper triage is needed.
+                </p>
+                <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-indigo-950">
+                  <li>vCenter Server logs (for inventory, task, and event timeline context)</li>
+                  <li>ESXi host support bundle from impacted host(s)</li>
+                  <li><span className="font-medium">vmkernel.log</span> from affected host(s) for storage/network path issues</li>
+                  <li><span className="font-medium">vpxd.log</span> for vCenter management-plane errors</li>
+                  <li>Related datastore, VMFS, or vSAN/network error logs you already have on hand</li>
                 </ul>
+                <div className="mt-3 grid gap-2 text-xs text-indigo-900 md:grid-cols-2">
+                  <article className="rounded-xl border border-indigo-200 bg-white/80 px-3 py-2">
+                    <p className="font-semibold text-indigo-950">If uploaded now</p>
+                    <p className="mt-1 leading-5">These files are available in frontend live-session context for this walkthrough.</p>
+                  </article>
+                  <article className="rounded-xl border border-indigo-200 bg-white/80 px-3 py-2">
+                    <p className="font-semibold text-indigo-950">If uploaded later</p>
+                    <p className="mt-1 leading-5">The AI VMware expert can request exact logs during the live session.</p>
+                  </article>
+                </div>
                 <div className="mt-4">
                   <ExpertDeskLogUploadPanel
                     files={draft.uploadedLogFiles}
                     uploadSource="intake"
                     onAddFiles={(files) => onAddUploadedLogs(files)}
                     title="Attach VMware logs"
+                    helperNote="You can attach now or wait until live session. Either way, this remains optional."
                   />
                 </div>
               </section>

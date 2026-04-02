@@ -192,6 +192,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                 files={frontstageContext.uploadedLogFiles}
                 uploadSource="live-session"
                 title="Upload logs during live session"
+                helperNote="If logs were not uploaded in intake, add them here when the AI VMware expert asks for them."
                 onAddFiles={(files, source) => {
                   const updatedContext = addExpertDeskSessionLogFiles(sessionId, files, source);
                   if (updatedContext) {
