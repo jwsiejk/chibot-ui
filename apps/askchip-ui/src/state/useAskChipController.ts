@@ -108,6 +108,8 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
   const [wsNotice, setWsNotice] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
   const [invalidInitialSession, setInvalidInitialSession] = useState(false);
+  const terminalInvalidSessionRef = useRef<{ sessionId: string | null; message: string; } | null>(null);
+  const bootstrapStartedRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const activeVoiceTraceIdRef = useRef<string | null>(null);
@@ -146,7 +148,29 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
     return transcript;
   }, []);
 
+  const setInvalidSessionTerminalState = useCallback((sessionId: string | null, message: string) => {
+    terminalInvalidSessionRef.current = { sessionId, message };
+    setInvalidInitialSession(true);
+    clearReconnectTimer();
+    setConnectionState('disconnected');
+    setWsNotice(null);
+    localStorage.removeItem(STORAGE_KEY);
+    activeSessionIdRef.current = null;
+    setVoiceDraft(null);
+    const cleared = clearCurrentSessionState();
+    setCurrentSessionId(cleared.currentSessionId);
+    setMessages(cleared.messages);
+    setEvents(cleared.events);
+    setTimings(cleared.timings);
+    setTopLevelState(cleared.topLevelState);
+    setSessions((existing) => sortSessions(existing.filter((session) => session.id !== sessionId)));
+    setAppError(message);
+  }, [clearReconnectTimer]);
+
   const selectSession = useCallback(async (sessionId: string) => {
+    if (terminalInvalidSessionRef.current) {
+      return;
+    }
     const previousSessionId = activeSessionIdRef.current;
 
     activeSessionIdRef.current = sessionId;
@@ -158,19 +182,30 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
       await loadTranscript(sessionId);
       localStorage.setItem(STORAGE_KEY, sessionId);
     } catch (error) {
-      activeSessionIdRef.current = previousSessionId;
-      setCurrentSessionId(previousSessionId);
-      localStorage.removeItem(STORAGE_KEY);
+      const isSessionNotFound = error instanceof ApiError && error.status === 404;
+      if (isSessionNotFound) {
+        setInvalidSessionTerminalState(
+          sessionId,
+          `Session "${sessionId}" was not found or was deleted.`,
+        );
+      }
+      if (!isSessionNotFound) {
+        activeSessionIdRef.current = previousSessionId;
+        setCurrentSessionId(previousSessionId);
+        localStorage.removeItem(STORAGE_KEY);
+      }
 
       const message = error instanceof ApiError
         ? error.detail
         : error instanceof Error
           ? error.message
           : 'Failed to load session transcript.';
-      setAppError(message);
+      if (!isSessionNotFound) {
+        setAppError(message);
+      }
       throw error;
     }
-  }, [loadTranscript]);
+  }, [loadTranscript, setInvalidSessionTerminalState]);
 
   const getBootstrapErrorMessage = useCallback((error: unknown): string => {
     if (error instanceof BootstrapDependencyError) {
@@ -192,10 +227,13 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
   }, []);
 
   const bootstrap = useCallback(async () => {
+    if (bootstrapStartedRef.current || terminalInvalidSessionRef.current) {
+      return;
+    }
+    bootstrapStartedRef.current = true;
     try {
       setBootstrapping(true);
       setAppError(null);
-      setInvalidInitialSession(false);
       const { config: nextConfig, sessions: nextSessions, readiness: nextReadiness, readinessError: nextReadinessError } = await loadBootstrapShellData({
         getConfig: () => askChipApiClient.getConfig(),
         getReadiness: () => askChipApiClient.getReadiness(),
@@ -217,18 +255,10 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
       if (requestedInitialSessionId && !hasAppliedInitialSessionRef.current) {
         hasAppliedInitialSessionRef.current = true;
         if (!canUseRequestedInitialSessionId) {
-          localStorage.removeItem(STORAGE_KEY);
-          activeSessionIdRef.current = null;
-          const cleared = clearCurrentSessionState();
-          setCurrentSessionId(cleared.currentSessionId);
-          setMessages(cleared.messages);
-          setEvents(cleared.events);
-          setTimings(cleared.timings);
-          setTopLevelState(cleared.topLevelState);
-          setConnectionState('disconnected');
-          setWsNotice(null);
-          setInvalidInitialSession(true);
-          setAppError(`Session "${requestedInitialSessionId}" was not found. It may have been deleted.`);
+          setInvalidSessionTerminalState(
+            requestedInitialSessionId,
+            `Session "${requestedInitialSessionId}" was not found or was deleted.`,
+          );
           return;
         }
       }
@@ -250,9 +280,12 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
     } finally {
       setBootstrapping(false);
     }
-  }, [getBootstrapErrorMessage, loadSessions, requestedInitialSessionId, selectSession]);
+  }, [getBootstrapErrorMessage, loadSessions, requestedInitialSessionId, selectSession, setInvalidSessionTerminalState]);
 
   const scheduleReconnect = useCallback((notice: string) => {
+    if (terminalInvalidSessionRef.current) {
+      return;
+    }
     clearReconnectTimer();
     setConnectionState('disconnected');
     setWsNotice(notice);
@@ -379,6 +412,12 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
   }, [finalizeTrace, loadTranscript, markTrace]);
 
   useEffect(() => {
+    if (invalidInitialSession) {
+      clearReconnectTimer();
+      setConnectionState('disconnected');
+      setWsNotice(null);
+      return;
+    }
     if (currentSessionId === null) {
       clearReconnectTimer();
       setConnectionState('disconnected');
@@ -410,7 +449,7 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
       clearReconnectTimer();
       disconnect();
     };
-  }, [clearReconnectTimer, currentSessionId, handleEvent, reconnectKey, scheduleReconnect]);
+  }, [clearReconnectTimer, currentSessionId, handleEvent, invalidInitialSession, reconnectKey, scheduleReconnect]);
 
   const createSession = useCallback(async () => {
     const session = await askChipApiClient.createSession({ title: 'New chat' });
