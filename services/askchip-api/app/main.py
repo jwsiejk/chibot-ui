@@ -16,7 +16,7 @@ from app.api_models import (
     CreateTurnRequest,
     HealthResponse,
     ReadinessResponse,
-    RenameSessionRequest,
+    UpdateSessionRequest,
     TranscriptMessageResponse,
     TranscriptResponse,
 )
@@ -195,10 +195,30 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         return JSONResponse({'items': sessions})
 
     @app.patch('/api/v1/sessions/{session_id}')
-    def rename_session(session_id: str, request: RenameSessionRequest) -> JSONResponse:
-        updated = state.db.rename_session(session_id, request.title, datetime.now(timezone.utc).isoformat())
-        if updated is None:
+    def update_session(session_id: str, request: UpdateSessionRequest) -> JSONResponse:
+        current = state.db.get_session(session_id)
+        if current is None:
             raise HTTPException(status_code=404, detail='session not found')
+        updated = current
+        updated_at = datetime.now(timezone.utc).isoformat()
+        if request.title is not None:
+            updated = state.db.rename_session(session_id, request.title, updated_at)
+            if updated is None:
+                raise HTTPException(status_code=404, detail='session not found')
+        if request.metadata is not None:
+            state.db.update_session_state(
+                session_id,
+                status=updated.status,
+                updated_at=updated_at,
+                active_turn_id=updated.active_turn_id,
+                ready_at=updated.ready_at.isoformat() if updated.ready_at else None,
+                last_error_at=updated.last_error_at.isoformat() if updated.last_error_at else None,
+                metadata=request.metadata.model_dump(mode='json'),
+            )
+            refreshed = state.db.get_session(session_id)
+            if refreshed is None:
+                raise HTTPException(status_code=404, detail='session not found')
+            updated = refreshed
         return JSONResponse(updated.model_dump(mode='json'))
 
     @app.delete('/api/v1/sessions/{session_id}')

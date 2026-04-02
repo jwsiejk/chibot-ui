@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
 
@@ -20,6 +20,10 @@ class ExpertDeskSessionMetadata(BaseModel):
     issue_description: str
     architecture_notes: str
     error_text: str
+    uploaded_logs_count: int = 0
+    uploaded_log_names: list[str] = Field(default_factory=list)
+    uploaded_logs_available: bool = False
+    recommended_vmware_logs: list[str] = Field(default_factory=list)
 
 
 class CreateSessionMetadata(BaseModel):
@@ -31,8 +35,9 @@ class CreateSessionRequest(BaseModel):
     metadata: CreateSessionMetadata | None = None
 
 
-class RenameSessionRequest(BaseModel):
-    title: str
+class UpdateSessionRequest(BaseModel):
+    title: str | None = None
+    metadata: CreateSessionMetadata | None = None
 
 
 class CreateTurnRequest(BaseModel):

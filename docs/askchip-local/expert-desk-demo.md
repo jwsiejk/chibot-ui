@@ -202,6 +202,23 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Added a connected helper note in the live-session log upload panel so intake and live-session upload expectations remain consistent.
 - No contract-relevant transcript/session behavior changes were made in this phase.
 
+### Phase 17 — VMware live kickoff + runtime log-receipt awareness
+- VMware live-session prompting now includes explicit kickoff guidance for the **first AI VMware expert response**:
+  - acknowledge the issue professionally
+  - state whether logs were received
+  - offer to review now when logs are present
+  - recommend the same VMware log set when logs are absent
+- Prompt guidance is intentionally honest:
+  - runtime currently has uploaded file metadata only
+  - no parsed-log findings are claimed unless real parsed content exists.
+- Recommendation launch metadata now includes uploaded-log summary fields in `metadata.expert_desk`:
+  - `uploaded_logs_count`
+  - `uploaded_log_names`
+  - `uploaded_logs_available`
+  - optional `recommended_vmware_logs`
+- Live-session log uploads now update backend session-scoped `metadata.expert_desk` (via session patch), so later typed + voice turns can acknowledge newly received logs.
+- Canonical transcript contract remains unchanged (`text` stays canonical; no synthetic/system transcript rows were added).
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -258,6 +275,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - added graceful failure handling for missing/deleted sessions and context gaps
 - **2026-04-02 — Phase 10 final frontstage consolidation**
   - unified frontstage flow narrative and copy from landing through summary
+- **2026-04-02 — Phase 17 VMware runtime kickoff + log receipt metadata**
+  - added VMware-first kickoff guidance in runtime pre-briefing for first response behavior
+  - added backend Expert Desk metadata fields for uploaded-log summary and runtime-aware prompt context
+  - wired live-session upload flow to patch backend session metadata so later turns can acknowledge newly received logs
+  - kept behavior honest: metadata receipt only, no fake log parsing claims
   - added shared progress indicator across all frontstage flow stages
   - replaced ambiguous wrap-up CTA with **View summary and handoff** plus explicit no-backend-termination wording
   - rendered latest saved local handoff request note clearly in summary with frontend-local-only labeling

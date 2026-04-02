@@ -2,6 +2,7 @@ import type {
   ConfigResponse,
   ReadinessResponse,
   CreateSessionRequest,
+  UpdateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
   SessionRecord,
@@ -76,6 +77,13 @@ export class AskChipApiClient {
   async deleteSession(sessionId: string): Promise<{ status: string; session_id: string; }> {
     return this.request<{ status: string; session_id: string; }>(`/api/v1/sessions/${sessionId}`, {
       method: 'DELETE',
+    });
+  }
+
+  async updateSession(sessionId: string, payload: UpdateSessionRequest): Promise<SessionRecord> {
+    return this.request<SessionRecord>(`/api/v1/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     });
   }
 

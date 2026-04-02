@@ -115,6 +115,10 @@ export interface ExpertDeskSessionMetadata {
   issue_description: string;
   architecture_notes: string;
   error_text: string;
+  uploaded_logs_count: number;
+  uploaded_log_names: string[];
+  uploaded_logs_available: boolean;
+  recommended_vmware_logs?: string[];
 }
 
 export interface CreateSessionMetadata {
@@ -123,6 +127,13 @@ export interface CreateSessionMetadata {
 
 export interface CreateTurnRequest {
   text: string;
+}
+
+export interface UpdateSessionRequest {
+  title?: string;
+  metadata?: {
+    expert_desk?: Partial<ExpertDeskSessionMetadata> & Record<string, unknown>;
+  };
 }
 
 export interface CreateTurnResponse {
