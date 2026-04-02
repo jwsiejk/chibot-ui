@@ -52,7 +52,7 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - free-text issue description
 - Added optional architecture notes and error text capture areas.
 - Intake persistence now uses frontend `sessionStorage` (browser session scope) through a dedicated frontstage demo-state layer; no backend handoff is implied.
-- Added explicit saved-state feedback and a clear “ready for recommendation/routing” affordance that points to the Phase 7 handoff stub.
+- Added explicit saved-state feedback and a clear “ready for recommendation/routing” affordance that points to the Phase 7 handoff placeholder.
 
 ### Phase 7 — recommendation + route decision
 - Implemented a real deterministic recommendation engine driven by saved intake fields (`issueCategory`, `environmentPlatform`, `urgency`, `preferredExpertType`, `contactPreference`, `issueDescription`, and optional notes/error text).
@@ -184,6 +184,10 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - replaced ambiguous wrap-up CTA with **View summary and handoff** plus explicit no-backend-termination wording
   - rendered latest saved local handoff request note clearly in summary with frontend-local-only labeling
   - finalized walkthrough guidance for repeatable demo delivery
+- **2026-04-02 — Recommendation view naming cleanup**
+  - renamed the implemented recommendation screen component/file from `ExpertDeskRecommendationStubView` to `ExpertDeskRecommendationView`
+  - updated app route import/usage references to match and removed stale "stub" identifier wording
+  - no runtime, routing, UI, transcript, or session contract behavior changes
 
 ---
 

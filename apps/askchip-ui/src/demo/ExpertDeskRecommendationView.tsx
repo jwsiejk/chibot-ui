@@ -20,7 +20,7 @@ type ExpertDeskRecommendationViewProps = {
   readyForRecommendation: boolean;
 };
 
-export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation }: ExpertDeskRecommendationViewProps) {
+export function ExpertDeskRecommendationView({ draft, readyForRecommendation }: ExpertDeskRecommendationViewProps) {
   const [launching, setLaunching] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const recommendation = useMemo(() => buildExpertDeskRecommendation(draft), [draft]);

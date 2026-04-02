@@ -1,6 +1,6 @@
 import { ExpertDeskIntakeView } from './demo/ExpertDeskIntakeView';
 import { ExpertDeskLandingView } from './demo/ExpertDeskLandingView';
-import { ExpertDeskRecommendationStubView } from './demo/ExpertDeskRecommendationStubView';
+import { ExpertDeskRecommendationView } from './demo/ExpertDeskRecommendationView';
 import { ExpertDeskSummaryView } from './demo/ExpertDeskSummaryView';
 import { useExpertDeskDemoState } from './demo/useExpertDeskDemoState';
 import { resolveAppRoute } from './routing';
@@ -33,7 +33,7 @@ function App() {
   }
 
   if (route.kind === 'demo-recommendation') {
-    return <ExpertDeskRecommendationStubView draft={intakeDraft} readyForRecommendation={readyForRecommendation} />;
+    return <ExpertDeskRecommendationView draft={intakeDraft} readyForRecommendation={readyForRecommendation} />;
   }
 
   if (route.kind === 'demo-summary') {
