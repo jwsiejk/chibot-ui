@@ -16,6 +16,25 @@ export interface BootstrapShellDataResult {
   readinessError: string | null;
 }
 
+export type BootstrapDependency = 'config' | 'sessions' | 'readiness';
+
+export class BootstrapDependencyError extends Error {
+  dependency: BootstrapDependency;
+
+  constructor(dependency: BootstrapDependency, detail: string) {
+    super(detail);
+    this.name = 'BootstrapDependencyError';
+    this.dependency = dependency;
+  }
+}
+
+function toDependencyError(dependency: BootstrapDependency, fallbackMessage: string, reason: unknown): BootstrapDependencyError {
+  if (reason instanceof Error && reason.message.trim()) {
+    return new BootstrapDependencyError(dependency, reason.message);
+  }
+  return new BootstrapDependencyError(dependency, fallbackMessage);
+}
+
 export function isReadinessSettled(readiness: ReadinessResponse | null): boolean {
   if (!readiness) {
     return true;
@@ -34,11 +53,11 @@ export async function loadBootstrapShellData(deps: BootstrapShellDataDependencie
   ]);
 
   if (config.status !== 'fulfilled') {
-    throw config.reason;
+    throw toDependencyError('config', 'Failed to load AskChip config.', config.reason);
   }
 
   if (sessions.status !== 'fulfilled') {
-    throw sessions.reason;
+    throw toDependencyError('sessions', 'Failed to load sessions.', sessions.reason);
   }
 
   if (readinessResult.status === 'fulfilled') {
@@ -54,7 +73,7 @@ export async function loadBootstrapShellData(deps: BootstrapShellDataDependencie
     config: config.value,
     sessions: sessions.value,
     readiness: null,
-    readinessError: readinessResult.reason instanceof Error ? readinessResult.reason.message : 'Failed to load readiness diagnostics.',
+    readinessError: toDependencyError('readiness', 'Failed to load readiness diagnostics.', readinessResult.reason).message,
   };
 }
 

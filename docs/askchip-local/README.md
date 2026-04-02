@@ -100,6 +100,8 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - Typed submit and push-to-talk press explicitly stop active assistant playback before the next turn starts. Merely typing in the composer does not interrupt playback.
 - This still uses plain-text Kokoro TTS only. It does not add SSML or injected laugh/chuckle audio clips, and it does not increase `ASKCHIP_TTS_SPEED`.
 - Visual Session is now in an interview-ready polish pass with improved header/stage/toolbar/drawer treatment while retaining the existing shared runtime and chat architecture.
+- Visual Session bootstrap now fails fast for invalid/deleted `/visual-session/:sessionId` routes and shows a terminal unavailable state instead of hanging on "Loading session context…".
+- Bootstrap dependency reads (`/config`, `/readiness`, `/sessions`, transcript load) now use frontend request timeouts and surface explicit dependency-specific errors to the user.
 - Frontstage Expert Desk demo routes are available at `/demo` (landing), `/demo/intake` (structured intake persisted in frontend `sessionStorage` only), and `/demo/recommendation` (deterministic recommendation/routing with a real live-session launch CTA).
 - Frontstage recommendation launch now sends an optional typed `metadata.expert_desk` payload during session creation so Expert Desk intake/recommendation context is persisted on the backend session record before the first live turn.
 - Frontstage recommendation now hands off canonical expert persona routing fields (`expert_persona_id`, `expert_persona_label`, optional `expert_persona_summary`) end-to-end so backend live runtime applies the intended specialist overlay deterministically.

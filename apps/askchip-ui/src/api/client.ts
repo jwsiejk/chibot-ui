@@ -21,6 +21,15 @@ export class ApiError extends Error {
   }
 }
 
+export class ApiTimeoutError extends ApiError {
+  constructor(detail: string) {
+    super(408, detail);
+    this.name = 'ApiTimeoutError';
+  }
+}
+
+const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 8000;
+
 export class AskChipApiClient {
   readonly baseUrl: string;
 
@@ -29,15 +38,24 @@ export class AskChipApiClient {
   }
 
   async getConfig(): Promise<ConfigResponse> {
-    return this.request<ConfigResponse>('/api/v1/config');
+    return this.request<ConfigResponse>('/api/v1/config', {
+      timeoutMs: DEFAULT_BOOTSTRAP_TIMEOUT_MS,
+      timeoutMessage: 'Config request timed out while loading AskChip.',
+    });
   }
 
   async getReadiness(): Promise<ReadinessResponse> {
-    return this.request<ReadinessResponse>('/api/v1/readiness');
+    return this.request<ReadinessResponse>('/api/v1/readiness', {
+      timeoutMs: DEFAULT_BOOTSTRAP_TIMEOUT_MS,
+      timeoutMessage: 'Readiness request timed out while loading AskChip.',
+    });
   }
 
   async listSessions(): Promise<SessionRecord[]> {
-    const response = await this.request<SessionsResponse>('/api/v1/sessions');
+    const response = await this.request<SessionsResponse>('/api/v1/sessions', {
+      timeoutMs: DEFAULT_BOOTSTRAP_TIMEOUT_MS,
+      timeoutMessage: 'Sessions request timed out while loading AskChip.',
+    });
     return response.items;
   }
 
@@ -49,7 +67,10 @@ export class AskChipApiClient {
   }
 
   async getTranscript(sessionId: string): Promise<TranscriptResponse> {
-    return this.request<TranscriptResponse>(`/api/v1/sessions/${sessionId}/transcript`);
+    return this.request<TranscriptResponse>(`/api/v1/sessions/${sessionId}/transcript`, {
+      timeoutMs: DEFAULT_BOOTSTRAP_TIMEOUT_MS,
+      timeoutMessage: 'Transcript request timed out while loading the selected session.',
+    });
   }
 
   async deleteSession(sessionId: string): Promise<{ status: string; session_id: string; }> {
@@ -145,16 +166,41 @@ export class AskChipApiClient {
     return fallbackDetail;
   }
 
-  private async request<T>(path: string, init?: RequestInit & { isJsonRequest?: boolean }): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: init?.isJsonRequest === false
-        ? init?.headers
-        : {
-            'Content-Type': 'application/json',
-            ...(init?.headers ?? {}),
-          },
-    });
+  private async request<T>(path: string, init?: RequestInit & { isJsonRequest?: boolean; timeoutMs?: number; timeoutMessage?: string }): Promise<T> {
+    const timeoutMs = init?.timeoutMs;
+    const timeoutMessage = init?.timeoutMessage ?? 'Request timed out.';
+    const controller = timeoutMs ? new AbortController() : null;
+    const timerId = timeoutMs
+      ? setTimeout(() => {
+          controller?.abort();
+        }, timeoutMs)
+      : null;
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        signal: init?.signal ?? controller?.signal,
+        headers: init?.isJsonRequest === false
+          ? init?.headers
+          : {
+              'Content-Type': 'application/json',
+              ...(init?.headers ?? {}),
+            },
+      });
+    } catch (error) {
+      if (timerId !== null) {
+        clearTimeout(timerId);
+      }
+      if (error instanceof DOMException && error.name === 'AbortError' && timeoutMs) {
+        throw new ApiTimeoutError(timeoutMessage);
+      }
+      throw error;
+    }
+
+    if (timerId !== null) {
+      clearTimeout(timerId);
+    }
 
     if (!response.ok) {
       throw new ApiError(response.status, await this.getErrorDetail(response, `Request failed with status ${response.status}`));

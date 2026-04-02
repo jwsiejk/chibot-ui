@@ -160,6 +160,16 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Backend prompt overlay selection now keys on canonical persona id first, with legacy prose-label fallback for backwards compatibility with older saved sessions.
 - Frontstage launch metadata and runtime pre-briefing continue to preserve existing transcript/turn contracts unchanged.
 
+### Phase 14 — visual-session bootstrap failure hardening
+- Visual-session bootstrap now exits quickly when a requested route session id is missing/deleted and renders the existing terminal **Session unavailable** state instead of remaining in loading bootstrap.
+- Invalid initial session-id failure now suppresses readiness polling so frontend bootstrap does not keep churning on config/readiness/sessions requests in that terminal case.
+- Bootstrap dependency fetches now include frontend timeout guards with honest user-facing error messaging for:
+  - config load timeout/failure
+  - readiness timeout/failure
+  - sessions list timeout/failure
+  - transcript load timeout/failure
+- Successful bootstrap behavior for valid sessions remains unchanged, and transcript + turn-submit contract shapes remain intact.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -239,6 +249,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - aligned intake/recommendation output and session metadata handoff with real backend specialist overlays
   - updated backend prompt overlay selection to use canonical persona id first with legacy label fallback safety
   - preserved transcript contract, `CreateTurnRequest`, and non-Expert-Desk/general session behavior
+- **2026-04-02 — Phase 14 visual-session bootstrap failure hardening**
+  - added fail-fast handling for deleted/nonexistent visual-session ids so loading bootstrap does not hang
+  - stopped readiness-poller churn for terminal invalid-session bootstrap failures
+  - added API timeout handling for bootstrap dependency reads (config/readiness/sessions/transcript) with explicit dependency-specific user-facing errors
+  - preserved valid-session bootstrap path plus canonical transcript and turn-submit contract shapes
 
 ---
 

@@ -15,7 +15,7 @@ import {
   MAX_RECENT_TIMINGS,
   type VoiceDraftState,
 } from './controllerHelpers';
-import { createReadinessPoller, isReadinessSettled, loadBootstrapShellData } from './readinessPolling';
+import { BootstrapDependencyError, createReadinessPoller, isReadinessSettled, loadBootstrapShellData } from './readinessPolling';
 import type {
   AskChipEvent,
   ConfigResponse,
@@ -107,6 +107,7 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
   const [turnLatencySummaries, setTurnLatencySummaries] = useState<Array<Record<string, unknown>>>([]);
   const [wsNotice, setWsNotice] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
+  const [invalidInitialSession, setInvalidInitialSession] = useState(false);
   const reconnectTimerRef = useRef<number | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const activeVoiceTraceIdRef = useRef<string | null>(null);
@@ -147,11 +148,6 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
 
   const selectSession = useCallback(async (sessionId: string) => {
     const previousSessionId = activeSessionIdRef.current;
-    const previousMessages = messages;
-    const previousEvents = events;
-    const previousTimings = timings;
-    const previousTopLevelState = topLevelState;
-    const previousAppError = appError;
 
     activeSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
@@ -164,10 +160,6 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
     } catch (error) {
       activeSessionIdRef.current = previousSessionId;
       setCurrentSessionId(previousSessionId);
-      setMessages(previousMessages);
-      setEvents(previousEvents);
-      setTimings(previousTimings);
-      setTopLevelState(previousTopLevelState);
       localStorage.removeItem(STORAGE_KEY);
 
       const message = error instanceof ApiError
@@ -175,15 +167,35 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
         : error instanceof Error
           ? error.message
           : 'Failed to load session transcript.';
-      setAppError(previousAppError ?? message);
+      setAppError(message);
       throw error;
     }
-  }, [appError, events, loadTranscript, messages, timings, topLevelState]);
+  }, [loadTranscript]);
+
+  const getBootstrapErrorMessage = useCallback((error: unknown): string => {
+    if (error instanceof BootstrapDependencyError) {
+      if (error.dependency === 'config') {
+        return `Unable to load AskChip config. ${error.message}`;
+      }
+      if (error.dependency === 'sessions') {
+        return `Unable to load sessions list. ${error.message}`;
+      }
+      return `Unable to load readiness diagnostics. ${error.message}`;
+    }
+    if (error instanceof ApiError) {
+      return error.detail;
+    }
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return 'Unable to reach AskChip API.';
+  }, []);
 
   const bootstrap = useCallback(async () => {
     try {
       setBootstrapping(true);
       setAppError(null);
+      setInvalidInitialSession(false);
       const { config: nextConfig, sessions: nextSessions, readiness: nextReadiness, readinessError: nextReadinessError } = await loadBootstrapShellData({
         getConfig: () => askChipApiClient.getConfig(),
         getReadiness: () => askChipApiClient.getReadiness(),
@@ -215,6 +227,7 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
           setTopLevelState(cleared.topLevelState);
           setConnectionState('disconnected');
           setWsNotice(null);
+          setInvalidInitialSession(true);
           setAppError(`Session "${requestedInitialSessionId}" was not found. It may have been deleted.`);
           return;
         }
@@ -233,12 +246,11 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
         setTopLevelState(cleared.topLevelState);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to reach AskChip API.';
-      setAppError(message);
+      setAppError(getBootstrapErrorMessage(error));
     } finally {
       setBootstrapping(false);
     }
-  }, [loadSessions, requestedInitialSessionId, selectSession]);
+  }, [getBootstrapErrorMessage, loadSessions, requestedInitialSessionId, selectSession]);
 
   const scheduleReconnect = useCallback((notice: string) => {
     clearReconnectTimer();
@@ -277,6 +289,10 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
 
 
   useEffect(() => {
+    if (invalidInitialSession) {
+      return;
+    }
+
     if (!readinessError && (!readiness || isReadinessSettled(readiness))) {
       return;
     }
@@ -296,7 +312,7 @@ export function useAskChipController({ initialSessionId = null }: AskChipControl
     return () => {
       poller.stop();
     };
-  }, [readiness, readinessError]);
+  }, [invalidInitialSession, readiness, readinessError]);
 
   const handleEvent = useCallback((event: AskChipEvent) => {
     const traceId = eventTraceId(event);
