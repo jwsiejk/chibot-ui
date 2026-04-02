@@ -129,6 +129,22 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Backend session creation now accepts and persists that optional Expert Desk metadata on the real session record, while preserving title-only session creation compatibility.
 - This phase intentionally does **not** change transcript message shape, turn-submit contract, or runtime prompting behavior; it only establishes pre-turn, session-scoped context persistence for future runtime pre-briefing.
 
+### Phase 12 — live runtime expert pre-briefing (typed + voice)
+- Turn handling now loads current backend session metadata during committed-input processing and passes it into prompt assembly for both typed and voice turns.
+- Prompt assembly now prepends compact system-context pre-brief blocks for Expert Desk sessions before transcript history and before the current user turn, including:
+  - selected expert persona
+  - intake issue category/environment/urgency/description
+  - optional architecture notes and error text
+  - recommended path and session-linked routing context
+- Added production-ready expert persona overlays for:
+  - AI VMware Engineer
+  - AI AWS Engineer
+  - AI Backup / Recovery Engineer
+  - AI Data Center Engineer
+  - General infrastructure fallback
+- Marlene is now explicitly used for non-Expert-Desk/general sessions; Expert Desk sessions use base Expert Desk instructions + persona overlay model.
+- Canonical transcript contract remains unchanged (`text` is canonical, no synthetic transcript rows).
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -198,6 +214,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - extended backend session-create API model/path to accept and persist optional Expert Desk session metadata
   - preserved backward compatibility for existing title-only session creation and backstage shell behavior
   - kept transcript contract and turn-submit contract unchanged (no prompt/runtime behavior changes yet)
+- **2026-04-02 — Phase 12 live expert runtime pre-briefing**
+  - wired typed + voice turn runtime to read backend session-scoped Expert Desk metadata during real turn handling
+  - expanded prompt assembly to prepend Expert Desk persona + intake/session pre-brief system context before transcript/current user input
+  - added concrete expert persona overlays (VMware, AWS, Backup/Recovery, Data Center, general fallback)
+  - made Marlene path explicit for non-Expert-Desk sessions while preserving canonical transcript contract and turn API shape
 
 ---
 
