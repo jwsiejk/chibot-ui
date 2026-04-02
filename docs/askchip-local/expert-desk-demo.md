@@ -219,6 +219,20 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Live-session log uploads now update backend session-scoped `metadata.expert_desk` (via session patch), so later typed + voice turns can acknowledge newly received logs.
 - Canonical transcript contract remains unchanged (`text` stays canonical; no synthetic/system transcript rows were added).
 
+### Phase 18 — VMware live follow-through conversation tuning
+- Tuned VMware-only live runtime guidance after kickoff to feel more like an experienced VMware engineer in an active troubleshooting session.
+- Added explicit post-kickoff behavior guardrails for VMware persona responses:
+  - ask one focused next question at a time
+  - keep responses shorter by default
+  - provide one or two likely issue paths
+  - provide one or two practical verification steps
+  - avoid long lecture/policy-style responses
+- Strengthened honesty language for metadata-only log receipt:
+  - if uploaded file metadata is present but parsed content is not, the assistant must say logs were received but not parsed yet
+  - the assistant may state what it would check next, but must not claim parsed-log findings.
+- Typed and voice runtime alignment is preserved because both continue to use the same backend turn prompt assembly path.
+- No transcript shape, session-state contract, or WebRTC scope changes were introduced in this phase.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -244,6 +258,10 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 
 ## Progress log
 
+- **2026-04-02 — Phase 18 VMware live follow-through tuning**
+  - tuned VMware post-kickoff runtime guidance for shorter, conversational engineer-style troubleshooting
+  - added explicit one-question-at-a-time plus likely-path/verification-step guidance for live follow-up turns
+  - reinforced metadata-only log honesty language to prevent fake parsed-log conclusions
 - **2026-04-01 — Phase 5 visual polish + doc foundation**
   - polished Visual Session header/stage/toolbar/drawer behavior
   - added assistant display name configuration in runtime config
