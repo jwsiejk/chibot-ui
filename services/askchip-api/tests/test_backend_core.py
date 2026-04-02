@@ -317,6 +317,104 @@ def test_turns_do_not_inject_qwen_think_control_message(tmp_path: Path) -> None:
     assert '/think' not in contents
 
 
+def test_typed_turn_prompt_preface_includes_expert_desk_metadata(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Got it.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Expert session',
+                'metadata': {
+                    'expert_desk': {
+                        'issue_category': 'Backup failure',
+                        'environment_platform': 'AWS',
+                        'urgency': 'Critical',
+                        'issue_description': 'Nightly snapshot job failed.',
+                        'architecture_notes': 'Cross-region backups enabled.',
+                        'error_text': 'AccessDenied on backup vault',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona': 'AI AWS Engineer',
+                        'request_label': 'Case A-1',
+                        'preferred_expert_type': 'Cloud',
+                        'recommended_expert_type': 'Cloud',
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'How do we stabilize this?'})
+
+    assert turn.status_code == 201
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+    system_messages = [message for message in payload['messages'] if message['role'] == 'system']
+    assert len(system_messages) >= 3
+    assert 'AI AWS Engineer' in system_messages[1]['content']
+    assert 'issue category: Backup failure' in system_messages[2]['content']
+    assert 'environment/platform: AWS' in system_messages[2]['content']
+    assert 'urgency: Critical' in system_messages[2]['content']
+    assert 'issue description: Nightly snapshot job failed.' in system_messages[2]['content']
+    assert 'architecture notes: Cross-region backups enabled.' in system_messages[2]['content']
+    assert 'error text: AccessDenied on backup vault' in system_messages[2]['content']
+    assert 'recommended path: continue_with_ai_now' in system_messages[2]['content']
+
+
+def test_voice_turn_prompt_preface_includes_expert_desk_metadata(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Starting triage now.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), stt_service=FakeSttService(text='voice question'))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Expert voice session',
+                'metadata': {
+                    'expert_desk': {
+                        'issue_category': 'Replication lag',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'issue_description': 'Replication queue is growing.',
+                        'recommended_path': 'launch_live_session_now',
+                        'expert_persona': 'AI VMware Engineer',
+                        'request_label': 'Case V-2',
+                        'preferred_expert_type': 'Virtualization',
+                        'recommended_expert_type': 'Virtualization',
+                        'architecture_notes': '',
+                        'error_text': '',
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        start = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        voice = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'content-type': 'audio/webm'},
+        )
+
+    assert start.status_code == 200
+    assert voice.status_code == 201
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+    system_messages = [message for message in payload['messages'] if message['role'] == 'system']
+    assert len(system_messages) >= 3
+    assert 'AI VMware Engineer' in system_messages[1]['content']
+    assert 'issue category: Replication lag' in system_messages[2]['content']
+    assert 'environment/platform: VMware' in system_messages[2]['content']
+    assert 'recommended path: launch_live_session_now' in system_messages[2]['content']
+
+
 def test_manual_think_token_is_treated_as_plain_text(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
@@ -630,7 +728,7 @@ def test_prompt_assembler_adds_persona_and_recent_window() -> None:
     ]
     messages = assembler.build_messages(transcript, user_text='new question')
 
-    assert messages[0].role == 'user'
+    assert messages[0].role == 'system'
     assert 'You are Marlene inside AskChip Local, a woman' in messages[0].text
     assert 'refer to yourself with she/her pronouns' in messages[0].text
     assert 'Never describe yourself as a man, male, guy, or with any other male self-reference' in messages[0].text
@@ -659,7 +757,63 @@ def test_prompt_assembler_keeps_canonical_transcript_user_text_plain() -> None:
     messages = assembler.build_messages(transcript, user_text='fresh plain input')
 
     user_entries = [message.text for message in messages if message.role == 'user']
-    assert user_entries == [messages[0].text, 'plain prior text', 'fresh plain input']
+    assert user_entries == ['plain prior text', 'fresh plain input']
+
+
+def test_prompt_assembler_uses_expert_desk_preface_and_persona_overlay() -> None:
+    assembler = PromptAssembler(transcript_window=2)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', text='prior question', turn_id='t1', source='typed_input'),
+    ]
+    session_metadata = {
+        'expert_desk': {
+            'issue_category': 'Storage outage',
+            'environment_platform': 'VMware vSphere',
+            'urgency': 'High',
+            'issue_description': 'Datastore latency spiked and VMs froze.',
+            'architecture_notes': 'Two clusters with shared SAN replication.',
+            'error_text': 'APD timeout on host 03',
+            'recommended_path': 'launch_live_session_now',
+            'expert_persona': 'AI VMware Engineer',
+            'request_label': 'Case 204',
+            'recommended_expert_type': 'Virtualization',
+            'preferred_expert_type': 'Virtualization',
+        }
+    }
+
+    messages = assembler.build_messages(
+        transcript,
+        user_text='What should we do first?',
+        session_metadata=session_metadata,
+    )
+
+    assert messages[0].role == 'system'
+    assert 'You are AskChip Expert Desk' in messages[0].text
+    assert messages[1].role == 'system'
+    assert 'AI VMware Engineer' in messages[1].text
+    assert messages[2].role == 'system'
+    assert 'issue category: Storage outage' in messages[2].text
+    assert 'environment/platform: VMware vSphere' in messages[2].text
+    assert 'urgency: High' in messages[2].text
+    assert 'issue description: Datastore latency spiked and VMs froze.' in messages[2].text
+    assert 'recommended path: launch_live_session_now' in messages[2].text
+    assert 'architecture notes: Two clusters with shared SAN replication.' in messages[2].text
+    assert 'error text: APD timeout on host 03' in messages[2].text
+    assert messages[-1].text == 'What should we do first?'
+
+
+def test_prompt_assembler_uses_general_expert_fallback_overlay() -> None:
+    assembler = PromptAssembler()
+    messages = assembler.build_messages(
+        transcript=[],
+        user_text='help',
+        session_metadata={'expert_desk': {'expert_persona': 'AI Quantum Datacenter Wizard'}},
+    )
+
+    assert messages[1].role == 'system'
+    assert 'General Infrastructure Expert Engineer' in messages[1].text
 
 
 def test_thinking_filter_strips_unmatched_close_tag() -> None:

@@ -24,6 +24,7 @@ The only allowed top-level states are:
 - `POST /api/v1/sessions` may include an optional typed `metadata` object.
 - For Expert Desk frontstage handoff, session creation may include `metadata.expert_desk` as session-scoped pre-brief context.
 - This metadata is stored on the session record and is available before the first assistant turn.
+- During live turn runtime, AskChip may use session-scoped `metadata.expert_desk` as prompt preface/system-context pre-briefing before transcript history and current user turn (typed and voice paths), without changing stored transcript message shape.
 - Canonical transcript rules remain unchanged: transcript messages still use `text` (never `content`), with `role` as speaker identity and `source` as origin semantics.
 - `CreateTurnRequest` and transcript message shape are unchanged.
 

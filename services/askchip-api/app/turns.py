@@ -106,10 +106,12 @@ class TurnManager:
             )
             self.db.create_message(assistant_message)
 
+            current_session = self.db.get_session(session.id) or session
             transcript = self.db.list_messages(session.id)
             prompt_messages = self.prompt_assembler.build_messages(
                 transcript=transcript,
                 user_text=user_text,
+                session_metadata=current_session.metadata,
             )
             prompt_event = EventRecord(
                 session_id=session.id,
