@@ -13,6 +13,7 @@ const SESSION_CONTEXT_MAX_AGE_MS = 1000 * 60 * 60 * 12;
 type SessionContextRecord = {
   context: ExpertDeskSessionContext;
   storedAt: string;
+  localHandoffRequest: ExpertDeskLocalHandoffRequest | null;
 };
 
 type SessionContextStorage = Record<string, SessionContextRecord>;
@@ -29,6 +30,14 @@ export type ExpertDeskSessionContext = {
   escalationNote: string;
   retrievedCaseContext: string[];
   sourceNote: string;
+};
+
+export type ExpertDeskLocalHandoffRequestType = 'human-escalation' | 'follow-up-session';
+
+export type ExpertDeskLocalHandoffRequest = {
+  type: ExpertDeskLocalHandoffRequestType;
+  note: string;
+  updatedAt: string;
 };
 
 function isExpired(storedAt: string): boolean {
@@ -88,6 +97,7 @@ export function saveExpertDeskSessionContext(sessionId: string, context: ExpertD
   nextStorage[sessionId] = {
     context,
     storedAt: new Date().toISOString(),
+    localHandoffRequest: storage[sessionId]?.localHandoffRequest ?? null,
   };
 
   writeStorage(nextStorage);
@@ -108,6 +118,45 @@ export function getExpertDeskSessionContext(sessionId: string): ExpertDeskSessio
   }
 
   return record.context;
+}
+
+export function getExpertDeskLocalHandoffRequest(sessionId: string): ExpertDeskLocalHandoffRequest | null {
+  const storage = readStorage();
+  const record = storage[sessionId];
+
+  if (!record) {
+    return null;
+  }
+
+  if (isExpired(record.storedAt)) {
+    delete storage[sessionId];
+    writeStorage(storage);
+    return null;
+  }
+
+  return record.localHandoffRequest ?? null;
+}
+
+export function saveExpertDeskLocalHandoffRequest(
+  sessionId: string,
+  request: ExpertDeskLocalHandoffRequest,
+  fallbackContext: ExpertDeskSessionContext,
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const storage = readStorage();
+  const existing = storage[sessionId];
+  const context = existing?.context ?? fallbackContext;
+
+  storage[sessionId] = {
+    context,
+    localHandoffRequest: request,
+    storedAt: new Date().toISOString(),
+  };
+
+  writeStorage(storage);
 }
 
 function buildLikelyTopicHint(draft: ExpertDeskIntakeDraft, recommendation: ExpertDeskRecommendation): string {

@@ -17,6 +17,7 @@ The current demo framing is:
 - `/demo` — Expert Desk landing screen for concept framing and handoff into intake.
 - `/demo/intake` — structured intake flow for issue capture and expert routing setup.
 - `/demo/recommendation` — deterministic recommendation and routing screen based on saved intake fields.
+- `/demo/summary/:sessionId` — post-session handoff summary resolved by session id.
 
 All frontstage routes run in frontend demo mode and do **not** claim backend intake, CRM, calendar, or queue-engine integration.
 
@@ -84,16 +85,31 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
   - escalation note
 - Intake “ready for recommendation” logic now requires **current valid intake fields + saved state**, so stale ready status no longer persists after fields become invalid.
 
+### Phase 9 — post-session summary / handoff closeout
+- Added a dedicated frontstage summary route: `/demo/summary/:sessionId`.
+- Added a deliberate transition from live visual session to summary via **End session and view summary** (no automatic redirect).
+- Summary data assembly now combines:
+  - actual session + transcript data loaded from the real local API (`GET /api/v1/sessions/:sessionId/transcript`)
+  - optional session-linked Expert Desk context loaded by session id from frontend `sessionStorage`
+- Summary now presents:
+  - issue summary
+  - key captured context
+  - actions taken explicitly labeled as **derived from transcript/session data**
+  - recommended next steps and escalation note
+  - transcript follow-up affordance back to the same `/visual-session/:sessionId`
+  - optional local-only next-step request capture (follow-up session or human escalation) saved in frontend session storage only
+- Missing-data handling:
+  - if transcript/session loads but no Expert Desk context exists, summary falls back to honest session-derived framing
+  - if session id is invalid/deleted, summary shows a user-facing unavailable message with recovery links
+
 
 ## Remaining planned phases
 
 > This sequence is intentionally high-level and may be updated as implementation proceeds.
 
-1. **Guided flow scaffolds**
-   - add structured panels/cards for routed tasks while preserving transcript authority
-2. **Demo narrative instrumentation**
+1. **Demo narrative instrumentation**
    - add lightweight event and progress indicators for live walkthroughs
-3. **Stabilization + handoff packaging**
+2. **Stabilization + handoff packaging**
    - polish copy/motion/accessibility and freeze a repeatable demo path
 
 ## Progress log
@@ -121,6 +137,12 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
   - rendered Expert Desk context strip and Expert Assist rail in Visual Session while keeping assistant stage as the focal point
   - fixed readiness gating so recommendation readiness reflects current valid intake fields instead of historical save alone
   - kept runtime/transcript contract intact with no backend integration claims
+- **2026-04-02 — Phase 9 summary / handoff closeout route**
+  - added `/demo/summary/:sessionId` with session-id-based transcript/context resolution
+  - added deliberate wrap-up CTA in live visual session: **End session and view summary**
+  - assembled summary using real session/transcript data plus optional session-linked Expert Desk context
+  - added local-only follow-up/escalation request capture persisted to frontend session storage (explicitly non-integrated)
+  - added graceful failure handling for missing/deleted sessions and context gaps
 
 ---
 
@@ -132,3 +154,4 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
 - Recommendation routing is deterministic and frontend-local; it is not a machine-learned policy engine.
 - Follow-up “scheduling preference” capture on `/demo/recommendation` is not persisted and does not integrate with real calendar/queue services.
 - Session-linked frontstage context for Visual Session is frontend-local (`sessionStorage`) and browser-session scoped; it is not persisted to backend systems or shared across browsers/devices.
+- Summary handoff requests (follow-up/escalation) are frontend-local (`sessionStorage`) by session id and are not sent to backend CRM, scheduling, or ticketing systems.

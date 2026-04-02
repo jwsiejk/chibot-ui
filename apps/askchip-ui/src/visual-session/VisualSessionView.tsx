@@ -3,6 +3,7 @@ import { ChatPanel } from '../chat/ChatPanel';
 import { runtimeConfig } from '../config/runtime';
 import { getExpertDeskSessionContext } from '../demo/expertDeskSessionContext';
 import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
+import { getDemoSummaryRoute } from '../routing';
 import { VisualSessionStage } from './VisualSessionStage';
 import { VisualSessionToolbar } from './VisualSessionToolbar';
 
@@ -104,8 +105,16 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
               <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200/80">AskChip visual session</p>
               <h1 className="mt-1 text-xl font-semibold text-white">{state.currentSession?.title ?? `Session ${sessionId}`}</h1>
             </div>
-            <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs uppercase tracking-[0.16em] text-slate-300">
-              {assistantName} · {state.topLevelState ?? 'ready'}
+            <div className="flex items-center gap-2">
+              <a
+                href={getDemoSummaryRoute(sessionId)}
+                className="inline-flex rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-cyan-100 transition hover:border-cyan-200/70 hover:bg-cyan-300/20"
+              >
+                End session and view summary
+              </a>
+              <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs uppercase tracking-[0.16em] text-slate-300">
+                {assistantName} · {state.topLevelState ?? 'ready'}
+              </div>
             </div>
           </div>
           <p className="mt-2 text-sm text-slate-300">Live specialist engagement surface with shared transcript + voice runtime.</p>
