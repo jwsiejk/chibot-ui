@@ -339,7 +339,9 @@ def test_typed_turn_prompt_preface_includes_expert_desk_metadata(tmp_path: Path)
                         'architecture_notes': 'Cross-region backups enabled.',
                         'error_text': 'AccessDenied on backup vault',
                         'recommended_path': 'continue_with_ai_now',
-                        'expert_persona': 'AI AWS Engineer',
+                        'expert_persona_id': 'ai-aws-engineer',
+                        'expert_persona_label': 'AI AWS Engineer',
+                        'expert_persona_summary': 'AWS specialist summary',
                         'request_label': 'Case A-1',
                         'preferred_expert_type': 'Cloud',
                         'recommended_expert_type': 'Cloud',
@@ -356,6 +358,7 @@ def test_typed_turn_prompt_preface_includes_expert_desk_metadata(tmp_path: Path)
     system_messages = [message for message in payload['messages'] if message['role'] == 'system']
     assert len(system_messages) >= 3
     assert 'AI AWS Engineer' in system_messages[1]['content']
+    assert 'selected expert persona id: ai-aws-engineer' in system_messages[2]['content']
     assert 'issue category: Backup failure' in system_messages[2]['content']
     assert 'environment/platform: AWS' in system_messages[2]['content']
     assert 'urgency: Critical' in system_messages[2]['content']
@@ -385,7 +388,9 @@ def test_voice_turn_prompt_preface_includes_expert_desk_metadata(tmp_path: Path)
                         'urgency': 'High',
                         'issue_description': 'Replication queue is growing.',
                         'recommended_path': 'launch_live_session_now',
-                        'expert_persona': 'AI VMware Engineer',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': 'VMware specialist summary',
                         'request_label': 'Case V-2',
                         'preferred_expert_type': 'Virtualization',
                         'recommended_expert_type': 'Virtualization',
@@ -410,6 +415,7 @@ def test_voice_turn_prompt_preface_includes_expert_desk_metadata(tmp_path: Path)
     system_messages = [message for message in payload['messages'] if message['role'] == 'system']
     assert len(system_messages) >= 3
     assert 'AI VMware Engineer' in system_messages[1]['content']
+    assert 'selected expert persona id: ai-vmware-engineer' in system_messages[2]['content']
     assert 'issue category: Replication lag' in system_messages[2]['content']
     assert 'environment/platform: VMware' in system_messages[2]['content']
     assert 'recommended path: launch_live_session_now' in system_messages[2]['content']
@@ -776,7 +782,9 @@ def test_prompt_assembler_uses_expert_desk_preface_and_persona_overlay() -> None
             'architecture_notes': 'Two clusters with shared SAN replication.',
             'error_text': 'APD timeout on host 03',
             'recommended_path': 'launch_live_session_now',
-            'expert_persona': 'AI VMware Engineer',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'expert_persona_summary': 'VMware specialist summary',
             'request_label': 'Case 204',
             'recommended_expert_type': 'Virtualization',
             'preferred_expert_type': 'Virtualization',
@@ -793,6 +801,7 @@ def test_prompt_assembler_uses_expert_desk_preface_and_persona_overlay() -> None
     assert 'You are AskChip Expert Desk' in messages[0].text
     assert messages[1].role == 'system'
     assert 'AI VMware Engineer' in messages[1].text
+    assert 'selected expert persona id: ai-vmware-engineer' in messages[2].text
     assert messages[2].role == 'system'
     assert 'issue category: Storage outage' in messages[2].text
     assert 'environment/platform: VMware vSphere' in messages[2].text
@@ -809,11 +818,23 @@ def test_prompt_assembler_uses_general_expert_fallback_overlay() -> None:
     messages = assembler.build_messages(
         transcript=[],
         user_text='help',
-        session_metadata={'expert_desk': {'expert_persona': 'AI Quantum Datacenter Wizard'}},
+        session_metadata={'expert_desk': {'expert_persona_label': 'AI Quantum Datacenter Wizard'}},
     )
 
     assert messages[1].role == 'system'
     assert 'General Infrastructure Expert Engineer' in messages[1].text
+
+
+def test_prompt_assembler_legacy_persona_label_fallback_still_works() -> None:
+    assembler = PromptAssembler()
+    messages = assembler.build_messages(
+        transcript=[],
+        user_text='help',
+        session_metadata={'expert_desk': {'expert_persona': 'AI AWS Engineer'}},
+    )
+
+    assert messages[1].role == 'system'
+    assert 'AI AWS Engineer' in messages[1].text
 
 
 def test_thinking_filter_strips_unmatched_close_tag() -> None:

@@ -28,23 +28,23 @@ EXPERT_DESK_BASE_INSTRUCTION_BLOCK = (
     'Do not reveal private/internal reasoning. Give the answer directly.'
 )
 
-EXPERT_PERSONA_OVERLAYS: dict[str, str] = {
-    'ai vmware engineer': (
+EXPERT_PERSONA_OVERLAYS_BY_ID: dict[str, str] = {
+    'ai-vmware-engineer': (
         'Persona overlay: Act as an AI VMware Engineer focused on vSphere/ESXi/vCenter operations. '
         'Prioritize host/cluster health, datastore and networking dependencies, VM impact, and safe remediation order. '
         'Prefer concrete checks (alarms, logs, service status, HA/DRS state, storage latency) before disruptive actions.'
     ),
-    'ai aws engineer': (
+    'ai-aws-engineer': (
         'Persona overlay: Act as an AI AWS Engineer focused on cloud architecture and incident response. '
         'Prioritize blast-radius control, IAM/network boundaries, service quotas, regional dependencies, and cost-aware mitigation. '
         'Provide AWS-native diagnostic paths (CloudWatch, CloudTrail, VPC flow logs, service health, runbooks).'
     ),
-    'ai backup / recovery engineer': (
+    'ai-backup-recovery-engineer': (
         'Persona overlay: Act as an AI Backup / Recovery Engineer focused on recoverability and data integrity. '
         'Prioritize RPO/RTO clarity, backup chain validity, immutability/encryption status, restore testability, and staged recovery order. '
         'Call out evidence needed before declaring recovery complete.'
     ),
-    'ai data center engineer': (
+    'ai-data-center-engineer': (
         'Persona overlay: Act as an AI Data Center Engineer focused on infrastructure reliability and dependencies. '
         'Prioritize power/cooling/network/storage/compute interlocks, fault domains, maintenance windows, and operational safety. '
         'Recommend minimally disruptive stabilization steps first.'
@@ -102,10 +102,12 @@ class PromptAssembler:
         return cleaned or None
 
     def _build_expert_desk_preface(self, expert_desk: dict[str, str]) -> list[PromptMessage]:
-        persona = expert_desk.get('expert_persona', '')
-        overlay = self._persona_overlay(persona)
+        persona_id = expert_desk.get('expert_persona_id', '')
+        persona_label = expert_desk.get('expert_persona_label', '') or expert_desk.get('expert_persona', '')
+        overlay = self._persona_overlay(persona_id=persona_id, persona_label=persona_label)
         context_lines = [
-            f"selected expert persona: {persona or 'General Infrastructure Expert'}",
+            f"selected expert persona id: {persona_id or 'general-infrastructure-expert'}",
+            f"selected expert persona label: {persona_label or 'General Infrastructure Expert'}",
             f"issue category: {expert_desk.get('issue_category', 'not provided')}",
             f"environment/platform: {expert_desk.get('environment_platform', 'not provided')}",
             f"urgency: {expert_desk.get('urgency', 'not provided')}",
@@ -129,6 +131,20 @@ class PromptAssembler:
             PromptMessage(role='system', text='Expert Desk session pre-brief:\n' + '\n'.join(f'- {line}' for line in context_lines)),
         ]
 
-    def _persona_overlay(self, persona: str) -> str:
-        normalized = ' '.join(persona.lower().split())
-        return EXPERT_PERSONA_OVERLAYS.get(normalized, EXPERT_PERSONA_GENERAL_FALLBACK)
+    def _persona_overlay(self, *, persona_id: str, persona_label: str) -> str:
+        normalized_id = '-'.join(persona_id.lower().split())
+        if normalized_id in EXPERT_PERSONA_OVERLAYS_BY_ID:
+            return EXPERT_PERSONA_OVERLAYS_BY_ID[normalized_id]
+
+        normalized_label = ' '.join(persona_label.lower().split())
+        legacy_label_to_id = {
+            'ai vmware engineer': 'ai-vmware-engineer',
+            'ai aws engineer': 'ai-aws-engineer',
+            'ai backup / recovery engineer': 'ai-backup-recovery-engineer',
+            'ai data center engineer': 'ai-data-center-engineer',
+        }
+        legacy_id = legacy_label_to_id.get(normalized_label)
+        if legacy_id:
+            return EXPERT_PERSONA_OVERLAYS_BY_ID[legacy_id]
+
+        return EXPERT_PERSONA_GENERAL_FALLBACK

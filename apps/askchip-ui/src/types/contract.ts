@@ -109,7 +109,9 @@ export interface ExpertDeskSessionMetadata {
   preferred_expert_type: string;
   recommended_expert_type: string;
   recommended_path: string;
-  expert_persona: string;
+  expert_persona_id: string;
+  expert_persona_label: string;
+  expert_persona_summary: string;
   issue_description: string;
   architecture_notes: string;
   error_text: string;

@@ -145,6 +145,21 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Marlene is now explicitly used for non-Expert-Desk/general sessions; Expert Desk sessions use base Expert Desk instructions + persona overlay model.
 - Canonical transcript contract remains unchanged (`text` is canonical, no synthetic transcript rows).
 
+### Phase 13 — canonical expert persona identity alignment
+- Replaced prose-driven frontstage expert identity with canonical persona routing fields across intake, recommendation, and session metadata handoff:
+  - `expert_persona_id`
+  - `expert_persona_label`
+  - optional `expert_persona_summary` for UI/helper copy
+- Updated intake expert choices to map directly to live backend specialist overlays:
+  - AI VMware Engineer
+  - AI AWS Engineer
+  - AI Backup / Recovery Engineer
+  - AI Data Center Engineer
+  - General Infrastructure Expert fallback
+- Recommendation output now carries canonical persona id/label for live-session launch metadata and keeps summary prose separate from routing identity.
+- Backend prompt overlay selection now keys on canonical persona id first, with legacy prose-label fallback for backwards compatibility with older saved sessions.
+- Frontstage launch metadata and runtime pre-briefing continue to preserve existing transcript/turn contracts unchanged.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -219,6 +234,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - expanded prompt assembly to prepend Expert Desk persona + intake/session pre-brief system context before transcript/current user input
   - added concrete expert persona overlays (VMware, AWS, Backup/Recovery, Data Center, general fallback)
   - made Marlene path explicit for non-Expert-Desk sessions while preserving canonical transcript contract and turn API shape
+- **2026-04-02 — Phase 13 canonical persona-id handoff alignment**
+  - standardized frontstage expert identity to canonical persona id + label and removed prose-string persona identity coupling
+  - aligned intake/recommendation output and session metadata handoff with real backend specialist overlays
+  - updated backend prompt overlay selection to use canonical persona id first with legacy label fallback safety
+  - preserved transcript contract, `CreateTurnRequest`, and non-Expert-Desk/general session behavior
 
 ---
 

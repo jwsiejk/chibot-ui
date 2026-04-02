@@ -226,7 +226,7 @@ export function buildExpertDeskSessionContextFromDraft(
     issueCategoryLabel,
     environment: draft.environmentPlatform.trim() || 'Not specified',
     urgencyLabel,
-    expertPersona: recommendation.expertPersona,
+    expertPersona: recommendation.expertPersonaLabel,
     recommendedPathLabel,
     recommendedNextStep: buildNextStep(recommendation),
     likelyTopicHint: buildLikelyTopicHint(draft, recommendation),

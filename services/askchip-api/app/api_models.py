@@ -13,7 +13,10 @@ class ExpertDeskSessionMetadata(BaseModel):
     preferred_expert_type: str
     recommended_expert_type: str
     recommended_path: str
-    expert_persona: str
+    expert_persona_id: str = ''
+    expert_persona_label: str = ''
+    expert_persona_summary: str = ''
+    expert_persona: str = ''
     issue_description: str
     architecture_notes: str
     error_text: str
