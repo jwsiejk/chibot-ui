@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ApiError, askChipApiClient } from '../api/client';
 import { DEMO_ROUTES } from '../routing';
 import type { SessionRecord, TranscriptMessage } from '../types/contract';
+import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
 import {
   getExpertDeskLocalHandoffRequest,
   getExpertDeskSessionContext,
@@ -152,6 +153,14 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
 
   const localRequest = useMemo(() => getExpertDeskLocalHandoffRequest(sessionId), [requestSavedNotice, sessionId]);
 
+  useEffect(() => {
+    if (!localRequest) {
+      return;
+    }
+    setRequestType(localRequest.type);
+    setRequestNote(localRequest.note);
+  }, [localRequest]);
+
   const summaryContext = useMemo(
     () => dataState.context ?? buildFallbackContext(dataState.session),
     [dataState.context, dataState.session],
@@ -163,6 +172,7 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
     return (
       <main className="min-h-screen bg-slate-100 px-4 py-10 text-slate-900 md:px-6">
         <div className="mx-auto w-full max-w-5xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <ExpertDeskFlowProgress currentStep="summary" sessionId={sessionId} />
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">Expert Desk Summary</p>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">Loading post-session handoff…</h1>
           <p className="mt-3 text-sm text-slate-700">Fetching actual session transcript and available Expert Desk context for session {sessionId}.</p>
@@ -175,6 +185,7 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
     return (
       <main className="min-h-screen bg-slate-100 px-4 py-10 text-slate-900 md:px-6">
         <div className="mx-auto w-full max-w-4xl rounded-3xl border border-rose-200 bg-white p-8 shadow-sm">
+          <ExpertDeskFlowProgress currentStep="summary" sessionId={sessionId} />
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-700">Summary unavailable</p>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">This session could not be loaded.</h1>
           <p className="mt-3 text-sm leading-6 text-slate-700">
@@ -197,6 +208,7 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
     <main className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 md:px-6">
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <ExpertDeskFlowProgress currentStep="summary" sessionId={sessionId} />
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">Expert Desk Handoff Summary</p>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">Session closeout and next-step plan</h1>
           <p className="mt-3 text-sm leading-6 text-slate-700">
@@ -270,6 +282,7 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
               <a href={`/visual-session/${encodeURIComponent(sessionId)}`} className="mt-4 inline-flex w-full justify-center rounded-full bg-indigo-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-600">
                 Open live session transcript
               </a>
+              <p className="mt-2 text-xs text-slate-500">This returns to the same live session id; it does not represent backend session termination.</p>
             </section>
 
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -320,10 +333,17 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
               </button>
               {requestSavedNotice ? <p className="mt-2 text-xs text-emerald-700">{requestSavedNotice}</p> : null}
               {localRequest ? (
-                <p className="mt-2 text-xs text-slate-600">
-                  Latest local request: <span className="font-medium text-slate-900">{localRequest.type === 'human-escalation' ? 'Human escalation' : 'Follow-up session'}</span>
-                  {' '}({formatDateTime(localRequest.updatedAt)}).
-                </p>
+                <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-900">
+                  <p className="font-semibold uppercase tracking-[0.14em]">Latest local handoff request</p>
+                  <p className="mt-1">
+                    Type: <span className="font-medium">{localRequest.type === 'human-escalation' ? 'Human escalation' : 'Follow-up session'}</span>
+                  </p>
+                  <p className="mt-1">Saved: {formatDateTime(localRequest.updatedAt)}</p>
+                  <p className="mt-1">Note: {localRequest.note.trim() ? localRequest.note : 'No note provided.'}</p>
+                  <p className="mt-1 text-indigo-700">
+                    Frontend-local only: this request is not sent to backend, CRM, calendar, queue, or ticketing services.
+                  </p>
+                </div>
               ) : null}
             </section>
           </aside>

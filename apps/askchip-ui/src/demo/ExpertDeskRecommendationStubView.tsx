@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { askChipApiClient } from '../api/client';
 import { DEMO_ROUTES } from '../routing';
+import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
 import {
   buildExpertDeskSessionContextFromDraft,
   saveExpertDeskSessionContext,
@@ -22,7 +23,6 @@ type ExpertDeskRecommendationViewProps = {
 export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation }: ExpertDeskRecommendationViewProps) {
   const [launching, setLaunching] = useState(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
-  const [followUpPreference, setFollowUpPreference] = useState('');
   const recommendation = useMemo(() => buildExpertDeskRecommendation(draft), [draft]);
 
   const launchLiveSession = async () => {
@@ -48,6 +48,7 @@ export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation
     return (
       <main className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 md:px-6">
         <div className="mx-auto w-full max-w-4xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <ExpertDeskFlowProgress currentStep="recommendation" />
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">Expert Desk Routing</p>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">Recommendation requires current valid intake</h1>
           <p className="mt-4 text-sm leading-6 text-slate-700">
@@ -65,6 +66,7 @@ export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation
     <main className="min-h-screen bg-slate-100 px-4 py-8 text-slate-900 md:px-6">
       <div className="mx-auto grid w-full max-w-6xl gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.6fr)]">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <ExpertDeskFlowProgress currentStep="recommendation" />
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">Expert Desk Routing</p>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">Recommendation & Next Step</h1>
           <p className="mt-3 text-sm leading-6 text-slate-700">{recommendation.issueSummary}</p>
@@ -95,19 +97,12 @@ export function ExpertDeskRecommendationStubView({ draft, readyForRecommendation
             <p className="mt-3 text-xs text-indigo-800">Recommendation confidence: {recommendation.confidence}.</p>
           </section>
 
-          <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
-            <p className="text-sm font-semibold text-slate-900">Follow-up preference request capture (demo-only)</p>
+          <section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Handoff model for this demo</p>
             <p className="mt-2 text-xs leading-5 text-slate-600">
-              This field captures a scheduling preference request only in local browser state for the current view. It is
-              not sent to a calendar or queue engine.
+              Launching the live expert session creates a real AskChip session id and carries intake + routing context by
+              saving frontend-local data in sessionStorage for this browser session only.
             </p>
-            <textarea
-              value={followUpPreference}
-              onChange={(event) => setFollowUpPreference(event.target.value)}
-              rows={3}
-              placeholder="Optional: share preferred day/time windows for a follow-up request."
-              className="mt-3 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-            />
           </section>
         </section>
 

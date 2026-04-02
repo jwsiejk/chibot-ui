@@ -103,5 +103,8 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - Frontstage Expert Desk demo routes are available at `/demo` (landing), `/demo/intake` (structured intake persisted in frontend `sessionStorage` only), and `/demo/recommendation` (deterministic recommendation/routing with a real live-session launch CTA).
 - Frontstage recommendation launch now binds saved intake + recommendation context to the created visual-session id via frontend `sessionStorage`, and Visual Session reads that session-linked context to render an Expert Desk context strip plus an Expert Assist rail (local-only, no backend persistence).
 - Frontstage flow now includes `/demo/summary/:sessionId` as an explicit post-session handoff step, assembled from real session/transcript API data plus any session-linked Expert Desk context found in frontend `sessionStorage`.
+- Frontstage flow now includes a shared lightweight progress indicator across `/demo` → `/demo/intake` → `/demo/recommendation` → `/visual-session/:sessionId` → `/demo/summary/:sessionId` for coherent walkthrough narration.
+- Live visual-session wrap-up copy is now explicit and honest: navigation to summary/handoff does not imply backend session termination.
 - Expert Desk intake readiness now reflects current field validity plus save state; stale “ready” status is cleared if required fields become invalid again.
+- Summary now surfaces the latest saved local handoff request type/timestamp/note and explicitly labels it as frontend-local-only (not sent to backend/CRM/calendar/queue/ticketing systems).
 - Visual stage assistant naming is configurable in the frontend using `VITE_ASKCHIP_ASSISTANT_DISPLAY_NAME` (default: `Chip`).

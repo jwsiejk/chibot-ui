@@ -61,7 +61,7 @@ export function VisualSessionToolbar({
           href="/"
           className="rounded-full border border-rose-300/35 bg-rose-400/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-100 transition hover:border-rose-300/60 hover:bg-rose-400/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300/60"
         >
-          End session
+          Back to shell
         </a>
       </div>
     </div>

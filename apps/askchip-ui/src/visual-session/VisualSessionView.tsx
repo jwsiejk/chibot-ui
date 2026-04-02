@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChatPanel } from '../chat/ChatPanel';
 import { runtimeConfig } from '../config/runtime';
+import { ExpertDeskFlowProgress } from '../demo/ExpertDeskFlowProgress';
 import { getExpertDeskSessionContext } from '../demo/expertDeskSessionContext';
 import { useSessionInteractionRuntime } from '../interaction/useSessionInteractionRuntime';
-import { getDemoSummaryRoute } from '../routing';
+import { DEMO_ROUTES, getDemoSummaryRoute } from '../routing';
 import { VisualSessionStage } from './VisualSessionStage';
 import { VisualSessionToolbar } from './VisualSessionToolbar';
 
@@ -110,7 +111,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                 href={getDemoSummaryRoute(sessionId)}
                 className="inline-flex rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-cyan-100 transition hover:border-cyan-200/70 hover:bg-cyan-300/20"
               >
-                End session and view summary
+                View summary and handoff
               </a>
               <div className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs uppercase tracking-[0.16em] text-slate-300">
                 {assistantName} · {state.topLevelState ?? 'ready'}
@@ -118,10 +119,14 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
             </div>
           </div>
           <p className="mt-2 text-sm text-slate-300">Live specialist engagement surface with shared transcript + voice runtime.</p>
+          <p className="mt-1 text-xs text-slate-400">
+            Summary navigation is a frontstage walkthrough step and does not perform backend session termination.
+          </p>
         </div>
 
         {frontstageContext ? (
-          <div className="mt-3 rounded-3xl border border-cyan-300/25 bg-slate-900/70 px-4 py-3">
+          <div className="mt-3 space-y-3 rounded-3xl border border-cyan-300/25 bg-slate-900/70 px-4 py-3">
+            <ExpertDeskFlowProgress currentStep="live-session" sessionId={sessionId} />
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-100/80">Expert desk context</p>
             <div className="mt-2 grid gap-2 text-xs text-slate-200 md:grid-cols-2 xl:grid-cols-3">
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Request</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.requestLabel}</p></div>
@@ -132,7 +137,15 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
               <div className="rounded-xl border border-slate-700/80 bg-slate-950/55 px-3 py-2"><span className="text-slate-400">Recommended path</span><p className="mt-1 text-sm font-medium text-white">{frontstageContext.recommendedPathLabel}</p></div>
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-3 rounded-3xl border border-slate-700/80 bg-slate-900/55 px-4 py-3 text-xs text-slate-300">
+            <p className="font-semibold uppercase tracking-[0.16em] text-slate-200">Backstage visual session mode</p>
+            <p className="mt-1">No Expert Desk frontstage context was attached to this session id.</p>
+            <a href={DEMO_ROUTES.recommendation} className="mt-2 inline-flex text-cyan-200 hover:text-cyan-100">
+              Return to Expert Desk recommendation
+            </a>
+          </div>
+        )}
       </header>
 
       <section className="mx-auto grid w-full max-w-[1460px] gap-5 px-6 pb-28 xl:grid-cols-[300px_minmax(0,1fr)_320px]">

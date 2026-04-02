@@ -1,9 +1,12 @@
 import { DEMO_ROUTES } from '../routing';
+import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
 
 export function ExpertDeskLandingView() {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top,#eef2ff_0%,#e2e8f0_40%,#f8fafc_100%)] px-6 py-8 text-slate-900">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
+        <ExpertDeskFlowProgress currentStep="landing" />
+
         <header className="rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-xl shadow-slate-300/40">
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-indigo-700">AskChip Frontstage Demo</p>
           <h1 className="mt-2 text-4xl font-semibold tracking-tight text-slate-950">Expert Desk</h1>

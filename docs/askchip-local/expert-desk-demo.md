@@ -21,6 +21,15 @@ The current demo framing is:
 
 All frontstage routes run in frontend demo mode and do **not** claim backend intake, CRM, calendar, or queue-engine integration.
 
+### Frontstage flow (final consolidated demo)
+1. `/demo` frames the AI Expert Desk story and routes into intake.
+2. `/demo/intake` captures structured routing context and saves it in frontend-local `sessionStorage`.
+3. `/demo/recommendation` computes deterministic specialist routing and launches a real local AskChip session id.
+4. `/visual-session/:sessionId` runs the live expert session with assistant-stage-first focus and Expert Desk context assist rails.
+5. `/demo/summary/:sessionId` provides summary, handoff request capture, and next-step framing tied to that same session id.
+
+A lightweight progress treatment now appears across frontstage stages to keep walkthrough narrative coherence.
+
 ## Completed so far
 
 ### Foundation and Visual Session phases completed
@@ -62,7 +71,7 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
   - expert persona
   - why the path was selected
 - Added a real launch CTA that creates a local AskChip session via the existing API and routes directly into `/visual-session/:sessionId`.
-- Added optional follow-up preference capture on the recommendation screen with explicit copy that it is **request capture only** in local view state and is **not persisted** to backend/calendar/queue systems.
+- Recommendation now includes explicit handoff-model copy describing real session-id creation plus frontend-local context carryover only.
 
 ### Phase 8 — session-linked frontstage context handoff
 - Added a dedicated frontend-local session context utility keyed by visual-session id (`sessionStorage`) to carry frontstage Expert Desk context across redirect.
@@ -102,15 +111,41 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
   - if transcript/session loads but no Expert Desk context exists, summary falls back to honest session-derived framing
   - if session id is invalid/deleted, summary shows a user-facing unavailable message with recovery links
 
+### Phase 10 — final coherence and walkthrough consolidation
+- Standardized frontstage copy to consistently use AI Expert Desk, expert routing/specialist engagement, live session, and summary/handoff language.
+- Added a minimal shared progress indicator across landing, intake, recommendation, live session, and summary to improve walkthrough clarity.
+- Resolved live-session wrap-up wording mismatch:
+  - CTA now reads **View summary and handoff**
+  - UI explicitly states this is walkthrough navigation and does not perform backend session termination.
+- Finalized summary handoff-request behavior:
+  - latest saved request (type, timestamp, and note) is now rendered clearly
+  - request is explicitly labeled frontend-local only and non-integrated.
+- Tightened edge-case and transition affordances:
+  - clearer fallback state when visual session is opened without Expert Desk context
+  - explicit return links between recommendation/live-session and summary/live-session steps.
+
+## Demo Walkthrough (recommended)
+1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
+2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
+3. Use **Continue to recommendation handoff** and review deterministic routing on `/demo/recommendation`.
+4. Click **Launch live expert session** to create a real local session id and carry frontend-local context into live session.
+5. In `/visual-session/:sessionId`, show assistant-stage behavior first, then show Expert Assist context rail.
+6. Click **View summary and handoff** to move into `/demo/summary/:sessionId`.
+7. In summary, review:
+   - session/transcript-derived actions
+   - recommended next steps
+   - optional local handoff request capture and the displayed latest saved local request.
+8. Optionally reopen the same transcript via **Open live session transcript** for continuity.
+
 
 ## Remaining planned phases
 
 > This sequence is intentionally high-level and may be updated as implementation proceeds.
 
-1. **Demo narrative instrumentation**
-   - add lightweight event and progress indicators for live walkthroughs
-2. **Stabilization + handoff packaging**
-   - polish copy/motion/accessibility and freeze a repeatable demo path
+1. **Roadmap hygiene only**
+   - optional micro-polish (animation pacing/accessibility copy tightening)
+2. **Backend integration planning (future)**
+   - only if/when product scope expands beyond frontend-local demo storage and deterministic routing
 
 ## Progress log
 
@@ -143,6 +178,12 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
   - assembled summary using real session/transcript data plus optional session-linked Expert Desk context
   - added local-only follow-up/escalation request capture persisted to frontend session storage (explicitly non-integrated)
   - added graceful failure handling for missing/deleted sessions and context gaps
+- **2026-04-02 — Phase 10 final frontstage consolidation**
+  - unified frontstage flow narrative and copy from landing through summary
+  - added shared progress indicator across all frontstage flow stages
+  - replaced ambiguous wrap-up CTA with **View summary and handoff** plus explicit no-backend-termination wording
+  - rendered latest saved local handoff request note clearly in summary with frontend-local-only labeling
+  - finalized walkthrough guidance for repeatable demo delivery
 
 ---
 
@@ -152,6 +193,6 @@ All frontstage routes run in frontend demo mode and do **not** claim backend int
 - Transcript/state/WebRTC contract remains unchanged and authoritative.
 - Intake data is persisted only in frontend `sessionStorage` for this demo phase (same browser session, refresh-safe, no backend persistence).
 - Recommendation routing is deterministic and frontend-local; it is not a machine-learned policy engine.
-- Follow-up “scheduling preference” capture on `/demo/recommendation` is not persisted and does not integrate with real calendar/queue services.
+- `/demo/recommendation` provides routing rationale and handoff-model copy only; no calendar/queue request capture is performed there.
 - Session-linked frontstage context for Visual Session is frontend-local (`sessionStorage`) and browser-session scoped; it is not persisted to backend systems or shared across browsers/devices.
 - Summary handoff requests (follow-up/escalation) are frontend-local (`sessionStorage`) by session id and are not sent to backend CRM, scheduling, or ticketing systems.
