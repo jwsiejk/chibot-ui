@@ -117,8 +117,12 @@ class ConfigResponse(BaseModel):
     stt_requested_compute_type: str
     stt_compute_type: str
     tts_voice: str
+    tts_requested_device: str
     tts_device: str
     tts_provider: str
+    tts_available_providers: list[str] = Field(default_factory=list)
+    tts_warning: str | None = None
+    tts_fallback_reason: str | None = None
     tts_model_path: str | None = None
     tts_voices_path: str | None = None
     tts_sample_rate_hz: int

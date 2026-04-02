@@ -52,19 +52,29 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - Wake word, always-open microphones, tools, RAG, and auth remain out of scope.
 
 ## Windows (PowerShell)
-1. Create and activate a Python 3.11+ virtual environment in `services/askchip-api`.
-2. Install API dependencies: `pip install -e .[dev]`
-   - Voice input depends on `faster-whisper` plus its local runtime prerequisites. On Windows 11 local-first setups, keep the configured model/device/compute settings aligned with your machine capabilities.
-   - Assistant speech now depends on local Kokoro runtime support via `kokoro-onnx`. If Kokoro model/voice assets are not available locally, typed chat and transcript completion still work but speech synthesis requests will fail honestly.
+1. Run the dedicated Windows/NVIDIA setup flow from the repo root:
+   ```powershell
+   ./scripts/setup-askchip-local-windows-nvidia.ps1
+   ```
+   This script:
+   - creates/uses `services/askchip-api/.venv`
+   - installs backend deps
+   - replaces CPU `onnxruntime` with `onnxruntime-gpu`
+   - verifies `CUDAExecutionProvider` is actually available
+2. Activate backend `.venv`:
+   ```powershell
+   .\services\askchip-api\.venv\Scripts\Activate.ps1
+   ```
 3. Install UI dependencies in `apps/askchip-ui`: `npm install`
 4. Start both services from the repo root:
    ```powershell
    ./scripts/run-askchip-local.ps1
    ```
+   > `run-askchip-local.ps1` now requires `services/askchip-api/.venv` and uses that interpreter directly to prevent accidental global-environment CPU fallback.
 5. Open the UI at `http://127.0.0.1:5173`.
 
 ## Bash
-1. Create and activate a Python 3.11+ virtual environment in `services/askchip-api`.
+1. Create and activate a dedicated Python 3.11+ virtual environment in `services/askchip-api/.venv`.
 2. Install API dependencies: `pip install -e .[dev]`
    - Voice input depends on `faster-whisper` plus its local runtime prerequisites. On Windows 11 local-first setups, keep the configured model/device/compute settings aligned with your machine capabilities.
    - Assistant speech now depends on local Kokoro runtime support via `kokoro-onnx`. If Kokoro model/voice assets are not available locally, typed chat and transcript completion still work but speech synthesis requests will fail honestly.
@@ -73,6 +83,7 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
    ```bash
    ./scripts/run-askchip-local.sh
    ```
+   > `run-askchip-local.sh` now requires `services/askchip-api/.venv` and uses that interpreter directly.
 5. Open the UI at `http://127.0.0.1:5173`.
 
 ## Phase 6 speech configuration
@@ -89,7 +100,23 @@ The AskChip frontend is local-first and defaults to localhost when no overrides 
 - GPU-enabled Kokoro expectations:
   - `ASKCHIP_TTS_DEVICE=auto` chooses CUDA only when ONNX Runtime reports `CUDAExecutionProvider`; otherwise it falls back to CPU.
   - On Windows, when `onnxruntime-gpu` exposes CUDA support, AskChip preloads the ONNX Runtime CUDA DLLs before session initialization.
-  - If CUDA is explicitly requested but unavailable, runtime diagnostics include a warning and show CPU fallback.
+  - If CUDA is unavailable (including `ASKCHIP_TTS_DEVICE=auto`), runtime diagnostics include an explicit warning/fallback reason and show CPU selection honestly.
+  - `services/askchip-api/pyproject.toml` includes an optional `gpu-tts` extra for explicit GPU runtime installs (`pip install -e .[dev,gpu-tts]`), but environment/provider availability must still be verified at runtime.
+- Verify ONNX Runtime provider availability from the backend `.venv`:
+  ```bash
+  python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+  ```
+- Verify backend runtime diagnostics:
+  ```bash
+  curl http://127.0.0.1:8000/api/v1/config
+  curl http://127.0.0.1:8000/api/v1/readiness
+  ```
+- GPU success criteria:
+  - `/api/v1/config` shows `tts_device = cuda`
+  - `/api/v1/config` shows `tts_provider = CUDAExecutionProvider`
+- Honest fallback criteria:
+  - `/api/v1/config` shows `tts_device = cpu`
+  - `/api/v1/config` includes `tts_warning` / `tts_fallback_reason` explaining why CUDA was unavailable
 - When using the espeak fallback backend, American English voices should use `en-us` (British English would use `en-gb`).
 - Runtime startup diagnostics now report the selected STT device/compute type and Kokoro ONNX provider/device, including explicit warnings when a requested GPU path is unavailable and the runtime falls back to CPU.
 - Assistant speech is fetched from a dedicated HTTP endpoint, then the frontend reports real playback start/stop so `speaking` only appears while audio is actually playing.

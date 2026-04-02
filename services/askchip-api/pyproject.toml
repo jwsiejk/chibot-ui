@@ -19,6 +19,9 @@ dependencies = [
 dev = [
   "pytest>=8.3,<9.0"
 ]
+gpu-tts = [
+  "onnxruntime-gpu>=1.21,<2.0"
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"

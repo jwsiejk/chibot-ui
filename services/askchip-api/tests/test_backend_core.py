@@ -221,6 +221,33 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
     assert response.json()['stt_requested_device'] == 'auto'
     assert response.json()['stt_requested_compute_type'] == 'auto'
     assert response.json()['tts_voice'] == 'am_echo'
+    assert response.json()['tts_requested_device'] == 'auto'
+    assert response.json()['tts_provider'] in {'CPUExecutionProvider', 'CUDAExecutionProvider', 'unknown'}
+    assert isinstance(response.json()['tts_available_providers'], list)
+    assert 'tts_warning' in response.json()
+    assert 'tts_fallback_reason' in response.json()
+
+
+def test_config_and_readiness_surface_tts_auto_cpu_fallback_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.tts as tts_module
+
+    monkeypatch.setattr(tts_module, '_available_onnx_providers', lambda: ['CPUExecutionProvider'])
+    app = make_app(tmp_path, tts_device='auto')
+    with TestClient(app) as client:
+        config = client.get('/api/v1/config')
+        readiness = client.get('/api/v1/readiness')
+
+    assert config.status_code == 200
+    assert readiness.status_code == 200
+    config_body = config.json()
+    readiness_body = readiness.json()
+    assert config_body['tts_requested_device'] == 'auto'
+    assert config_body['tts_device'] == 'cpu'
+    assert config_body['tts_provider'] == 'CPUExecutionProvider'
+    assert config_body['tts_fallback_reason'] == 'ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable.'
+    assert config_body['tts_warning'] == 'ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable. Using CPUExecutionProvider.'
+    assert readiness_body['runtime']['tts']['fallback_reason'] == 'ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable.'
+    assert readiness_body['runtime']['tts']['warning'] == 'ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable. Using CPUExecutionProvider.'
 
 
 def test_local_readme_documents_ollama_num_parallel_pin() -> None:
@@ -228,6 +255,15 @@ def test_local_readme_documents_ollama_num_parallel_pin() -> None:
 
     assert 'OLLAMA_NUM_PARALLEL=1' in readme_text
     assert 'Ollama memory use scales' in readme_text
+
+
+def test_windows_nvidia_setup_script_documents_gpu_runtime_swap_and_provider_validation() -> None:
+    script_text = (Path(__file__).resolve().parents[3] / 'scripts/setup-askchip-local-windows-nvidia.ps1').read_text(encoding='utf-8')
+
+    assert 'services/askchip-api/.venv' in script_text
+    assert 'onnxruntime-gpu' in script_text
+    assert 'uninstall -y onnxruntime' in script_text
+    assert 'CUDAExecutionProvider' in script_text
 
 
 def test_turns_send_explicit_think_false_for_small_talk(tmp_path: Path) -> None:
@@ -2251,6 +2287,13 @@ def test_readiness_endpoint_reports_warmup_state(tmp_path: Path) -> None:
     assert body['runtime']['stt']['selected_device'] in {'cpu', 'cuda'}
     assert body['runtime']['stt']['requested_compute_type'] == 'auto'
     assert body['runtime']['stt']['resolved_compute_type'] in {'int8', 'int8_float16'}
+    assert body['runtime']['tts']['requested_device'] == 'auto'
+    assert body['runtime']['tts']['selected_device'] in {'cpu', 'cuda'}
+    assert isinstance(body['runtime']['tts']['available_providers'], list)
+    if body['runtime']['tts']['selected_device'] == 'cpu':
+        assert body['runtime']['tts']['provider'] in {'CPUExecutionProvider', 'unknown'}
+    else:
+        assert body['runtime']['tts']['provider'] == 'CUDAExecutionProvider'
     assert config.json()['ollama_warmup_enabled'] is True
     assert config.json()['tts_warmup_enabled'] is False
 

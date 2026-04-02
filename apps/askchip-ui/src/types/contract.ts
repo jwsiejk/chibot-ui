@@ -71,7 +71,12 @@ export interface ConfigResponse {
   stt_device: string;
   stt_compute_type: string;
   tts_voice: string;
+  tts_requested_device: string;
   tts_device: string;
+  tts_provider: string;
+  tts_available_providers: string[];
+  tts_warning: string | null;
+  tts_fallback_reason: string | null;
   tts_model_path: string | null;
   tts_voices_path: string | null;
   tts_sample_rate_hz: number;

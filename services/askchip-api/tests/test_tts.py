@@ -118,3 +118,55 @@ def test_kokoro_runtime_init_failure_still_raises_tts_error(
                 voice="af_heart", model_path=None, voices_path=None, device="cpu"
             )
         ).synthesize("Hello error")
+
+
+def test_kokoro_runtime_details_auto_selects_cuda_when_provider_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tts_module,
+        "_available_onnx_providers",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    adapter = KokoroTtsAdapter(
+        KokoroConfig(
+            voice="af_heart",
+            model_path=None,
+            voices_path=None,
+            device="auto",
+        )
+    )
+
+    runtime = adapter.runtime_details()
+
+    assert runtime["requested_device"] == "auto"
+    assert runtime["selected_device"] == "cuda"
+    assert runtime["provider"] == "CUDAExecutionProvider"
+    assert runtime.get("warning") is None
+    assert runtime.get("fallback_reason") is None
+
+
+def test_kokoro_runtime_details_auto_falls_back_to_cpu_with_warning_when_cuda_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tts_module,
+        "_available_onnx_providers",
+        lambda: ["CPUExecutionProvider"],
+    )
+    adapter = KokoroTtsAdapter(
+        KokoroConfig(
+            voice="af_heart",
+            model_path=None,
+            voices_path=None,
+            device="auto",
+        )
+    )
+
+    runtime = adapter.runtime_details()
+
+    assert runtime["requested_device"] == "auto"
+    assert runtime["selected_device"] == "cpu"
+    assert runtime["provider"] == "CPUExecutionProvider"
+    assert runtime["fallback_reason"] == "ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable."
+    assert runtime["warning"] == "ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable. Using CPUExecutionProvider."
