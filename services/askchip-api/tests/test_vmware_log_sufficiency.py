@@ -1,3 +1,5 @@
+import pytest
+
 from app.vmware_log_sufficiency import VMWARE_LOG_REQUIREMENT_MATRIX, evaluate_vmware_log_sufficiency
 
 
@@ -61,6 +63,22 @@ def test_weak_san_or_array_names_do_not_satisfy_storage_array_event_logs() -> No
 
 def test_storage_array_event_log_requires_clear_event_artifact() -> None:
     result = evaluate_vmware_log_sufficiency('storage-pathing', ['powerstore-controller-events.log'])
+
+    assert result.log_sufficiency_status == 'partial'
+    assert result.received_logs == ['Storage array event logs']
+
+
+@pytest.mark.parametrize(
+    'log_name',
+    [
+        'storage-array-events.log',
+        'pure_storage_alerts.log',
+        'san-switch-events.log',
+        'fc-switch-alerts.log',
+    ],
+)
+def test_storage_array_event_log_matches_separator_variants(log_name: str) -> None:
+    result = evaluate_vmware_log_sufficiency('storage-pathing', [log_name])
 
     assert result.log_sufficiency_status == 'partial'
     assert result.received_logs == ['Storage array event logs']

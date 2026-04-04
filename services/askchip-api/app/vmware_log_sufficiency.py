@@ -148,6 +148,7 @@ def _looks_like_storage_array_event_log(uploaded_log_name: str) -> bool:
         'storage-event',
         'netapp',
         'purestorage',
+        'pure-storage',
         '3par',
         'nimble',
         'unity',
@@ -161,6 +162,7 @@ def _looks_like_storage_array_event_log(uploaded_log_name: str) -> bool:
     evidence_tokens = ('event', 'events', 'log', 'logs', 'alert', 'alerts', 'audit')
     separators = re.compile(r'[\s._-]+')
     normalized = separators.sub(' ', uploaded_log_name.strip().lower())
-    has_storage_source = any(token in normalized for token in storage_source_tokens)
+    normalized_source_tokens = tuple(separators.sub(' ', token.strip().lower()) for token in storage_source_tokens)
+    has_storage_source = any(token in normalized for token in normalized_source_tokens)
     has_event_evidence = any(token in normalized for token in evidence_tokens)
     return has_storage_source and has_event_evidence
