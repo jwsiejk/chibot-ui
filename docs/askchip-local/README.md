@@ -133,4 +133,5 @@ curl http://127.0.0.1:8000/api/v1/readiness
 ## Expert Desk session metadata notes
 - Expert Desk session metadata now includes an optional typed VMware triage state at `metadata.expert_desk.vmware_triage`.
 - The VMware triage state is session-scoped and persists across typed and voice turns so runtime triage flow can be reused turn-to-turn.
+- For VMware persona sessions, backend runtime may update this triage state through a hidden per-turn extraction step before assistant response generation; transcript message shape is unchanged.
 - Transcript and turn payload contracts remain unchanged (`text` remains canonical transcript content).

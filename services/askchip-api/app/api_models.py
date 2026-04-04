@@ -10,6 +10,8 @@ class VmwareTriageState(BaseModel):
     suspected_layer: str = ''
     impact_scope: str = ''
     recent_change_summary: str = ''
+    symptom_summary: str = ''
+    open_questions: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     conversation_stage: str = ''
     next_best_question: str = ''

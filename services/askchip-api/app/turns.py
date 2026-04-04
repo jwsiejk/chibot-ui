@@ -8,11 +8,13 @@ from uuid import uuid4
 
 from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
 from app.events import EventBus
+from app.expert_desk_metadata import read_expert_desk_metadata, read_vmware_triage_state, update_vmware_triage_state
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.reasoning import route_reasoning
 from app.storage import Database, DatabaseError
 from app.thinking_filter import ThinkingLeakFilter
+from app.vmware_triage_extraction import VmwareTriageExtractor
 
 
 class BusyError(RuntimeError):
@@ -32,6 +34,7 @@ class TurnManager:
         self.event_bus = event_bus
         self.ollama = ollama
         self.prompt_assembler = prompt_assembler
+        self.vmware_triage_extractor = VmwareTriageExtractor(ollama)
         self._job_lock = asyncio.Lock()
 
     async def handle_typed_turn(self, session: SessionRecord, text: str, *, trace_id: str | None = None) -> dict[str, str]:
@@ -93,6 +96,14 @@ class TurnManager:
             )
             self.db.create_event(committed_event)
             await self.event_bus.publish(self.event_payload(committed_event), session.id)
+
+            current_session = self.db.get_session(session.id) or session
+            await self._maybe_update_vmware_triage(
+                session=current_session,
+                turn_id=turn_id,
+                user_text=user_text,
+                trace_id=trace_id,
+            )
 
             assistant_message = MessageRecord(
                 session_id=session.id,
@@ -214,6 +225,68 @@ class TurnManager:
                 self.db.update_timing(model_timing.id, ended_at.isoformat(), duration_ms, {'error': str(exc), **provider_metrics})
                 self.db.update_timing(turn_timing.id, ended_at.isoformat(), duration_ms, {'error': str(exc)})
                 raise
+
+    async def _maybe_update_vmware_triage(
+        self,
+        *,
+        session: SessionRecord,
+        turn_id: str,
+        user_text: str,
+        trace_id: str | None,
+    ) -> None:
+        expert_desk = read_expert_desk_metadata(session.metadata)
+        if expert_desk is None:
+            return
+        is_vmware_persona = expert_desk.expert_persona_id == 'ai-vmware-engineer' or expert_desk.expert_persona_label.strip().lower() == 'ai vmware engineer'
+        if not is_vmware_persona:
+            return
+
+        transcript = self.db.list_messages(session.id)
+        previous_state = read_vmware_triage_state(session.metadata)
+        next_state = await self.vmware_triage_extractor.extract(
+            user_text=user_text,
+            transcript=transcript,
+            previous_state=previous_state,
+            turn_id=turn_id,
+        )
+        if next_state is None:
+            triage_event = EventRecord(
+                session_id=session.id,
+                turn_id=turn_id,
+                type='vmware.triage.skipped',
+                payload={'reason': 'invalid_or_low_confidence', **({'trace_id': trace_id} if trace_id else {})},
+            )
+            self.db.create_event(triage_event)
+            await self.event_bus.publish(self.event_payload(triage_event), session.id)
+            return
+
+        metadata = update_vmware_triage_state(session.metadata, next_state)
+        if metadata == session.metadata:
+            return
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        self.db.update_session_state(
+            session.id,
+            status=session.status,
+            updated_at=now_iso,
+            active_turn_id=session.active_turn_id,
+            ready_at=session.ready_at.isoformat() if session.ready_at else None,
+            last_error_at=session.last_error_at.isoformat() if session.last_error_at else None,
+            metadata=metadata,
+        )
+        triage_event = EventRecord(
+            session_id=session.id,
+            turn_id=turn_id,
+            type='vmware.triage.updated',
+            payload={
+                'issue_family': next_state.issue_family,
+                'conversation_stage': next_state.conversation_stage,
+                'confidence': next_state.confidence,
+                **({'trace_id': trace_id} if trace_id else {}),
+            },
+        )
+        self.db.create_event(triage_event)
+        await self.event_bus.publish(self.event_payload(triage_event), session.id)
 
     async def _publish_busy_error(self, session_id: str) -> None:
         event = EventRecord(session_id=session_id, type='error', payload={'code': 'assistant_busy', 'message': 'Assistant is already responding.'})
