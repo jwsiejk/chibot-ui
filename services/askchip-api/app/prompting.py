@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.api_models import VmwareTriageState
 from app.domain_models import MessageRecord, PromptMessage
 from app.expert_desk_metadata import build_prompt_context, read_expert_desk_metadata
+from app.vmware_conversation_policy import decide_vmware_next_move
 
 MARLENE_INSTRUCTION_BLOCK = (
     'Instruction for this chat: You are Marlene inside AskChip Local, a woman and a middle-aged Nebraska farmer turned tech geek. '
@@ -76,7 +78,13 @@ class PromptAssembler:
 
         expert_desk = read_expert_desk_metadata(session_metadata)
         if expert_desk is not None:
-            messages.extend(self._build_expert_desk_preface(build_prompt_context(expert_desk), transcript))
+            messages.extend(
+                self._build_expert_desk_preface(
+                    build_prompt_context(expert_desk),
+                    transcript,
+                    triage_state=expert_desk.vmware_triage,
+                )
+            )
         else:
             messages.append(PromptMessage(role='system', text=MARLENE_INSTRUCTION_BLOCK))
 
@@ -89,7 +97,13 @@ class PromptAssembler:
             messages.append(PromptMessage(role='user', text=user_text))
         return messages
 
-    def _build_expert_desk_preface(self, expert_desk: dict[str, str], transcript: list[MessageRecord]) -> list[PromptMessage]:
+    def _build_expert_desk_preface(
+        self,
+        expert_desk: dict[str, str],
+        transcript: list[MessageRecord],
+        *,
+        triage_state: VmwareTriageState | None = None,
+    ) -> list[PromptMessage]:
         persona_id = expert_desk.get('expert_persona_id', '')
         persona_label = expert_desk.get('expert_persona_label', '') or expert_desk.get('expert_persona', '')
         overlay = self._persona_overlay(persona_id=persona_id, persona_label=persona_label)
@@ -145,11 +159,28 @@ class PromptAssembler:
 
         vmware_runtime_guidance = None
         if is_vmware_persona:
+            latest_user_feedback = ''
+            for item in reversed(transcript):
+                if item.role == 'user' and item.text.strip():
+                    latest_user_feedback = item.text
+                    break
+            policy_decision = decide_vmware_next_move(
+                triage_state=triage_state,
+                latest_user_feedback=latest_user_feedback,
+                has_prior_assistant_turn=has_prior_assistant_turn,
+            )
             vmware_runtime_guidance_lines = [
                 'VMware live-session guidance:',
                 '- Keep tone calm, direct, conversational, and professional.',
                 '- Keep responses short by default: usually 2-4 sentences unless the user asks for more.',
                 '- Ask one focused next question at a time to move triage forward.',
+                '- Lead with a working hypothesis when appropriate; do not present unverified causes as facts.',
+                f"- Deterministic policy next move: {policy_decision.next_move}.",
+                f"- Deterministic policy confidence band: {policy_decision.confidence_band}.",
+                f"- Deterministic policy user feedback signal: {policy_decision.user_feedback_signal}.",
+                f"- Deterministic policy log sufficiency status: {policy_decision.log_sufficiency_status}.",
+                f'- Deterministic policy working hypothesis: {policy_decision.working_hypothesis}',
+                f'- Deterministic policy focused next question: {policy_decision.focused_question}',
                 '- For follow-up turns, give one or two likely issue paths and one or two short verification steps when grounded by evidence.',
                 '- Keep troubleshooting practical and ordered; avoid long lectures or policy-like disclaimers.',
                 '- Avoid broad speculation or generic outage declarations without concrete evidence from user context.',
@@ -170,6 +201,7 @@ class PromptAssembler:
                     '- The first response is a conversational opener, not an assessment dump.',
                     '- Keep the first response to 2-3 short sentences by default.',
                     '- Start by acknowledging the issue professionally.',
+                    '- For first response flow: state a working hypothesis, ask for confirmation, then ask one focused next question.',
                     '- Do not use headings (for example: initial assessment, likely diagnosis path, immediate next actions).',
                     '- Do not use numbered checklists unless the user explicitly asks for one.',
                     '- Do not declare a likely root cause unless the user already provided enough concrete evidence.',
@@ -182,6 +214,7 @@ class PromptAssembler:
             else:
                 vmware_runtime_guidance_lines.extend([
                     '- If logs were just uploaded during this live session, acknowledge they were received and offer to review them now.',
+                    '- If the user corrects your path, explicitly revise your working hypothesis before proposing the next step.',
                     '- Do not fabricate findings from logs that were not parsed.',
                 ])
             vmware_runtime_guidance = '\n'.join(vmware_runtime_guidance_lines)
