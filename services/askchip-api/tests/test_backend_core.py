@@ -250,11 +250,14 @@ def test_config_and_readiness_surface_tts_auto_cpu_fallback_reason(tmp_path: Pat
     assert readiness_body['runtime']['tts']['warning'] == 'ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable. Using CPUExecutionProvider.'
 
 
-def test_local_readme_documents_ollama_num_parallel_pin() -> None:
+def test_local_readme_documents_gpu_tts_setup_and_diagnostics() -> None:
     readme_text = (Path(__file__).resolve().parents[3] / 'docs/askchip-local/README.md').read_text(encoding='utf-8')
 
-    assert 'OLLAMA_NUM_PARALLEL=1' in readme_text
-    assert 'Ollama memory use scales' in readme_text
+    assert 'services/askchip-api/.venv' in readme_text
+    assert 'setup-askchip-local-windows-nvidia.ps1' in readme_text
+    assert 'CUDAExecutionProvider' in readme_text
+    assert '/api/v1/config' in readme_text
+    assert '/api/v1/readiness' in readme_text
 
 
 def test_windows_nvidia_setup_script_documents_gpu_runtime_swap_and_provider_validation() -> None:

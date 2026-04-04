@@ -170,3 +170,28 @@ def test_kokoro_runtime_details_auto_falls_back_to_cpu_with_warning_when_cuda_un
     assert runtime["provider"] == "CPUExecutionProvider"
     assert runtime["fallback_reason"] == "ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable."
     assert runtime["warning"] == "ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable. Using CPUExecutionProvider."
+
+
+def test_kokoro_runtime_details_fallback_warning_uses_selected_provider_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tts_module,
+        "_available_onnx_providers",
+        lambda: ["AzureExecutionProvider"],
+    )
+    adapter = KokoroTtsAdapter(
+        KokoroConfig(
+            voice="af_heart",
+            model_path=None,
+            voices_path=None,
+            device="cuda",
+        )
+    )
+
+    runtime = adapter.runtime_details()
+
+    assert runtime["requested_device"] == "cuda"
+    assert runtime["selected_device"] == "cpu"
+    assert runtime["provider"] == "unknown"
+    assert runtime["warning"] == "ASKCHIP_TTS_DEVICE=cuda requested but CUDAExecutionProvider is unavailable. Using unknown."
