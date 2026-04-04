@@ -258,7 +258,23 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - `confidence`
   - `conversation_stage` (from extractor `recommended_conversation_stage`)
   - `required_logs`, `received_logs`, `missing_logs`
-  - `resolution_status`
+
+
+### Phase 21 — deterministic VMware log sufficiency evaluation
+- Added a deterministic VMware log requirement matrix keyed by `issue_family` so the backend can assess whether the current troubleshooting path has the right log set.
+- Added backend log-sufficiency evaluation using session metadata uploaded-log names (metadata receipt only, no parsed-log claims):
+  - compares issue family requirements with uploaded log metadata names
+  - computes required vs received vs missing logs
+  - computes optional logs and an operator-facing guidance summary
+- VMware triage metadata now persists structured log sufficiency fields:
+  - `log_sufficiency_status`
+  - `required_logs`
+  - `received_logs`
+  - `missing_logs`
+  - `optional_logs`
+  - `log_guidance_summary`
+- Prompt runtime context now includes these fields so the assistant can naturally state whether logs are sufficient, partially sufficient, or still missing for the current issue path.
+- Honesty guardrail remains enforced: sufficiency is based on uploaded metadata names only unless parsed log content is explicitly present.
 - Invalid or low-confidence extraction output now safely preserves prior triage state (no fact invention / no metadata corruption).
 - The extraction step is hidden from the end-user transcript and used only to shape runtime expert behavior through session metadata context.
 - Typed and voice committed-turn paths both use the same backend extraction/update path so VMware triage state stays aligned across modalities.

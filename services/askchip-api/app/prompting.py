@@ -136,6 +136,12 @@ class PromptAssembler:
             context_lines.append(f"vmware triage conversation stage: {expert_desk['vmware_triage_conversation_stage']}")
         if expert_desk.get('vmware_triage_missing_logs'):
             context_lines.append(f"vmware triage missing logs: {expert_desk['vmware_triage_missing_logs']}")
+        if expert_desk.get('vmware_triage_log_sufficiency_status'):
+            context_lines.append(f"vmware triage log sufficiency status: {expert_desk['vmware_triage_log_sufficiency_status']}")
+        if expert_desk.get('vmware_triage_optional_logs'):
+            context_lines.append(f"vmware triage optional logs: {expert_desk['vmware_triage_optional_logs']}")
+        if expert_desk.get('vmware_triage_log_guidance_summary'):
+            context_lines.append(f"vmware triage log guidance summary: {expert_desk['vmware_triage_log_guidance_summary']}")
 
         vmware_runtime_guidance = None
         if is_vmware_persona:
@@ -150,6 +156,9 @@ class PromptAssembler:
                 '- Be honest about logs: you only have uploaded file metadata unless parsed content is explicitly provided.',
                 '- Never claim parsed-log findings unless parsed content is explicitly present in context.',
                 "- If only metadata is available, say logs were received but not parsed yet, and state what you would check next.",
+                "- If vmware triage log sufficiency status is sufficient, you may say you have enough logs for this issue path and continue step-by-step.",
+                "- If vmware triage log sufficiency status is partial, say you can proceed with current evidence but explicitly list missing logs.",
+                "- If vmware triage log sufficiency status is insufficient or unknown_issue_family, say the right logs are not complete for this path and list what to upload next.",
                 f"- Uploaded logs available: {'yes' if (uploaded_logs_available or uploaded_logs_count > 0) else 'no'}.",
                 f'- Uploaded logs count: {uploaded_logs_count}.',
             ]

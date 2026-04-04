@@ -106,6 +106,27 @@ export interface CreateSessionRequest {
   metadata?: CreateSessionMetadata;
 }
 
+
+export interface VmwareTriageState {
+  issue_family: string;
+  suspected_layer: string;
+  impact_scope: string;
+  recent_change_summary: string;
+  symptom_summary: string;
+  open_questions: string[];
+  confidence: number;
+  conversation_stage: string;
+  next_best_question: string;
+  required_logs: string[];
+  received_logs: string[];
+  missing_logs: string[];
+  log_sufficiency_status: string;
+  optional_logs: string[];
+  log_guidance_summary: string;
+  resolution_status: string;
+  last_updated_from_turn_id: string;
+}
+
 export interface ExpertDeskSessionMetadata {
   request_label: string;
   issue_category: string;
@@ -124,6 +145,7 @@ export interface ExpertDeskSessionMetadata {
   uploaded_log_names: string[];
   uploaded_logs_available: boolean;
   recommended_vmware_logs?: string[];
+  vmware_triage?: VmwareTriageState;
 }
 
 export interface CreateSessionMetadata {
