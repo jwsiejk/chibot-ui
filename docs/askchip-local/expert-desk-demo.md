@@ -297,6 +297,10 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - `required_logs`
   - `received_logs`
   - `missing_logs`
+  - `optional_logs`
+  - `log_guidance_summary`
+- Prompt runtime context now includes these fields so the assistant can naturally state whether logs are sufficient, partially sufficient, or still missing for the current issue path.
+- Honesty guardrail remains enforced: sufficiency is based on uploaded metadata names only unless parsed log content is explicitly present.
 
 ### Phase 23 — VMware trajectory transition observability + regression harness
 - Added backend-native VMware trajectory transition events for deterministic triage fields when values actually change:
@@ -323,10 +327,6 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - hypothesis-first kickoff guidance and one-focused-question behavior remain intact
   - correction handling, missing-log guidance, blocked/handoff behavior, and resolution-confirmed behavior remain deterministic
   - non-VMware sessions do not emit VMware trajectory transition events
-  - `optional_logs`
-  - `log_guidance_summary`
-- Prompt runtime context now includes these fields so the assistant can naturally state whether logs are sufficient, partially sufficient, or still missing for the current issue path.
-- Honesty guardrail remains enforced: sufficiency is based on uploaded metadata names only unless parsed log content is explicitly present.
 - Invalid or low-confidence extraction output now safely preserves prior triage state (no fact invention / no metadata corruption).
 - The extraction step is hidden from the end-user transcript and used only to shape runtime expert behavior through session metadata context.
 - Typed and voice committed-turn paths both use the same backend extraction/update path so VMware triage state stays aligned across modalities.
