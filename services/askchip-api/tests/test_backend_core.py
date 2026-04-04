@@ -4252,3 +4252,103 @@ def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_pa
     assert 'configured Ollama model is not installed locally: gemma3:4b' in readiness.json()['checks']['ollama']['detail']
     assert turn.status_code == 503
     assert 'configured Ollama model is not installed locally: gemma3:4b' in turn.json()['detail']
+
+def test_session_artifact_upload_persists_and_parses_supported_file(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Artifacts'}).json()['id']
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',
+            headers={'X-Artifact-Filename': 'vmkernel.log', 'Content-Type': 'text/plain'},
+        )
+        listed = client.get(f'/api/v1/sessions/{session_id}/artifacts')
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    artifact = response.json()['artifact']
+    assert artifact['status'] == 'parsed_supported'
+    assert artifact['evidence']['parsed_line_count'] == 1
+    assert listed.status_code == 200
+    assert len(listed.json()['items']) == 1
+    assert 'text' in transcript['messages'][0] if transcript['messages'] else True
+    assert transcript['session']['status'] in CONTRACT_TRANSCRIPT_STATES
+
+
+def test_session_artifact_upload_marks_unsupported(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Artifacts'}).json()['id']
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'2026-03-10 09:10:20 hostd started',
+            headers={'X-Artifact-Filename': 'hostd.log', 'Content-Type': 'text/plain'},
+        )
+
+    assert response.status_code == 201
+    assert response.json()['artifact']['status'] == 'uploaded_unsupported'
+
+
+def test_session_artifact_upload_parse_failure_is_explicit(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'Artifacts'}).json()['id']
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'\xff\xfe\x00\x00',
+            headers={'X-Artifact-Filename': 'vpxd.log', 'Content-Type': 'text/plain'},
+        )
+
+    assert response.status_code == 201
+    artifact = response.json()['artifact']
+    assert artifact['status'] == 'parse_failed'
+    assert artifact['parse_error']
+
+
+def test_prompt_preface_includes_vmware_artifact_statuses(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'ok'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        create = client.post('/api/v1/sessions', json={
+            'title': 'VMware artifact context',
+            'metadata': {
+                'expert_desk': {
+                    'request_label': 'req',
+                    'issue_category': 'production-outage',
+                    'environment_platform': 'vmware',
+                    'urgency': 'same-day',
+                    'preferred_expert_type': 'ai-vmware-engineer',
+                    'recommended_expert_type': 'ai-vmware-engineer',
+                    'recommended_path': 'launch-live-expert-now',
+                    'expert_persona_id': 'ai-vmware-engineer',
+                    'expert_persona_label': 'AI VMware Engineer',
+                    'expert_persona_summary': '',
+                    'issue_description': 'issue',
+                    'architecture_notes': '',
+                    'error_text': '',
+                    'uploaded_logs_count': 1,
+                    'uploaded_log_names': ['vmkernel.log'],
+                    'uploaded_logs_available': True,
+                    'vmware_artifacts': [{
+                        'id': 'a1', 'session_id': 's1', 'filename': 'vmkernel.log', 'content_type': 'text/plain',
+                        'size_bytes': 10, 'status': 'parsed_supported', 'artifact_type': 'vmkernel.log',
+                        'uploaded_at': '2026-03-10T00:00:00', 'storage_path': '/tmp/a1',
+                        'evidence': {'parser_kind': 'vmware_log_v1', 'artifact_type': 'vmkernel.log', 'parsed_line_count': 1,
+                                     'timestamp_start': None, 'timestamp_end': None, 'matched_categories': ['storage'],
+                                     'notable_lines': ['error'], 'parse_warnings': []},
+                    }],
+                },
+            },
+        })
+        session_id = create.json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'help'})
+
+    assert turn.status_code == 201
+    payload = captured['payload']
+    content = '\n'.join(message['content'] for message in payload['messages'])
+    assert 'vmware artifacts' in content

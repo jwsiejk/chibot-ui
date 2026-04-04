@@ -115,6 +115,7 @@ class PromptAssembler:
             uploaded_logs_count = 0
         uploaded_logs_available = expert_desk.get('uploaded_logs_available', '').lower() in {'true', '1', 'yes'}
         uploaded_log_names = expert_desk.get('uploaded_log_names', '').strip()
+        vmware_artifacts = expert_desk.get('vmware_artifacts', '').strip()
         context_lines = [
             f"selected expert persona id: {persona_id or 'general-infrastructure-expert'}",
             f"selected expert persona label: {persona_label or 'General Infrastructure Expert'}",
@@ -136,6 +137,8 @@ class PromptAssembler:
             context_lines.append(f"preferred expert type: {expert_desk['preferred_expert_type']}")
         if uploaded_log_names:
             context_lines.append(f"uploaded log names: {uploaded_log_names}")
+        if vmware_artifacts:
+            context_lines.append(f"vmware artifacts: {vmware_artifacts}")
         if expert_desk.get('vmware_triage_issue_family'):
             context_lines.append(f"vmware triage issue family: {expert_desk['vmware_triage_issue_family']}")
         if expert_desk.get('vmware_triage_suspected_layer'):
@@ -187,6 +190,8 @@ class PromptAssembler:
                 '- Be honest about logs: you only have uploaded file metadata unless parsed content is explicitly provided.',
                 '- Never claim parsed-log findings unless parsed content is explicitly present in context.',
                 "- If only metadata is available, say logs were received but not parsed yet, and state what you would check next.",
+                "- If parsed_supported artifacts exist, you may reference only their explicit parsed evidence (line count, timestamp range, categories, notable lines).",
+                "- If uploaded_unsupported or parse_failed artifacts exist, call that out clearly and request supported plain-text logs.",
                 "- If vmware triage log sufficiency status is sufficient, you may say you have enough logs for this issue path and continue step-by-step.",
                 "- If vmware triage log sufficiency status is partial, say you can proceed with current evidence but explicitly list missing logs.",
                 "- If vmware triage log sufficiency status is insufficient or unknown_issue_family, say the right logs are not complete for this path and list what to upload next.",

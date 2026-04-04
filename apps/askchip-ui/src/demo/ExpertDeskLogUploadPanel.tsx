@@ -1,8 +1,10 @@
 import type { ChangeEvent } from 'react';
 import type { ExpertDeskUploadedLogMetadata, ExpertDeskUploadedLogSource } from './types';
+import type { VmwareArtifactRecord } from '../types/contract';
 
 type ExpertDeskLogUploadPanelProps = {
   files: ExpertDeskUploadedLogMetadata[];
+  backendArtifacts?: VmwareArtifactRecord[];
   uploadSource: ExpertDeskUploadedLogSource;
   onAddFiles: (files: FileList, source: ExpertDeskUploadedLogSource) => void;
   title?: string;
@@ -22,6 +24,7 @@ function formatBytes(size: number): string {
 
 export function ExpertDeskLogUploadPanel({
   files,
+  backendArtifacts = [],
   uploadSource,
   onAddFiles,
   title = 'Log file upload',
@@ -41,7 +44,7 @@ export function ExpertDeskLogUploadPanel({
     <section className={`rounded-2xl border border-slate-200 bg-slate-50 ${compact ? 'p-3' : 'p-4'}`}>
       <p className="text-sm font-semibold text-slate-900">{title}</p>
       <p className="mt-1 text-xs leading-5 text-slate-600">
-        Frontend-local only for now: files are not uploaded to backend storage or parsed by AskChip in this phase.
+        Intake files are frontend-local. Live-session uploads are sent to backend for supported VMware parser checks.
       </p>
       {helperNote ? <p className="mt-1 text-xs leading-5 text-slate-600">{helperNote}</p> : null}
       <label className="mt-3 inline-flex cursor-pointer rounded-full border border-indigo-300 bg-indigo-50 px-4 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">
@@ -69,6 +72,20 @@ export function ExpertDeskLogUploadPanel({
           ))
         )}
       </div>
+      {backendArtifacts.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs font-semibold text-slate-700">Backend artifact ingestion status</p>
+          {backendArtifacts.map((artifact) => (
+            <article key={artifact.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <p className="text-sm font-medium text-slate-900">{artifact.filename}</p>
+              <p className="mt-1 text-xs text-slate-600">
+                status: {artifact.status} · type: {artifact.artifact_type || 'unknown'} · uploaded: {new Date(artifact.uploaded_at).toLocaleString()}
+              </p>
+              {artifact.parse_error ? <p className="mt-1 text-xs text-rose-600">parse_error: {artifact.parse_error}</p> : null}
+            </article>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

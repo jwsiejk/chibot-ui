@@ -70,3 +70,18 @@ class TimingRecord(BaseModel):
     ended_at: datetime | None = None
     duration_ms: int | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class VmwareArtifactRecord(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    session_id: str
+    filename: str
+    content_type: str = 'application/octet-stream'
+    size_bytes: int = 0
+    status: str = 'metadata_only'
+    artifact_type: str = ''
+    uploaded_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    storage_path: str = ''
+    parse_error: str = ''
+    evidence: dict[str, Any] = Field(default_factory=dict)

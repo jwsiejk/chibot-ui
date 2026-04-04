@@ -19,7 +19,11 @@ from app.api_models import (
     UpdateSessionRequest,
     TranscriptMessageResponse,
     TranscriptResponse,
+    SessionArtifactsResponse,
+    UploadSessionArtifactResponse,
+    VmwareArtifactRecord,
 )
+from app.artifact_store import ArtifactStore
 from app.config import Settings, settings
 from app.domain_models import EventRecord, SessionRecord
 from app.events import EventBus
@@ -39,6 +43,8 @@ from app.turns import BusyError, InvalidCommittedInputError, TurnManager
 from app.voice import EmptyTranscriptionError, InvalidVoiceLifecycleError, VoiceInputError, VoiceTurnService
 from app.webrtc import WebRtcSignalingService, WebRtcWebSocketHandler
 from app.webrtc_models import WebRtcOfferRequest
+from app.vmware_artifacts import parse_uploaded_vmware_artifact
+from app.domain_models import VmwareArtifactRecord as VmwareArtifactDomainRecord
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +54,7 @@ class AppState:
     def __init__(self, config: Settings, ollama_transport=None, webrtc_peer_factory=None, stt_service=None, tts_adapter=None) -> None:
         self.config = config
         self.db = Database(Path(config.database_path))
+        self.artifacts = ArtifactStore(Path(config.database_path).parent / 'artifacts')
         self.event_bus = EventBus()
         self.prompt_assembler = PromptAssembler(transcript_window=config.prompt_transcript_window)
         self.ollama = OllamaClient(
@@ -275,6 +282,109 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             timings=state.db.list_timings(session_id),
         )
         return JSONResponse(transcript.model_dump(mode='json'))
+
+    @app.get('/api/v1/sessions/{session_id}/artifacts')
+    def list_session_artifacts(session_id: str) -> JSONResponse:
+        session = state.db.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail='session not found')
+        items = [
+            VmwareArtifactRecord.model_validate(
+                {
+                    'id': artifact.id,
+                    'session_id': artifact.session_id,
+                    'filename': artifact.filename,
+                    'content_type': artifact.content_type,
+                    'size_bytes': artifact.size_bytes,
+                    'status': artifact.status,
+                    'artifact_type': artifact.artifact_type,
+                    'uploaded_at': artifact.uploaded_at.isoformat(),
+                    'storage_path': artifact.storage_path,
+                    'parse_error': artifact.parse_error or None,
+                    'evidence': artifact.evidence or None,
+                }
+            )
+            for artifact in state.db.list_vmware_artifacts(session_id)
+        ]
+        return JSONResponse(SessionArtifactsResponse(items=items).model_dump(mode='json'))
+
+    @app.post('/api/v1/sessions/{session_id}/artifacts')
+    async def upload_session_artifact(
+        session_id: str,
+        request: Request,
+        x_artifact_filename: str | None = Header(default=None, alias='X-Artifact-Filename'),
+        content_type: str | None = Header(default=None, alias='Content-Type'),
+    ) -> JSONResponse:
+        session = state.db.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail='session not found')
+        filename = (x_artifact_filename or 'uploaded-artifact').strip() or 'uploaded-artifact'
+        content = await request.body()
+        parse_result = parse_uploaded_vmware_artifact(filename, content)
+        artifact = VmwareArtifactDomainRecord(
+            session_id=session_id,
+            filename=filename,
+            content_type=content_type or 'application/octet-stream',
+            size_bytes=len(content),
+            status=parse_result.status,
+            artifact_type=parse_result.artifact_type,
+            parse_error=parse_result.parse_error,
+            evidence=parse_result.evidence.model_dump(mode='json') if parse_result.evidence else {},
+        )
+        stored_path = state.artifacts.store_session_artifact(session_id, artifact.id, filename, content)
+        artifact.storage_path = str(stored_path)
+        state.db.create_vmware_artifact(artifact)
+
+        expert_desk = (
+            session.metadata.get('expert_desk', {})
+            if isinstance(session.metadata, dict) and isinstance(session.metadata.get('expert_desk'), dict)
+            else {}
+        )
+        existing = expert_desk.get('vmware_artifacts')
+        existing_items = list(existing) if isinstance(existing, list) else []
+        existing_items.append({
+            'id': artifact.id,
+            'session_id': artifact.session_id,
+            'filename': artifact.filename,
+            'content_type': artifact.content_type,
+            'size_bytes': artifact.size_bytes,
+            'status': artifact.status,
+            'artifact_type': artifact.artifact_type,
+            'uploaded_at': artifact.uploaded_at.isoformat(),
+            'storage_path': artifact.storage_path,
+            'parse_error': artifact.parse_error or None,
+            'evidence': artifact.evidence or None,
+        })
+        expert_desk['vmware_artifacts'] = existing_items
+        metadata_patch = {'expert_desk': expert_desk}
+        metadata_patch = refresh_vmware_triage_log_sufficiency(metadata_patch)
+        metadata_patch = refresh_vmware_triage_policy_state(metadata_patch)
+        state.db.update_session_state(
+            session_id,
+            status=session.status,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            active_turn_id=session.active_turn_id,
+            ready_at=session.ready_at.isoformat() if session.ready_at else None,
+            last_error_at=session.last_error_at.isoformat() if session.last_error_at else None,
+            metadata=metadata_patch,
+        )
+
+        payload = VmwareArtifactRecord.model_validate(
+            {
+                'id': artifact.id,
+                'session_id': artifact.session_id,
+                'filename': artifact.filename,
+                'content_type': artifact.content_type,
+                'size_bytes': artifact.size_bytes,
+                'status': artifact.status,
+                'artifact_type': artifact.artifact_type,
+                'uploaded_at': artifact.uploaded_at.isoformat(),
+                'storage_path': artifact.storage_path,
+                'parse_error': artifact.parse_error or None,
+                'evidence': artifact.evidence or None,
+            }
+        )
+        return JSONResponse(UploadSessionArtifactResponse(artifact=payload).model_dump(mode='json'), status_code=201)
 
 
     @app.get('/api/v1/sessions/{session_id}/messages/{message_id}/speech')

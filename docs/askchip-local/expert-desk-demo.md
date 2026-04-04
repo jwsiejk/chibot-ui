@@ -452,3 +452,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Session-linked frontstage context for Visual Session is still frontend-local (`sessionStorage`) and browser-session scoped for current demo UI rendering.
 - Recommendation launch now also supports an optional backend session-scoped metadata handoff (`metadata.expert_desk`) persisted on the AskChip session record for future runtime pre-briefing.
 - Summary handoff requests (follow-up/escalation) are frontend-local (`sessionStorage`) by session id and are not sent to backend CRM, scheduling, or ticketing systems.
+
+### Optional Phase 7 — backend VMware artifact ingestion/parsing foundation
+- Added real backend artifact upload/list endpoints scoped to existing sessions (`POST/GET /api/v1/sessions/:sessionId/artifacts`).
+- Uploaded artifact bytes are persisted in app-owned local storage and artifact metadata is persisted in typed records.
+- First supported parser set is intentionally narrow: plain-text `vmkernel.log`, `vobd.log`, `vpxd.log`.
+- Artifact parse status is explicit (`metadata_only`, `uploaded_supported_unparsed`, `parsed_supported`, `uploaded_unsupported`, `parse_failed`) and is distinct from transcript messages.
+- Runtime/prompt guidance can now distinguish metadata-only log names vs parsed-supported evidence vs unsupported/failed uploads.
+- Out of scope remains unchanged for this phase: archives (`.tgz`/`.zip`), support bundles, broad artifact coverage, OCR, and RAG indexing.

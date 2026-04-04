@@ -327,9 +327,14 @@ def build_vmware_handoff_packet(
         confirmed_facts.append(f'Recent change summary: {triage.recent_change_summary.strip()}')
     if triage.symptom_summary.strip():
         confirmed_facts.append(f'Symptom summary: {triage.symptom_summary.strip()}')
-    confirmed_facts.append(
-        'Log evidence reflects uploaded file metadata names only; parsed-log conclusions are not persisted in this phase.'
-    )
+    artifact_rows = expert_desk.vmware_artifacts
+    has_parsed_artifacts = any(item.status == 'parsed_supported' for item in artifact_rows)
+    if has_parsed_artifacts:
+        confirmed_facts.append('Parsed VMware artifact evidence is available for supported uploaded plain-text logs.')
+    else:
+        confirmed_facts.append(
+            'Log evidence reflects uploaded file metadata names only; parsed-log conclusions are not available yet.'
+        )
 
     user_count = 0
     assistant_count = 0

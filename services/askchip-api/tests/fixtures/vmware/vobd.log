@@ -1,0 +1,3 @@
+2026-03-10 10:00:00 [UserWorldCorrelator] 112233: [vob.user.vmk.status.warning] Hostd health warning detected
+2026-03-10 10:00:05 [Vpxa] 112234: [vob.vpxa.status.error] vpxa disconnected from vCenter
+2026-03-10 10:00:06 [Net] 112235: [vob.net.vmnic.linkstate.down] vmnic0 link down

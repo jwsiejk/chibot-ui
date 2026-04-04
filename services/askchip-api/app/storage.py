@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Iterator
 
-from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
+from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord, VmwareArtifactRecord
 
 
 class DatabaseError(RuntimeError):
@@ -94,6 +94,21 @@ class Database:
                 type TEXT NOT NULL,
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS vmware_artifacts (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                artifact_type TEXT NOT NULL,
+                storage_path TEXT NOT NULL,
+                parse_error TEXT NOT NULL DEFAULT '',
+                evidence TEXT NOT NULL DEFAULT '{}',
+                uploaded_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
             CREATE TABLE IF NOT EXISTS timings (
                 id TEXT PRIMARY KEY,
@@ -193,6 +208,7 @@ class Database:
                 return False
             conn.execute('DELETE FROM timings WHERE session_id = ?', (session_id,))
             conn.execute('DELETE FROM events WHERE session_id = ?', (session_id,))
+            conn.execute('DELETE FROM vmware_artifacts WHERE session_id = ?', (session_id,))
             conn.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
             conn.execute('DELETE FROM sessions WHERE id = ?', (session_id,))
         return True
@@ -278,6 +294,34 @@ class Database:
             rows = conn.execute('SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC', (session_id,)).fetchall()
         return [self._message_from_row(row) for row in rows]
 
+    def create_vmware_artifact(self, artifact: VmwareArtifactRecord) -> VmwareArtifactRecord:
+        with self._lock, self.connect() as conn:
+            conn.execute(
+                '''INSERT INTO vmware_artifacts(
+                    id, session_id, filename, content_type, size_bytes, status, artifact_type, storage_path, parse_error, evidence, uploaded_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (
+                    artifact.id,
+                    artifact.session_id,
+                    artifact.filename,
+                    artifact.content_type,
+                    artifact.size_bytes,
+                    artifact.status,
+                    artifact.artifact_type,
+                    artifact.storage_path,
+                    artifact.parse_error,
+                    json.dumps(artifact.evidence),
+                    artifact.uploaded_at.isoformat(),
+                    artifact.updated_at.isoformat(),
+                ),
+            )
+        return artifact
+
+    def list_vmware_artifacts(self, session_id: str) -> list[VmwareArtifactRecord]:
+        with self._lock, self.connect() as conn:
+            rows = conn.execute('SELECT * FROM vmware_artifacts WHERE session_id = ? ORDER BY uploaded_at ASC', (session_id,)).fetchall()
+        return [self._vmware_artifact_from_row(row) for row in rows]
+
     def create_event(self, event: EventRecord) -> EventRecord:
         with self._lock, self.connect() as conn:
             conn.execute(
@@ -362,6 +406,23 @@ class Database:
             type=row['type'],
             payload=json.loads(row['payload']),
             created_at=datetime.fromisoformat(row['created_at']),
+        )
+
+    @staticmethod
+    def _vmware_artifact_from_row(row: sqlite3.Row) -> VmwareArtifactRecord:
+        return VmwareArtifactRecord(
+            id=row['id'],
+            session_id=row['session_id'],
+            filename=row['filename'],
+            content_type=row['content_type'],
+            size_bytes=row['size_bytes'],
+            status=row['status'],
+            artifact_type=row['artifact_type'],
+            storage_path=row['storage_path'],
+            parse_error=row['parse_error'] or '',
+            evidence=json.loads(row['evidence']) if row['evidence'] else {},
+            uploaded_at=datetime.fromisoformat(row['uploaded_at']),
+            updated_at=datetime.fromisoformat(row['updated_at']),
         )
 
     @staticmethod
