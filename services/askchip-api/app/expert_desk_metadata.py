@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.api_models import ExpertDeskSessionMetadata, VmwareTriageState
+from app.vmware_log_sufficiency import evaluate_vmware_log_sufficiency
 
 
 def safe_partial_vmware_triage(raw_vmware_triage: Any) -> VmwareTriageState | None:
@@ -65,6 +66,34 @@ def update_vmware_triage_state(
     expert_desk = read_expert_desk_metadata(base)
     if expert_desk is None:
         return base
+    expert_desk.vmware_triage = triage_state
+    base['expert_desk'] = expert_desk.model_dump(mode='json')
+    return base
+
+
+def refresh_vmware_triage_log_sufficiency(session_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    base = dict(session_metadata) if isinstance(session_metadata, dict) else {}
+    expert_desk = read_expert_desk_metadata(base)
+    if expert_desk is None:
+        return base
+    is_vmware_persona = expert_desk.expert_persona_id == 'ai-vmware-engineer' or expert_desk.expert_persona_label.strip().lower() == 'ai vmware engineer'
+    if not is_vmware_persona:
+        return base
+    triage_state = expert_desk.vmware_triage
+    if triage_state is None:
+        return base
+    issue_family = triage_state.issue_family.strip()
+    if not issue_family:
+        return base
+
+    uploaded_log_names = [name.strip() for name in expert_desk.uploaded_log_names if name.strip()]
+    sufficiency = evaluate_vmware_log_sufficiency(issue_family, uploaded_log_names)
+    triage_state.required_logs = sufficiency.required_logs
+    triage_state.received_logs = sufficiency.received_logs
+    triage_state.missing_logs = sufficiency.missing_logs
+    triage_state.optional_logs = sufficiency.optional_logs
+    triage_state.log_sufficiency_status = sufficiency.log_sufficiency_status
+    triage_state.log_guidance_summary = sufficiency.log_guidance_summary
     expert_desk.vmware_triage = triage_state
     base['expert_desk'] = expert_desk.model_dump(mode='json')
     return base

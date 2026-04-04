@@ -135,5 +135,6 @@ curl http://127.0.0.1:8000/api/v1/readiness
 - The VMware triage state is session-scoped and persists across typed and voice turns so runtime triage flow can be reused turn-to-turn.
 - For VMware persona sessions, backend runtime may update this triage state through a hidden per-turn extraction step before assistant response generation; transcript message shape is unchanged.
 - VMware triage metadata now also tracks deterministic log-sufficiency fields per issue family (`log_sufficiency_status`, `required_logs`, `received_logs`, `missing_logs`, `optional_logs`, `log_guidance_summary`) based on uploaded file metadata names only.
+- For VMware persona sessions that already have a triage `issue_family`, session metadata PATCH updates now immediately refresh deterministic log-sufficiency fields from the latest `uploaded_log_names` during live sessions (without waiting for the next committed turn).
 - AskChip remains honest about current log handling: uploaded file metadata can drive sufficiency guidance, but parsed-log findings are not claimed unless parsed content exists.
 - Transcript and turn payload contracts remain unchanged (`text` remains canonical transcript content).

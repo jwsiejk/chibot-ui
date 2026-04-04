@@ -1071,6 +1071,220 @@ def test_session_patch_can_update_expert_desk_metadata_without_renaming(tmp_path
     assert transcript.json()['session']['metadata']['expert_desk']['uploaded_log_names'] == ['vmkernel.log']
 
 
+def test_session_patch_vmware_uploaded_logs_immediately_refreshes_log_sufficiency(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware sufficiency refresh',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Patch 1',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Intermittent host disconnects',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['vmkernel.log'],
+                        'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'suspected_layer': 'esxi-network-stack',
+                            'impact_scope': 'single-cluster',
+                            'recent_change_summary': 'Recent uplink policy change',
+                            'symptom_summary': 'Hosts flap every 20 minutes',
+                            'open_questions': ['Do flaps align with vmnic errors?'],
+                            'confidence': 0.7,
+                            'conversation_stage': 'evidence_gathering',
+                            'next_best_question': 'Do vmnic errors align with flap timestamps?',
+                            'resolution_status': 'in_progress',
+                            'last_updated_from_turn_id': 'turn-prev',
+                        },
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Patch 1',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Intermittent host disconnects',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 3,
+                        'uploaded_log_names': ['vmkernel.log', 'vobd.log', 'vcenter-events-bundle.tgz'],
+                        'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'suspected_layer': 'esxi-network-stack',
+                            'impact_scope': 'single-cluster',
+                            'recent_change_summary': 'Recent uplink policy change',
+                            'symptom_summary': 'Hosts flap every 20 minutes',
+                            'open_questions': ['Do flaps align with vmnic errors?'],
+                            'confidence': 0.7,
+                            'conversation_stage': 'evidence_gathering',
+                            'next_best_question': 'Do vmnic errors align with flap timestamps?',
+                            'resolution_status': 'in_progress',
+                            'last_updated_from_turn_id': 'turn-prev',
+                        },
+                    }
+                }
+            },
+        )
+
+    assert patched.status_code == 200
+    triage = patched.json()['metadata']['expert_desk']['vmware_triage']
+    assert triage['issue_family'] == 'host-networking'
+    assert triage['suspected_layer'] == 'esxi-network-stack'
+    assert triage['confidence'] == 0.7
+    assert triage['last_updated_from_turn_id'] == 'turn-prev'
+    assert triage['log_sufficiency_status'] == 'sufficient'
+    assert triage['required_logs'] == ['vmkernel.log', 'vobd.log', 'vCenter Server logs']
+    assert triage['received_logs'] == ['vmkernel.log', 'vobd.log', 'vCenter Server logs']
+    assert triage['missing_logs'] == []
+    assert triage['optional_logs'] == ['ESXi host support bundle', 'Distributed switch / vmnic event export']
+    assert "host-networking" in triage['log_guidance_summary']
+
+
+def test_session_patch_non_vmware_persona_does_not_run_vmware_log_sufficiency(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post('/api/v1/sessions', json={'title': 'Non-VMware patch'})
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Patch 2',
+                        'issue_category': 'EC2 issue',
+                        'environment_platform': 'AWS',
+                        'urgency': 'Medium',
+                        'preferred_expert_type': 'AI AWS Engineer',
+                        'recommended_expert_type': 'AI AWS Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-aws-engineer',
+                        'expert_persona_label': 'AI AWS Engineer',
+                        'issue_description': 'Instance network timeout',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['ec2-network.log'],
+                        'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'required_logs': ['seeded-required'],
+                            'received_logs': ['seeded-received'],
+                            'missing_logs': ['seeded-missing'],
+                            'optional_logs': ['seeded-optional'],
+                            'log_sufficiency_status': 'seeded-status',
+                            'log_guidance_summary': 'seeded-summary',
+                        },
+                    }
+                }
+            },
+        )
+
+    assert patched.status_code == 200
+    triage = patched.json()['metadata']['expert_desk']['vmware_triage']
+    assert triage['required_logs'] == ['seeded-required']
+    assert triage['received_logs'] == ['seeded-received']
+    assert triage['missing_logs'] == ['seeded-missing']
+    assert triage['optional_logs'] == ['seeded-optional']
+    assert triage['log_sufficiency_status'] == 'seeded-status'
+    assert triage['log_guidance_summary'] == 'seeded-summary'
+
+
+def test_session_patch_vmware_without_issue_family_does_not_invent_triage_state(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post('/api/v1/sessions', json={'title': 'No triage issue family'})
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Patch 3',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'No triage yet',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 2,
+                        'uploaded_log_names': ['vmkernel.log', 'vobd.log'],
+                        'uploaded_logs_available': True,
+                    }
+                }
+            },
+        )
+
+    assert patched.status_code == 200
+    assert patched.json()['metadata']['expert_desk'].get('vmware_triage') is None
+
+
+def test_session_patch_metadata_regression_still_persists_general_expert_desk_updates(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post('/api/v1/sessions', json={'title': 'Regression metadata patch'})
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Patch 4',
+                        'issue_category': 'General infra support',
+                        'environment_platform': 'AWS',
+                        'urgency': 'Low',
+                        'preferred_expert_type': 'AI AWS Engineer',
+                        'recommended_expert_type': 'AI AWS Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-aws-engineer',
+                        'expert_persona_label': 'AI AWS Engineer',
+                        'issue_description': 'Need architecture guidance',
+                        'architecture_notes': 'Staging VPC',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['cloudwatch-export.json'],
+                        'uploaded_logs_available': True,
+                    }
+                }
+            },
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert patched.status_code == 200
+    assert transcript.status_code == 200
+    assert patched.json()['metadata']['expert_desk']['request_label'] == 'Req Patch 4'
+    assert transcript.json()['session']['metadata']['expert_desk']['uploaded_log_names'] == ['cloudwatch-export.json']
+
+
 def test_session_create_persists_typed_vmware_triage_state(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:

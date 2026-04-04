@@ -23,6 +23,7 @@ from app.api_models import (
 from app.config import Settings, settings
 from app.domain_models import EventRecord, SessionRecord
 from app.events import EventBus
+from app.expert_desk_metadata import refresh_vmware_triage_log_sufficiency
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.readiness import ReadinessTracker
@@ -210,6 +211,9 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             if updated is None:
                 raise HTTPException(status_code=404, detail='session not found')
         if request.metadata is not None:
+            metadata = request.metadata.model_dump(mode='json')
+            if request.metadata.expert_desk is not None:
+                metadata = refresh_vmware_triage_log_sufficiency(metadata)
             state.db.update_session_state(
                 session_id,
                 status=updated.status,
@@ -217,7 +221,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
                 active_turn_id=updated.active_turn_id,
                 ready_at=updated.ready_at.isoformat() if updated.ready_at else None,
                 last_error_at=updated.last_error_at.isoformat() if updated.last_error_at else None,
-                metadata=request.metadata.model_dump(mode='json'),
+                metadata=metadata,
             )
             refreshed = state.db.get_session(session_id)
             if refreshed is None:
