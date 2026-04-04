@@ -1218,9 +1218,95 @@ def test_session_patch_vmware_uploaded_logs_immediately_refreshes_log_sufficienc
     assert triage['missing_logs'] == []
     assert triage['optional_logs'] == ['ESXi host support bundle', 'Distributed switch / vmnic event export']
     assert "host-networking" in triage['log_guidance_summary']
-    assert triage['policy_next_move'] == 'confirm_issue_family'
-    assert triage['conversation_stage'] == 'issue_definition'
-    assert triage['next_best_question'] == 'Does this align most with host networking, storage pathing, vCenter services, or VM performance impact?'
+    assert triage['policy_next_move'] == 'validate_hypothesis'
+    assert triage['conversation_stage'] == 'evidence_gathering'
+    assert triage['next_best_question'] == 'Based on your latest details, should we revise the issue family before we continue?'
+
+
+def test_session_patch_vmware_refresh_preserves_existing_progressed_policy_move(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware preserve progressed move',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Patch 1b',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Intermittent host disconnects',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 2,
+                        'uploaded_log_names': ['vmkernel.log', 'vobd.log'],
+                        'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'suspected_layer': 'esxi-network-stack',
+                            'impact_scope': 'single-cluster',
+                            'recent_change_summary': 'Recent uplink policy change',
+                            'confidence': 0.8,
+                            'conversation_stage': 'verification',
+                            'policy_next_move': 'verify_result',
+                            'next_best_question': 'Did host health improve?',
+                            'resolution_status': 'in_progress',
+                            'last_updated_from_turn_id': 'turn-prev',
+                        },
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Patch 1b',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Intermittent host disconnects',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 3,
+                        'uploaded_log_names': ['vmkernel.log', 'vobd.log', 'vcenter-events-bundle.tgz'],
+                        'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'suspected_layer': 'esxi-network-stack',
+                            'impact_scope': 'single-cluster',
+                            'recent_change_summary': 'Recent uplink policy change',
+                            'confidence': 0.8,
+                            'conversation_stage': 'verification',
+                            'policy_next_move': 'verify_result',
+                            'next_best_question': 'Did host health improve?',
+                            'resolution_status': 'in_progress',
+                            'last_updated_from_turn_id': 'turn-prev',
+                        },
+                    }
+                }
+            },
+        )
+
+    assert patched.status_code == 200
+    triage = patched.json()['metadata']['expert_desk']['vmware_triage']
+    assert triage['log_sufficiency_status'] == 'sufficient'
+    assert triage['policy_next_move'] == 'verify_result'
+    assert triage['conversation_stage'] == 'verification'
+    assert triage['next_best_question'] == 'After that step, did alarms, host state, and workload impact improve or stay the same?'
 
 
 def test_session_patch_non_vmware_persona_does_not_run_vmware_log_sufficiency(tmp_path: Path) -> None:
