@@ -14,6 +14,7 @@ class VmwareTriageState(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     conversation_stage: str = ''
+    policy_next_move: str = ''
     next_best_question: str = ''
     required_logs: list[str] = Field(default_factory=list)
     received_logs: list[str] = Field(default_factory=list)
