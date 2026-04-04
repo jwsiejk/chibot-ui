@@ -286,7 +286,7 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Transcript and session-state contract remains unchanged in this phase (`text` canonical transcript field, same allowed top-level session states, WebRTC diagnostics-only).
 
 
-### Phase 21 — deterministic VMware log sufficiency evaluation
+### Phase 22 — deterministic VMware log sufficiency evaluation
 - Added a deterministic VMware log requirement matrix keyed by `issue_family` so the backend can assess whether the current troubleshooting path has the right log set.
 - Added backend log-sufficiency evaluation using session metadata uploaded-log names (metadata receipt only, no parsed-log claims):
   - compares issue family requirements with uploaded log metadata names
@@ -298,7 +298,7 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - `received_logs`
   - `missing_logs`
 
-### Phase 21 — VMware trajectory transition observability + regression harness
+### Phase 23 — VMware trajectory transition observability + regression harness
 - Added backend-native VMware trajectory transition events for deterministic triage fields when values actually change:
   - `vmware.trajectory.issue_family_changed`
   - `vmware.trajectory.conversation_stage_changed`
