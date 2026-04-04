@@ -40,6 +40,28 @@ def safe_partial_vmware_triage(raw_vmware_triage: Any) -> VmwareTriageState | No
         return None
 
 
+def safe_partial_vmware_handoff(raw_vmware_handoff: Any) -> VmwareHandoffPacket | None:
+    if isinstance(raw_vmware_handoff, VmwareHandoffPacket):
+        return raw_vmware_handoff
+    if not isinstance(raw_vmware_handoff, dict):
+        return None
+    cleaned: dict[str, Any] = {}
+    for field_name, raw_value in raw_vmware_handoff.items():
+        if field_name not in VmwareHandoffPacket.model_fields:
+            continue
+        try:
+            parsed = VmwareHandoffPacket.model_validate({field_name: raw_value})
+        except ValidationError:
+            continue
+        cleaned[field_name] = getattr(parsed, field_name)
+    if not cleaned:
+        return None
+    try:
+        return VmwareHandoffPacket.model_validate(cleaned)
+    except ValidationError:
+        return None
+
+
 def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> ExpertDeskSessionMetadata | None:
     if not isinstance(session_metadata, dict):
         return None
@@ -48,16 +70,23 @@ def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> Expert
         return None
     raw_expert_desk = dict(raw)
     raw_vmware_triage = raw_expert_desk.pop('vmware_triage', None)
+    raw_vmware_handoff = raw_expert_desk.pop('vmware_handoff', None)
     try:
-        expert_desk = ExpertDeskSessionMetadata.model_validate({**raw_expert_desk, 'vmware_triage': None})
+        expert_desk = ExpertDeskSessionMetadata.model_validate(
+            {**raw_expert_desk, 'vmware_triage': None, 'vmware_handoff': None}
+        )
     except ValidationError:
         return None
-    if raw_vmware_triage is None:
-        return expert_desk
-    try:
-        expert_desk.vmware_triage = safe_partial_vmware_triage(raw_vmware_triage)
-    except ValidationError:
-        expert_desk.vmware_triage = None
+    if raw_vmware_triage is not None:
+        try:
+            expert_desk.vmware_triage = safe_partial_vmware_triage(raw_vmware_triage)
+        except ValidationError:
+            expert_desk.vmware_triage = None
+    if raw_vmware_handoff is not None:
+        try:
+            expert_desk.vmware_handoff = safe_partial_vmware_handoff(raw_vmware_handoff)
+        except ValidationError:
+            expert_desk.vmware_handoff = None
     return expert_desk
 
 
@@ -263,7 +292,10 @@ def build_vmware_handoff_packet(
 
     issue_summary = triage.symptom_summary.strip() or expert_desk.issue_description.strip() or expert_desk.request_label.strip()
     working_hypothesis = triage.suspected_layer.strip() or f'Current working path remains {issue_family}.'
-    recommended_next_step = triage.next_best_question.strip() or triage.policy_next_move.strip() or 'Continue evidence-driven VMware triage.'
+    recommended_next_step = triage.next_best_question.strip() or _human_readable_next_step_for_policy_move(
+        triage.policy_next_move,
+        triage,
+    )
     return VmwareHandoffPacket(
         issue_summary=issue_summary,
         working_hypothesis=working_hypothesis,
@@ -278,6 +310,35 @@ def build_vmware_handoff_packet(
         handoff_reason=handoff_reason,
         ready_for_handoff=resolution_status == 'needs_human_handoff',
     )
+
+
+
+def _human_readable_next_step_for_policy_move(policy_next_move: str, triage_state: VmwareTriageState) -> str:
+    move = policy_next_move.strip().lower()
+    if move == 'confirm_issue_family':
+        return 'Confirm which VMware issue family best matches the current symptoms.'
+    if move == 'confirm_scope':
+        return 'Confirm whether impact is isolated or spread across multiple hosts or clusters.'
+    if move == 'collect_recent_change':
+        return 'Capture the most recent environment change before symptoms started.'
+    if move == 'request_missing_logs':
+        missing = [item.strip() for item in triage_state.missing_logs if item.strip()]
+        if missing:
+            return f"Request the missing logs next: {', '.join(missing)}."
+        return 'Request the next relevant VMware logs to strengthen evidence.'
+    if move == 'validate_hypothesis':
+        return 'Validate whether the current VMware hypothesis still fits the latest evidence.'
+    if move == 'propose_safe_next_step':
+        return 'Run one safe verification step and capture the outcome.'
+    if move == 'verify_result':
+        return 'Verify whether the latest action improved the observed impact.'
+    if move == 'summarize_progress':
+        return 'Summarize confirmed findings, open questions, and next actions.'
+    if move == 'handoff_required':
+        return 'Prepare a clean human handoff summary with current evidence and blockers.'
+    if move == 'resolution_confirmed':
+        return 'Confirm the issue is resolved and stable before closing this path.'
+    return 'Continue evidence-driven VMware triage with the next focused validation step.'
 
 
 def _non_regressive_patch_policy_next_move(*, triage_state: VmwareTriageState, decided_next_move: str) -> str:
