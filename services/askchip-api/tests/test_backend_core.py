@@ -870,13 +870,18 @@ def test_prompt_assembler_vmware_kickoff_guidance_reflects_log_receipt() -> None
     ]
     session_metadata = {
         'expert_desk': {
+            'request_label': 'Req kickoff 1',
             'environment_platform': 'VMware',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
             'recommended_path': 'launch_live_session_now',
             'issue_description': 'Hosts disconnected',
             'issue_category': 'Production outage',
             'urgency': 'High',
             'expert_persona_id': 'ai-vmware-engineer',
             'expert_persona_label': 'AI VMware Engineer',
+            'architecture_notes': '',
+            'error_text': '',
             'uploaded_logs_available': True,
             'uploaded_logs_count': 2,
             'uploaded_log_names': ['vpxd.log', 'vmkernel.log'],
@@ -885,18 +890,18 @@ def test_prompt_assembler_vmware_kickoff_guidance_reflects_log_receipt() -> None
 
     messages = assembler.build_messages(transcript, user_text='What should we do first?', session_metadata=session_metadata)
 
-    assert messages[3].role == 'system'
-    assert 'This is your first VMware response in the live session.' in messages[3].text
-    assert 'The first response is a conversational opener, not an assessment dump.' in messages[3].text
-    assert 'Keep the first response to 2-3 short sentences by default.' in messages[3].text
-    assert 'Do not use headings (for example: initial assessment, likely diagnosis path, immediate next actions).' in messages[3].text
-    assert 'Do not use numbered checklists unless the user explicitly asks for one.' in messages[3].text
-    assert 'End with one focused next question.' in messages[3].text
-    assert 'Uploaded logs available: yes.' in messages[3].text
-    assert 'Uploaded log file names: vpxd.log, vmkernel.log.' in messages[3].text
-    assert 'acknowledge receipt, say you can review them' in messages[3].text
-    assert 'Keep responses short by default: usually 2-4 sentences unless the user asks for more.' in messages[3].text
-    assert 'Ask one focused next question at a time to move triage forward.' in messages[3].text
+    runtime_guidance = next(message for message in messages if message.role == 'system' and message.text.startswith('VMware live-session guidance:'))
+    assert 'This is your first VMware response in the live session.' in runtime_guidance.text
+    assert 'The first response is a conversational opener, not an assessment dump.' in runtime_guidance.text
+    assert 'Keep the first response to 2-3 short sentences by default.' in runtime_guidance.text
+    assert 'Do not use headings (for example: initial assessment, likely diagnosis path, immediate next actions).' in runtime_guidance.text
+    assert 'Do not use numbered checklists unless the user explicitly asks for one.' in runtime_guidance.text
+    assert 'End with one focused next question.' in runtime_guidance.text
+    assert 'Uploaded logs available: yes.' in runtime_guidance.text
+    assert 'Uploaded log file names: vpxd.log, vmkernel.log.' in runtime_guidance.text
+    assert 'acknowledge receipt, say you can review them' in runtime_guidance.text
+    assert 'Keep responses short by default: usually 2-4 sentences unless the user asks for more.' in runtime_guidance.text
+    assert 'Ask one focused next question at a time to move triage forward.' in runtime_guidance.text
 
 
 def test_prompt_assembler_vmware_kickoff_guidance_explicit_no_logs_path() -> None:
@@ -908,13 +913,18 @@ def test_prompt_assembler_vmware_kickoff_guidance_explicit_no_logs_path() -> Non
     ]
     session_metadata = {
         'expert_desk': {
+            'request_label': 'Req kickoff 2',
             'environment_platform': 'VMware',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
             'recommended_path': 'launch_live_session_now',
             'issue_description': 'Storage latency',
             'issue_category': 'Performance issue',
             'urgency': 'Medium',
             'expert_persona_id': 'ai-vmware-engineer',
             'expert_persona_label': 'AI VMware Engineer',
+            'architecture_notes': '',
+            'error_text': '',
             'uploaded_logs_available': False,
             'uploaded_logs_count': 0,
         }
@@ -922,11 +932,11 @@ def test_prompt_assembler_vmware_kickoff_guidance_explicit_no_logs_path() -> Non
 
     messages = assembler.build_messages(transcript, user_text='Can we start now?', session_metadata=session_metadata)
 
-    assert messages[3].role == 'system'
-    assert 'Uploaded logs available: no.' in messages[3].text
-    assert 'If logs were not received, briefly say that' in messages[3].text
-    assert 'point to the live-session upload control.' in messages[3].text
-    assert 'recommend uploading: vCenter logs, ESXi host/support bundle, vmkernel.log, and vpxd.log,' in messages[3].text
+    runtime_guidance = next(message for message in messages if message.role == 'system' and message.text.startswith('VMware live-session guidance:'))
+    assert 'Uploaded logs available: no.' in runtime_guidance.text
+    assert 'If logs were not received, briefly say that' in runtime_guidance.text
+    assert 'point to the live-session upload control.' in runtime_guidance.text
+    assert 'recommend uploading: vCenter logs, ESXi host/support bundle, vmkernel.log, and vpxd.log,' in runtime_guidance.text
 
 
 def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> None:
@@ -940,13 +950,18 @@ def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> Non
     ]
     session_metadata = {
         'expert_desk': {
+            'request_label': 'Req followup 1',
             'environment_platform': 'VMware',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
             'recommended_path': 'launch_live_session_now',
             'issue_description': 'Hosts disconnected',
             'issue_category': 'Production outage',
             'urgency': 'High',
             'expert_persona_id': 'ai-vmware-engineer',
             'expert_persona_label': 'AI VMware Engineer',
+            'architecture_notes': '',
+            'error_text': '',
             'uploaded_logs_available': True,
             'uploaded_logs_count': 1,
             'uploaded_log_names': ['support-bundle.tgz'],
@@ -955,11 +970,11 @@ def test_prompt_assembler_vmware_followup_guidance_handles_live_uploads() -> Non
 
     messages = assembler.build_messages(transcript, user_text='Can you review them?', session_metadata=session_metadata)
 
-    assert messages[3].role == 'system'
-    assert 'If logs were just uploaded during this live session' in messages[3].text
-    assert 'Do not fabricate findings from logs that were not parsed.' in messages[3].text
-    assert 'For follow-up turns, give one or two likely issue paths and one or two short verification steps when grounded by evidence.' in messages[3].text
-    assert 'Avoid broad speculation or generic outage declarations without concrete evidence from user context.' in messages[3].text
+    runtime_guidance = next(message for message in messages if message.role == 'system' and message.text.startswith('VMware live-session guidance:'))
+    assert 'If logs were just uploaded during this live session' in runtime_guidance.text
+    assert 'Do not fabricate findings from logs that were not parsed.' in runtime_guidance.text
+    assert 'For follow-up turns, give one or two likely issue paths and one or two short verification steps when grounded by evidence.' in runtime_guidance.text
+    assert 'Avoid broad speculation or generic outage declarations without concrete evidence from user context.' in runtime_guidance.text
 
 
 
@@ -973,12 +988,18 @@ def test_prompt_assembler_vmware_metadata_only_guidance_is_honest() -> None:
     ]
     session_metadata = {
         'expert_desk': {
+            'request_label': 'Req followup 2',
             'environment_platform': 'VMware',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
             'issue_description': 'Hosts disconnected',
             'issue_category': 'Production outage',
             'urgency': 'High',
             'expert_persona_id': 'ai-vmware-engineer',
             'expert_persona_label': 'AI VMware Engineer',
+            'architecture_notes': '',
+            'error_text': '',
             'uploaded_logs_available': True,
             'uploaded_logs_count': 1,
             'uploaded_log_names': ['esxi-support-bundle.tgz'],
@@ -987,9 +1008,9 @@ def test_prompt_assembler_vmware_metadata_only_guidance_is_honest() -> None:
 
     messages = assembler.build_messages(transcript, user_text='Any early read from those logs?', session_metadata=session_metadata)
 
-    assert messages[3].role == 'system'
-    assert 'Never claim parsed-log findings unless parsed content is explicitly present in context.' in messages[3].text
-    assert 'If only metadata is available, say logs were received but not parsed yet, and state what you would check next.' in messages[3].text
+    runtime_guidance = next(message for message in messages if message.role == 'system' and message.text.startswith('VMware live-session guidance:'))
+    assert 'Never claim parsed-log findings unless parsed content is explicitly present in context.' in runtime_guidance.text
+    assert 'If only metadata is available, say logs were received but not parsed yet, and state what you would check next.' in runtime_guidance.text
 
 
 def test_prompt_assembler_includes_vmware_triage_log_guidance_fields() -> None:
@@ -1882,7 +1903,7 @@ def test_session_create_persists_typed_vmware_triage_state(tmp_path: Path) -> No
     triage = created.json()['metadata']['expert_desk']['vmware_triage']
     assert triage['issue_family'] == 'host-networking'
     assert triage['confidence'] == 0.72
-    assert triage['missing_logs'] == ['vobd.log']
+    assert triage['missing_logs'] == ['vobd.log', 'vCenter Server logs']
 
 
 def test_session_patch_and_reload_preserves_typed_vmware_triage_state(tmp_path: Path) -> None:
@@ -1936,8 +1957,8 @@ def test_session_patch_and_reload_preserves_typed_vmware_triage_state(tmp_path: 
     assert transcript.status_code == 200
     triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
     assert triage['suspected_layer'] == 'esxi-multipath'
-    assert triage['required_logs'] == ['vmkernel.log', 'vpxd.log', 'array-event-log']
-    assert triage['missing_logs'] == ['array-event-log']
+    assert triage['required_logs'] == ['vmkernel.log', 'ESXi host support bundle', 'Storage array event logs']
+    assert triage['missing_logs'] == ['ESXi host support bundle', 'Storage array event logs']
 
 
 def test_read_expert_desk_metadata_preserves_valid_nested_vmware_triage() -> None:
@@ -2748,7 +2769,7 @@ def test_vmware_voice_turn_updates_same_triage_state(tmp_path: Path) -> None:
     assert voice.status_code == 201
     triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
     assert triage['issue_family'] == 'storage-pathing'
-    assert triage['conversation_stage'] == 'evidence_gathering'
+    assert triage['conversation_stage'] == 'log_collection'
     assert triage['log_sufficiency_status'] == 'insufficient'
     assert triage['required_logs'] == ['vmkernel.log', 'ESXi host support bundle', 'Storage array event logs']
     assert triage['received_logs'] == []
