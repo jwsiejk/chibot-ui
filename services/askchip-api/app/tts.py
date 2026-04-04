@@ -144,7 +144,7 @@ def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
         else:
             selected_device = 'cpu'
             fallback_reason = 'ASKCHIP_TTS_DEVICE=auto requested but CUDAExecutionProvider is unavailable.'
-            warning = f'{fallback_reason} Using CPUExecutionProvider.'
+            warning = _format_runtime_fallback_warning(fallback_reason, selected_provider)
 
     if selected_device == 'cuda':
         if not providers:
@@ -154,7 +154,7 @@ def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
         else:
             selected_device = 'cpu'
             fallback_reason = 'ASKCHIP_TTS_DEVICE=cuda requested but CUDAExecutionProvider is unavailable.'
-            warning = f'{fallback_reason} Using CPUExecutionProvider.'
+            warning = _format_runtime_fallback_warning(fallback_reason, selected_provider)
 
     return {
         'requested_device': requested_device,
@@ -164,6 +164,11 @@ def _kokoro_runtime_details(config: KokoroConfig) -> dict[str, object]:
         **({'fallback_reason': fallback_reason} if fallback_reason else {}),
         **({'warning': warning} if warning else {}),
     }
+
+
+
+def _format_runtime_fallback_warning(fallback_reason: str, provider: str) -> str:
+    return f'{fallback_reason} Using {provider}.'
 
 
 def _prepare_windows_onnxruntime_cuda(runtime_details: dict[str, object]) -> None:
