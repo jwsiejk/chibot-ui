@@ -985,6 +985,52 @@ def test_prompt_assembler_vmware_metadata_only_guidance_is_honest() -> None:
     assert 'If only metadata is available, say logs were received but not parsed yet, and state what you would check next.' in messages[3].text
 
 
+def test_prompt_assembler_includes_vmware_triage_log_guidance_fields() -> None:
+    assembler = PromptAssembler(transcript_window=4)
+    from app.domain_models import MessageRecord
+
+    transcript = [
+        MessageRecord(session_id='s', role='user', text='Need help with host disconnects', turn_id='t1', source='typed_input'),
+        MessageRecord(session_id='s', role='assistant', text='Understood. What changed right before impact?', turn_id='t1', source='model_output'),
+    ]
+    session_metadata = {
+        'expert_desk': {
+            'request_label': 'Request: VMware outage',
+            'environment_platform': 'VMware',
+            'issue_description': 'Hosts disconnected',
+            'issue_category': 'Production outage',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'launch_live_session_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'architecture_notes': '',
+            'error_text': '',
+            'uploaded_logs_available': True,
+            'uploaded_logs_count': 1,
+            'uploaded_log_names': ['vpxd.log'],
+            'vmware_triage': {
+                'issue_family': 'vcenter-services',
+                'log_sufficiency_status': 'partial',
+                'missing_logs': ['vCenter Server logs'],
+                'optional_logs': ['vSphere UI/API gateway logs'],
+                'log_guidance_summary': 'Some required logs are present, but additional vCenter service logs are still needed.',
+            },
+        }
+    }
+
+    messages = assembler.build_messages(transcript, user_text='Can you continue triage?', session_metadata=session_metadata)
+    prebrief = next(message.text for message in messages if message.role == 'system' and message.text.startswith('Expert Desk session pre-brief:'))
+    runtime_guidance = next(message.text for message in messages if message.role == 'system' and message.text.startswith('VMware live-session guidance:'))
+
+    assert 'vmware triage log sufficiency status: partial' in prebrief
+    assert 'vmware triage missing logs: vCenter Server logs' in prebrief
+    assert 'vmware triage optional logs: vSphere UI/API gateway logs' in prebrief
+    assert 'vmware triage log guidance summary: Some required logs are present' in prebrief
+    assert 'If vmware triage log sufficiency status is partial, say you can proceed with current evidence but explicitly list missing logs.' in runtime_guidance
+
+
 def test_session_patch_can_update_expert_desk_metadata_without_renaming(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:

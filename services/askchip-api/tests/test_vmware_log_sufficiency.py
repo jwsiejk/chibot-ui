@@ -32,3 +32,35 @@ def test_evaluator_marks_unknown_for_unmapped_issue_family() -> None:
     assert result.log_sufficiency_status == 'unknown_issue_family'
     assert result.required_logs == []
     assert result.received_logs == []
+
+
+def test_vcenter_services_with_only_vpxd_log_stays_partial() -> None:
+    result = evaluate_vmware_log_sufficiency('vcenter-services', ['vpxd.log'])
+
+    assert result.log_sufficiency_status == 'partial'
+    assert result.received_logs == ['vpxd.log']
+    assert result.missing_logs == ['vCenter Server logs']
+
+
+def test_generic_archive_does_not_count_as_esxi_support_bundle() -> None:
+    result = evaluate_vmware_log_sufficiency('storage-pathing', ['bundle.tgz', 'host-vmkernel.log'])
+
+    assert result.log_sufficiency_status == 'partial'
+    assert result.received_logs == ['vmkernel.log']
+    assert 'ESXi host support bundle' in result.missing_logs
+
+
+def test_weak_san_or_array_names_do_not_satisfy_storage_array_event_logs() -> None:
+    weak_names = ['san.txt', 'array.txt', 'storage-array-notes.md']
+    result = evaluate_vmware_log_sufficiency('storage-pathing', weak_names)
+
+    assert result.log_sufficiency_status == 'insufficient'
+    assert result.received_logs == []
+    assert 'Storage array event logs' in result.missing_logs
+
+
+def test_storage_array_event_log_requires_clear_event_artifact() -> None:
+    result = evaluate_vmware_log_sufficiency('storage-pathing', ['powerstore-controller-events.log'])
+
+    assert result.log_sufficiency_status == 'partial'
+    assert result.received_logs == ['Storage array event logs']

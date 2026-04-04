@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 @dataclass(frozen=True)
@@ -60,9 +61,9 @@ _LOG_PATTERN_MAP: dict[str, tuple[str, ...]] = {
     'vmkernel.log': ('vmkernel.log',),
     'vobd.log': ('vobd.log',),
     'vpxd.log': ('vpxd.log',),
-    'vCenter Server logs': ('vcenter', 'vcsa', 'applmgmt', 'vpxd'),
-    'ESXi host support bundle': ('support bundle', 'vm-support', 'esxi', '.tgz', '.txz'),
-    'Storage array event logs': ('array', 'san', 'storage event', 'controller event'),
+    'vCenter Server logs': ('vcenter', 'vcsa', 'applmgmt', 'vpxd-profiler', 'vmon'),
+    'ESXi host support bundle': ('vm-support', 'support-bundle', 'esxi-support', 'esx-support'),
+    'Storage array event logs': (),
     'Distributed switch / vmnic event export': ('vds', 'distributed switch', 'vmnic', 'uplink'),
     'HBA driver logs': ('hba', 'fc', 'iscsi', 'driver'),
     'vSphere UI/API gateway logs': ('vsphere-ui', 'vapi', 'rhttpproxy'),
@@ -129,8 +130,37 @@ def evaluate_vmware_log_sufficiency(issue_family: str, uploaded_log_names: list[
 
 
 def _matches_uploaded_metadata(log_label: str, uploaded_log_names: list[str]) -> bool:
+    if log_label == 'Storage array event logs':
+        return any(_looks_like_storage_array_event_log(name) for name in uploaded_log_names)
     patterns = _LOG_PATTERN_MAP.get(log_label, (log_label.lower(),))
     for uploaded in uploaded_log_names:
         if any(pattern in uploaded for pattern in patterns):
             return True
     return False
+
+
+def _looks_like_storage_array_event_log(uploaded_log_name: str) -> bool:
+    storage_source_tokens = (
+        'storage-array',
+        'storage_array',
+        'array-event',
+        'controller-event',
+        'storage-event',
+        'netapp',
+        'purestorage',
+        '3par',
+        'nimble',
+        'unity',
+        'powerstore',
+        'powermax',
+        'isilon',
+        'ontap',
+        'san-switch',
+        'fc-switch',
+    )
+    evidence_tokens = ('event', 'events', 'log', 'logs', 'alert', 'alerts', 'audit')
+    separators = re.compile(r'[\s._-]+')
+    normalized = separators.sub(' ', uploaded_log_name.strip().lower())
+    has_storage_source = any(token in normalized for token in storage_source_tokens)
+    has_event_evidence = any(token in normalized for token in evidence_tokens)
+    return has_storage_source and has_event_evidence
