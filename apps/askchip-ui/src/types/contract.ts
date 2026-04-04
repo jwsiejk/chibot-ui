@@ -142,6 +142,31 @@ export interface VmwareHandoffPacket {
   ready_for_handoff: boolean;
 }
 
+export interface VmwareArtifactEvidence {
+  parser_kind: string;
+  artifact_type: string;
+  parsed_line_count: number;
+  timestamp_start: string | null;
+  timestamp_end: string | null;
+  matched_categories: string[];
+  notable_lines: string[];
+  parse_warnings: string[];
+}
+
+export interface VmwareArtifactRecord {
+  id: string;
+  session_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  status: 'metadata_only' | 'uploaded_supported_unparsed' | 'parsed_supported' | 'uploaded_unsupported' | 'parse_failed';
+  artifact_type: string;
+  uploaded_at: string;
+  storage_path: string;
+  parse_error?: string | null;
+  evidence?: VmwareArtifactEvidence | null;
+}
+
 export interface ExpertDeskSessionMetadata {
   request_label: string;
   issue_category: string;
@@ -160,6 +185,7 @@ export interface ExpertDeskSessionMetadata {
   uploaded_log_names: string[];
   uploaded_logs_available: boolean;
   recommended_vmware_logs?: string[];
+  vmware_artifacts?: VmwareArtifactRecord[];
   vmware_triage?: VmwareTriageState;
   vmware_handoff?: VmwareHandoffPacket;
 }

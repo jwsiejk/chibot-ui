@@ -5,6 +5,7 @@ import type {
   UpdateSessionRequest,
   CreateTurnRequest,
   CreateTurnResponse,
+  VmwareArtifactRecord,
   SessionRecord,
   SessionsResponse,
   TranscriptResponse,
@@ -159,6 +160,24 @@ export class AskChipApiClient {
         ...(payload.traceId ? { 'X-AskChip-Trace-Id': payload.traceId } : {}),
       },
     });
+  }
+
+  async listSessionArtifacts(sessionId: string): Promise<VmwareArtifactRecord[]> {
+    const response = await this.request<{ items: VmwareArtifactRecord[] }>(`/api/v1/sessions/${sessionId}/artifacts`);
+    return response.items;
+  }
+
+  async uploadSessionArtifact(sessionId: string, file: File): Promise<VmwareArtifactRecord> {
+    const response = await this.request<{ artifact: VmwareArtifactRecord }>(`/api/v1/sessions/${sessionId}/artifacts`, {
+      method: 'POST',
+      body: file,
+      isJsonRequest: false,
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'X-Artifact-Filename': file.name,
+      },
+    });
+    return response.artifact;
   }
 
 

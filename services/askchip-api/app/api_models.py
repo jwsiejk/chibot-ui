@@ -41,6 +41,40 @@ class VmwareHandoffPacket(BaseModel):
     ready_for_handoff: bool = False
 
 
+
+
+class VmwareArtifactEvidence(BaseModel):
+    parser_kind: str
+    artifact_type: str
+    parsed_line_count: int = 0
+    timestamp_start: str | None = None
+    timestamp_end: str | None = None
+    matched_categories: list[str] = Field(default_factory=list)
+    notable_lines: list[str] = Field(default_factory=list)
+    parse_warnings: list[str] = Field(default_factory=list)
+
+
+class VmwareArtifactRecord(BaseModel):
+    id: str
+    session_id: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    status: str
+    artifact_type: str
+    uploaded_at: str
+    storage_path: str
+    parse_error: str | None = None
+    evidence: VmwareArtifactEvidence | None = None
+
+
+class UploadSessionArtifactResponse(BaseModel):
+    artifact: VmwareArtifactRecord
+
+
+class SessionArtifactsResponse(BaseModel):
+    items: list[VmwareArtifactRecord] = Field(default_factory=list)
+
 class ExpertDeskSessionMetadata(BaseModel):
     request_label: str
     issue_category: str
@@ -60,6 +94,7 @@ class ExpertDeskSessionMetadata(BaseModel):
     uploaded_log_names: list[str] = Field(default_factory=list)
     uploaded_logs_available: bool = False
     recommended_vmware_logs: list[str] = Field(default_factory=list)
+    vmware_artifacts: list[VmwareArtifactRecord] = Field(default_factory=list)
     vmware_triage: VmwareTriageState | None = None
     vmware_handoff: VmwareHandoffPacket | None = None
 

@@ -10,6 +10,7 @@ import { useSessionInteractionRuntime } from '../interaction/useSessionInteracti
 import { DEMO_ROUTES, getDemoSummaryRoute } from '../routing';
 import { VisualSessionStage } from './VisualSessionStage';
 import { VisualSessionToolbar } from './VisualSessionToolbar';
+import type { VmwareArtifactRecord } from '../types/contract';
 
 type VisualSessionViewProps = {
   sessionId: string;
@@ -21,6 +22,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   const [chatOpen, setChatOpen] = useState(false);
   const assistantName = runtimeConfig.assistantDisplayName;
   const [contextVersion, setContextVersion] = useState(0);
+  const [backendArtifacts, setBackendArtifacts] = useState<VmwareArtifactRecord[]>([]);
   const frontstageContext = useMemo(() => getExpertDeskSessionContext(sessionId), [contextVersion, sessionId]);
 
   useEffect(() => {
@@ -114,6 +116,16 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
     : undefined;
   const isVmwareSession = String(expertDeskMetadata?.environment_platform ?? '').toLowerCase() === 'vmware';
 
+  useEffect(() => {
+    if (!isVmwareSession) {
+      setBackendArtifacts([]);
+      return;
+    }
+    void askChipApiClient.listSessionArtifacts(sessionId).then(setBackendArtifacts).catch(() => {
+      // errors surface elsewhere; keep UI non-blocking
+    });
+  }, [isVmwareSession, sessionId]);
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#040812_0%,#050d1e_45%,#020617_100%)] text-slate-100">
       <header className="mx-auto w-full max-w-[1460px] px-6 pb-4 pt-5">
@@ -196,6 +208,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
               <ExpertDeskLogUploadPanel
                 compact
                 files={frontstageContext.uploadedLogFiles}
+                backendArtifacts={backendArtifacts}
                 uploadSource="live-session"
                 title="Upload logs during live session"
                 helperNote="If logs were not uploaded in intake, add them here when the AI VMware expert asks for them."
@@ -215,6 +228,16 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                           },
                         },
                       });
+                    }
+                    if (isVmwareSession) {
+                      const fileItems = Array.from(files);
+                      Promise.all(fileItems.map((item) => askChipApiClient.uploadSessionArtifact(sessionId, item)))
+                        .then((uploaded) => {
+                          setBackendArtifacts((previous) => [...previous, ...uploaded]);
+                        })
+                        .catch(() => {
+                          // upload/parser failures are represented via API artifact status or app error on retry
+                        });
                     }
                     setContextVersion((current) => current + 1);
                   }
