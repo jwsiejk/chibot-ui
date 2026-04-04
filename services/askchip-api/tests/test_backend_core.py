@@ -1218,6 +1218,9 @@ def test_session_patch_vmware_uploaded_logs_immediately_refreshes_log_sufficienc
     assert triage['missing_logs'] == []
     assert triage['optional_logs'] == ['ESXi host support bundle', 'Distributed switch / vmnic event export']
     assert "host-networking" in triage['log_guidance_summary']
+    assert triage['policy_next_move'] == 'confirm_issue_family'
+    assert triage['conversation_stage'] == 'issue_definition'
+    assert triage['next_best_question'] == 'Does this align most with host networking, storage pathing, vCenter services, or VM performance impact?'
 
 
 def test_session_patch_non_vmware_persona_does_not_run_vmware_log_sufficiency(tmp_path: Path) -> None:
@@ -1247,6 +1250,9 @@ def test_session_patch_non_vmware_persona_does_not_run_vmware_log_sufficiency(tm
                         'uploaded_logs_available': True,
                         'vmware_triage': {
                             'issue_family': 'host-networking',
+                            'policy_next_move': 'seeded-policy',
+                            'conversation_stage': 'seeded-stage',
+                            'next_best_question': 'seeded-question',
                             'required_logs': ['seeded-required'],
                             'received_logs': ['seeded-received'],
                             'missing_logs': ['seeded-missing'],
@@ -1267,6 +1273,9 @@ def test_session_patch_non_vmware_persona_does_not_run_vmware_log_sufficiency(tm
     assert triage['optional_logs'] == ['seeded-optional']
     assert triage['log_sufficiency_status'] == 'seeded-status'
     assert triage['log_guidance_summary'] == 'seeded-summary'
+    assert triage['policy_next_move'] == 'seeded-policy'
+    assert triage['conversation_stage'] == 'seeded-stage'
+    assert triage['next_best_question'] == 'seeded-question'
 
 
 def test_session_patch_vmware_without_issue_family_does_not_invent_triage_state(tmp_path: Path) -> None:
@@ -1294,13 +1303,35 @@ def test_session_patch_vmware_without_issue_family_does_not_invent_triage_state(
                         'uploaded_logs_count': 2,
                         'uploaded_log_names': ['vmkernel.log', 'vobd.log'],
                         'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': '',
+                            'policy_next_move': 'seeded-policy',
+                            'conversation_stage': 'seeded-stage',
+                            'next_best_question': 'seeded-question',
+                            'log_sufficiency_status': 'seeded-status',
+                            'required_logs': ['seeded-required'],
+                            'received_logs': ['seeded-received'],
+                            'missing_logs': ['seeded-missing'],
+                            'optional_logs': ['seeded-optional'],
+                            'log_guidance_summary': 'seeded-summary',
+                        },
                     }
                 }
             },
         )
 
     assert patched.status_code == 200
-    assert patched.json()['metadata']['expert_desk'].get('vmware_triage') is None
+    triage = patched.json()['metadata']['expert_desk']['vmware_triage']
+    assert triage['issue_family'] == ''
+    assert triage['policy_next_move'] == 'seeded-policy'
+    assert triage['conversation_stage'] == 'seeded-stage'
+    assert triage['next_best_question'] == 'seeded-question'
+    assert triage['log_sufficiency_status'] == 'seeded-status'
+    assert triage['required_logs'] == ['seeded-required']
+    assert triage['received_logs'] == ['seeded-received']
+    assert triage['missing_logs'] == ['seeded-missing']
+    assert triage['optional_logs'] == ['seeded-optional']
+    assert triage['log_guidance_summary'] == 'seeded-summary'
 
 
 def test_session_patch_metadata_regression_still_persists_general_expert_desk_updates(tmp_path: Path) -> None:
