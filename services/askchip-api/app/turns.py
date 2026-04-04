@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
 from app.events import EventBus
 from app.expert_desk_metadata import (
+    build_vmware_trajectory_transition_payloads,
     normalize_vmware_resolution_status,
     read_expert_desk_metadata,
     read_vmware_triage_state,
@@ -297,6 +298,14 @@ class TurnManager:
         if metadata == session.metadata:
             return
 
+        transition_events = build_vmware_trajectory_transition_payloads(
+            session.metadata,
+            metadata,
+            source_path='turn_runtime',
+            turn_id=turn_id,
+            trace_id=trace_id,
+        )
+
         now_iso = datetime.now(timezone.utc).isoformat()
         self.db.update_session_state(
             session.id,
@@ -307,6 +316,15 @@ class TurnManager:
             last_error_at=session.last_error_at.isoformat() if session.last_error_at else None,
             metadata=metadata,
         )
+        for event_type, payload in transition_events:
+            event = EventRecord(
+                session_id=session.id,
+                turn_id=turn_id,
+                type=event_type,
+                payload=payload,
+            )
+            self.db.create_event(event)
+            await self.event_bus.publish(self.event_payload(event), session.id)
         triage_event = EventRecord(
             session_id=session.id,
             turn_id=turn_id,

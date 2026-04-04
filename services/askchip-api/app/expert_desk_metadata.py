@@ -17,6 +17,14 @@ VMWARE_RESOLUTION_STATUSES = {
     'needs_human_handoff',
 }
 
+VMWARE_TRAJECTORY_TRANSITION_EVENT_TYPES = {
+    'issue_family': 'vmware.trajectory.issue_family_changed',
+    'conversation_stage': 'vmware.trajectory.conversation_stage_changed',
+    'next_move': 'vmware.trajectory.next_move_changed',
+    'log_sufficiency': 'vmware.trajectory.log_sufficiency_changed',
+    'resolution_status': 'vmware.trajectory.resolution_status_changed',
+}
+
 
 def safe_partial_vmware_triage(raw_vmware_triage: Any) -> VmwareTriageState | None:
     if isinstance(raw_vmware_triage, VmwareTriageState):
@@ -95,6 +103,46 @@ def read_vmware_triage_state(session_metadata: dict[str, Any] | None) -> VmwareT
     if expert_desk is None:
         return None
     return expert_desk.vmware_triage
+
+
+def build_vmware_trajectory_transition_payloads(
+    previous_metadata: dict[str, Any] | None,
+    current_metadata: dict[str, Any] | None,
+    *,
+    source_path: str,
+    turn_id: str | None = None,
+    trace_id: str | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    previous_snapshot = _vmware_transition_snapshot(previous_metadata)
+    current_snapshot = _vmware_transition_snapshot(current_metadata)
+    if current_snapshot is None:
+        return []
+
+    tracked_fields: tuple[tuple[str, str], ...] = (
+        ('issue_family', 'issue_family'),
+        ('conversation_stage', 'conversation_stage'),
+        ('next_move', 'next_move'),
+        ('log_sufficiency', 'log_sufficiency'),
+        ('resolution_status', 'resolution_status'),
+    )
+    events: list[tuple[str, dict[str, Any]]] = []
+    for event_key, snapshot_field in tracked_fields:
+        event_type = VMWARE_TRAJECTORY_TRANSITION_EVENT_TYPES[event_key]
+        previous_value = previous_snapshot.get(snapshot_field, '') if previous_snapshot else ''
+        current_value = current_snapshot.get(snapshot_field, '')
+        if previous_value == current_value:
+            continue
+        payload: dict[str, Any] = {
+            'previous_value': previous_value,
+            'current_value': current_value,
+            'source_path': source_path,
+        }
+        if turn_id:
+            payload['turn_id'] = turn_id
+        if trace_id:
+            payload['trace_id'] = trace_id
+        events.append((event_type, payload))
+    return events
 
 
 def update_vmware_triage_state(
@@ -225,6 +273,30 @@ def normalize_vmware_resolution_status(raw_status: str, *, log_sufficiency_statu
     if log_sufficiency_status.strip().lower() == 'insufficient':
         return 'blocked_waiting_on_logs'
     return 'unresolved'
+
+
+def _vmware_transition_snapshot(session_metadata: dict[str, Any] | None) -> dict[str, str] | None:
+    expert_desk = read_expert_desk_metadata(session_metadata)
+    if expert_desk is None:
+        return None
+    is_vmware_persona = (
+        expert_desk.expert_persona_id == 'ai-vmware-engineer'
+        or expert_desk.expert_persona_label.strip().lower() == 'ai vmware engineer'
+    )
+    if not is_vmware_persona or expert_desk.vmware_triage is None:
+        return None
+    triage = expert_desk.vmware_triage
+    log_status = triage.log_sufficiency_status.strip().lower()
+    return {
+        'issue_family': triage.issue_family.strip(),
+        'conversation_stage': triage.conversation_stage.strip(),
+        'next_move': triage.policy_next_move.strip(),
+        'log_sufficiency': log_status,
+        'resolution_status': normalize_vmware_resolution_status(
+            triage.resolution_status,
+            log_sufficiency_status=log_status,
+        ),
+    }
 
 
 def build_vmware_handoff_packet(
