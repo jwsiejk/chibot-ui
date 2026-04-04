@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.api_models import ExpertDeskSessionMetadata, VmwareTriageState
+from app.vmware_conversation_policy import decide_vmware_next_move, stage_for_vmware_next_move
 from app.vmware_log_sufficiency import evaluate_vmware_log_sufficiency
 
 
@@ -94,6 +95,35 @@ def refresh_vmware_triage_log_sufficiency(session_metadata: dict[str, Any] | Non
     triage_state.optional_logs = sufficiency.optional_logs
     triage_state.log_sufficiency_status = sufficiency.log_sufficiency_status
     triage_state.log_guidance_summary = sufficiency.log_guidance_summary
+    expert_desk.vmware_triage = triage_state
+    base['expert_desk'] = expert_desk.model_dump(mode='json')
+    return base
+
+
+def refresh_vmware_triage_policy_state(session_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    base = dict(session_metadata) if isinstance(session_metadata, dict) else {}
+    expert_desk = read_expert_desk_metadata(base)
+    if expert_desk is None:
+        return base
+    is_vmware_persona = expert_desk.expert_persona_id == 'ai-vmware-engineer' or expert_desk.expert_persona_label.strip().lower() == 'ai vmware engineer'
+    if not is_vmware_persona:
+        return base
+    triage_state = expert_desk.vmware_triage
+    if triage_state is None:
+        return base
+    issue_family = triage_state.issue_family.strip()
+    if not issue_family:
+        return base
+
+    has_prior_assistant_turn = bool(triage_state.last_updated_from_turn_id.strip())
+    policy_decision = decide_vmware_next_move(
+        triage_state=triage_state,
+        latest_user_feedback='',
+        has_prior_assistant_turn=has_prior_assistant_turn,
+    )
+    triage_state.policy_next_move = policy_decision.next_move
+    triage_state.conversation_stage = stage_for_vmware_next_move(policy_decision.next_move)
+    triage_state.next_best_question = policy_decision.focused_question
     expert_desk.vmware_triage = triage_state
     base['expert_desk'] = expert_desk.model_dump(mode='json')
     return base

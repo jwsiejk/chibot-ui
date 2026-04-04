@@ -23,7 +23,7 @@ from app.api_models import (
 from app.config import Settings, settings
 from app.domain_models import EventRecord, SessionRecord
 from app.events import EventBus
-from app.expert_desk_metadata import refresh_vmware_triage_log_sufficiency
+from app.expert_desk_metadata import refresh_vmware_triage_log_sufficiency, refresh_vmware_triage_policy_state
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.readiness import ReadinessTracker
@@ -214,6 +214,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             metadata = request.metadata.model_dump(mode='json')
             if request.metadata.expert_desk is not None:
                 metadata = refresh_vmware_triage_log_sufficiency(metadata)
+                metadata = refresh_vmware_triage_policy_state(metadata)
             state.db.update_session_state(
                 session_id,
                 status=updated.status,
