@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain_models import MessageRecord, PromptMessage
+from app.expert_desk_metadata import build_prompt_context, read_expert_desk_metadata
 
 MARLENE_INSTRUCTION_BLOCK = (
     'Instruction for this chat: You are Marlene inside AskChip Local, a woman and a middle-aged Nebraska farmer turned tech geek. '
@@ -73,9 +74,9 @@ class PromptAssembler:
         recent = transcript[-self.transcript_window :]
         messages: list[PromptMessage] = []
 
-        expert_desk = self._extract_expert_desk_metadata(session_metadata)
-        if expert_desk:
-            messages.extend(self._build_expert_desk_preface(expert_desk, transcript))
+        expert_desk = read_expert_desk_metadata(session_metadata)
+        if expert_desk is not None:
+            messages.extend(self._build_expert_desk_preface(build_prompt_context(expert_desk), transcript))
         else:
             messages.append(PromptMessage(role='system', text=MARLENE_INSTRUCTION_BLOCK))
 
@@ -87,27 +88,6 @@ class PromptAssembler:
         if not recent or recent[-1].role != 'user' or recent[-1].text != user_text:
             messages.append(PromptMessage(role='user', text=user_text))
         return messages
-
-    @staticmethod
-    def _extract_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> dict[str, str] | None:
-        if not isinstance(session_metadata, dict):
-            return None
-        raw = session_metadata.get('expert_desk')
-        if not isinstance(raw, dict):
-            return None
-        cleaned: dict[str, str] = {}
-        for key, value in raw.items():
-            if not isinstance(key, str) or value is None:
-                continue
-            if isinstance(value, list):
-                flattened = ', '.join(str(item).strip() for item in value if str(item).strip())
-                if flattened:
-                    cleaned[key] = flattened
-                continue
-            normalized = str(value).strip()
-            if normalized:
-                cleaned[key] = normalized
-        return cleaned or None
 
     def _build_expert_desk_preface(self, expert_desk: dict[str, str], transcript: list[MessageRecord]) -> list[PromptMessage]:
         persona_id = expert_desk.get('expert_persona_id', '')

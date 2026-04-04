@@ -5,6 +5,21 @@ from pydantic import BaseModel, Field
 from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
 
 
+class VmwareTriageState(BaseModel):
+    issue_family: str = ''
+    suspected_layer: str = ''
+    impact_scope: str = ''
+    recent_change_summary: str = ''
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    conversation_stage: str = ''
+    next_best_question: str = ''
+    required_logs: list[str] = Field(default_factory=list)
+    received_logs: list[str] = Field(default_factory=list)
+    missing_logs: list[str] = Field(default_factory=list)
+    resolution_status: str = ''
+    last_updated_from_turn_id: str = ''
+
+
 class ExpertDeskSessionMetadata(BaseModel):
     request_label: str
     issue_category: str
@@ -24,6 +39,7 @@ class ExpertDeskSessionMetadata(BaseModel):
     uploaded_log_names: list[str] = Field(default_factory=list)
     uploaded_logs_available: bool = False
     recommended_vmware_logs: list[str] = Field(default_factory=list)
+    vmware_triage: VmwareTriageState | None = None
 
 
 class CreateSessionMetadata(BaseModel):

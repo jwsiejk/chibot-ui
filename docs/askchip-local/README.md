@@ -129,3 +129,8 @@ curl http://127.0.0.1:8000/api/v1/readiness
 - WebRTC remains foundation-only for diagnostics/signaling and is not required for voice-turn capture or upload.
 - Phase 6 adds local Kokoro assistant speech from the same canonical assistant message, now starting as soon as a stable sentence-level chunk is available while generation is still streaming.
 - Wake word, always-open microphones, tools, RAG, and auth remain out of scope.
+
+## Expert Desk session metadata notes
+- Expert Desk session metadata now includes an optional typed VMware triage state at `metadata.expert_desk.vmware_triage`.
+- The VMware triage state is session-scoped and persists across typed and voice turns so runtime triage flow can be reused turn-to-turn.
+- Transcript and turn payload contracts remain unchanged (`text` remains canonical transcript content).

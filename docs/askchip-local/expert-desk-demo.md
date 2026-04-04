@@ -239,6 +239,13 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Typed and voice runtime alignment is preserved because both continue to use the same backend turn prompt assembly path.
 - No transcript shape, session-state contract, or WebRTC scope changes were introduced in this phase.
 
+### Phase 19 — typed VMware triage state metadata foundation
+- Added an optional typed VMware triage state under backend session metadata (`metadata.expert_desk.vmware_triage`) for reusable multi-turn triage context.
+- Added backend helper utilities for reading, validating, and updating Expert Desk metadata and VMware triage state without ad hoc dictionary manipulation.
+- VMware triage state is session-scoped and can be loaded for both typed and voice turns.
+- Existing transcript contract remains unchanged (`text` canonical, no synthetic transcript rows).
+- Existing top-level session states and WebRTC diagnostics-only scope remain unchanged.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.

@@ -1023,6 +1023,163 @@ def test_session_patch_can_update_expert_desk_metadata_without_renaming(tmp_path
     assert transcript.json()['session']['metadata']['expert_desk']['uploaded_log_names'] == ['vmkernel.log']
 
 
+def test_session_create_persists_typed_vmware_triage_state(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware triage create',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req 42',
+                        'issue_category': 'VM outage',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'launch_live_session_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': 'VMware specialist',
+                        'issue_description': 'Multiple guests disconnected',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['vmkernel.log'],
+                        'uploaded_logs_available': True,
+                        'recommended_vmware_logs': ['vCenter logs'],
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'suspected_layer': 'esxi-network-stack',
+                            'impact_scope': 'single-cluster',
+                            'recent_change_summary': 'vDS uplink changed overnight',
+                            'confidence': 0.72,
+                            'conversation_stage': 'hypothesis_confirmation',
+                            'next_best_question': 'Did vmnic link flaps start after the uplink change?',
+                            'required_logs': ['vmkernel.log', 'vobd.log'],
+                            'received_logs': ['vmkernel.log'],
+                            'missing_logs': ['vobd.log'],
+                            'resolution_status': 'in_progress',
+                            'last_updated_from_turn_id': 'turn-abc',
+                        },
+                    }
+                },
+            },
+        )
+
+    assert created.status_code == 201
+    triage = created.json()['metadata']['expert_desk']['vmware_triage']
+    assert triage['issue_family'] == 'host-networking'
+    assert triage['confidence'] == 0.72
+    assert triage['missing_logs'] == ['vobd.log']
+
+
+def test_session_patch_and_reload_preserves_typed_vmware_triage_state(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post('/api/v1/sessions', json={'title': 'VMware triage patch'})
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req 99',
+                        'issue_category': 'Datastore latency',
+                        'environment_platform': 'VMware',
+                        'urgency': 'Critical',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': 'VMware specialist',
+                        'issue_description': 'Latency spikes every 10 minutes',
+                        'architecture_notes': 'Shared iSCSI datastore',
+                        'error_text': 'APD warnings intermittently',
+                        'uploaded_logs_count': 2,
+                        'uploaded_log_names': ['vmkernel.log', 'vpxd.log'],
+                        'uploaded_logs_available': True,
+                        'recommended_vmware_logs': ['vmkernel.log', 'vpxd.log'],
+                        'vmware_triage': {
+                            'issue_family': 'storage-pathing',
+                            'suspected_layer': 'esxi-multipath',
+                            'impact_scope': 'multi-host',
+                            'recent_change_summary': 'Array firmware updated last night',
+                            'confidence': 0.65,
+                            'conversation_stage': 'evidence_gathering',
+                            'next_best_question': 'Do APD alerts align with SAN controller failovers?',
+                            'required_logs': ['vmkernel.log', 'vpxd.log', 'array-event-log'],
+                            'received_logs': ['vmkernel.log', 'vpxd.log'],
+                            'missing_logs': ['array-event-log'],
+                            'resolution_status': 'in_progress',
+                            'last_updated_from_turn_id': 'turn-222',
+                        },
+                    }
+                }
+            },
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert patched.status_code == 200
+    assert transcript.status_code == 200
+    triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
+    assert triage['suspected_layer'] == 'esxi-multipath'
+    assert triage['required_logs'] == ['vmkernel.log', 'vpxd.log', 'array-event-log']
+    assert triage['missing_logs'] == ['array-event-log']
+
+
+def test_legacy_session_without_vmware_triage_state_still_supports_turns(tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured['payload'] = json.loads(request.content.decode())
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Let us check host and datastore health first.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Legacy expert metadata',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Legacy 1',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': 'VMware specialist',
+                        'issue_description': 'Hosts enter not responding state',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 0,
+                        'uploaded_log_names': [],
+                        'uploaded_logs_available': False,
+                        'recommended_vmware_logs': ['vmkernel.log'],
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Can you guide next steps?'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert turn.status_code == 201
+    assert transcript.status_code == 200
+    assert transcript.json()['session']['metadata']['expert_desk'].get('vmware_triage') is None
+    messages = transcript.json()['messages']
+    assert messages[0]['text'] == 'Can you guide next steps?'
+    assert 'content' not in messages[0]
+    payload = captured['payload']
+    assert isinstance(payload, dict)
+
+
 def test_prompt_assembler_uses_general_expert_fallback_overlay() -> None:
     assembler = PromptAssembler()
     messages = assembler.build_messages(
