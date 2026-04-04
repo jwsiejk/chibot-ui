@@ -1278,6 +1278,192 @@ def test_update_vmware_triage_state_overwrites_invalid_nested_vmware_triage() ->
     assert triage['missing_logs'] == ['vobd.log']
 
 
+def test_vmware_typed_turn_updates_triage_state_from_hidden_extraction(tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode())
+        calls.append(payload)
+        if len(calls) == 1:
+            extraction = {
+                'issue_family': 'host-networking',
+                'suspected_layer': 'esxi-network-stack',
+                'impact_scope': 'single-cluster',
+                'recent_change_summary': 'vDS uplink policy changed last night',
+                'symptom_summary': 'Hosts intermittently disconnect and VMs lose connectivity',
+                'open_questions': ['Did vmnic flaps start right after the vDS change?'],
+                'confidence': 0.81,
+                'recommended_conversation_stage': 'hypothesis_confirmation',
+                'required_logs': ['vmkernel.log', 'vobd.log'],
+                'received_logs': ['vmkernel.log'],
+                'missing_logs': ['vobd.log'],
+                'resolution_status': 'in_progress',
+            }
+            return httpx.Response(200, content=json.dumps({'message': {'content': json.dumps(extraction)}, 'done': True}).encode() + b'\n')
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Let us verify host uplink state first.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware extraction typed',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req T-1',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Hosts disconnected',
+                        'architecture_notes': '',
+                        'error_text': '',
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hosts dropped after last-night vDS changes.'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert turn.status_code == 201
+    assert transcript.status_code == 200
+    triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
+    assert triage['issue_family'] == 'host-networking'
+    assert triage['conversation_stage'] == 'hypothesis_confirmation'
+    assert triage['open_questions'] == ['Did vmnic flaps start right after the vDS change?']
+    assert triage['next_best_question'] == 'Did vmnic flaps start right after the vDS change?'
+    assert triage['missing_logs'] == ['vobd.log']
+    assert len(calls) == 2
+
+
+def test_vmware_voice_turn_updates_same_triage_state(tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode())
+        calls.append(payload)
+        if len(calls) == 1:
+            extraction = {
+                'issue_family': 'storage-pathing',
+                'suspected_layer': 'esxi-multipath',
+                'impact_scope': 'multi-host',
+                'recent_change_summary': 'SAN firmware upgraded this weekend',
+                'symptom_summary': 'Datastores show APD on several hosts',
+                'open_questions': ['Do APD timestamps align with SAN controller failover events?'],
+                'confidence': 0.78,
+                'recommended_conversation_stage': 'evidence_gathering',
+                'required_logs': ['vmkernel.log', 'vpxd.log', 'array-event-log'],
+                'received_logs': ['vmkernel.log'],
+                'missing_logs': ['vpxd.log', 'array-event-log'],
+                'resolution_status': 'in_progress',
+            }
+            return httpx.Response(200, content=json.dumps({'message': {'content': json.dumps(extraction)}, 'done': True}).encode() + b'\n')
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Please gather APD timeline and SAN failover events.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler), stt_service=FakeSttService(text='APD started after SAN update'))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware extraction voice',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req V-1',
+                        'issue_category': 'Datastore latency',
+                        'environment_platform': 'VMware',
+                        'urgency': 'Critical',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'launch_live_session_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Intermittent APD',
+                        'architecture_notes': '',
+                        'error_text': '',
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        start = client.post(f'/api/v1/sessions/{session_id}/voice-turns/ptt/start')
+        voice = client.post(
+            f'/api/v1/sessions/{session_id}/voice-turns?filename=voice-turn.webm',
+            content=b'voice-bytes',
+            headers={'content-type': 'audio/webm'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert start.status_code == 200
+    assert voice.status_code == 201
+    triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
+    assert triage['issue_family'] == 'storage-pathing'
+    assert triage['conversation_stage'] == 'evidence_gathering'
+    assert triage['missing_logs'] == ['vpxd.log', 'array-event-log']
+    assert len(calls) == 2
+
+
+def test_invalid_vmware_extraction_does_not_overwrite_existing_triage_state(tmp_path: Path) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            invalid_extraction = {'issue_family': 'host-networking', 'confidence': 2.4}
+            return httpx.Response(200, content=json.dumps({'message': {'content': json.dumps(invalid_extraction)}, 'done': True}).encode() + b'\n')
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Can you confirm exact VM impact scope?'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware extraction invalid',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req I-1',
+                        'issue_category': 'Host networking',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Hosts disconnecting',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'suspected_layer': 'esxi-network-stack',
+                            'impact_scope': 'single-cluster',
+                            'confidence': 0.66,
+                            'conversation_stage': 'evidence_gathering',
+                            'missing_logs': ['vobd.log'],
+                            'last_updated_from_turn_id': 'turn-prev',
+                        },
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Any update?'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert turn.status_code == 201
+    triage = transcript['session']['metadata']['expert_desk']['vmware_triage']
+    assert triage['issue_family'] == 'host-networking'
+    assert triage['confidence'] == 0.66
+    assert triage['last_updated_from_turn_id'] == 'turn-prev'
+    triage_events = [event for event in transcript['events'] if event['type'] == 'vmware.triage.skipped']
+    assert triage_events
+
+
 def test_legacy_session_without_vmware_triage_state_still_supports_turns(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 

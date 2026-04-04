@@ -246,6 +246,23 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Existing transcript contract remains unchanged (`text` canonical, no synthetic transcript rows).
 - Existing top-level session states and WebRTC diagnostics-only scope remain unchanged.
 
+### Phase 20 — hidden VMware triage extraction before assistant response
+- Added a backend-only VMware triage extraction layer that runs after each committed VMware user turn and before assistant generation.
+- Extraction output is strictly typed/validated before persistence and can update structured triage fields including:
+  - `issue_family`
+  - `suspected_layer`
+  - `impact_scope`
+  - `recent_change_summary`
+  - `symptom_summary`
+  - `open_questions`
+  - `confidence`
+  - `conversation_stage` (from extractor `recommended_conversation_stage`)
+  - `required_logs`, `received_logs`, `missing_logs`
+  - `resolution_status`
+- Invalid or low-confidence extraction output now safely preserves prior triage state (no fact invention / no metadata corruption).
+- The extraction step is hidden from the end-user transcript and used only to shape runtime expert behavior through session metadata context.
+- Typed and voice committed-turn paths both use the same backend extraction/update path so VMware triage state stays aligned across modalities.
+
 ## Demo Walkthrough (recommended)
 1. Open `/demo` and frame this as the **frontstage AI Expert Desk** experience, distinct from backstage AskChip shell.
 2. Select **Start intake** and complete `/demo/intake` required fields; click **Save intake draft**.
@@ -275,6 +292,10 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - tuned VMware post-kickoff runtime guidance for shorter, conversational engineer-style troubleshooting
   - added explicit one-question-at-a-time plus likely-path/verification-step guidance for live follow-up turns
   - reinforced metadata-only log honesty language to prevent fake parsed-log conclusions
+- **2026-04-04 — Phase 20 hidden VMware triage extraction**
+  - added hidden per-turn VMware triage extraction before assistant generation
+  - added strict typed validation and low-confidence rejection before metadata persistence
+  - aligned typed and voice turn paths to update the same session-scoped VMware triage state
 - **2026-04-01 — Phase 5 visual polish + doc foundation**
   - polished Visual Session header/stage/toolbar/drawer behavior
   - added assistant display name configuration in runtime config

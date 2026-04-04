@@ -122,6 +122,20 @@ class PromptAssembler:
             context_lines.append(f"preferred expert type: {expert_desk['preferred_expert_type']}")
         if uploaded_log_names:
             context_lines.append(f"uploaded log names: {uploaded_log_names}")
+        if expert_desk.get('vmware_triage_issue_family'):
+            context_lines.append(f"vmware triage issue family: {expert_desk['vmware_triage_issue_family']}")
+        if expert_desk.get('vmware_triage_suspected_layer'):
+            context_lines.append(f"vmware triage suspected layer: {expert_desk['vmware_triage_suspected_layer']}")
+        if expert_desk.get('vmware_triage_impact_scope'):
+            context_lines.append(f"vmware triage impact scope: {expert_desk['vmware_triage_impact_scope']}")
+        if expert_desk.get('vmware_triage_symptom_summary'):
+            context_lines.append(f"vmware triage symptom summary: {expert_desk['vmware_triage_symptom_summary']}")
+        if expert_desk.get('vmware_triage_open_questions'):
+            context_lines.append(f"vmware triage open questions: {expert_desk['vmware_triage_open_questions']}")
+        if expert_desk.get('vmware_triage_conversation_stage'):
+            context_lines.append(f"vmware triage conversation stage: {expert_desk['vmware_triage_conversation_stage']}")
+        if expert_desk.get('vmware_triage_missing_logs'):
+            context_lines.append(f"vmware triage missing logs: {expert_desk['vmware_triage_missing_logs']}")
 
         vmware_runtime_guidance = None
         if is_vmware_persona:
