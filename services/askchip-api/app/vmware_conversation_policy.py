@@ -59,10 +59,14 @@ def decide_vmware_next_move(
     focused_question = _default_question_for_move('confirm_issue_family', state)
     next_move = 'confirm_issue_family'
 
-    if resolution_status in {'resolved', 'stable'}:
+    if resolution_status in {'resolved'}:
         next_move = 'resolution_confirmed'
-    elif resolution_status in {'handoff_required', 'needs_handoff'}:
+    elif resolution_status in {'needs_human_handoff'}:
         next_move = 'handoff_required'
+    elif resolution_status in {'blocked_waiting_on_logs'}:
+        next_move = 'request_missing_logs'
+    elif resolution_status in {'blocked_waiting_on_user_action'}:
+        next_move = 'propose_safe_next_step'
     elif feedback_signal == 'correction':
         next_move = 'validate_hypothesis'
     elif not issue_family:

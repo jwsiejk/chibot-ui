@@ -51,12 +51,33 @@ The only allowed top-level states are:
   - `log_guidance_summary`
   - `resolution_status`
   - `last_updated_from_turn_id`
+- `vmware_triage.resolution_status` is normalized to:
+  - `unresolved`
+  - `monitoring`
+  - `resolved`
+  - `blocked_waiting_on_logs`
+  - `blocked_waiting_on_user_action`
+  - `needs_human_handoff`
+- Expert Desk metadata may include typed VMware handoff packet state under `metadata.expert_desk.vmware_handoff`:
+  - `issue_summary`
+  - `working_hypothesis`
+  - `confirmed_facts` (string array)
+  - `open_questions` (string array)
+  - `actions_taken` (string array)
+  - `logs_received` (string array)
+  - `logs_missing` (string array)
+  - `log_sufficiency_status`
+  - `current_resolution_status`
+  - `recommended_next_step`
+  - `handoff_reason`
+  - `ready_for_handoff` (boolean)
 - This metadata is stored on the session record and is available before the first assistant turn.
 - Session metadata updates (`PATCH /api/v1/sessions/{session_id}`) may update `metadata.expert_desk` during live sessions (for example when new log-file metadata is added), and this runtime metadata is used for later typed + voice turns.
 - During live turn runtime, AskChip may use session-scoped `metadata.expert_desk` as prompt preface/system-context pre-briefing before transcript history and current user turn (typed and voice paths), without changing stored transcript message shape.
 - For VMware Expert Desk sessions, AskChip may run a hidden extraction step after each committed user turn and before assistant generation to update typed `metadata.expert_desk.vmware_triage` state; invalid or low-confidence extraction output must not overwrite prior triage state.
 - For mapped VMware issue families, AskChip may deterministically evaluate uploaded log metadata names against a requirement matrix and persist log sufficiency metadata (`log_sufficiency_status`, `required_logs`, `received_logs`, `missing_logs`, `optional_logs`, `log_guidance_summary`) without claiming parsed-log findings.
 - During those VMware PATCH-time log-sufficiency refreshes, AskChip may also recompute and persist deterministic policy fields (`policy_next_move`, policy-aligned `conversation_stage`, and `next_best_question`) from the current typed triage state with non-regressive behavior, avoiding resets to `confirm_issue_family`/`issue_definition` when the issue family path is already established.
+- VMware triage/policy refreshes may also refresh `metadata.expert_desk.vmware_handoff` so summary/handoff flows use current persisted triage, transcript-derived facts, and uploaded log-name metadata without claiming parsed-log conclusions.
 - Runtime persona overlay selection must use `expert_persona_id` first; legacy prose-only fields may be used only as backward-compatible fallback.
 - Canonical transcript rules remain unchanged: transcript messages still use `text` (never `content`), with `role` as speaker identity and `source` as origin semantics.
 - `CreateTurnRequest` and transcript message shape are unchanged.

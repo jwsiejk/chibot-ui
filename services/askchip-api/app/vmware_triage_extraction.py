@@ -118,7 +118,9 @@ class VmwareTriageExtractor:
             '- required_logs\n'
             '- received_logs\n'
             '- missing_logs\n'
-            '- resolution_status'
+            '- resolution_status\n'
+            'Resolution status should be one of: unresolved, monitoring, resolved, '
+            'blocked_waiting_on_logs, blocked_waiting_on_user_action, needs_human_handoff.'
         )
         state_context = json.dumps(prior, ensure_ascii=False)
         extraction_input = (

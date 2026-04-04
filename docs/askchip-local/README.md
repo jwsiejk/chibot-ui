@@ -140,4 +140,6 @@ curl http://127.0.0.1:8000/api/v1/readiness
 - AskChip remains honest about current log handling: uploaded file metadata can drive sufficiency guidance, but parsed-log findings are not claimed unless parsed content exists.
 - VMware live runtime guidance now includes a deterministic conversation-policy decision (next move + focused next question) derived from triage state, conversation stage, confidence, log sufficiency, and latest user feedback, while preserving the same transcript payload contract.
 - VMware triage persistence now also stores deterministic policy outputs (`policy_next_move`, policy-aligned `conversation_stage`, and policy-focused `next_best_question`) in session metadata for consistent multi-turn state.
+- VMware triage now normalizes `resolution_status` into a fixed set (`unresolved`, `monitoring`, `resolved`, `blocked_waiting_on_logs`, `blocked_waiting_on_user_action`, `needs_human_handoff`).
+- VMware Expert Desk metadata now includes an optional typed `metadata.expert_desk.vmware_handoff` packet for structured summary/handoff framing grounded in persisted triage state, transcript facts, and uploaded log-name metadata only (no parsed-log claims in this phase).
 - Transcript and turn payload contracts remain unchanged (`text` remains canonical transcript content).

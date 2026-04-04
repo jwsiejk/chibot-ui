@@ -407,6 +407,12 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - stopped readiness-poller churn for terminal invalid-session bootstrap failures
   - added API timeout handling for bootstrap dependency reads (config/readiness/sessions/transcript) with explicit dependency-specific user-facing errors
   - preserved valid-session bootstrap path plus canonical transcript and turn-submit contract shapes
+- **2026-04-04 — Phase 21 VMware structured resolution + handoff packet**
+  - normalized VMware triage `resolution_status` into a fixed production set (`unresolved`, `monitoring`, `resolved`, `blocked_waiting_on_logs`, `blocked_waiting_on_user_action`, `needs_human_handoff`)
+  - added typed `metadata.expert_desk.vmware_handoff` packet generation from persisted VMware triage + transcript facts + uploaded log-name metadata
+  - wired packet refresh into turn-time triage persistence and PATCH-time VMware metadata refresh so summary/handoff views can rely on current state
+  - updated `/demo/summary/:sessionId` to surface structured VMware handoff packet details when present
+  - kept transcript shape, session-state vocabulary, and WebRTC diagnostics-only scope unchanged
 
 ---
 

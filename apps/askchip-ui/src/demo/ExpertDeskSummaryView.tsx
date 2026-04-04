@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError, askChipApiClient } from '../api/client';
 import { DEMO_ROUTES } from '../routing';
-import type { SessionRecord, TranscriptMessage } from '../types/contract';
+import type { ExpertDeskSessionMetadata, SessionRecord, TranscriptMessage } from '../types/contract';
 import { ExpertDeskFlowProgress } from './ExpertDeskFlowProgress';
 import {
   getExpertDeskLocalHandoffRequest,
@@ -168,6 +168,10 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
   );
 
   const actionsTaken = useMemo(() => buildDerivedActions(dataState.messages), [dataState.messages]);
+  const vmwareHandoff = useMemo(() => {
+    const metadata = dataState.session?.metadata as { expert_desk?: ExpertDeskSessionMetadata } | undefined;
+    return metadata?.expert_desk?.vmware_handoff;
+  }, [dataState.session]);
 
   if (dataState.loading) {
     return (
@@ -263,6 +267,23 @@ export function ExpertDeskSummaryView({ sessionId }: ExpertDeskSummaryViewProps)
                 ))}
               </ul>
             </article>
+
+            {vmwareHandoff ? (
+              <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 className="text-lg font-semibold text-slate-950">VMware structured handoff packet</h2>
+                <p className="mt-3 text-sm text-slate-700">{vmwareHandoff.issue_summary}</p>
+                <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-slate-700">
+                  <li>Working hypothesis: {vmwareHandoff.working_hypothesis}</li>
+                  <li>Resolution status: {vmwareHandoff.current_resolution_status}</li>
+                  <li>Log sufficiency: {vmwareHandoff.log_sufficiency_status}</li>
+                  <li>Recommended next step: {vmwareHandoff.recommended_next_step}</li>
+                  {vmwareHandoff.handoff_reason ? <li>Handoff reason: {vmwareHandoff.handoff_reason}</li> : null}
+                </ul>
+                <p className="mt-3 text-xs text-slate-500">
+                  This packet is metadata-driven from persisted VMware triage state, transcript facts, and uploaded log-name metadata.
+                </p>
+              </article>
+            ) : null}
 
             <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-950">Recommended next steps</h2>
