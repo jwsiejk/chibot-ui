@@ -4,9 +4,18 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.api_models import ExpertDeskSessionMetadata, VmwareTriageState
+from app.api_models import ExpertDeskSessionMetadata, VmwareHandoffPacket, VmwareTriageState
 from app.vmware_conversation_policy import VMWARE_NEXT_MOVES, decide_vmware_next_move, stage_for_vmware_next_move
 from app.vmware_log_sufficiency import evaluate_vmware_log_sufficiency
+
+VMWARE_RESOLUTION_STATUSES = {
+    'unresolved',
+    'monitoring',
+    'resolved',
+    'blocked_waiting_on_logs',
+    'blocked_waiting_on_user_action',
+    'needs_human_handoff',
+}
 
 
 def safe_partial_vmware_triage(raw_vmware_triage: Any) -> VmwareTriageState | None:
@@ -62,12 +71,19 @@ def read_vmware_triage_state(session_metadata: dict[str, Any] | None) -> VmwareT
 def update_vmware_triage_state(
     session_metadata: dict[str, Any] | None,
     triage_state: VmwareTriageState,
+    *,
+    transcript_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     base = dict(session_metadata) if isinstance(session_metadata, dict) else {}
     expert_desk = read_expert_desk_metadata(base)
     if expert_desk is None:
         return base
+    triage_state.resolution_status = normalize_vmware_resolution_status(
+        triage_state.resolution_status,
+        log_sufficiency_status=triage_state.log_sufficiency_status,
+    )
     expert_desk.vmware_triage = triage_state
+    expert_desk.vmware_handoff = build_vmware_handoff_packet(expert_desk=expert_desk, transcript_messages=transcript_messages)
     base['expert_desk'] = expert_desk.model_dump(mode='json')
     return base
 
@@ -95,7 +111,12 @@ def refresh_vmware_triage_log_sufficiency(session_metadata: dict[str, Any] | Non
     triage_state.optional_logs = sufficiency.optional_logs
     triage_state.log_sufficiency_status = sufficiency.log_sufficiency_status
     triage_state.log_guidance_summary = sufficiency.log_guidance_summary
+    triage_state.resolution_status = normalize_vmware_resolution_status(
+        triage_state.resolution_status,
+        log_sufficiency_status=triage_state.log_sufficiency_status,
+    )
     expert_desk.vmware_triage = triage_state
+    expert_desk.vmware_handoff = build_vmware_handoff_packet(expert_desk=expert_desk, transcript_messages=None)
     base['expert_desk'] = expert_desk.model_dump(mode='json')
     return base
 
@@ -142,9 +163,121 @@ def refresh_vmware_triage_policy_state(session_metadata: dict[str, Any] | None) 
         triage_state.conversation_stage = current_stage
     else:
         triage_state.conversation_stage = decided_stage
+    triage_state.resolution_status = normalize_vmware_resolution_status(
+        triage_state.resolution_status,
+        log_sufficiency_status=triage_state.log_sufficiency_status,
+    )
     expert_desk.vmware_triage = triage_state
+    expert_desk.vmware_handoff = build_vmware_handoff_packet(expert_desk=expert_desk, transcript_messages=None)
     base['expert_desk'] = expert_desk.model_dump(mode='json')
     return base
+
+
+def normalize_vmware_resolution_status(raw_status: str, *, log_sufficiency_status: str = '') -> str:
+    normalized = raw_status.strip().lower()
+    alias_map = {
+        '': 'unresolved',
+        'in_progress': 'unresolved',
+        'triage': 'unresolved',
+        'triaging': 'unresolved',
+        'stable': 'monitoring',
+        'observing': 'monitoring',
+        'fixed': 'resolved',
+        'waiting_on_logs': 'blocked_waiting_on_logs',
+        'blocked_logs': 'blocked_waiting_on_logs',
+        'waiting_on_user': 'blocked_waiting_on_user_action',
+        'waiting_on_customer': 'blocked_waiting_on_user_action',
+        'needs_handoff': 'needs_human_handoff',
+        'handoff_required': 'needs_human_handoff',
+    }
+    candidate = alias_map.get(normalized, normalized)
+    if candidate in VMWARE_RESOLUTION_STATUSES:
+        return candidate
+    if log_sufficiency_status.strip().lower() == 'insufficient':
+        return 'blocked_waiting_on_logs'
+    return 'unresolved'
+
+
+def build_vmware_handoff_packet(
+    *,
+    expert_desk: ExpertDeskSessionMetadata,
+    transcript_messages: list[dict[str, Any]] | None,
+) -> VmwareHandoffPacket | None:
+    triage = expert_desk.vmware_triage
+    if triage is None:
+        return None
+
+    issue_family = triage.issue_family.strip() or 'unconfirmed issue family'
+    resolution_status = normalize_vmware_resolution_status(
+        triage.resolution_status,
+        log_sufficiency_status=triage.log_sufficiency_status,
+    )
+    logs_received = [item.strip() for item in triage.received_logs if item.strip()]
+    if not logs_received:
+        logs_received = [item.strip() for item in expert_desk.uploaded_log_names if item.strip()]
+    logs_missing = [item.strip() for item in triage.missing_logs if item.strip()]
+
+    confirmed_facts = [f'Issue family: {issue_family}']
+    if triage.suspected_layer.strip():
+        confirmed_facts.append(f'Suspected layer: {triage.suspected_layer.strip()}')
+    if triage.impact_scope.strip():
+        confirmed_facts.append(f'Impact scope: {triage.impact_scope.strip()}')
+    if triage.recent_change_summary.strip():
+        confirmed_facts.append(f'Recent change summary: {triage.recent_change_summary.strip()}')
+    if triage.symptom_summary.strip():
+        confirmed_facts.append(f'Symptom summary: {triage.symptom_summary.strip()}')
+    confirmed_facts.append(
+        'Log evidence reflects uploaded file metadata names only; parsed-log conclusions are not persisted in this phase.'
+    )
+
+    user_count = 0
+    assistant_count = 0
+    if transcript_messages:
+        for message in transcript_messages:
+            role = str(message.get('role', '')).strip().lower()
+            text = str(message.get('text', '')).strip()
+            if not text:
+                continue
+            if role == 'user':
+                user_count += 1
+            if role == 'assistant':
+                assistant_count += 1
+
+    actions_taken: list[str] = []
+    if user_count or assistant_count:
+        actions_taken.append(f'Transcript captured {user_count} user message(s) and {assistant_count} assistant message(s).')
+    if triage.policy_next_move.strip():
+        actions_taken.append(f'Deterministic policy next move: {triage.policy_next_move.strip()}.')
+    if triage.next_best_question.strip():
+        actions_taken.append(f'Focused next question: {triage.next_best_question.strip()}')
+    if not actions_taken:
+        actions_taken.append('No transcript-derived action summary is available yet.')
+
+    handoff_reason = ''
+    if resolution_status == 'needs_human_handoff':
+        handoff_reason = 'Current troubleshooting path requires human expert escalation.'
+    elif resolution_status == 'blocked_waiting_on_logs':
+        handoff_reason = 'Troubleshooting is blocked waiting on required logs.'
+    elif resolution_status == 'blocked_waiting_on_user_action':
+        handoff_reason = 'Troubleshooting is blocked waiting on required user action.'
+
+    issue_summary = triage.symptom_summary.strip() or expert_desk.issue_description.strip() or expert_desk.request_label.strip()
+    working_hypothesis = triage.suspected_layer.strip() or f'Current working path remains {issue_family}.'
+    recommended_next_step = triage.next_best_question.strip() or triage.policy_next_move.strip() or 'Continue evidence-driven VMware triage.'
+    return VmwareHandoffPacket(
+        issue_summary=issue_summary,
+        working_hypothesis=working_hypothesis,
+        confirmed_facts=confirmed_facts,
+        open_questions=[item.strip() for item in triage.open_questions if item.strip()],
+        actions_taken=actions_taken,
+        logs_received=logs_received,
+        logs_missing=logs_missing,
+        log_sufficiency_status=triage.log_sufficiency_status.strip() or 'unknown',
+        current_resolution_status=resolution_status,
+        recommended_next_step=recommended_next_step,
+        handoff_reason=handoff_reason,
+        ready_for_handoff=resolution_status == 'needs_human_handoff',
+    )
 
 
 def _non_regressive_patch_policy_next_move(*, triage_state: VmwareTriageState, decided_next_move: str) -> str:
@@ -193,6 +326,8 @@ def build_prompt_context(expert_desk: ExpertDeskSessionMetadata) -> dict[str, st
     raw = expert_desk.model_dump(mode='json')
     cleaned: dict[str, str] = {}
     for key, value in raw.items():
+        if key == 'vmware_handoff':
+            continue
         if value is None:
             continue
         if isinstance(value, list):

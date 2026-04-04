@@ -26,6 +26,21 @@ class VmwareTriageState(BaseModel):
     last_updated_from_turn_id: str = ''
 
 
+class VmwareHandoffPacket(BaseModel):
+    issue_summary: str = ''
+    working_hypothesis: str = ''
+    confirmed_facts: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    actions_taken: list[str] = Field(default_factory=list)
+    logs_received: list[str] = Field(default_factory=list)
+    logs_missing: list[str] = Field(default_factory=list)
+    log_sufficiency_status: str = ''
+    current_resolution_status: str = ''
+    recommended_next_step: str = ''
+    handoff_reason: str = ''
+    ready_for_handoff: bool = False
+
+
 class ExpertDeskSessionMetadata(BaseModel):
     request_label: str
     issue_category: str
@@ -46,6 +61,7 @@ class ExpertDeskSessionMetadata(BaseModel):
     uploaded_logs_available: bool = False
     recommended_vmware_logs: list[str] = Field(default_factory=list)
     vmware_triage: VmwareTriageState | None = None
+    vmware_handoff: VmwareHandoffPacket | None = None
 
 
 class CreateSessionMetadata(BaseModel):

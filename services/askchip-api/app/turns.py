@@ -8,7 +8,12 @@ from uuid import uuid4
 
 from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
 from app.events import EventBus
-from app.expert_desk_metadata import read_expert_desk_metadata, read_vmware_triage_state, update_vmware_triage_state
+from app.expert_desk_metadata import (
+    normalize_vmware_resolution_status,
+    read_expert_desk_metadata,
+    read_vmware_triage_state,
+    update_vmware_triage_state,
+)
 from app.vmware_log_sufficiency import evaluate_vmware_log_sufficiency
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
@@ -270,6 +275,10 @@ class TurnManager:
         next_state.optional_logs = sufficiency.optional_logs
         next_state.log_sufficiency_status = sufficiency.log_sufficiency_status
         next_state.log_guidance_summary = sufficiency.log_guidance_summary
+        next_state.resolution_status = normalize_vmware_resolution_status(
+            next_state.resolution_status,
+            log_sufficiency_status=next_state.log_sufficiency_status,
+        )
         has_prior_assistant_turn = any(message.role == 'assistant' and message.text.strip() for message in transcript)
         policy_decision = decide_vmware_next_move(
             triage_state=next_state,
@@ -280,7 +289,11 @@ class TurnManager:
         next_state.conversation_stage = stage_for_vmware_next_move(policy_decision.next_move)
         next_state.next_best_question = policy_decision.focused_question
 
-        metadata = update_vmware_triage_state(session.metadata, next_state)
+        metadata = update_vmware_triage_state(
+            session.metadata,
+            next_state,
+            transcript_messages=[message.model_dump(mode='json') for message in transcript],
+        )
         if metadata == session.metadata:
             return
 

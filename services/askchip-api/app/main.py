@@ -185,11 +185,15 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
 
     @app.post('/api/v1/sessions')
     def create_session(request: CreateSessionRequest) -> JSONResponse:
+        metadata = request.metadata.model_dump(mode='json') if request.metadata is not None else {}
+        if request.metadata is not None and request.metadata.expert_desk is not None:
+            metadata = refresh_vmware_triage_log_sufficiency(metadata)
+            metadata = refresh_vmware_triage_policy_state(metadata)
         session = SessionRecord(
             title=request.title or 'New chat',
             status='ready',
             ready_at=datetime.now(timezone.utc),
-            metadata=request.metadata.model_dump(mode='json') if request.metadata is not None else {},
+            metadata=metadata,
         )
         state.db.create_session(session)
         return JSONResponse(session.model_dump(mode='json'), status_code=201)

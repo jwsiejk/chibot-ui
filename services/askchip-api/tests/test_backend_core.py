@@ -23,7 +23,12 @@ from app.stt import SttError, SttResult
 from app.vmware_conversation_policy import decide_vmware_next_move
 from app.webrtc.session_store import WebRtcSessionStore
 from app.api_models import VmwareTriageState
-from app.expert_desk_metadata import read_expert_desk_metadata, update_vmware_triage_state
+from app.expert_desk_metadata import (
+    build_vmware_handoff_packet,
+    normalize_vmware_resolution_status,
+    read_expert_desk_metadata,
+    update_vmware_triage_state,
+)
 
 CONTRACT_MESSAGE_KEYS = {
     'id',
@@ -1740,6 +1745,202 @@ def test_update_vmware_triage_state_overwrites_invalid_nested_vmware_triage() ->
     assert triage['issue_family'] == 'host-networking'
     assert triage['confidence'] == 0.61
     assert triage['missing_logs'] == ['vobd.log']
+    assert triage['resolution_status'] == 'unresolved'
+    assert updated['expert_desk']['vmware_handoff']['current_resolution_status'] == 'unresolved'
+
+
+def test_normalize_vmware_resolution_status_aliases() -> None:
+    assert normalize_vmware_resolution_status('in_progress') == 'unresolved'
+    assert normalize_vmware_resolution_status('waiting_on_logs') == 'blocked_waiting_on_logs'
+    assert normalize_vmware_resolution_status('waiting_on_user') == 'blocked_waiting_on_user_action'
+    assert normalize_vmware_resolution_status('stable') == 'monitoring'
+    assert normalize_vmware_resolution_status('handoff_required') == 'needs_human_handoff'
+
+
+def test_vmware_handoff_packet_reflects_blocked_waiting_on_logs_state() -> None:
+    expert_desk = read_expert_desk_metadata(
+        {
+            'expert_desk': {
+                'request_label': 'Req H-logs',
+                'issue_category': 'Storage APD',
+                'environment_platform': 'VMware',
+                'urgency': 'High',
+                'preferred_expert_type': 'AI VMware Engineer',
+                'recommended_expert_type': 'AI VMware Engineer',
+                'recommended_path': 'continue_with_ai_now',
+                'expert_persona_id': 'ai-vmware-engineer',
+                'expert_persona_label': 'AI VMware Engineer',
+                'issue_description': 'APD on datastore',
+                'architecture_notes': '',
+                'error_text': '',
+                'uploaded_log_names': ['vmkernel.log'],
+                'vmware_triage': {
+                    'issue_family': 'storage-pathing',
+                    'symptom_summary': 'APD still active',
+                    'log_sufficiency_status': 'insufficient',
+                    'received_logs': ['vmkernel.log'],
+                    'missing_logs': ['ESXi host support bundle'],
+                    'resolution_status': 'waiting_on_logs',
+                    'next_best_question': 'Can you upload ESXi host support bundle next?',
+                },
+            }
+        }
+    )
+    assert expert_desk is not None
+    packet = build_vmware_handoff_packet(expert_desk=expert_desk, transcript_messages=[{'role': 'user', 'text': 'APD started'}])
+    assert packet is not None
+    assert packet.current_resolution_status == 'blocked_waiting_on_logs'
+    assert packet.logs_received == ['vmkernel.log']
+    assert packet.logs_missing == ['ESXi host support bundle']
+    assert packet.ready_for_handoff is False
+
+
+def test_vmware_handoff_packet_reflects_blocked_waiting_on_user_action_state() -> None:
+    expert_desk = read_expert_desk_metadata(
+        {
+            'expert_desk': {
+                'request_label': 'Req H-user',
+                'issue_category': 'Host networking',
+                'environment_platform': 'VMware',
+                'urgency': 'High',
+                'preferred_expert_type': 'AI VMware Engineer',
+                'recommended_expert_type': 'AI VMware Engineer',
+                'recommended_path': 'continue_with_ai_now',
+                'expert_persona_id': 'ai-vmware-engineer',
+                'expert_persona_label': 'AI VMware Engineer',
+                'issue_description': 'Hosts disconnected',
+                'architecture_notes': '',
+                'error_text': '',
+                'vmware_triage': {
+                    'issue_family': 'host-networking',
+                    'resolution_status': 'blocked_waiting_on_user_action',
+                    'log_sufficiency_status': 'sufficient',
+                    'next_best_question': 'Can you run the NIC health check on host-03?',
+                },
+            }
+        }
+    )
+    assert expert_desk is not None
+    packet = build_vmware_handoff_packet(expert_desk=expert_desk, transcript_messages=None)
+    assert packet is not None
+    assert packet.current_resolution_status == 'blocked_waiting_on_user_action'
+    assert 'user action' in packet.handoff_reason.lower()
+
+
+def test_vmware_handoff_packet_reflects_resolved_and_handoff_states() -> None:
+    resolved = read_expert_desk_metadata(
+        {
+            'expert_desk': {
+                'request_label': 'Req resolved',
+                'issue_category': 'VM perf',
+                'environment_platform': 'VMware',
+                'urgency': 'Same day',
+                'preferred_expert_type': 'AI VMware Engineer',
+                'recommended_expert_type': 'AI VMware Engineer',
+                'recommended_path': 'continue_with_ai_now',
+                'expert_persona_id': 'ai-vmware-engineer',
+                'expert_persona_label': 'AI VMware Engineer',
+                'issue_description': 'CPU ready high',
+                'architecture_notes': '',
+                'error_text': '',
+                'vmware_triage': {'issue_family': 'vm-performance', 'resolution_status': 'resolved'},
+            }
+        }
+    )
+    handoff = read_expert_desk_metadata(
+        {
+            'expert_desk': {
+                'request_label': 'Req handoff',
+                'issue_category': 'vCenter',
+                'environment_platform': 'VMware',
+                'urgency': 'Critical',
+                'preferred_expert_type': 'AI VMware Engineer',
+                'recommended_expert_type': 'AI VMware Engineer',
+                'recommended_path': 'escalate_to_human_expert',
+                'expert_persona_id': 'ai-vmware-engineer',
+                'expert_persona_label': 'AI VMware Engineer',
+                'issue_description': 'vCenter flapping',
+                'architecture_notes': '',
+                'error_text': '',
+                'vmware_triage': {'issue_family': 'vcenter-services', 'resolution_status': 'needs_human_handoff'},
+            }
+        }
+    )
+    assert resolved is not None
+    assert handoff is not None
+    resolved_packet = build_vmware_handoff_packet(expert_desk=resolved, transcript_messages=None)
+    handoff_packet = build_vmware_handoff_packet(expert_desk=handoff, transcript_messages=None)
+    assert resolved_packet is not None
+    assert handoff_packet is not None
+    assert resolved_packet.current_resolution_status == 'resolved'
+    assert resolved_packet.ready_for_handoff is False
+    assert handoff_packet.current_resolution_status == 'needs_human_handoff'
+    assert handoff_packet.ready_for_handoff is True
+
+
+def test_session_patch_refresh_persists_vmware_handoff_packet_from_current_triage_state(tmp_path: Path) -> None:
+    app = make_app(tmp_path, transport=streaming_transport([{'message': {'content': 'ok'}, 'done': True}]))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware handoff refresh',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req HP-1',
+                        'issue_category': 'Host network',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Intermittent host disconnect',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_log_names': ['vmkernel.log'],
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'suspected_layer': 'esxi-network-stack',
+                            'impact_scope': 'single-cluster',
+                            'recent_change_summary': 'vDS change last night',
+                            'symptom_summary': 'Hosts disconnected twice this morning',
+                            'open_questions': ['Did this start right after change window?'],
+                            'conversation_stage': 'issue_definition',
+                            'policy_next_move': 'request_missing_logs',
+                            'next_best_question': 'Can you upload vobd.log next?',
+                            'required_logs': ['vmkernel.log', 'vobd.log', 'vCenter Server logs'],
+                            'received_logs': ['vmkernel.log'],
+                            'missing_logs': ['vobd.log', 'vCenter Server logs'],
+                            'log_sufficiency_status': 'partial',
+                            'resolution_status': 'in_progress',
+                        },
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        patched = client.patch(
+            f'/api/v1/sessions/{session_id}',
+            json={
+                'metadata': {
+                    'expert_desk': {
+                        **created.json()['metadata']['expert_desk'],
+                        'uploaded_log_names': ['vmkernel.log', 'vobd.log'],
+                    }
+                }
+            },
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert patched.status_code == 200
+    handoff = transcript.json()['session']['metadata']['expert_desk']['vmware_handoff']
+    assert handoff['current_resolution_status'] == 'unresolved'
+    assert handoff['logs_received'] == ['vmkernel.log', 'vobd.log']
+    assert handoff['logs_missing'] == ['vCenter Server logs']
+    assert handoff['log_sufficiency_status'] in {'partial', 'sufficient'}
+    assert handoff['recommended_next_step']
 
 
 def test_vmware_typed_turn_updates_triage_state_from_hidden_extraction(tmp_path: Path) -> None:
@@ -2012,6 +2213,7 @@ def test_non_vmware_sessions_do_not_persist_vmware_policy_triage_fields(tmp_path
     assert turn.status_code == 201
     assert transcript.status_code == 200
     assert transcript.json()['session']['metadata']['expert_desk'].get('vmware_triage') is None
+    assert transcript.json()['session']['metadata']['expert_desk'].get('vmware_handoff') is None
 
 
 def test_vmware_voice_turn_updates_same_triage_state(tmp_path: Path) -> None:

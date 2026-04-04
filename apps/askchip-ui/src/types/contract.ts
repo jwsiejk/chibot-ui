@@ -127,6 +127,21 @@ export interface VmwareTriageState {
   last_updated_from_turn_id: string;
 }
 
+export interface VmwareHandoffPacket {
+  issue_summary: string;
+  working_hypothesis: string;
+  confirmed_facts: string[];
+  open_questions: string[];
+  actions_taken: string[];
+  logs_received: string[];
+  logs_missing: string[];
+  log_sufficiency_status: string;
+  current_resolution_status: string;
+  recommended_next_step: string;
+  handoff_reason: string;
+  ready_for_handoff: boolean;
+}
+
 export interface ExpertDeskSessionMetadata {
   request_label: string;
   issue_category: string;
@@ -146,6 +161,7 @@ export interface ExpertDeskSessionMetadata {
   uploaded_logs_available: boolean;
   recommended_vmware_logs?: string[];
   vmware_triage?: VmwareTriageState;
+  vmware_handoff?: VmwareHandoffPacket;
 }
 
 export interface CreateSessionMetadata {
