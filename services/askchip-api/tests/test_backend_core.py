@@ -1189,7 +1189,7 @@ def test_read_expert_desk_metadata_keeps_none_when_vmware_triage_missing() -> No
     assert expert_desk.vmware_triage is None
 
 
-def test_read_expert_desk_metadata_ignores_invalid_nested_vmware_triage() -> None:
+def test_read_expert_desk_metadata_preserves_partial_nested_vmware_triage() -> None:
     metadata = {
         'expert_desk': {
             'request_label': 'Req 333',
@@ -1216,10 +1216,12 @@ def test_read_expert_desk_metadata_ignores_invalid_nested_vmware_triage() -> Non
     assert expert_desk is not None
     assert expert_desk.request_label == 'Req 333'
     assert expert_desk.issue_category == 'VM outage'
-    assert expert_desk.vmware_triage is None
+    assert expert_desk.vmware_triage is not None
+    assert expert_desk.vmware_triage.issue_family == 'host-networking'
+    assert expert_desk.vmware_triage.confidence == 0.0
 
 
-def test_prompt_assembler_keeps_expert_desk_preface_when_vmware_triage_invalid() -> None:
+def test_prompt_assembler_keeps_expert_desk_preface_when_vmware_triage_partially_invalid() -> None:
     assembler = PromptAssembler(transcript_window=2)
     session_metadata = {
         'expert_desk': {
@@ -1235,7 +1237,7 @@ def test_prompt_assembler_keeps_expert_desk_preface_when_vmware_triage_invalid()
             'issue_description': 'Latency spikes',
             'architecture_notes': '',
             'error_text': '',
-            'vmware_triage': {'confidence': -1.0},
+            'vmware_triage': {'issue_family': 'storage-pathing', 'confidence': -1.0},
         }
     }
 
@@ -1245,6 +1247,36 @@ def test_prompt_assembler_keeps_expert_desk_preface_when_vmware_triage_invalid()
     assert 'You are AskChip Expert Desk' in messages[0].text
     assert 'selected expert persona id: ai-vmware-engineer' in messages[2].text
     assert 'issue category: Datastore latency' in messages[2].text
+    assert 'vmware triage issue family: storage-pathing' in messages[2].text
+    assert 'vmware triage confidence' not in messages[2].text
+
+
+def test_read_expert_desk_metadata_drops_unusable_nested_vmware_triage() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req 334',
+            'issue_category': 'VM outage',
+            'environment_platform': 'VMware',
+            'urgency': 'Critical',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'launch_live_session_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Guests disconnected',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {
+                'confidence': 2.0,
+            },
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert expert_desk.request_label == 'Req 334'
+    assert expert_desk.vmware_triage is None
 
 
 def test_update_vmware_triage_state_overwrites_invalid_nested_vmware_triage() -> None:

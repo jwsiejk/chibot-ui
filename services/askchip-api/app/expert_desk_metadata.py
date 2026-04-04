@@ -7,6 +7,28 @@ from pydantic import ValidationError
 from app.api_models import ExpertDeskSessionMetadata, VmwareTriageState
 
 
+def safe_partial_vmware_triage(raw_vmware_triage: Any) -> VmwareTriageState | None:
+    if isinstance(raw_vmware_triage, VmwareTriageState):
+        return raw_vmware_triage
+    if not isinstance(raw_vmware_triage, dict):
+        return None
+    cleaned: dict[str, Any] = {}
+    for field_name, raw_value in raw_vmware_triage.items():
+        if field_name not in VmwareTriageState.model_fields:
+            continue
+        try:
+            parsed = VmwareTriageState.model_validate({field_name: raw_value})
+        except ValidationError:
+            continue
+        cleaned[field_name] = getattr(parsed, field_name)
+    if not cleaned:
+        return None
+    try:
+        return VmwareTriageState.model_validate(cleaned)
+    except ValidationError:
+        return None
+
+
 def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> ExpertDeskSessionMetadata | None:
     if not isinstance(session_metadata, dict):
         return None
@@ -22,7 +44,7 @@ def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> Expert
     if raw_vmware_triage is None:
         return expert_desk
     try:
-        expert_desk.vmware_triage = VmwareTriageState.model_validate(raw_vmware_triage)
+        expert_desk.vmware_triage = safe_partial_vmware_triage(raw_vmware_triage)
     except ValidationError:
         expert_desk.vmware_triage = None
     return expert_desk
