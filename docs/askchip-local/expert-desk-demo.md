@@ -297,6 +297,32 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - `required_logs`
   - `received_logs`
   - `missing_logs`
+
+### Phase 21 — VMware trajectory transition observability + regression harness
+- Added backend-native VMware trajectory transition events for deterministic triage fields when values actually change:
+  - `vmware.trajectory.issue_family_changed`
+  - `vmware.trajectory.conversation_stage_changed`
+  - `vmware.trajectory.next_move_changed`
+  - `vmware.trajectory.log_sufficiency_changed`
+  - `vmware.trajectory.resolution_status_changed`
+- Transition event payloads are compact and grounded for debugging:
+  - `previous_value`
+  - `current_value`
+  - `source_path` (`turn_runtime` or `session_patch_refresh`)
+  - optional `turn_id`
+  - optional `trace_id`
+- Session metadata PATCH refresh now emits VMware trajectory transition events when PATCH-time log/policy refresh changes persisted VMware triage state.
+- Added backend regression harness coverage for representative VMware issue families and runtime states:
+  - host-networking
+  - storage-pathing
+  - vcenter-services
+  - vm-performance
+- Added trajectory-focused tests that assert:
+  - transition events emit only on real value changes
+  - no duplicate trajectory transition events when VMware triage state is unchanged
+  - hypothesis-first kickoff guidance and one-focused-question behavior remain intact
+  - correction handling, missing-log guidance, blocked/handoff behavior, and resolution-confirmed behavior remain deterministic
+  - non-VMware sessions do not emit VMware trajectory transition events
   - `optional_logs`
   - `log_guidance_summary`
 - Prompt runtime context now includes these fields so the assistant can naturally state whether logs are sufficient, partially sufficient, or still missing for the current issue path.

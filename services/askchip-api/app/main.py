@@ -23,7 +23,11 @@ from app.api_models import (
 from app.config import Settings, settings
 from app.domain_models import EventRecord, SessionRecord
 from app.events import EventBus
-from app.expert_desk_metadata import refresh_vmware_triage_log_sufficiency, refresh_vmware_triage_policy_state
+from app.expert_desk_metadata import (
+    build_vmware_trajectory_transition_payloads,
+    refresh_vmware_triage_log_sufficiency,
+    refresh_vmware_triage_policy_state,
+)
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.readiness import ReadinessTracker
@@ -204,7 +208,11 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         return JSONResponse({'items': sessions})
 
     @app.patch('/api/v1/sessions/{session_id}')
-    def update_session(session_id: str, request: UpdateSessionRequest) -> JSONResponse:
+    async def update_session(
+        session_id: str,
+        request: UpdateSessionRequest,
+        x_askchip_trace_id: str | None = Header(default=None),
+    ) -> JSONResponse:
         current = state.db.get_session(session_id)
         if current is None:
             raise HTTPException(status_code=404, detail='session not found')
@@ -215,10 +223,17 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             if updated is None:
                 raise HTTPException(status_code=404, detail='session not found')
         if request.metadata is not None:
+            previous_metadata = current.metadata
             metadata = request.metadata.model_dump(mode='json')
             if request.metadata.expert_desk is not None:
                 metadata = refresh_vmware_triage_log_sufficiency(metadata)
                 metadata = refresh_vmware_triage_policy_state(metadata)
+            transition_events = build_vmware_trajectory_transition_payloads(
+                previous_metadata,
+                metadata,
+                source_path='session_patch_refresh',
+                trace_id=x_askchip_trace_id,
+            )
             state.db.update_session_state(
                 session_id,
                 status=updated.status,
@@ -228,6 +243,14 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
                 last_error_at=updated.last_error_at.isoformat() if updated.last_error_at else None,
                 metadata=metadata,
             )
+            for event_type, payload in transition_events:
+                event = EventRecord(
+                    session_id=session_id,
+                    type=event_type,
+                    payload=payload,
+                )
+                state.db.create_event(event)
+                await state.event_bus.publish(state.turn_manager.event_payload(event), session_id)
             refreshed = state.db.get_session(session_id)
             if refreshed is None:
                 raise HTTPException(status_code=404, detail='session not found')

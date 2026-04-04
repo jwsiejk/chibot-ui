@@ -24,6 +24,7 @@ from app.vmware_conversation_policy import decide_vmware_next_move
 from app.webrtc.session_store import WebRtcSessionStore
 from app.api_models import VmwareTriageState
 from app.expert_desk_metadata import (
+    build_vmware_trajectory_transition_payloads,
     build_vmware_handoff_packet,
     normalize_vmware_resolution_status,
     read_expert_desk_metadata,
@@ -1091,6 +1092,291 @@ def test_vmware_policy_requests_missing_logs_for_current_issue_family() -> None:
     assert 'upload vCenter Server logs, vpxd.log' in decision.focused_question
 
 
+@pytest.mark.parametrize(
+    ('previous_status', 'current_status'),
+    [
+        ('insufficient', 'partial'),
+        ('partial', 'sufficient'),
+    ],
+)
+def test_vmware_transition_event_payloads_emit_on_log_sufficiency_change(previous_status: str, current_status: str) -> None:
+    previous_metadata = {
+        'expert_desk': {
+            'request_label': 'Req',
+            'issue_category': 'Host issue',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Host disconnects',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {
+                'issue_family': 'host-networking',
+                'conversation_stage': 'log_collection',
+                'policy_next_move': 'request_missing_logs',
+                'log_sufficiency_status': previous_status,
+                'resolution_status': 'blocked_waiting_on_logs',
+            },
+        }
+    }
+    current_metadata = {
+        **previous_metadata,
+        'expert_desk': {
+            **previous_metadata['expert_desk'],
+            'vmware_triage': {
+                **previous_metadata['expert_desk']['vmware_triage'],
+                'log_sufficiency_status': current_status,
+            },
+        },
+    }
+
+    payloads = build_vmware_trajectory_transition_payloads(
+        previous_metadata,
+        current_metadata,
+        source_path='session_patch_refresh',
+    )
+
+    assert payloads == [
+        (
+            'vmware.trajectory.log_sufficiency_changed',
+            {
+                'previous_value': previous_status,
+                'current_value': current_status,
+                'source_path': 'session_patch_refresh',
+            },
+        )
+    ]
+
+
+def test_vmware_transition_event_payloads_emit_only_when_values_change() -> None:
+    previous_metadata = {
+        'expert_desk': {
+            'request_label': 'Req',
+            'issue_category': 'Host issue',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Host disconnects',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {
+                'issue_family': 'host-networking',
+                'conversation_stage': 'scope_confirmation',
+                'policy_next_move': 'confirm_scope',
+                'log_sufficiency_status': 'partial',
+                'resolution_status': 'unresolved',
+            },
+        }
+    }
+    current_metadata = {
+        **previous_metadata,
+        'expert_desk': {
+            **previous_metadata['expert_desk'],
+            'vmware_triage': {
+                **previous_metadata['expert_desk']['vmware_triage'],
+                'conversation_stage': 'hypothesis_validation',
+                'policy_next_move': 'validate_hypothesis',
+            },
+        },
+    }
+
+    payloads = build_vmware_trajectory_transition_payloads(
+        previous_metadata,
+        current_metadata,
+        source_path='turn_runtime',
+        turn_id='turn-123',
+        trace_id='trace-123',
+    )
+
+    assert payloads == [
+        (
+            'vmware.trajectory.conversation_stage_changed',
+            {
+                'previous_value': 'scope_confirmation',
+                'current_value': 'hypothesis_validation',
+                'source_path': 'turn_runtime',
+                'turn_id': 'turn-123',
+                'trace_id': 'trace-123',
+            },
+        ),
+        (
+            'vmware.trajectory.next_move_changed',
+            {
+                'previous_value': 'confirm_scope',
+                'current_value': 'validate_hypothesis',
+                'source_path': 'turn_runtime',
+                'turn_id': 'turn-123',
+                'trace_id': 'trace-123',
+            },
+        ),
+    ]
+
+
+def test_vmware_transition_event_payloads_track_issue_family_and_resolution_changes() -> None:
+    previous_metadata = {
+        'expert_desk': {
+            'request_label': 'Req',
+            'issue_category': 'Host issue',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Host disconnects',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {
+                'issue_family': 'host-networking',
+                'conversation_stage': 'verification',
+                'policy_next_move': 'verify_result',
+                'log_sufficiency_status': 'sufficient',
+                'resolution_status': 'monitoring',
+            },
+        }
+    }
+    current_metadata = {
+        **previous_metadata,
+        'expert_desk': {
+            **previous_metadata['expert_desk'],
+            'vmware_triage': {
+                **previous_metadata['expert_desk']['vmware_triage'],
+                'issue_family': 'storage-pathing',
+                'resolution_status': 'needs_human_handoff',
+            },
+        },
+    }
+
+    payloads = build_vmware_trajectory_transition_payloads(
+        previous_metadata,
+        current_metadata,
+        source_path='turn_runtime',
+    )
+    assert payloads == [
+        (
+            'vmware.trajectory.issue_family_changed',
+            {
+                'previous_value': 'host-networking',
+                'current_value': 'storage-pathing',
+                'source_path': 'turn_runtime',
+            },
+        ),
+        (
+            'vmware.trajectory.resolution_status_changed',
+            {
+                'previous_value': 'monitoring',
+                'current_value': 'needs_human_handoff',
+                'source_path': 'turn_runtime',
+            },
+        ),
+    ]
+
+
+def test_vmware_trajectory_regression_harness_policy_paths_across_issue_families() -> None:
+    scenarios = [
+        {
+            'issue_family': 'host-networking',
+            'log_sufficiency_status': 'insufficient',
+            'resolution_status': 'blocked_waiting_on_logs',
+            'feedback': 'We have vmkernel only so far.',
+            'expected_move': 'request_missing_logs',
+        },
+        {
+            'issue_family': 'storage-pathing',
+            'log_sufficiency_status': 'partial',
+            'resolution_status': 'unresolved',
+            'feedback': 'No, that is not right; this started after SAN maintenance.',
+            'expected_move': 'validate_hypothesis',
+        },
+        {
+            'issue_family': 'vcenter-services',
+            'log_sufficiency_status': 'sufficient',
+            'resolution_status': 'blocked_waiting_on_user_action',
+            'feedback': 'I can run a safe step now.',
+            'expected_move': 'propose_safe_next_step',
+        },
+        {
+            'issue_family': 'vm-performance',
+            'log_sufficiency_status': 'sufficient',
+            'resolution_status': 'needs_human_handoff',
+            'feedback': 'Still degraded across both clusters.',
+            'expected_move': 'handoff_required',
+        },
+        {
+            'issue_family': 'vm-performance',
+            'log_sufficiency_status': 'sufficient',
+            'resolution_status': 'resolved',
+            'feedback': 'Performance is stable now.',
+            'expected_move': 'resolution_confirmed',
+        },
+    ]
+
+    for scenario in scenarios:
+        decision = decide_vmware_next_move(
+            triage_state=VmwareTriageState(
+                issue_family=scenario['issue_family'],
+                confidence=0.78,
+                conversation_stage='hypothesis_validation',
+                log_sufficiency_status=scenario['log_sufficiency_status'],
+                resolution_status=scenario['resolution_status'],
+                missing_logs=['vCenter Server logs'],
+            ),
+            latest_user_feedback=scenario['feedback'],
+            has_prior_assistant_turn=True,
+        )
+        assert decision.next_move == scenario['expected_move']
+        assert decision.working_hypothesis.startswith('Working hypothesis:')
+        assert decision.focused_question.endswith('?')
+
+
+def test_vmware_trajectory_regression_harness_kickoff_is_hypothesis_first_and_one_question() -> None:
+    assembler = PromptAssembler(transcript_window=6)
+    session_metadata = {
+        'expert_desk': {
+            'request_label': 'Req Kickoff',
+            'issue_category': 'Production outage',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'VMs are pausing every few minutes',
+            'architecture_notes': '',
+            'error_text': '',
+            'uploaded_logs_count': 0,
+            'uploaded_log_names': [],
+            'uploaded_logs_available': False,
+            'vmware_triage': {
+                'issue_family': 'vm-performance',
+                'conversation_stage': 'issue_definition',
+                'policy_next_move': 'confirm_scope',
+                'log_sufficiency_status': 'insufficient',
+                'missing_logs': ['vmkernel.log', 'ESXi host support bundle'],
+                'resolution_status': 'blocked_waiting_on_logs',
+            },
+        }
+    }
+
+    messages = assembler.build_messages(transcript=[], user_text='VMs pause for 10 seconds at a time', session_metadata=session_metadata)
+    runtime_guidance = next(message.text for message in messages if message.role == 'system' and message.text.startswith('VMware live-session guidance:'))
+
+    assert 'For first response flow: state a working hypothesis, ask for confirmation, then ask one focused next question.' in runtime_guidance
+    assert 'Ask one focused next question at a time to move triage forward.' in runtime_guidance
+    assert 'If logs were not received, briefly say that' in runtime_guidance
+    assert 'Do not use numbered checklists unless the user explicitly asks for one.' in runtime_guidance
+
+
 def test_session_patch_can_update_expert_desk_metadata_without_renaming(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
@@ -1210,8 +1496,10 @@ def test_session_patch_vmware_uploaded_logs_immediately_refreshes_log_sufficienc
                 }
             },
         )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
 
     assert patched.status_code == 200
+    assert transcript.status_code == 200
     triage = patched.json()['metadata']['expert_desk']['vmware_triage']
     assert triage['issue_family'] == 'host-networking'
     assert triage['suspected_layer'] == 'esxi-network-stack'
@@ -1226,6 +1514,12 @@ def test_session_patch_vmware_uploaded_logs_immediately_refreshes_log_sufficienc
     assert triage['policy_next_move'] == 'validate_hypothesis'
     assert triage['conversation_stage'] == 'evidence_gathering'
     assert triage['next_best_question'] == 'Based on your latest details, should we revise the issue family before we continue?'
+    transition_events = [event for event in transcript.json()['events'] if event['type'] == 'vmware.trajectory.log_sufficiency_changed']
+    assert transition_events
+    latest = transition_events[-1]
+    assert latest['payload']['previous_value'] == 'partial'
+    assert latest['payload']['current_value'] == 'sufficient'
+    assert latest['payload']['source_path'] == 'session_patch_refresh'
 
 
 def test_session_patch_vmware_refresh_preserves_existing_progressed_policy_move(tmp_path: Path) -> None:
@@ -1355,8 +1649,10 @@ def test_session_patch_non_vmware_persona_does_not_run_vmware_log_sufficiency(tm
                 }
             },
         )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
 
     assert patched.status_code == 200
+    assert transcript.status_code == 200
     triage = patched.json()['metadata']['expert_desk']['vmware_triage']
     assert triage['required_logs'] == ['seeded-required']
     assert triage['received_logs'] == ['seeded-received']
@@ -1367,6 +1663,81 @@ def test_session_patch_non_vmware_persona_does_not_run_vmware_log_sufficiency(tm
     assert triage['policy_next_move'] == 'seeded-policy'
     assert triage['conversation_stage'] == 'seeded-stage'
     assert triage['next_best_question'] == 'seeded-question'
+    assert [event for event in transcript.json()['events'] if event['type'].startswith('vmware.trajectory.')] == []
+
+
+def test_session_patch_vmware_transition_events_do_not_duplicate_when_state_unchanged(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware transition dedupe',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req dedupe',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Intermittent host disconnects',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 3,
+                        'uploaded_log_names': ['vmkernel.log', 'vobd.log', 'vcenter-events-bundle.tgz'],
+                        'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': 'host-networking',
+                            'conversation_stage': 'verification',
+                            'policy_next_move': 'verify_result',
+                            'log_sufficiency_status': 'sufficient',
+                            'resolution_status': 'monitoring',
+                        },
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        payload = {
+            'metadata': {
+                'expert_desk': {
+                    'request_label': 'Req dedupe',
+                    'issue_category': 'Host disconnect',
+                    'environment_platform': 'VMware',
+                    'urgency': 'High',
+                    'preferred_expert_type': 'AI VMware Engineer',
+                    'recommended_expert_type': 'AI VMware Engineer',
+                    'recommended_path': 'continue_with_ai_now',
+                    'expert_persona_id': 'ai-vmware-engineer',
+                    'expert_persona_label': 'AI VMware Engineer',
+                    'issue_description': 'Intermittent host disconnects',
+                    'architecture_notes': '',
+                    'error_text': '',
+                    'uploaded_logs_count': 3,
+                    'uploaded_log_names': ['vmkernel.log', 'vobd.log', 'vcenter-events-bundle.tgz'],
+                    'uploaded_logs_available': True,
+                    'vmware_triage': {
+                        'issue_family': 'host-networking',
+                        'conversation_stage': 'verification',
+                        'policy_next_move': 'verify_result',
+                        'log_sufficiency_status': 'sufficient',
+                        'resolution_status': 'monitoring',
+                    },
+                }
+            }
+        }
+        first_patch = client.patch(f'/api/v1/sessions/{session_id}', json=payload)
+        second_patch = client.patch(f'/api/v1/sessions/{session_id}', json=payload)
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert first_patch.status_code == 200
+    assert second_patch.status_code == 200
+    assert transcript.status_code == 200
+    assert [event for event in transcript.json()['events'] if event['type'].startswith('vmware.trajectory.')] == []
 
 
 def test_session_patch_vmware_without_issue_family_does_not_invent_triage_state(tmp_path: Path) -> None:
