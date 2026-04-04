@@ -20,6 +20,7 @@ from app.storage import Database
 from app.turns import TurnManager
 from app.prompting import PromptAssembler
 from app.stt import SttError, SttResult
+from app.vmware_conversation_policy import decide_vmware_next_move
 from app.webrtc.session_store import WebRtcSessionStore
 from app.api_models import VmwareTriageState
 from app.expert_desk_metadata import read_expert_desk_metadata, update_vmware_triage_state
@@ -1029,6 +1030,60 @@ def test_prompt_assembler_includes_vmware_triage_log_guidance_fields() -> None:
     assert 'vmware triage optional logs: vSphere UI/API gateway logs' in prebrief
     assert 'vmware triage log guidance summary: Some required logs are present' in prebrief
     assert 'If vmware triage log sufficiency status is partial, say you can proceed with current evidence but explicitly list missing logs.' in runtime_guidance
+    assert 'Deterministic policy next move:' in runtime_guidance
+    assert 'Deterministic policy working hypothesis:' in runtime_guidance
+    assert 'Deterministic policy focused next question:' in runtime_guidance
+
+
+def test_vmware_policy_first_turn_prefers_hypothesis_confirmation() -> None:
+    decision = decide_vmware_next_move(
+        triage_state=VmwareTriageState(
+            issue_family='host-networking',
+            confidence=0.66,
+            conversation_stage='hypothesis_confirmation',
+            log_sufficiency_status='partial',
+            missing_logs=['vCenter Server logs'],
+        ),
+        latest_user_feedback='We saw host disconnect alarms right after the vDS change.',
+        has_prior_assistant_turn=False,
+    )
+
+    assert decision.next_move == 'confirm_scope'
+    assert 'Working hypothesis:' in decision.working_hypothesis
+    assert 'Is the impact isolated' in decision.focused_question
+
+
+def test_vmware_policy_user_correction_updates_next_move() -> None:
+    decision = decide_vmware_next_move(
+        triage_state=VmwareTriageState(
+            issue_family='host-networking',
+            confidence=0.8,
+            conversation_stage='mitigation',
+            log_sufficiency_status='sufficient',
+        ),
+        latest_user_feedback='No, that is not right. It started before the vDS change and only impacts one datastore cluster.',
+        has_prior_assistant_turn=True,
+    )
+
+    assert decision.user_feedback_signal == 'correction'
+    assert decision.next_move == 'validate_hypothesis'
+
+
+def test_vmware_policy_requests_missing_logs_for_current_issue_family() -> None:
+    decision = decide_vmware_next_move(
+        triage_state=VmwareTriageState(
+            issue_family='vcenter-services',
+            confidence=0.74,
+            conversation_stage='evidence_gathering',
+            log_sufficiency_status='insufficient',
+            missing_logs=['vCenter Server logs', 'vpxd.log'],
+        ),
+        latest_user_feedback='yes that matches',
+        has_prior_assistant_turn=True,
+    )
+
+    assert decision.next_move == 'request_missing_logs'
+    assert 'upload vCenter Server logs, vpxd.log' in decision.focused_question
 
 
 def test_session_patch_can_update_expert_desk_metadata_without_renaming(tmp_path: Path) -> None:
@@ -1636,6 +1691,97 @@ def test_vmware_typed_turn_updates_triage_state_from_hidden_extraction(tmp_path:
     assert triage['optional_logs'] == ['ESXi host support bundle', 'Distributed switch / vmnic event export']
     assert 'metadata' in triage['log_guidance_summary'].lower() or 'collect' in triage['log_guidance_summary'].lower()
     assert len(calls) == 2
+
+
+def test_vmware_turn_trajectory_updates_policy_after_user_correction(tmp_path: Path) -> None:
+    assistant_payloads: list[dict[str, object]] = []
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        payload = json.loads(request.content.decode())
+        calls += 1
+        if calls == 1:
+            extraction = {
+                'issue_family': 'host-networking',
+                'suspected_layer': 'esxi-network-stack',
+                'impact_scope': '',
+                'recent_change_summary': 'vDS uplink policy changed',
+                'symptom_summary': 'host disconnect alarms',
+                'open_questions': ['Is impact single cluster or multiple clusters?'],
+                'confidence': 0.79,
+                'recommended_conversation_stage': 'hypothesis_confirmation',
+                'required_logs': ['vmkernel.log', 'vobd.log'],
+                'received_logs': ['vmkernel.log'],
+                'missing_logs': ['vobd.log'],
+                'resolution_status': 'in_progress',
+            }
+            return httpx.Response(200, content=json.dumps({'message': {'content': json.dumps(extraction)}, 'done': True}).encode() + b'\n')
+        if calls == 2:
+            assistant_payloads.append(payload)
+            return httpx.Response(200, content=json.dumps({'message': {'content': 'Understood. Let us confirm scope first.'}, 'done': True}).encode() + b'\n')
+        if calls == 3:
+            extraction = {
+                'issue_family': 'storage-pathing',
+                'suspected_layer': 'esxi-multipath',
+                'impact_scope': 'single-cluster',
+                'recent_change_summary': 'no recent storage changes',
+                'symptom_summary': 'APD on one datastore',
+                'open_questions': ['Do APD events align with array controller alerts?'],
+                'confidence': 0.76,
+                'recommended_conversation_stage': 'evidence_gathering',
+                'required_logs': ['vmkernel.log', 'ESXi host support bundle', 'Storage array event logs'],
+                'received_logs': ['vmkernel.log'],
+                'missing_logs': ['ESXi host support bundle', 'Storage array event logs'],
+                'resolution_status': 'in_progress',
+            }
+            return httpx.Response(200, content=json.dumps({'message': {'content': json.dumps(extraction)}, 'done': True}).encode() + b'\n')
+        assistant_payloads.append(payload)
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Thanks for the correction. I will revise the hypothesis.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware trajectory policy',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req Traj-1',
+                        'issue_category': 'Host disconnect',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Host disconnect alarms',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['vmkernel.log'],
+                        'uploaded_logs_available': True,
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        first_turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hosts started disconnecting after last night change.'})
+        second_turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'No, correction: this is storage APD and not network.'})
+
+    assert first_turn.status_code == 201
+    assert second_turn.status_code == 201
+    assert len(assistant_payloads) == 2
+    first_system_messages = [message['content'] for message in assistant_payloads[0]['messages'] if message['role'] == 'system']
+    second_system_messages = [message['content'] for message in assistant_payloads[1]['messages'] if message['role'] == 'system']
+    first_policy = next(message for message in first_system_messages if message.startswith('VMware live-session guidance:'))
+    second_policy = next(message for message in second_system_messages if message.startswith('VMware live-session guidance:'))
+    assert 'Deterministic policy next move: confirm_scope.' in first_policy
+    assert 'Deterministic policy working hypothesis:' in first_policy
+    assert 'Deterministic policy focused next question: Is the impact isolated' in first_policy
+    assert 'Deterministic policy next move: validate_hypothesis.' in second_policy
+    assert 'If the user corrects your path, explicitly revise your working hypothesis before proposing the next step.' in second_policy
 
 
 def test_vmware_voice_turn_updates_same_triage_state(tmp_path: Path) -> None:

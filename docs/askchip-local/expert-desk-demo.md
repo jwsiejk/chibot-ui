@@ -259,6 +259,32 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - `conversation_stage` (from extractor `recommended_conversation_stage`)
   - `required_logs`, `received_logs`, `missing_logs`
 
+### Phase 21 — deterministic VMware support-engineer conversation policy
+- Added a deterministic VMware conversation-policy layer that computes each response steering move from:
+  - typed triage state
+  - conversation stage
+  - confidence band
+  - log sufficiency status
+  - latest user feedback signal (including explicit user corrections)
+- Added explicit next-move policy states used by runtime guidance:
+  - `confirm_issue_family`
+  - `confirm_scope`
+  - `collect_recent_change`
+  - `request_missing_logs`
+  - `validate_hypothesis`
+  - `propose_safe_next_step`
+  - `verify_result`
+  - `summarize_progress`
+  - `handoff_required`
+  - `resolution_confirmed`
+- VMware runtime prompting now injects deterministic policy outputs so the assistant:
+  - leads with a working hypothesis (not a declaration) when appropriate
+  - asks one focused next question
+  - revises hypothesis when the user corrects the direction
+  - states whether current uploaded logs are sufficient for the active issue path
+  - remains short, calm, professional, and engineer-to-engineer by default
+- Transcript and session-state contract remains unchanged in this phase (`text` canonical transcript field, same allowed top-level session states, WebRTC diagnostics-only).
+
 
 ### Phase 21 — deterministic VMware log sufficiency evaluation
 - Added a deterministic VMware log requirement matrix keyed by `issue_family` so the backend can assess whether the current troubleshooting path has the right log set.

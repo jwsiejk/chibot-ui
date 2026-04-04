@@ -137,4 +137,5 @@ curl http://127.0.0.1:8000/api/v1/readiness
 - VMware triage metadata now also tracks deterministic log-sufficiency fields per issue family (`log_sufficiency_status`, `required_logs`, `received_logs`, `missing_logs`, `optional_logs`, `log_guidance_summary`) based on uploaded file metadata names only.
 - For VMware persona sessions that already have a triage `issue_family`, session metadata PATCH updates now immediately refresh deterministic log-sufficiency fields from the latest `uploaded_log_names` during live sessions (without waiting for the next committed turn).
 - AskChip remains honest about current log handling: uploaded file metadata can drive sufficiency guidance, but parsed-log findings are not claimed unless parsed content exists.
+- VMware live runtime guidance now includes a deterministic conversation-policy decision (next move + focused next question) derived from triage state, conversation stage, confidence, log sufficiency, and latest user feedback, while preserving the same transcript payload contract.
 - Transcript and turn payload contracts remain unchanged (`text` remains canonical transcript content).
