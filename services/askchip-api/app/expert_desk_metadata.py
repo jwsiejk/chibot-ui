@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.api_models import ExpertDeskSessionMetadata, VmwareTriageState
-from app.vmware_conversation_policy import decide_vmware_next_move, stage_for_vmware_next_move
+from app.vmware_conversation_policy import VMWARE_NEXT_MOVES, decide_vmware_next_move, stage_for_vmware_next_move
 from app.vmware_log_sufficiency import evaluate_vmware_log_sufficiency
 
 
@@ -121,12 +121,72 @@ def refresh_vmware_triage_policy_state(session_metadata: dict[str, Any] | None) 
         latest_user_feedback='',
         has_prior_assistant_turn=has_prior_assistant_turn,
     )
-    triage_state.policy_next_move = policy_decision.next_move
-    triage_state.conversation_stage = stage_for_vmware_next_move(policy_decision.next_move)
-    triage_state.next_best_question = policy_decision.focused_question
+    next_move = _non_regressive_patch_policy_next_move(
+        triage_state=triage_state,
+        decided_next_move=policy_decision.next_move,
+    )
+    triage_state.policy_next_move = next_move
+    if next_move != policy_decision.next_move:
+        triage_state.next_best_question = _fallback_question_for_non_regressive_move(next_move, triage_state)
+    else:
+        triage_state.next_best_question = policy_decision.focused_question
+
+    current_stage = triage_state.conversation_stage.strip()
+    decided_stage = stage_for_vmware_next_move(next_move)
+    if (
+        policy_decision.next_move == 'confirm_issue_family'
+        and next_move != 'confirm_issue_family'
+        and current_stage
+        and current_stage.lower() not in {'issue_definition'}
+    ):
+        triage_state.conversation_stage = current_stage
+    else:
+        triage_state.conversation_stage = decided_stage
     expert_desk.vmware_triage = triage_state
     base['expert_desk'] = expert_desk.model_dump(mode='json')
     return base
+
+
+def _non_regressive_patch_policy_next_move(*, triage_state: VmwareTriageState, decided_next_move: str) -> str:
+    if decided_next_move != 'confirm_issue_family':
+        return decided_next_move
+    if not triage_state.issue_family.strip():
+        return decided_next_move
+
+    has_scope = bool(triage_state.impact_scope.strip())
+    has_recent_change = bool(triage_state.recent_change_summary.strip())
+    log_status = triage_state.log_sufficiency_status.strip().lower()
+    has_sufficient_logs = log_status in {'sufficient', 'partial'}
+    if not (has_scope and has_recent_change and has_sufficient_logs):
+        return decided_next_move
+
+    existing_next_move = triage_state.policy_next_move.strip().lower()
+    if existing_next_move in VMWARE_NEXT_MOVES and existing_next_move != 'confirm_issue_family':
+        return existing_next_move
+
+    stage = triage_state.conversation_stage.strip().lower()
+    if stage in {'mitigation', 'remediation'}:
+        return 'propose_safe_next_step'
+    if stage in {'verification', 'verify_result'}:
+        return 'verify_result'
+    if stage in {'summary', 'summarize_progress'}:
+        return 'summarize_progress'
+    return 'validate_hypothesis'
+
+
+def _fallback_question_for_non_regressive_move(move: str, triage_state: VmwareTriageState) -> str:
+    if move == 'propose_safe_next_step':
+        return 'Can we run one safe verification step now and confirm the result before changing anything disruptive?'
+    if move == 'verify_result':
+        return 'After that step, did alarms, host state, and workload impact improve or stay the same?'
+    if move == 'summarize_progress':
+        return 'Would you like a short summary of confirmed findings, open risks, and next actions?'
+    if move == 'validate_hypothesis':
+        return 'Based on your latest details, should we revise the issue family before we continue?'
+    missing = [item.strip() for item in triage_state.missing_logs if item.strip()]
+    if missing:
+        return f"Can you upload {', '.join(missing)} next so we can validate this path?"
+    return 'Can you confirm the latest symptom timeline so we can continue triage?'
 
 
 def build_prompt_context(expert_desk: ExpertDeskSessionMetadata) -> dict[str, str]:
