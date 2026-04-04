@@ -1369,7 +1369,12 @@ def test_vmware_typed_turn_updates_triage_state_from_hidden_extraction(tmp_path:
     assert triage['conversation_stage'] == 'hypothesis_confirmation'
     assert triage['open_questions'] == ['Did vmnic flaps start right after the vDS change?']
     assert triage['next_best_question'] == 'Did vmnic flaps start right after the vDS change?'
-    assert triage['missing_logs'] == ['vobd.log']
+    assert triage['log_sufficiency_status'] == 'insufficient'
+    assert triage['required_logs'] == ['vmkernel.log', 'vobd.log', 'vCenter Server logs']
+    assert triage['received_logs'] == []
+    assert triage['missing_logs'] == ['vmkernel.log', 'vobd.log', 'vCenter Server logs']
+    assert triage['optional_logs'] == ['ESXi host support bundle', 'Distributed switch / vmnic event export']
+    assert 'metadata' in triage['log_guidance_summary'].lower() or 'collect' in triage['log_guidance_summary'].lower()
     assert len(calls) == 2
 
 
@@ -1435,7 +1440,11 @@ def test_vmware_voice_turn_updates_same_triage_state(tmp_path: Path) -> None:
     triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
     assert triage['issue_family'] == 'storage-pathing'
     assert triage['conversation_stage'] == 'evidence_gathering'
-    assert triage['missing_logs'] == ['vpxd.log', 'array-event-log']
+    assert triage['log_sufficiency_status'] == 'insufficient'
+    assert triage['required_logs'] == ['vmkernel.log', 'ESXi host support bundle', 'Storage array event logs']
+    assert triage['received_logs'] == []
+    assert triage['missing_logs'] == ['vmkernel.log', 'ESXi host support bundle', 'Storage array event logs']
+    assert triage['optional_logs'] == ['vpxd.log', 'HBA driver logs']
     assert len(calls) == 2
 
 

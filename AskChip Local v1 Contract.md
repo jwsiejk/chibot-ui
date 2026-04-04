@@ -45,12 +45,16 @@ The only allowed top-level states are:
   - `required_logs` (string array)
   - `received_logs` (string array)
   - `missing_logs` (string array)
+  - `log_sufficiency_status`
+  - `optional_logs` (string array)
+  - `log_guidance_summary`
   - `resolution_status`
   - `last_updated_from_turn_id`
 - This metadata is stored on the session record and is available before the first assistant turn.
 - Session metadata updates (`PATCH /api/v1/sessions/{session_id}`) may update `metadata.expert_desk` during live sessions (for example when new log-file metadata is added), and this runtime metadata is used for later typed + voice turns.
 - During live turn runtime, AskChip may use session-scoped `metadata.expert_desk` as prompt preface/system-context pre-briefing before transcript history and current user turn (typed and voice paths), without changing stored transcript message shape.
 - For VMware Expert Desk sessions, AskChip may run a hidden extraction step after each committed user turn and before assistant generation to update typed `metadata.expert_desk.vmware_triage` state; invalid or low-confidence extraction output must not overwrite prior triage state.
+- For mapped VMware issue families, AskChip may deterministically evaluate uploaded log metadata names against a requirement matrix and persist log sufficiency metadata (`log_sufficiency_status`, `required_logs`, `received_logs`, `missing_logs`, `optional_logs`, `log_guidance_summary`) without claiming parsed-log findings.
 - Runtime persona overlay selection must use `expert_persona_id` first; legacy prose-only fields may be used only as backward-compatible fallback.
 - Canonical transcript rules remain unchanged: transcript messages still use `text` (never `content`), with `role` as speaker identity and `source` as origin semantics.
 - `CreateTurnRequest` and transcript message shape are unchanged.

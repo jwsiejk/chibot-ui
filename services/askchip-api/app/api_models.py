@@ -18,6 +18,9 @@ class VmwareTriageState(BaseModel):
     required_logs: list[str] = Field(default_factory=list)
     received_logs: list[str] = Field(default_factory=list)
     missing_logs: list[str] = Field(default_factory=list)
+    log_sufficiency_status: str = ''
+    optional_logs: list[str] = Field(default_factory=list)
+    log_guidance_summary: str = ''
     resolution_status: str = ''
     last_updated_from_turn_id: str = ''
 

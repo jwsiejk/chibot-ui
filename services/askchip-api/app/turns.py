@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.domain_models import EventRecord, MessageRecord, SessionRecord, TimingRecord
 from app.events import EventBus
 from app.expert_desk_metadata import read_expert_desk_metadata, read_vmware_triage_state, update_vmware_triage_state
+from app.vmware_log_sufficiency import evaluate_vmware_log_sufficiency
 from app.ollama import OllamaClient, OllamaUnavailableError
 from app.prompting import PromptAssembler
 from app.reasoning import route_reasoning
@@ -259,6 +260,15 @@ class TurnManager:
             self.db.create_event(triage_event)
             await self.event_bus.publish(self.event_payload(triage_event), session.id)
             return
+
+        uploaded_log_names = [name.strip() for name in expert_desk.uploaded_log_names if name.strip()]
+        sufficiency = evaluate_vmware_log_sufficiency(next_state.issue_family, uploaded_log_names)
+        next_state.required_logs = sufficiency.required_logs
+        next_state.received_logs = sufficiency.received_logs
+        next_state.missing_logs = sufficiency.missing_logs
+        next_state.optional_logs = sufficiency.optional_logs
+        next_state.log_sufficiency_status = sufficiency.log_sufficiency_status
+        next_state.log_guidance_summary = sufficiency.log_guidance_summary
 
         metadata = update_vmware_triage_state(session.metadata, next_state)
         if metadata == session.metadata:
