@@ -15,6 +15,7 @@ from app.prompting import PromptAssembler
 from app.reasoning import route_reasoning
 from app.storage import Database, DatabaseError
 from app.thinking_filter import ThinkingLeakFilter
+from app.vmware_conversation_policy import decide_vmware_next_move, stage_for_vmware_next_move
 from app.vmware_triage_extraction import VmwareTriageExtractor
 
 
@@ -269,6 +270,15 @@ class TurnManager:
         next_state.optional_logs = sufficiency.optional_logs
         next_state.log_sufficiency_status = sufficiency.log_sufficiency_status
         next_state.log_guidance_summary = sufficiency.log_guidance_summary
+        has_prior_assistant_turn = any(message.role == 'assistant' and message.text.strip() for message in transcript)
+        policy_decision = decide_vmware_next_move(
+            triage_state=next_state,
+            latest_user_feedback=user_text,
+            has_prior_assistant_turn=has_prior_assistant_turn,
+        )
+        next_state.policy_next_move = policy_decision.next_move
+        next_state.conversation_stage = stage_for_vmware_next_move(policy_decision.next_move)
+        next_state.next_best_question = policy_decision.focused_question
 
         metadata = update_vmware_triage_state(session.metadata, next_state)
         if metadata == session.metadata:

@@ -17,6 +17,19 @@ VMWARE_NEXT_MOVES = {
     'resolution_confirmed',
 }
 
+VMWARE_STAGE_BY_NEXT_MOVE = {
+    'confirm_issue_family': 'issue_definition',
+    'confirm_scope': 'scope_confirmation',
+    'collect_recent_change': 'change_validation',
+    'request_missing_logs': 'log_collection',
+    'validate_hypothesis': 'hypothesis_validation',
+    'propose_safe_next_step': 'mitigation',
+    'verify_result': 'verification',
+    'summarize_progress': 'summary',
+    'handoff_required': 'handoff',
+    'resolution_confirmed': 'resolution',
+}
+
 
 @dataclass(frozen=True)
 class VmwareConversationPolicyDecision:
@@ -83,6 +96,11 @@ def decide_vmware_next_move(
         user_feedback_signal=feedback_signal,
         log_sufficiency_status=log_status,
     )
+
+
+def stage_for_vmware_next_move(next_move: str) -> str:
+    normalized = next_move.strip().lower()
+    return VMWARE_STAGE_BY_NEXT_MOVE.get(normalized, 'hypothesis_validation')
 
 
 def _build_working_hypothesis(state: VmwareTriageState) -> str:

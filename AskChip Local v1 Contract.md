@@ -41,6 +41,7 @@ The only allowed top-level states are:
   - `open_questions` (string array)
   - `confidence` (0.0 - 1.0)
   - `conversation_stage`
+  - `policy_next_move`
   - `next_best_question`
   - `required_logs` (string array)
   - `received_logs` (string array)

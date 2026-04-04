@@ -1681,9 +1681,10 @@ def test_vmware_typed_turn_updates_triage_state_from_hidden_extraction(tmp_path:
     assert transcript.status_code == 200
     triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
     assert triage['issue_family'] == 'host-networking'
-    assert triage['conversation_stage'] == 'hypothesis_confirmation'
+    assert triage['policy_next_move'] == 'request_missing_logs'
+    assert triage['conversation_stage'] == 'log_collection'
     assert triage['open_questions'] == ['Did vmnic flaps start right after the vDS change?']
-    assert triage['next_best_question'] == 'Did vmnic flaps start right after the vDS change?'
+    assert triage['next_best_question'] == 'Can you upload vmkernel.log, vobd.log, vCenter Server logs next so we can validate this path?'
     assert triage['log_sufficiency_status'] == 'insufficient'
     assert triage['required_logs'] == ['vmkernel.log', 'vobd.log', 'vCenter Server logs']
     assert triage['received_logs'] == []
@@ -1769,9 +1770,11 @@ def test_vmware_turn_trajectory_updates_policy_after_user_correction(tmp_path: P
         session_id = created.json()['id']
         first_turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Hosts started disconnecting after last night change.'})
         second_turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'No, correction: this is storage APD and not network.'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
 
     assert first_turn.status_code == 201
     assert second_turn.status_code == 201
+    assert transcript.status_code == 200
     assert len(assistant_payloads) == 2
     first_system_messages = [message['content'] for message in assistant_payloads[0]['messages'] if message['role'] == 'system']
     second_system_messages = [message['content'] for message in assistant_payloads[1]['messages'] if message['role'] == 'system']
@@ -1782,6 +1785,116 @@ def test_vmware_turn_trajectory_updates_policy_after_user_correction(tmp_path: P
     assert 'Deterministic policy focused next question: Is the impact isolated' in first_policy
     assert 'Deterministic policy next move: validate_hypothesis.' in second_policy
     assert 'If the user corrects your path, explicitly revise your working hypothesis before proposing the next step.' in second_policy
+    triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
+    assert triage['policy_next_move'] == 'validate_hypothesis'
+    assert triage['conversation_stage'] == 'hypothesis_validation'
+    assert triage['next_best_question'] == 'Based on your latest details, should we revise the issue family before we continue?'
+
+
+def test_vmware_partial_log_sufficiency_preserves_missing_log_guidance_and_policy_question(tmp_path: Path) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = json.loads(request.content.decode())
+        messages = payload.get('messages', [])
+        is_extraction_call = bool(messages) and 'triage extraction engine' in messages[0].get('content', '').lower()
+        if is_extraction_call:
+            extraction = {
+                'issue_family': 'storage-pathing',
+                'suspected_layer': 'esxi-multipath',
+                'impact_scope': 'single-cluster',
+                'recent_change_summary': 'SAN maintenance completed',
+                'symptom_summary': 'APD events on one datastore',
+                'open_questions': ['Do APD alarms align with storage controller events?'],
+                'confidence': 0.8,
+                'recommended_conversation_stage': 'evidence_gathering',
+                'required_logs': ['vmkernel.log', 'ESXi host support bundle', 'Storage array event logs'],
+                'received_logs': ['vmkernel.log'],
+                'missing_logs': ['ESXi host support bundle', 'Storage array event logs'],
+                'resolution_status': 'in_progress',
+            }
+            return httpx.Response(200, content=json.dumps({'message': {'content': json.dumps(extraction)}, 'done': True}).encode() + b'\n')
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Please upload the remaining storage logs so we can continue.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'VMware partial logs',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req P-1',
+                        'issue_category': 'Storage APD',
+                        'environment_platform': 'VMware',
+                        'urgency': 'High',
+                        'preferred_expert_type': 'AI VMware Engineer',
+                        'recommended_expert_type': 'AI VMware Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'issue_description': 'Datastore APD alarms',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['vmkernel.log'],
+                        'uploaded_logs_available': True,
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'APD started after SAN firmware update.'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert turn.status_code == 201
+    assert transcript.status_code == 200
+    triage = transcript.json()['session']['metadata']['expert_desk']['vmware_triage']
+    assert triage['log_sufficiency_status'] == 'partial'
+    assert triage['missing_logs'] == ['ESXi host support bundle', 'Storage array event logs']
+    assert triage['policy_next_move'] == 'confirm_issue_family'
+    assert triage['conversation_stage'] == 'issue_definition'
+    assert triage['next_best_question'] == 'Does this align most with host networking, storage pathing, vCenter services, or VM performance impact?'
+    assert 'more are still needed: ESXi host support bundle, Storage array event logs' in triage['log_guidance_summary']
+
+
+def test_non_vmware_sessions_do_not_persist_vmware_policy_triage_fields(tmp_path: Path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=json.dumps({'message': {'content': 'Checking AWS health now.'}, 'done': True}).encode() + b'\n')
+
+    app = make_app(tmp_path, transport=httpx.MockTransport(handler))
+    with TestClient(app) as client:
+        created = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'AWS session',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'Req AWS-1',
+                        'issue_category': 'EC2 outage',
+                        'environment_platform': 'AWS',
+                        'urgency': 'Critical',
+                        'preferred_expert_type': 'AI AWS Engineer',
+                        'recommended_expert_type': 'AI AWS Engineer',
+                        'recommended_path': 'continue_with_ai_now',
+                        'expert_persona_id': 'ai-aws-engineer',
+                        'expert_persona_label': 'AI AWS Engineer',
+                        'issue_description': 'Instances unreachable',
+                        'architecture_notes': '',
+                        'error_text': '',
+                    }
+                },
+            },
+        )
+        session_id = created.json()['id']
+        turn = client.post(f'/api/v1/sessions/{session_id}/turns', json={'text': 'Can you help me triage this outage?'})
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript')
+
+    assert turn.status_code == 201
+    assert transcript.status_code == 200
+    assert transcript.json()['session']['metadata']['expert_desk'].get('vmware_triage') is None
 
 
 def test_vmware_voice_turn_updates_same_triage_state(tmp_path: Path) -> None:
