@@ -1688,6 +1688,69 @@ def test_prompt_assembler_keeps_expert_desk_preface_when_vmware_triage_partially
     assert 'vmware triage confidence' not in messages[2].text
 
 
+
+
+def test_read_expert_desk_metadata_preserves_partial_nested_vmware_handoff() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req 335',
+            'issue_category': 'VM outage',
+            'environment_platform': 'VMware',
+            'urgency': 'Critical',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'launch_live_session_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Guests disconnected',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_handoff': {
+                'issue_summary': 'Intermittent APD',
+                'ready_for_handoff': 'not-a-bool',
+                'logs_missing': ['array-event.log'],
+                'unknown_field': 'ignored',
+            },
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert expert_desk.request_label == 'Req 335'
+    assert expert_desk.vmware_handoff is not None
+    assert expert_desk.vmware_handoff.issue_summary == 'Intermittent APD'
+    assert expert_desk.vmware_handoff.logs_missing == ['array-event.log']
+    assert expert_desk.vmware_handoff.ready_for_handoff is False
+
+
+def test_read_expert_desk_metadata_malformed_vmware_handoff_does_not_break_non_vmware_context() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req generic',
+            'issue_category': 'General support',
+            'environment_platform': 'Linux',
+            'urgency': 'Low',
+            'preferred_expert_type': 'Generalist',
+            'recommended_expert_type': 'Generalist',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-generalist',
+            'expert_persona_label': 'AI Generalist',
+            'issue_description': 'Need baseline troubleshooting',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_handoff': 'invalid-shape',
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert expert_desk.expert_persona_id == 'ai-generalist'
+    assert expert_desk.vmware_triage is None
+    assert expert_desk.vmware_handoff is None
+
+
 def test_read_expert_desk_metadata_drops_unusable_nested_vmware_triage() -> None:
     metadata = {
         'expert_desk': {
@@ -1756,6 +1819,43 @@ def test_normalize_vmware_resolution_status_aliases() -> None:
     assert normalize_vmware_resolution_status('stable') == 'monitoring'
     assert normalize_vmware_resolution_status('handoff_required') == 'needs_human_handoff'
 
+
+
+
+def test_vmware_handoff_packet_humanizes_policy_next_move_when_question_missing() -> None:
+    expert_desk = read_expert_desk_metadata(
+        {
+            'expert_desk': {
+                'request_label': 'Req H-humanized',
+                'issue_category': 'Storage APD',
+                'environment_platform': 'VMware',
+                'urgency': 'High',
+                'preferred_expert_type': 'AI VMware Engineer',
+                'recommended_expert_type': 'AI VMware Engineer',
+                'recommended_path': 'continue_with_ai_now',
+                'expert_persona_id': 'ai-vmware-engineer',
+                'expert_persona_label': 'AI VMware Engineer',
+                'issue_description': 'APD on datastore',
+                'architecture_notes': '',
+                'error_text': '',
+                'vmware_triage': {
+                    'issue_family': 'storage-pathing',
+                    'policy_next_move': 'request_missing_logs',
+                    'missing_logs': ['ESXi host support bundle'],
+                    'next_best_question': '',
+                },
+            }
+        }
+    )
+    assert expert_desk is not None
+
+    packet = build_vmware_handoff_packet(expert_desk=expert_desk, transcript_messages=None)
+
+    assert packet is not None
+    assert packet.recommended_next_step
+    assert packet.recommended_next_step != 'request_missing_logs'
+    assert 'request_missing_logs' not in packet.recommended_next_step
+    assert 'ESXi host support bundle' in packet.recommended_next_step
 
 def test_vmware_handoff_packet_reflects_blocked_waiting_on_logs_state() -> None:
     expert_desk = read_expert_desk_metadata(
