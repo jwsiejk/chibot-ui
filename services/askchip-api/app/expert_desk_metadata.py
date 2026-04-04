@@ -13,10 +13,19 @@ def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> Expert
     raw = session_metadata.get('expert_desk')
     if not isinstance(raw, dict):
         return None
+    raw_expert_desk = dict(raw)
+    raw_vmware_triage = raw_expert_desk.pop('vmware_triage', None)
     try:
-        return ExpertDeskSessionMetadata.model_validate(raw)
+        expert_desk = ExpertDeskSessionMetadata.model_validate({**raw_expert_desk, 'vmware_triage': None})
     except ValidationError:
         return None
+    if raw_vmware_triage is None:
+        return expert_desk
+    try:
+        expert_desk.vmware_triage = VmwareTriageState.model_validate(raw_vmware_triage)
+    except ValidationError:
+        expert_desk.vmware_triage = None
+    return expert_desk
 
 
 def read_vmware_triage_state(session_metadata: dict[str, Any] | None) -> VmwareTriageState | None:
