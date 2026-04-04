@@ -32,6 +32,19 @@ The only allowed top-level states are:
   - `uploaded_log_names` (string array)
   - `uploaded_logs_available` (boolean)
   - optional `recommended_vmware_logs` (string array guidance list)
+- Expert Desk metadata may include typed VMware triage state under `metadata.expert_desk.vmware_triage`:
+  - `issue_family`
+  - `suspected_layer`
+  - `impact_scope`
+  - `recent_change_summary`
+  - `confidence` (0.0 - 1.0)
+  - `conversation_stage`
+  - `next_best_question`
+  - `required_logs` (string array)
+  - `received_logs` (string array)
+  - `missing_logs` (string array)
+  - `resolution_status`
+  - `last_updated_from_turn_id`
 - This metadata is stored on the session record and is available before the first assistant turn.
 - Session metadata updates (`PATCH /api/v1/sessions/{session_id}`) may update `metadata.expert_desk` during live sessions (for example when new log-file metadata is added), and this runtime metadata is used for later typed + voice turns.
 - During live turn runtime, AskChip may use session-scoped `metadata.expert_desk` as prompt preface/system-context pre-briefing before transcript history and current user turn (typed and voice paths), without changing stored transcript message shape.
