@@ -21,6 +21,8 @@ from app.turns import TurnManager
 from app.prompting import PromptAssembler
 from app.stt import SttError, SttResult
 from app.webrtc.session_store import WebRtcSessionStore
+from app.api_models import VmwareTriageState
+from app.expert_desk_metadata import read_expert_desk_metadata, update_vmware_triage_state
 
 CONTRACT_MESSAGE_KEYS = {
     'id',
@@ -1128,6 +1130,152 @@ def test_session_patch_and_reload_preserves_typed_vmware_triage_state(tmp_path: 
     assert triage['suspected_layer'] == 'esxi-multipath'
     assert triage['required_logs'] == ['vmkernel.log', 'vpxd.log', 'array-event-log']
     assert triage['missing_logs'] == ['array-event-log']
+
+
+def test_read_expert_desk_metadata_preserves_valid_nested_vmware_triage() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req 111',
+            'issue_category': 'Storage outage',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Datastore path flaps',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {
+                'issue_family': 'storage-pathing',
+                'confidence': 0.5,
+                'missing_logs': ['array-event-log'],
+            },
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert expert_desk.request_label == 'Req 111'
+    assert expert_desk.vmware_triage is not None
+    assert expert_desk.vmware_triage.issue_family == 'storage-pathing'
+    assert expert_desk.vmware_triage.confidence == 0.5
+
+
+def test_read_expert_desk_metadata_keeps_none_when_vmware_triage_missing() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req 222',
+            'issue_category': 'Host disconnect',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Hosts not responding',
+            'architecture_notes': '',
+            'error_text': '',
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert expert_desk.request_label == 'Req 222'
+    assert expert_desk.vmware_triage is None
+
+
+def test_read_expert_desk_metadata_ignores_invalid_nested_vmware_triage() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req 333',
+            'issue_category': 'VM outage',
+            'environment_platform': 'VMware',
+            'urgency': 'Critical',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'launch_live_session_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Guests disconnected',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {
+                'issue_family': 'host-networking',
+                'confidence': 2.0,
+            },
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert expert_desk.request_label == 'Req 333'
+    assert expert_desk.issue_category == 'VM outage'
+    assert expert_desk.vmware_triage is None
+
+
+def test_prompt_assembler_keeps_expert_desk_preface_when_vmware_triage_invalid() -> None:
+    assembler = PromptAssembler(transcript_window=2)
+    session_metadata = {
+        'expert_desk': {
+            'request_label': 'Req 444',
+            'issue_category': 'Datastore latency',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Latency spikes',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {'confidence': -1.0},
+        }
+    }
+
+    messages = assembler.build_messages(transcript=[], user_text='What do we check first?', session_metadata=session_metadata)
+
+    assert messages[0].role == 'system'
+    assert 'You are AskChip Expert Desk' in messages[0].text
+    assert 'selected expert persona id: ai-vmware-engineer' in messages[2].text
+    assert 'issue category: Datastore latency' in messages[2].text
+
+
+def test_update_vmware_triage_state_overwrites_invalid_nested_vmware_triage() -> None:
+    session_metadata = {
+        'expert_desk': {
+            'request_label': 'Req 555',
+            'issue_category': 'Network flap',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Frequent vmnic down events',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_triage': {'confidence': 9.9},
+        }
+    }
+    updated = update_vmware_triage_state(
+        session_metadata,
+        VmwareTriageState(issue_family='host-networking', confidence=0.61, missing_logs=['vobd.log']),
+    )
+
+    assert updated['expert_desk']['request_label'] == 'Req 555'
+    triage = updated['expert_desk']['vmware_triage']
+    assert isinstance(triage, dict)
+    assert triage['issue_family'] == 'host-networking'
+    assert triage['confidence'] == 0.61
+    assert triage['missing_logs'] == ['vobd.log']
 
 
 def test_legacy_session_without_vmware_triage_state_still_supports_turns(tmp_path: Path) -> None:
