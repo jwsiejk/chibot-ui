@@ -1,10 +1,46 @@
 # AskChip Local Run Guide
 
+## Contract artifact
+- The authoritative, reviewable AskChip Local v1 contract now lives in the repo root at `AskChip Local v1 Contract.md`.
+- The legacy `AskChip Local v1 Contract.docx` remains as an export artifact, but pull-request contract updates should be made in the markdown file.
+- Expert Desk frontstage progress is tracked in `docs/askchip-local/expert-desk-demo.md`.
+
 ## Localhost defaults
 - Frontend dev server: `http://127.0.0.1:5173`
 - Backend API: `http://127.0.0.1:8000`
 - Backend WebSocket host: `ws://127.0.0.1:8000`
 - Local API development expects CORS middleware to allow `http://127.0.0.1:5173` and `http://localhost:5173`.
+
+## Frontend runtime configuration
+The AskChip frontend is local-first and defaults to localhost when no overrides are provided.
+
+- `VITE_ASKCHIP_API_BASE_URL` defaults to `http://127.0.0.1:8000`
+- `VITE_ASKCHIP_WS_BASE_URL` defaults to `ws://127.0.0.1:8000`
+- API requests resolve against `${VITE_ASKCHIP_API_BASE_URL}/api/v1/...`
+- Typed-chat event streaming resolves against `${VITE_ASKCHIP_WS_BASE_URL}/ws/events`
+- Canonical WebRTC signaling resolves against `${VITE_ASKCHIP_WS_BASE_URL}/ws/webrtc`
+- `POST /api/v1/webrtc/offer` remains compatibility-only and is not the primary signaling path
+
+## Ollama model defaults
+- AskChip Local defaults to `OLLAMA_MODEL=gemma3:4b` for local generation.
+- Pull the default model locally before starting the API:
+  ```bash
+  ollama pull gemma3:4b
+  ```
+- AskChip Local also sets explicit Ollama runtime request defaults for local responsiveness:
+  - `OLLAMA_KEEP_ALIVE=30m`
+  - `OLLAMA_NUM_CTX=8192`
+  - `OLLAMA_NUM_PARALLEL=1`
+- `OLLAMA_NUM_PARALLEL=1` is intentional for this local voice-first assistant profile, keeping memory pressure predictable for streaming chat + STT/TTS on one machine.
+- Ollama memory use scales with effective parallelism × context length. Increasing `OLLAMA_NUM_PARALLEL` and/or `OLLAMA_NUM_CTX` raises peak memory requirements.
+- `OLLAMA_NUM_PARALLEL` is an Ollama server/runtime setting and is not a per-request `/api/chat` payload field in AskChip.
+- Verify where Gemma is loaded (CPU/GPU split) with:
+  ```bash
+  ollama ps
+  ```
+- You can still override the model without code changes by setting `OLLAMA_MODEL` in your shell/environment before starting the API.
+- `/api/v1/config` reports the active backend model and resolved Ollama runtime settings (`ollama_model`, `ollama_keep_alive`, `ollama_num_ctx`, `ollama_num_parallel`) plus requested/selected STT device and compute type.
+- `/api/v1/readiness` always performs a local installed-model check for the configured `OLLAMA_MODEL`, even when `ASKCHIP_OLLAMA_WARMUP_ENABLED=false`; warm-up requests remain disabled in that mode.
 
 ## Backend virtual environment (required)
 Use a dedicated backend environment at `services/askchip-api/.venv` so runtime diagnostics reflect the exact backend dependency set.
@@ -84,3 +120,12 @@ curl http://127.0.0.1:8000/api/v1/readiness
 ### Honest fallback criteria
 - `/api/v1/config` shows `tts_device = cpu`
 - `/api/v1/config` includes `tts_warning` and `tts_fallback_reason` explaining why CUDA was unavailable
+
+## Current frontend scope
+- Typed chat is implemented, including transcript loading, session selection, and streaming assistant text updates.
+- WebRTC foundation work is implemented for mic readiness, peer negotiation, explicit disconnect cleanup, and transport diagnostics only.
+- Backend WebRTC peer/session lifetime is intentionally not tied to signaling WebSocket lifetime; explicit disconnect and backend orphan cleanup release peer sessions.
+- Push-to-talk voice input is implemented through direct microphone capture plus backend faster-whisper transcription after release.
+- WebRTC remains foundation-only for diagnostics/signaling and is not required for voice-turn capture or upload.
+- Phase 6 adds local Kokoro assistant speech from the same canonical assistant message, now starting as soon as a stable sentence-level chunk is available while generation is still streaming.
+- Wake word, always-open microphones, tools, RAG, and auth remain out of scope.
