@@ -115,7 +115,7 @@ class PromptAssembler:
             uploaded_logs_count = 0
         uploaded_logs_available = expert_desk.get('uploaded_logs_available', '').lower() in {'true', '1', 'yes'}
         uploaded_log_names = expert_desk.get('uploaded_log_names', '').strip()
-        vmware_artifacts = expert_desk.get('vmware_artifacts', '').strip()
+        vmware_artifact_summary = expert_desk.get('vmware_artifact_summary', '').strip()
         context_lines = [
             f"selected expert persona id: {persona_id or 'general-infrastructure-expert'}",
             f"selected expert persona label: {persona_label or 'General Infrastructure Expert'}",
@@ -137,8 +137,8 @@ class PromptAssembler:
             context_lines.append(f"preferred expert type: {expert_desk['preferred_expert_type']}")
         if uploaded_log_names:
             context_lines.append(f"uploaded log names: {uploaded_log_names}")
-        if vmware_artifacts:
-            context_lines.append(f"vmware artifacts: {vmware_artifacts}")
+        if vmware_artifact_summary:
+            context_lines.append(f"vmware artifact context:\n{vmware_artifact_summary}")
         if expert_desk.get('vmware_triage_issue_family'):
             context_lines.append(f"vmware triage issue family: {expert_desk['vmware_triage_issue_family']}")
         if expert_desk.get('vmware_triage_suspected_layer'):

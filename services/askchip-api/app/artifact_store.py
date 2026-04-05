@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 
 class ArtifactStore:
@@ -13,3 +14,8 @@ class ArtifactStore:
         target = session_dir / f'{artifact_id}-{Path(filename).name}'
         target.write_bytes(content)
         return target
+
+    def delete_session_artifacts(self, session_id: str) -> None:
+        session_dir = self.root / session_id
+        if session_dir.exists():
+            shutil.rmtree(session_dir)

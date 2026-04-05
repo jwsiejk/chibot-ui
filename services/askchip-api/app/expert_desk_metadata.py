@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
-from app.api_models import ExpertDeskSessionMetadata, VmwareHandoffPacket, VmwareTriageState
+from app.api_models import ExpertDeskSessionMetadata, VmwareArtifactEvidence, VmwareArtifactRecord, VmwareHandoffPacket, VmwareTriageState
 from app.vmware_conversation_policy import VMWARE_NEXT_MOVES, decide_vmware_next_move, stage_for_vmware_next_move
 from app.vmware_log_sufficiency import evaluate_vmware_log_sufficiency
 
@@ -70,6 +70,61 @@ def safe_partial_vmware_handoff(raw_vmware_handoff: Any) -> VmwareHandoffPacket 
         return None
 
 
+def safe_partial_vmware_artifacts(raw_vmware_artifacts: Any) -> list[VmwareArtifactRecord]:
+    if not isinstance(raw_vmware_artifacts, list):
+        return []
+    rows: list[VmwareArtifactRecord] = []
+    for raw_row in raw_vmware_artifacts:
+        row = safe_partial_vmware_artifact_row(raw_row)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def safe_partial_vmware_artifact_row(raw_vmware_artifact: Any) -> VmwareArtifactRecord | None:
+    if isinstance(raw_vmware_artifact, VmwareArtifactRecord):
+        return raw_vmware_artifact
+    if not isinstance(raw_vmware_artifact, dict):
+        return None
+    try:
+        return VmwareArtifactRecord.model_validate(raw_vmware_artifact)
+    except ValidationError:
+        pass
+
+    cleaned: dict[str, Any] = {}
+    for field_name, raw_value in raw_vmware_artifact.items():
+        if field_name not in VmwareArtifactRecord.model_fields:
+            continue
+        if field_name == 'evidence':
+            evidence = safe_partial_vmware_artifact_evidence(raw_value)
+            if evidence is not None:
+                cleaned[field_name] = evidence
+            continue
+        try:
+            adapter = TypeAdapter(VmwareArtifactRecord.model_fields[field_name].annotation)
+            cleaned[field_name] = adapter.validate_python(raw_value)
+        except ValidationError:
+            continue
+    required_fields = {'id', 'session_id', 'filename', 'content_type', 'size_bytes', 'status', 'artifact_type', 'uploaded_at', 'storage_path'}
+    if not required_fields.issubset(cleaned.keys()):
+        return None
+    try:
+        return VmwareArtifactRecord.model_validate(cleaned)
+    except ValidationError:
+        return None
+
+
+def safe_partial_vmware_artifact_evidence(raw_evidence: Any) -> VmwareArtifactEvidence | None:
+    if isinstance(raw_evidence, VmwareArtifactEvidence):
+        return raw_evidence
+    if not isinstance(raw_evidence, dict):
+        return None
+    try:
+        return VmwareArtifactEvidence.model_validate(raw_evidence)
+    except ValidationError:
+        return None
+
+
 def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> ExpertDeskSessionMetadata | None:
     if not isinstance(session_metadata, dict):
         return None
@@ -79,9 +134,10 @@ def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> Expert
     raw_expert_desk = dict(raw)
     raw_vmware_triage = raw_expert_desk.pop('vmware_triage', None)
     raw_vmware_handoff = raw_expert_desk.pop('vmware_handoff', None)
+    raw_vmware_artifacts = raw_expert_desk.pop('vmware_artifacts', None)
     try:
         expert_desk = ExpertDeskSessionMetadata.model_validate(
-            {**raw_expert_desk, 'vmware_triage': None, 'vmware_handoff': None}
+            {**raw_expert_desk, 'vmware_triage': None, 'vmware_handoff': None, 'vmware_artifacts': []}
         )
     except ValidationError:
         return None
@@ -95,6 +151,8 @@ def read_expert_desk_metadata(session_metadata: dict[str, Any] | None) -> Expert
             expert_desk.vmware_handoff = safe_partial_vmware_handoff(raw_vmware_handoff)
         except ValidationError:
             expert_desk.vmware_handoff = None
+    if raw_vmware_artifacts is not None:
+        expert_desk.vmware_artifacts = safe_partial_vmware_artifacts(raw_vmware_artifacts)
     return expert_desk
 
 
@@ -463,8 +521,11 @@ def _fallback_question_for_non_regressive_move(move: str, triage_state: VmwareTr
 def build_prompt_context(expert_desk: ExpertDeskSessionMetadata) -> dict[str, str]:
     raw = expert_desk.model_dump(mode='json')
     cleaned: dict[str, str] = {}
+    artifact_summary = build_vmware_artifact_prompt_summary(expert_desk.vmware_artifacts)
+    if artifact_summary:
+        cleaned['vmware_artifact_summary'] = artifact_summary
     for key, value in raw.items():
-        if key == 'vmware_handoff':
+        if key in {'vmware_handoff', 'vmware_artifacts'}:
             continue
         if value is None:
             continue
@@ -490,3 +551,51 @@ def build_prompt_context(expert_desk: ExpertDeskSessionMetadata) -> dict[str, st
         if normalized:
             cleaned[key] = normalized
     return cleaned
+
+
+def build_vmware_artifact_prompt_summary(artifacts: list[VmwareArtifactRecord]) -> str:
+    if not artifacts:
+        return ''
+    parsed_supported = sorted([item for item in artifacts if item.status == 'parsed_supported'], key=lambda item: item.filename.lower())
+    uploaded_unsupported = sorted([item.filename for item in artifacts if item.status == 'uploaded_unsupported'], key=str.lower)
+    parse_failed = sorted(
+        [(item.filename, (item.parse_error or '').strip()) for item in artifacts if item.status == 'parse_failed'],
+        key=lambda row: row[0].lower(),
+    )
+
+    lines: list[str] = ['VMware artifact summary (deterministic):']
+    lines.append(
+        'parsed_supported filenames: '
+        + (', '.join(item.filename for item in parsed_supported) if parsed_supported else 'none')
+    )
+    lines.append(
+        'uploaded_unsupported filenames: '
+        + (', '.join(uploaded_unsupported) if uploaded_unsupported else 'none')
+    )
+    lines.append(
+        'parse_failed artifacts: '
+        + (
+            '; '.join(f"{name} ({note or 'parse failed'})" for name, note in parse_failed)
+            if parse_failed
+            else 'none'
+        )
+    )
+    if parsed_supported:
+        lines.append('parsed_supported evidence:')
+        for item in parsed_supported:
+            evidence = item.evidence
+            if evidence is None:
+                continue
+            timestamp_range = (
+                f'{evidence.timestamp_start or "unknown"} -> {evidence.timestamp_end or "unknown"}'
+                if evidence.timestamp_start or evidence.timestamp_end
+                else 'not available'
+            )
+            categories = ', '.join(evidence.matched_categories) if evidence.matched_categories else 'none'
+            notable = '; '.join(evidence.notable_lines) if evidence.notable_lines else 'none'
+            lines.append(
+                f"- {item.filename}: parser_kind={evidence.parser_kind}, artifact_type={evidence.artifact_type}, "
+                f"parsed_line_count={evidence.parsed_line_count}, timestamp_range={timestamp_range}, "
+                f"matched_categories={categories}, notable_lines={notable}"
+            )
+    return '\n'.join(lines)

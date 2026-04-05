@@ -29,6 +29,7 @@ from app.domain_models import EventRecord, SessionRecord
 from app.events import EventBus
 from app.expert_desk_metadata import (
     build_vmware_trajectory_transition_payloads,
+    read_expert_desk_metadata,
     refresh_vmware_triage_log_sufficiency,
     refresh_vmware_triage_policy_state,
 )
@@ -268,6 +269,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
     def delete_session(session_id: str) -> JSONResponse:
         if not state.db.delete_session(session_id):
             raise HTTPException(status_code=404, detail='session not found')
+        state.artifacts.delete_session_artifacts(session_id)
         return JSONResponse({'status': 'deleted', 'session_id': session_id})
 
     @app.get('/api/v1/sessions/{session_id}/transcript')
@@ -318,6 +320,16 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         session = state.db.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail='session not found')
+        expert_desk = read_expert_desk_metadata(session.metadata)
+        is_vmware_expert_desk = (
+            expert_desk is not None
+            and (
+                expert_desk.expert_persona_id == 'ai-vmware-engineer'
+                or expert_desk.expert_persona_label.strip().lower() == 'ai vmware engineer'
+            )
+        )
+        if not is_vmware_expert_desk:
+            raise HTTPException(status_code=409, detail='artifact upload is only supported for VMware Expert Desk sessions')
         filename = (x_artifact_filename or 'uploaded-artifact').strip() or 'uploaded-artifact'
         content = await request.body()
         parse_result = parse_uploaded_vmware_artifact(filename, content)
@@ -335,30 +347,41 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         artifact.storage_path = str(stored_path)
         state.db.create_vmware_artifact(artifact)
 
-        expert_desk = (
-            session.metadata.get('expert_desk', {})
-            if isinstance(session.metadata, dict) and isinstance(session.metadata.get('expert_desk'), dict)
-            else {}
+        all_artifacts = state.db.list_vmware_artifacts(session_id)
+        artifacts_payload = [
+            {
+                'id': item.id,
+                'session_id': item.session_id,
+                'filename': item.filename,
+                'content_type': item.content_type,
+                'size_bytes': item.size_bytes,
+                'status': item.status,
+                'artifact_type': item.artifact_type,
+                'uploaded_at': item.uploaded_at.isoformat(),
+                'storage_path': item.storage_path,
+                'parse_error': item.parse_error or None,
+                'evidence': item.evidence or None,
+            }
+            for item in all_artifacts
+        ]
+        uploaded_log_names = [item.filename for item in all_artifacts if item.filename.strip()]
+        refreshed_expert_desk = expert_desk.model_dump(mode='json')
+        refreshed_expert_desk.update(
+            {
+                'uploaded_logs_count': len(uploaded_log_names),
+                'uploaded_log_names': uploaded_log_names,
+                'uploaded_logs_available': bool(uploaded_log_names),
+                'vmware_artifacts': artifacts_payload,
+            }
         )
-        existing = expert_desk.get('vmware_artifacts')
-        existing_items = list(existing) if isinstance(existing, list) else []
-        existing_items.append({
-            'id': artifact.id,
-            'session_id': artifact.session_id,
-            'filename': artifact.filename,
-            'content_type': artifact.content_type,
-            'size_bytes': artifact.size_bytes,
-            'status': artifact.status,
-            'artifact_type': artifact.artifact_type,
-            'uploaded_at': artifact.uploaded_at.isoformat(),
-            'storage_path': artifact.storage_path,
-            'parse_error': artifact.parse_error or None,
-            'evidence': artifact.evidence or None,
-        })
-        expert_desk['vmware_artifacts'] = existing_items
-        metadata_patch = {'expert_desk': expert_desk}
+        metadata_patch = {'expert_desk': refreshed_expert_desk}
         metadata_patch = refresh_vmware_triage_log_sufficiency(metadata_patch)
         metadata_patch = refresh_vmware_triage_policy_state(metadata_patch)
+        transition_events = build_vmware_trajectory_transition_payloads(
+            session.metadata,
+            metadata_patch,
+            source_path='artifact_upload_refresh',
+        )
         state.db.update_session_state(
             session_id,
             status=session.status,
@@ -368,6 +391,10 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             last_error_at=session.last_error_at.isoformat() if session.last_error_at else None,
             metadata=metadata_patch,
         )
+        for event_type, payload in transition_events:
+            event = EventRecord(session_id=session_id, type=event_type, payload=payload)
+            state.db.create_event(event)
+            await state.event_bus.publish(state.turn_manager.event_payload(event), session_id)
 
         payload = VmwareArtifactRecord.model_validate(
             {

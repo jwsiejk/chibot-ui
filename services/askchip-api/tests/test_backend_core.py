@@ -598,6 +598,46 @@ def test_delete_session_removes_only_target_session_data(tmp_path: Path) -> None
     assert [message['text'] for message in kept_transcript.json()['messages']] == ['second question', 'Reply']
 
 
+def test_delete_session_removes_stored_artifact_files(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Delete artifacts',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'req',
+                        'issue_category': 'production-outage',
+                        'environment_platform': 'vmware',
+                        'urgency': 'same-day',
+                        'preferred_expert_type': 'ai-vmware-engineer',
+                        'recommended_expert_type': 'ai-vmware-engineer',
+                        'recommended_path': 'launch-live-expert-now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': '',
+                        'issue_description': 'issue',
+                        'architecture_notes': '',
+                        'error_text': '',
+                    },
+                },
+            },
+        ).json()['id']
+        upload = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',
+            headers={'X-Artifact-Filename': 'vmkernel.log', 'Content-Type': 'text/plain'},
+        )
+        storage_path = Path(upload.json()['artifact']['storage_path'])
+        session_dir = storage_path.parent
+        deleted = client.delete(f'/api/v1/sessions/{session_id}')
+
+    assert deleted.status_code == 200
+    assert storage_path.exists() is False
+    assert session_dir.exists() is False
+
+
 def test_typed_turn_commits_and_assembles_assistant_message(tmp_path: Path) -> None:
     transport = streaming_transport(
         [
@@ -2141,6 +2181,93 @@ def test_read_expert_desk_metadata_malformed_vmware_handoff_does_not_break_non_v
     assert expert_desk.expert_persona_id == 'ai-generalist'
     assert expert_desk.vmware_triage is None
     assert expert_desk.vmware_handoff is None
+
+
+def test_read_expert_desk_metadata_preserves_valid_vmware_artifacts_when_some_rows_are_invalid() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req artifacts',
+            'issue_category': 'VMware outage',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Need logs',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_artifacts': [
+                {
+                    'id': 'a1',
+                    'session_id': 's1',
+                    'filename': 'vmkernel.log',
+                    'content_type': 'text/plain',
+                    'size_bytes': 100,
+                    'status': 'parsed_supported',
+                    'artifact_type': 'vmkernel.log',
+                    'uploaded_at': '2026-03-10T00:00:00',
+                    'storage_path': '/tmp/a1',
+                    'evidence': {
+                        'parser_kind': 'vmware_log_v1',
+                        'artifact_type': 'vmkernel.log',
+                        'parsed_line_count': 3,
+                        'matched_categories': ['storage'],
+                        'notable_lines': ['error line'],
+                        'parse_warnings': [],
+                    },
+                },
+                {'id': 'broken-row', 'filename': 'missing-required-fields.log'},
+            ],
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert len(expert_desk.vmware_artifacts) == 1
+    assert expert_desk.vmware_artifacts[0].filename == 'vmkernel.log'
+
+
+def test_read_expert_desk_metadata_vmware_artifact_invalid_evidence_is_safely_dropped() -> None:
+    metadata = {
+        'expert_desk': {
+            'request_label': 'Req artifacts 2',
+            'issue_category': 'VMware outage',
+            'environment_platform': 'VMware',
+            'urgency': 'High',
+            'preferred_expert_type': 'AI VMware Engineer',
+            'recommended_expert_type': 'AI VMware Engineer',
+            'recommended_path': 'continue_with_ai_now',
+            'expert_persona_id': 'ai-vmware-engineer',
+            'expert_persona_label': 'AI VMware Engineer',
+            'issue_description': 'Need logs',
+            'architecture_notes': '',
+            'error_text': '',
+            'vmware_artifacts': [
+                {
+                    'id': 'a2',
+                    'session_id': 's2',
+                    'filename': 'vobd.log',
+                    'content_type': 'text/plain',
+                    'size_bytes': 200,
+                    'status': 'parsed_supported',
+                    'artifact_type': 'vobd.log',
+                    'uploaded_at': '2026-03-11T00:00:00',
+                    'storage_path': '/tmp/a2',
+                    'evidence': 'invalid',
+                }
+            ],
+        }
+    }
+
+    expert_desk = read_expert_desk_metadata(metadata)
+
+    assert expert_desk is not None
+    assert len(expert_desk.vmware_artifacts) == 1
+    assert expert_desk.vmware_artifacts[0].filename == 'vobd.log'
+    assert expert_desk.vmware_artifacts[0].evidence is None
 
 
 def test_read_expert_desk_metadata_drops_unusable_nested_vmware_triage() -> None:
@@ -4256,11 +4383,41 @@ def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_pa
 def test_session_artifact_upload_persists_and_parses_supported_file(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Artifacts'}).json()['id']
+        session_id = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Artifacts',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'req',
+                        'issue_category': 'production-outage',
+                        'environment_platform': 'vmware',
+                        'urgency': 'same-day',
+                        'preferred_expert_type': 'ai-vmware-engineer',
+                        'recommended_expert_type': 'ai-vmware-engineer',
+                        'recommended_path': 'launch-live-expert-now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': '',
+                        'issue_description': 'Datastore issue',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 0,
+                        'uploaded_log_names': [],
+                        'uploaded_logs_available': False,
+                        'vmware_triage': {
+                            'issue_family': 'vcenter-services',
+                            'conversation_stage': 'issue_definition',
+                            'policy_next_move': 'request_missing_logs',
+                        },
+                    },
+                },
+            },
+        ).json()['id']
         response = client.post(
             f'/api/v1/sessions/{session_id}/artifacts',
             content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',
-            headers={'X-Artifact-Filename': 'vmkernel.log', 'Content-Type': 'text/plain'},
+            headers={'X-Artifact-Filename': 'vpxd.log', 'Content-Type': 'text/plain'},
         )
         listed = client.get(f'/api/v1/sessions/{session_id}/artifacts')
         transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
@@ -4273,12 +4430,42 @@ def test_session_artifact_upload_persists_and_parses_supported_file(tmp_path: Pa
     assert len(listed.json()['items']) == 1
     assert 'text' in transcript['messages'][0] if transcript['messages'] else True
     assert transcript['session']['status'] in CONTRACT_TRANSCRIPT_STATES
+    expert_desk = transcript['session']['metadata']['expert_desk']
+    assert expert_desk['uploaded_logs_count'] == 1
+    assert expert_desk['uploaded_log_names'] == ['vpxd.log']
+    assert expert_desk['uploaded_logs_available'] is True
+    assert expert_desk['vmware_triage']['log_sufficiency_status'] in {'partial', 'sufficient', 'insufficient', 'unknown_issue_family'}
+    transition_events = [event for event in transcript['events'] if event['type'].startswith('vmware.trajectory.')]
+    assert transition_events
+    assert any(event['payload']['source_path'] == 'artifact_upload_refresh' for event in transition_events)
 
 
 def test_session_artifact_upload_marks_unsupported(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Artifacts'}).json()['id']
+        session_id = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Artifacts',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'req',
+                        'issue_category': 'production-outage',
+                        'environment_platform': 'vmware',
+                        'urgency': 'same-day',
+                        'preferred_expert_type': 'ai-vmware-engineer',
+                        'recommended_expert_type': 'ai-vmware-engineer',
+                        'recommended_path': 'launch-live-expert-now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': '',
+                        'issue_description': 'Datastore issue',
+                        'architecture_notes': '',
+                        'error_text': '',
+                    },
+                },
+            },
+        ).json()['id']
         response = client.post(
             f'/api/v1/sessions/{session_id}/artifacts',
             content=b'2026-03-10 09:10:20 hostd started',
@@ -4292,7 +4479,29 @@ def test_session_artifact_upload_marks_unsupported(tmp_path: Path) -> None:
 def test_session_artifact_upload_parse_failure_is_explicit(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
-        session_id = client.post('/api/v1/sessions', json={'title': 'Artifacts'}).json()['id']
+        session_id = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Artifacts',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'req',
+                        'issue_category': 'production-outage',
+                        'environment_platform': 'vmware',
+                        'urgency': 'same-day',
+                        'preferred_expert_type': 'ai-vmware-engineer',
+                        'recommended_expert_type': 'ai-vmware-engineer',
+                        'recommended_path': 'launch-live-expert-now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': '',
+                        'issue_description': 'Datastore issue',
+                        'architecture_notes': '',
+                        'error_text': '',
+                    },
+                },
+            },
+        ).json()['id']
         response = client.post(
             f'/api/v1/sessions/{session_id}/artifacts',
             content=b'\xff\xfe\x00\x00',
@@ -4305,7 +4514,94 @@ def test_session_artifact_upload_parse_failure_is_explicit(tmp_path: Path) -> No
     assert artifact['parse_error']
 
 
-def test_prompt_preface_includes_vmware_artifact_statuses(tmp_path: Path) -> None:
+def test_session_artifact_upload_rejects_non_vmware_expert_desk_sessions(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = client.post('/api/v1/sessions', json={'title': 'No vmware metadata'}).json()['id']
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',
+            headers={'X-Artifact-Filename': 'vmkernel.log', 'Content-Type': 'text/plain'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+        listed = client.get(f'/api/v1/sessions/{session_id}/artifacts')
+
+    assert response.status_code == 409
+    assert 'only supported for VMware Expert Desk sessions' in response.json()['detail']
+    assert transcript['session']['metadata'] == {}
+    assert listed.json()['items'] == []
+
+
+def test_session_artifact_upload_emits_no_trajectory_events_when_state_unchanged(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'No state change',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'req',
+                        'issue_category': 'production-outage',
+                        'environment_platform': 'vmware',
+                        'urgency': 'same-day',
+                        'preferred_expert_type': 'ai-vmware-engineer',
+                        'recommended_expert_type': 'ai-vmware-engineer',
+                        'recommended_path': 'launch-live-expert-now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': '',
+                        'issue_description': 'Datastore issue',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 1,
+                        'uploaded_log_names': ['vmkernel.log'],
+                        'uploaded_logs_available': True,
+                        'vmware_triage': {
+                            'issue_family': 'storage_latency',
+                            'log_sufficiency_status': 'partial',
+                            'required_logs': ['vmkernel.log', 'vpxd.log'],
+                            'received_logs': ['vmkernel.log'],
+                            'missing_logs': ['vpxd.log'],
+                            'policy_next_move': 'request_missing_logs',
+                            'conversation_stage': 'evidence_collection',
+                        },
+                        'vmware_artifacts': [{
+                            'id': 'seed-a1',
+                            'session_id': 'seed-s1',
+                            'filename': 'vmkernel.log',
+                            'content_type': 'text/plain',
+                            'size_bytes': 10,
+                            'status': 'parsed_supported',
+                            'artifact_type': 'vmkernel.log',
+                            'uploaded_at': '2026-03-10T00:00:00',
+                            'storage_path': '/tmp/seed-a1',
+                            'evidence': {
+                                'parser_kind': 'vmware_log_v1',
+                                'artifact_type': 'vmkernel.log',
+                                'parsed_line_count': 1,
+                                'matched_categories': ['storage'],
+                                'notable_lines': ['error'],
+                                'parse_warnings': [],
+                            },
+                        }],
+                    },
+                },
+            },
+        ).json()['id']
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',
+            headers={'X-Artifact-Filename': 'vmkernel.log', 'Content-Type': 'text/plain'},
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    transition_events = [event for event in transcript['events'] if event['type'].startswith('vmware.trajectory.')]
+    assert transition_events == []
+
+
+def test_prompt_preface_includes_deterministic_vmware_artifact_summary(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -4351,4 +4647,8 @@ def test_prompt_preface_includes_vmware_artifact_statuses(tmp_path: Path) -> Non
     assert turn.status_code == 201
     payload = captured['payload']
     content = '\n'.join(message['content'] for message in payload['messages'])
-    assert 'vmware artifacts' in content
+    assert 'VMware artifact summary (deterministic)' in content
+    assert 'parsed_supported filenames: vmkernel.log' in content
+    assert 'uploaded_unsupported filenames: none' in content
+    assert 'parse_failed artifacts: none' in content
+    assert "{'id': 'a1'" not in content
