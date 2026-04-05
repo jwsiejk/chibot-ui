@@ -141,8 +141,11 @@ curl http://127.0.0.1:8000/api/v1/readiness
 - Those transition events use `vmware.trajectory.*_changed` types with compact payload fields (`previous_value`, `current_value`, `source_path`, optional `turn_id`, optional `trace_id`) and are emitted from both turn runtime updates and PATCH-time refresh paths.
 - AskChip remains honest about current log handling: uploaded file metadata can drive sufficiency guidance, but parsed-log findings are not claimed unless parsed content exists.
 - Expert Desk Phase 7 adds real session-scoped backend artifact upload endpoints (`POST/GET /api/v1/sessions/{session_id}/artifacts`) with local storage persistence.
+- Backend artifact upload is authoritative for live VMware uploaded-log summary metadata (`uploaded_logs_count`, `uploaded_log_names`, `uploaded_logs_available`) and no longer depends on a second metadata PATCH call for correctness.
+- Artifact upload is explicitly scoped to VMware Expert Desk sessions; non-VMware sessions are rejected rather than creating partial `metadata.expert_desk` state.
 - Only standalone plain-text `vmkernel.log`, `vobd.log`, and `vpxd.log` are parsed in this phase. Unsupported artifacts are stored and labeled honestly (`uploaded_unsupported`).
 - Parsed evidence is typed and stored separately from transcript text under `metadata.expert_desk.vmware_artifacts`; transcript contract remains unchanged.
+- Artifact-driven VMware metadata refresh now emits the same compact `vmware.trajectory.*_changed` transition events as turn and session-patch refresh paths when values actually change.
 - VMware live runtime guidance now includes a deterministic conversation-policy decision (next move + focused next question) derived from triage state, conversation stage, confidence, log sufficiency, and latest user feedback, while preserving the same transcript payload contract.
 - VMware triage persistence now also stores deterministic policy outputs (`policy_next_move`, policy-aligned `conversation_stage`, and policy-focused `next_best_question`) in session metadata for consistent multi-turn state.
 - VMware triage now normalizes `resolution_status` into a fixed set (`unresolved`, `monitoring`, `resolved`, `blocked_waiting_on_logs`, `blocked_waiting_on_user_action`, `needs_human_handoff`).
