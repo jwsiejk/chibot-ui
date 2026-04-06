@@ -231,7 +231,8 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                     }
                     if (isVmwareSession) {
                       const fileItems = Array.from(files);
-                      Promise.all(fileItems.map((item) => askChipApiClient.uploadSessionArtifact(sessionId, item)))
+                      const uploadTraceId = crypto.randomUUID();
+                      Promise.all(fileItems.map((item) => askChipApiClient.uploadSessionArtifact(sessionId, item, uploadTraceId)))
                         .then((uploaded) => {
                           setBackendArtifacts((previous) => [...previous, ...uploaded]);
                         })
