@@ -4380,7 +4380,7 @@ def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_pa
     assert turn.status_code == 503
     assert 'configured Ollama model is not installed locally: gemma3:4b' in turn.json()['detail']
 
-def test_session_artifact_upload_persists_and_parses_supported_file(tmp_path: Path) -> None:
+def test_session_artifact_upload_is_backend_authoritative_without_session_patch(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
         session_id = client.post(
@@ -4435,9 +4435,21 @@ def test_session_artifact_upload_persists_and_parses_supported_file(tmp_path: Pa
     assert expert_desk['uploaded_log_names'] == ['vpxd.log']
     assert expert_desk['uploaded_logs_available'] is True
     assert expert_desk['vmware_triage']['log_sufficiency_status'] in {'partial', 'sufficient', 'insufficient', 'unknown_issue_family'}
+    assert expert_desk['vmware_triage']['policy_next_move'] in {
+        'confirm_issue_family',
+        'confirm_scope',
+        'collect_recent_change',
+        'request_missing_logs',
+        'validate_hypothesis',
+        'propose_safe_next_step',
+        'verify_result',
+        'summarize_progress',
+        'handoff_required',
+        'resolution_confirmed',
+    }
     transition_events = [event for event in transcript['events'] if event['type'].startswith('vmware.trajectory.')]
     assert transition_events
-    assert any(event['payload']['source_path'] == 'artifact_upload_refresh' for event in transition_events)
+    assert all(event['payload']['source_path'] == 'artifact_upload_refresh' for event in transition_events)
     assert all('trace_id' not in event['payload'] for event in transition_events)
 
 

@@ -219,7 +219,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                       updatedContext.uploadedLogFiles,
                       isVmwareSession ? 'vmware' : 'aws',
                     );
-                    if (expertDeskMetadata) {
+                    if (expertDeskMetadata && !isVmwareSession) {
                       void askChipApiClient.updateSession(sessionId, {
                         metadata: {
                           expert_desk: {

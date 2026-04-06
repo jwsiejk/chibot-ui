@@ -398,7 +398,7 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - **2026-04-02 — Phase 17 VMware runtime kickoff + log receipt metadata**
   - added VMware-first kickoff guidance in runtime pre-briefing for first response behavior
   - added backend Expert Desk metadata fields for uploaded-log summary and runtime-aware prompt context
-  - wired live-session upload flow to patch backend session metadata so later turns can acknowledge newly received logs
+  - originally wired live-session upload flow to patch backend session metadata so later turns could acknowledge newly received logs
   - kept behavior honest: metadata receipt only, no fake log parsing claims
   - added shared progress indicator across all frontstage flow stages
   - replaced ambiguous wrap-up CTA with **View summary and handoff** plus explicit no-backend-termination wording
@@ -438,6 +438,11 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
   - added typed `metadata.expert_desk.vmware_handoff` packet generation from persisted VMware triage + transcript facts + uploaded log-name metadata
   - wired packet refresh into turn-time triage persistence and PATCH-time VMware metadata refresh so summary/handoff views can rely on current state
   - updated `/demo/summary/:sessionId` to surface structured VMware handoff packet details when present
+- **2026-04-06 — Phase 7.2 live VMware upload authority cleanup**
+  - removed live-session VMware frontend metadata PATCH mutation from the upload flow
+  - kept frontend-local upload context continuity for frontstage UX
+  - made backend artifact upload the sole authoritative backend mutation path for VMware uploaded-log summary and trajectory transitions
+  - preserved non-VMware frontstage behavior where metadata PATCH remains the active backend path
   - kept transcript shape, session-state vocabulary, and WebRTC diagnostics-only scope unchanged
 
 ---
