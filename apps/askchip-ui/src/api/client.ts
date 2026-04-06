@@ -167,7 +167,7 @@ export class AskChipApiClient {
     return response.items;
   }
 
-  async uploadSessionArtifact(sessionId: string, file: File): Promise<VmwareArtifactRecord> {
+  async uploadSessionArtifact(sessionId: string, file: File, traceId?: string): Promise<VmwareArtifactRecord> {
     const response = await this.request<{ artifact: VmwareArtifactRecord }>(`/api/v1/sessions/${sessionId}/artifacts`, {
       method: 'POST',
       body: file,
@@ -175,6 +175,7 @@ export class AskChipApiClient {
       headers: {
         'Content-Type': file.type || 'application/octet-stream',
         'X-Artifact-Filename': file.name,
+        ...(traceId ? { 'X-AskChip-Trace-Id': traceId } : {}),
       },
     });
     return response.artifact;

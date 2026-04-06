@@ -316,6 +316,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         request: Request,
         x_artifact_filename: str | None = Header(default=None, alias='X-Artifact-Filename'),
         content_type: str | None = Header(default=None, alias='Content-Type'),
+        trace_id: str | None = Header(default=None, alias='X-AskChip-Trace-Id'),
     ) -> JSONResponse:
         session = state.db.get_session(session_id)
         if session is None:
@@ -381,6 +382,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             session.metadata,
             metadata_patch,
             source_path='artifact_upload_refresh',
+            trace_id=trace_id,
         )
         state.db.update_session_state(
             session_id,

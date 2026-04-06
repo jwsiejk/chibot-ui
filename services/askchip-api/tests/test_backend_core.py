@@ -4438,6 +4438,63 @@ def test_session_artifact_upload_persists_and_parses_supported_file(tmp_path: Pa
     transition_events = [event for event in transcript['events'] if event['type'].startswith('vmware.trajectory.')]
     assert transition_events
     assert any(event['payload']['source_path'] == 'artifact_upload_refresh' for event in transition_events)
+    assert all('trace_id' not in event['payload'] for event in transition_events)
+
+
+def test_session_artifact_upload_with_trace_id_header_includes_trace_id_on_transition_events(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = client.post(
+            '/api/v1/sessions',
+            json={
+                'title': 'Artifacts traced',
+                'metadata': {
+                    'expert_desk': {
+                        'request_label': 'req',
+                        'issue_category': 'production-outage',
+                        'environment_platform': 'vmware',
+                        'urgency': 'same-day',
+                        'preferred_expert_type': 'ai-vmware-engineer',
+                        'recommended_expert_type': 'ai-vmware-engineer',
+                        'recommended_path': 'launch-live-expert-now',
+                        'expert_persona_id': 'ai-vmware-engineer',
+                        'expert_persona_label': 'AI VMware Engineer',
+                        'expert_persona_summary': '',
+                        'issue_description': 'Datastore issue',
+                        'architecture_notes': '',
+                        'error_text': '',
+                        'uploaded_logs_count': 0,
+                        'uploaded_log_names': [],
+                        'uploaded_logs_available': False,
+                        'vmware_triage': {
+                            'issue_family': 'vcenter-services',
+                            'conversation_stage': 'issue_definition',
+                            'policy_next_move': 'request_missing_logs',
+                        },
+                    },
+                },
+            },
+        ).json()['id']
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',
+            headers={
+                'X-Artifact-Filename': 'vpxd.log',
+                'Content-Type': 'text/plain',
+                'X-AskChip-Trace-Id': 'upload-trace-123',
+            },
+        )
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    transition_events = [event for event in transcript['events'] if event['type'].startswith('vmware.trajectory.')]
+    assert transition_events
+    artifact_refresh_events = [
+        event for event in transition_events
+        if event['payload'].get('source_path') == 'artifact_upload_refresh'
+    ]
+    assert artifact_refresh_events
+    assert all(event['payload'].get('trace_id') == 'upload-trace-123' for event in artifact_refresh_events)
 
 
 def test_session_artifact_upload_marks_unsupported(tmp_path: Path) -> None:
