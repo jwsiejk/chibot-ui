@@ -233,6 +233,7 @@ def test_config_endpoint_reports_default_model(tmp_path: Path) -> None:
     assert response.json()['tts_requested_device'] == 'auto'
     assert response.json()['tts_provider'] in {'CPUExecutionProvider', 'CUDAExecutionProvider', 'unknown'}
     assert isinstance(response.json()['tts_available_providers'], list)
+    assert response.json()['max_artifact_upload_bytes'] == 5 * 1024 * 1024
     assert 'tts_warning' in response.json()
     assert 'tts_fallback_reason' in response.json()
 
@@ -4380,40 +4381,91 @@ def test_readiness_and_turn_fail_clearly_when_configured_model_is_missing(tmp_pa
     assert turn.status_code == 503
     assert 'configured Ollama model is not installed locally: gemma3:4b' in turn.json()['detail']
 
-def test_session_artifact_upload_is_backend_authoritative_without_session_patch(tmp_path: Path) -> None:
-    app = make_app(tmp_path)
-    with TestClient(app) as client:
-        session_id = client.post(
-            '/api/v1/sessions',
-            json={
-                'title': 'Artifacts',
-                'metadata': {
-                    'expert_desk': {
-                        'request_label': 'req',
-                        'issue_category': 'production-outage',
-                        'environment_platform': 'vmware',
-                        'urgency': 'same-day',
-                        'preferred_expert_type': 'ai-vmware-engineer',
-                        'recommended_expert_type': 'ai-vmware-engineer',
-                        'recommended_path': 'launch-live-expert-now',
-                        'expert_persona_id': 'ai-vmware-engineer',
-                        'expert_persona_label': 'AI VMware Engineer',
-                        'expert_persona_summary': '',
-                        'issue_description': 'Datastore issue',
-                        'architecture_notes': '',
-                        'error_text': '',
-                        'uploaded_logs_count': 0,
-                        'uploaded_log_names': [],
-                        'uploaded_logs_available': False,
-                        'vmware_triage': {
-                            'issue_family': 'vcenter-services',
-                            'conversation_stage': 'issue_definition',
-                            'policy_next_move': 'request_missing_logs',
-                        },
+
+def create_vmware_expert_desk_session(client: TestClient, *, title: str = 'Artifacts') -> str:
+    return client.post(
+        '/api/v1/sessions',
+        json={
+            'title': title,
+            'metadata': {
+                'expert_desk': {
+                    'request_label': 'req',
+                    'issue_category': 'production-outage',
+                    'environment_platform': 'vmware',
+                    'urgency': 'same-day',
+                    'preferred_expert_type': 'ai-vmware-engineer',
+                    'recommended_expert_type': 'ai-vmware-engineer',
+                    'recommended_path': 'launch-live-expert-now',
+                    'expert_persona_id': 'ai-vmware-engineer',
+                    'expert_persona_label': 'AI VMware Engineer',
+                    'expert_persona_summary': '',
+                    'issue_description': 'Datastore issue',
+                    'architecture_notes': '',
+                    'error_text': '',
+                    'uploaded_logs_count': 0,
+                    'uploaded_log_names': [],
+                    'uploaded_logs_available': False,
+                    'vmware_triage': {
+                        'issue_family': 'vcenter-services',
+                        'conversation_stage': 'issue_definition',
+                        'policy_next_move': 'request_missing_logs',
                     },
                 },
             },
-        ).json()['id']
+        },
+    ).json()['id']
+
+
+def test_session_artifact_upload_rejects_empty_body_without_mutation(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = create_vmware_expert_desk_session(client, title='Empty upload')
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'',
+            headers={'X-Artifact-Filename': 'vmkernel.log', 'Content-Type': 'text/plain'},
+        )
+        listed = client.get(f'/api/v1/sessions/{session_id}/artifacts')
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 422
+    assert response.json()['detail'] == 'artifact upload body must not be empty'
+    assert listed.json()['items'] == []
+    assert transcript['session']['metadata']['expert_desk']['uploaded_logs_count'] == 0
+    assert transcript['session']['metadata']['expert_desk']['uploaded_log_names'] == []
+    assert transcript['session']['metadata']['expert_desk']['uploaded_logs_available'] is False
+    assert [event for event in transcript['events'] if event['type'].startswith('vmware.trajectory.')] == []
+    artifacts_dir = tmp_path / 'artifacts' / session_id
+    assert not artifacts_dir.exists()
+
+
+def test_session_artifact_upload_rejects_oversized_body_without_mutation(tmp_path: Path) -> None:
+    app = make_app(tmp_path, max_artifact_upload_bytes=32)
+    with TestClient(app) as client:
+        session_id = create_vmware_expert_desk_session(client, title='Oversized upload')
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'x' * 33,
+            headers={'X-Artifact-Filename': 'vpxd.log', 'Content-Type': 'text/plain'},
+        )
+        listed = client.get(f'/api/v1/sessions/{session_id}/artifacts')
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 413
+    assert response.json()['detail'] == 'artifact upload exceeds maximum size of 32 bytes'
+    assert listed.json()['items'] == []
+    assert transcript['session']['metadata']['expert_desk']['uploaded_logs_count'] == 0
+    assert transcript['session']['metadata']['expert_desk']['uploaded_log_names'] == []
+    assert transcript['session']['metadata']['expert_desk']['uploaded_logs_available'] is False
+    assert [event for event in transcript['events'] if event['type'].startswith('vmware.trajectory.')] == []
+    artifacts_dir = tmp_path / 'artifacts' / session_id
+    assert not artifacts_dir.exists()
+
+
+def test_session_artifact_upload_is_backend_authoritative_without_session_patch(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = create_vmware_expert_desk_session(client)
         response = client.post(
             f'/api/v1/sessions/{session_id}/artifacts',
             content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',

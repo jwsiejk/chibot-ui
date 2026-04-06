@@ -143,6 +143,7 @@ curl http://127.0.0.1:8000/api/v1/readiness
 - Expert Desk Phase 7 adds real session-scoped backend artifact upload endpoints (`POST/GET /api/v1/sessions/{session_id}/artifacts`) with local storage persistence.
 - Backend artifact upload is authoritative for live VMware uploaded-log summary metadata (`uploaded_logs_count`, `uploaded_log_names`, `uploaded_logs_available`) and no longer depends on a second metadata PATCH call for correctness.
 - Artifact upload is explicitly scoped to VMware Expert Desk sessions; non-VMware sessions are rejected rather than creating partial `metadata.expert_desk` state.
+- Artifact upload payloads are capped at `5 MiB` by default (`ASKCHIP_MAX_ARTIFACT_UPLOAD_BYTES`), and empty bodies are rejected before artifact bytes, rows, metadata, or trajectory events are persisted.
 - Only standalone plain-text `vmkernel.log`, `vobd.log`, and `vpxd.log` are parsed in this phase. Unsupported artifacts are stored and labeled honestly (`uploaded_unsupported`).
 - Parsed evidence is typed and stored separately from transcript text under `metadata.expert_desk.vmware_artifacts`; transcript contract remains unchanged.
 - Artifact-driven VMware metadata refresh now emits the same compact `vmware.trajectory.*_changed` transition events as turn and session-patch refresh paths when values actually change.

@@ -31,6 +31,7 @@ class Settings(BaseModel):
     tts_sample_rate_hz: int = 24000
     tts_speed: float = 1.0
     tts_lang_code: str = 'en-us'
+    max_artifact_upload_bytes: int = 5 * 1024 * 1024
     ollama_warmup_enabled: bool = True
     tts_warmup_enabled: bool = False
 
@@ -58,6 +59,7 @@ _ENV_MAP: dict[str, tuple[str, callable]] = {
     'tts_sample_rate_hz': ('ASKCHIP_TTS_SAMPLE_RATE_HZ', int),
     'tts_speed': ('ASKCHIP_TTS_SPEED', float),
     'tts_lang_code': ('ASKCHIP_TTS_LANG_CODE', str),
+    'max_artifact_upload_bytes': ('ASKCHIP_MAX_ARTIFACT_UPLOAD_BYTES', int),
     'ollama_warmup_enabled': ('ASKCHIP_OLLAMA_WARMUP_ENABLED', lambda value: value.lower() in {'1', 'true', 'yes', 'on'}),
     'tts_warmup_enabled': ('ASKCHIP_TTS_WARMUP_ENABLED', lambda value: value.lower() in {'1', 'true', 'yes', 'on'}),
 }

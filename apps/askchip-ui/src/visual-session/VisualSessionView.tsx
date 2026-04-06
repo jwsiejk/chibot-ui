@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { askChipApiClient } from '../api/client';
+import { ApiError, askChipApiClient } from '../api/client';
 import { ChatPanel } from '../chat/ChatPanel';
 import { runtimeConfig } from '../config/runtime';
 import { ExpertDeskFlowProgress } from '../demo/ExpertDeskFlowProgress';
@@ -23,6 +23,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
   const assistantName = runtimeConfig.assistantDisplayName;
   const [contextVersion, setContextVersion] = useState(0);
   const [backendArtifacts, setBackendArtifacts] = useState<VmwareArtifactRecord[]>([]);
+  const [artifactUploadError, setArtifactUploadError] = useState<string | null>(null);
   const frontstageContext = useMemo(() => getExpertDeskSessionContext(sessionId), [contextVersion, sessionId]);
 
   useEffect(() => {
@@ -212,6 +213,7 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                 uploadSource="live-session"
                 title="Upload logs during live session"
                 helperNote="If logs were not uploaded in intake, add them here when the AI VMware expert asks for them."
+                uploadErrorMessage={artifactUploadError}
                 onAddFiles={(files, source) => {
                   const updatedContext = addExpertDeskSessionLogFiles(sessionId, files, source);
                   if (updatedContext) {
@@ -232,12 +234,17 @@ export function VisualSessionView({ sessionId }: VisualSessionViewProps) {
                     if (isVmwareSession) {
                       const fileItems = Array.from(files);
                       const uploadTraceId = crypto.randomUUID();
+                      setArtifactUploadError(null);
                       Promise.all(fileItems.map((item) => askChipApiClient.uploadSessionArtifact(sessionId, item, uploadTraceId)))
                         .then((uploaded) => {
                           setBackendArtifacts((previous) => [...previous, ...uploaded]);
                         })
-                        .catch(() => {
-                          // upload/parser failures are represented via API artifact status or app error on retry
+                        .catch((error: unknown) => {
+                          if (error instanceof ApiError) {
+                            setArtifactUploadError(error.detail);
+                            return;
+                          }
+                          setArtifactUploadError('Artifact upload failed. Please retry.');
                         });
                     }
                     setContextVersion((current) => current + 1);

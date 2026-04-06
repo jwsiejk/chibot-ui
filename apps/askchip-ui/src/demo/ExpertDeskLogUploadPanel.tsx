@@ -10,6 +10,7 @@ type ExpertDeskLogUploadPanelProps = {
   title?: string;
   compact?: boolean;
   helperNote?: string;
+  uploadErrorMessage?: string | null;
 };
 
 function formatBytes(size: number): string {
@@ -30,6 +31,7 @@ export function ExpertDeskLogUploadPanel({
   title = 'Log file upload',
   compact = false,
   helperNote,
+  uploadErrorMessage,
 }: ExpertDeskLogUploadPanelProps) {
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files || event.target.files.length === 0) {
@@ -47,6 +49,7 @@ export function ExpertDeskLogUploadPanel({
         Intake files are frontend-local. Live-session uploads are sent to backend for supported VMware parser checks.
       </p>
       {helperNote ? <p className="mt-1 text-xs leading-5 text-slate-600">{helperNote}</p> : null}
+      {uploadErrorMessage ? <p className="mt-1 text-xs leading-5 text-rose-600">{uploadErrorMessage}</p> : null}
       <label className="mt-3 inline-flex cursor-pointer rounded-full border border-indigo-300 bg-indigo-50 px-4 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">
         Add log files
         <input
