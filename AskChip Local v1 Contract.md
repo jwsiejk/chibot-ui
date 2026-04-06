@@ -79,6 +79,9 @@ The only allowed top-level states are:
 - VMware session artifact ingestion is now available at `POST /api/v1/sessions/{session_id}/artifacts` and `GET /api/v1/sessions/{session_id}/artifacts` for real backend-uploaded artifacts.
 - Phase 7 supported parsed artifact set is limited to standalone plain-text `vmkernel.log`, `vobd.log`, and `vpxd.log`.
 - VMware artifact records carry explicit parse state separate from transcript text: `metadata_only`, `uploaded_supported_unparsed`, `parsed_supported`, `uploaded_unsupported`, `parse_failed`.
+- Current Phase 7 synchronous upload behavior emits `parsed_supported`, `uploaded_unsupported`, and `parse_failed`.
+- `metadata_only` is reserved for filename/session-metadata context only (not a backend artifact upload result).
+- `uploaded_supported_unparsed` is reserved for a future async parsing pipeline and is not emitted by the current synchronous upload path.
 - Parsed evidence is typed and session-scoped metadata (`metadata.expert_desk.vmware_artifacts`) and must not be fabricated for metadata-only or unsupported artifacts.
 - During those VMware PATCH-time log-sufficiency refreshes, AskChip may also recompute and persist deterministic policy fields (`policy_next_move`, policy-aligned `conversation_stage`, and `next_best_question`) from the current typed triage state with non-regressive behavior, avoiding resets to `confirm_issue_family`/`issue_definition` when the issue family path is already established.
 - VMware triage/policy refreshes may also refresh `metadata.expert_desk.vmware_handoff` so summary/handoff flows use current persisted triage, transcript-derived facts, and uploaded log-name metadata without claiming parsed-log conclusions.

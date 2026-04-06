@@ -16,6 +16,17 @@ VmwareArtifactStatus = Literal[
     'uploaded_unsupported',
     'parse_failed',
 ]
+"""Artifact status vocabulary for session metadata + upload records.
+
+Current synchronous upload behavior intentionally emits:
+- parsed_supported
+- uploaded_unsupported
+- parse_failed
+
+Reserved/not emitted in the synchronous upload path:
+- metadata_only (filename/session metadata context only; not an upload result)
+- uploaded_supported_unparsed (reserved for a future async parsing pipeline)
+"""
 
 
 @dataclass(frozen=True)

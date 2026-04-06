@@ -463,5 +463,7 @@ A lightweight progress treatment now appears across frontstage stages to keep wa
 - Uploaded artifact bytes are persisted in app-owned local storage and artifact metadata is persisted in typed records.
 - First supported parser set is intentionally narrow: plain-text `vmkernel.log`, `vobd.log`, `vpxd.log`.
 - Artifact parse status is explicit (`metadata_only`, `uploaded_supported_unparsed`, `parsed_supported`, `uploaded_unsupported`, `parse_failed`) and is distinct from transcript messages.
+- Current synchronous upload flow emits `parsed_supported`, `uploaded_unsupported`, and `parse_failed`.
+- `metadata_only` is filename/session-metadata context (not a backend upload result), while `uploaded_supported_unparsed` is reserved for a future async parsing pipeline.
 - Runtime/prompt guidance can now distinguish metadata-only log names vs parsed-supported evidence vs unsupported/failed uploads.
 - Out of scope remains unchanged for this phase: archives (`.tgz`/`.zip`), support bundles, broad artifact coverage, OCR, and RAG indexing.

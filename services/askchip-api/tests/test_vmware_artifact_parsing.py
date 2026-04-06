@@ -10,6 +10,7 @@ def _fixture(name: str) -> bytes:
 def test_parse_vmkernel_log_success() -> None:
     result = parse_uploaded_vmware_artifact('vmkernel.log', _fixture('vmkernel.log'))
     assert result.status == 'parsed_supported'
+    assert result.status != 'uploaded_supported_unparsed'
     assert result.evidence is not None
     assert result.evidence.artifact_type == 'vmkernel.log'
     assert result.evidence.parsed_line_count == 3
@@ -18,6 +19,7 @@ def test_parse_vmkernel_log_success() -> None:
 def test_parse_vobd_log_success() -> None:
     result = parse_uploaded_vmware_artifact('vobd.log', _fixture('vobd.log'))
     assert result.status == 'parsed_supported'
+    assert result.status != 'uploaded_supported_unparsed'
     assert result.evidence is not None
     assert 'service_health' in result.evidence.matched_categories
 
@@ -25,6 +27,7 @@ def test_parse_vobd_log_success() -> None:
 def test_parse_vpxd_log_success() -> None:
     result = parse_uploaded_vmware_artifact('vpxd.log', _fixture('vpxd.log'))
     assert result.status == 'parsed_supported'
+    assert result.status != 'uploaded_supported_unparsed'
     assert result.evidence is not None
     assert result.evidence.timestamp_start is not None
 
