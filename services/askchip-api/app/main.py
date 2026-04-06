@@ -176,6 +176,7 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
             tts_sample_rate_hz=config.tts_sample_rate_hz,
             tts_speed=config.tts_speed,
             tts_lang_code=config.tts_lang_code,
+            max_artifact_upload_bytes=config.max_artifact_upload_bytes,
             ollama_warmup_enabled=config.ollama_warmup_enabled,
             tts_warmup_enabled=config.tts_warmup_enabled,
         )
@@ -332,7 +333,24 @@ def create_app(config: Settings = settings, ollama_transport=None, webrtc_peer_f
         if not is_vmware_expert_desk:
             raise HTTPException(status_code=409, detail='artifact upload is only supported for VMware Expert Desk sessions')
         filename = (x_artifact_filename or 'uploaded-artifact').strip() or 'uploaded-artifact'
+        content_length_header = request.headers.get('content-length', '').strip()
+        if content_length_header:
+            try:
+                if int(content_length_header) > config.max_artifact_upload_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f'artifact upload exceeds maximum size of {config.max_artifact_upload_bytes} bytes',
+                    )
+            except ValueError:
+                pass
         content = await request.body()
+        if len(content) == 0:
+            raise HTTPException(status_code=422, detail='artifact upload body must not be empty')
+        if len(content) > config.max_artifact_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f'artifact upload exceeds maximum size of {config.max_artifact_upload_bytes} bytes',
+            )
         parse_result = parse_uploaded_vmware_artifact(filename, content)
         artifact = VmwareArtifactDomainRecord(
             session_id=session_id,

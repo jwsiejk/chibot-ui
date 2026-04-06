@@ -201,6 +201,7 @@ class ConfigResponse(BaseModel):
     tts_sample_rate_hz: int
     tts_speed: float
     tts_lang_code: str
+    max_artifact_upload_bytes: int
     local_only: bool = True
     ollama_warmup_enabled: bool = True
     tts_warmup_enabled: bool = False
