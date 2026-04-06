@@ -13,6 +13,23 @@ type ExpertDeskLogUploadPanelProps = {
   uploadErrorMessage?: string | null;
 };
 
+function getArtifactStatusLabel(status: VmwareArtifactRecord['status']): string {
+  switch (status) {
+    case 'parsed_supported':
+      return 'Parsed (supported log)';
+    case 'uploaded_unsupported':
+      return 'Stored (unsupported file type)';
+    case 'parse_failed':
+      return 'Parse failed (supported log)';
+    case 'metadata_only':
+      return 'Metadata-only context (not an upload result)';
+    case 'uploaded_supported_unparsed':
+      return 'Reserved async state (not used in current sync uploads)';
+    default:
+      return status;
+  }
+}
+
 function formatBytes(size: number): string {
   if (size < 1024) {
     return `${size} B`;
@@ -82,7 +99,7 @@ export function ExpertDeskLogUploadPanel({
             <article key={artifact.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2">
               <p className="text-sm font-medium text-slate-900">{artifact.filename}</p>
               <p className="mt-1 text-xs text-slate-600">
-                status: {artifact.status} · type: {artifact.artifact_type || 'unknown'} · uploaded: {new Date(artifact.uploaded_at).toLocaleString()}
+                status: {getArtifactStatusLabel(artifact.status)} · type: {artifact.artifact_type || 'unknown'} · uploaded: {new Date(artifact.uploaded_at).toLocaleString()}
               </p>
               {artifact.parse_error ? <p className="mt-1 text-xs text-rose-600">parse_error: {artifact.parse_error}</p> : null}
             </article>

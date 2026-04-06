@@ -145,6 +145,8 @@ curl http://127.0.0.1:8000/api/v1/readiness
 - Artifact upload is explicitly scoped to VMware Expert Desk sessions; non-VMware sessions are rejected rather than creating partial `metadata.expert_desk` state.
 - Artifact upload payloads are capped at `5 MiB` by default (`ASKCHIP_MAX_ARTIFACT_UPLOAD_BYTES`), and empty bodies are rejected before artifact bytes, rows, metadata, or trajectory events are persisted.
 - Only standalone plain-text `vmkernel.log`, `vobd.log`, and `vpxd.log` are parsed in this phase. Unsupported artifacts are stored and labeled honestly (`uploaded_unsupported`).
+- Current synchronous upload semantics are explicit: supported parseable uploads resolve directly to `parsed_supported` (no intermediary `uploaded_supported_unparsed` state in this path).
+- `metadata_only` is used for filename/session metadata context only (not as a backend upload outcome), and `uploaded_supported_unparsed` remains reserved for a future async parser pipeline.
 - Parsed evidence is typed and stored separately from transcript text under `metadata.expert_desk.vmware_artifacts`; transcript contract remains unchanged.
 - Artifact-driven VMware metadata refresh now emits the same compact `vmware.trajectory.*_changed` transition events as turn and session-patch refresh paths when values actually change.
 - VMware live runtime guidance now includes a deterministic conversation-policy decision (next move + focused next question) derived from triage state, conversation stage, confidence, log sufficiency, and latest user feedback, while preserving the same transcript payload contract.

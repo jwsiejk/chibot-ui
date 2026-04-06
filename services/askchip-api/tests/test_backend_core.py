@@ -4505,6 +4505,28 @@ def test_session_artifact_upload_is_backend_authoritative_without_session_patch(
     assert all('trace_id' not in event['payload'] for event in transition_events)
 
 
+def test_session_artifact_upload_sync_supported_log_never_emits_uploaded_supported_unparsed(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        session_id = create_vmware_expert_desk_session(client)
+        response = client.post(
+            f'/api/v1/sessions/{session_id}/artifacts',
+            content=b'2026-03-10 09:10:20 ERROR vmfs datastore issue',
+            headers={'X-Artifact-Filename': 'vmkernel.log', 'Content-Type': 'text/plain'},
+        )
+        listed = client.get(f'/api/v1/sessions/{session_id}/artifacts').json()['items']
+        transcript = client.get(f'/api/v1/sessions/{session_id}/transcript').json()
+
+    assert response.status_code == 201
+    assert response.json()['artifact']['status'] == 'parsed_supported'
+    assert response.json()['artifact']['status'] != 'uploaded_supported_unparsed'
+    assert listed
+    assert all(item['status'] != 'uploaded_supported_unparsed' for item in listed)
+    persisted_artifacts = transcript['session']['metadata']['expert_desk']['vmware_artifacts']
+    assert persisted_artifacts
+    assert all(item['status'] != 'uploaded_supported_unparsed' for item in persisted_artifacts)
+
+
 def test_session_artifact_upload_with_trace_id_header_includes_trace_id_on_transition_events(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     with TestClient(app) as client:
