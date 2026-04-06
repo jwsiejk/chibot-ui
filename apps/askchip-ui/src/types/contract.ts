@@ -66,9 +66,14 @@ export interface ConfigResponse {
   app_name: string;
   ollama_base_url: string;
   ollama_model: string;
+  ollama_keep_alive: string;
+  ollama_num_ctx: number;
+  ollama_num_parallel: number;
   database_path: string;
   stt_model: string;
+  stt_requested_device: string;
   stt_device: string;
+  stt_requested_compute_type: string;
   stt_compute_type: string;
   tts_voice: string;
   tts_requested_device: string;
@@ -82,6 +87,7 @@ export interface ConfigResponse {
   tts_sample_rate_hz: number;
   tts_speed: number;
   tts_lang_code: string;
+  max_artifact_upload_bytes: number;
   local_only: boolean;
   ollama_warmup_enabled: boolean;
   tts_warmup_enabled: boolean;
@@ -97,7 +103,10 @@ export interface ReadinessCheck {
 
 export interface ReadinessResponse {
   local_only: boolean;
+  ollama_warmup_enabled: boolean;
+  tts_warmup_enabled: boolean;
   warmup_active: boolean;
+  runtime: Record<string, unknown> | null;
   checks: Record<string, ReadinessCheck>;
 }
 
@@ -116,6 +125,7 @@ export interface VmwareTriageState {
   open_questions: string[];
   confidence: number;
   conversation_stage: string;
+  policy_next_move: string;
   next_best_question: string;
   required_logs: string[];
   received_logs: string[];
