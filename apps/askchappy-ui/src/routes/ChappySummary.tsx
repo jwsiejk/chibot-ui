@@ -32,8 +32,8 @@ export const ChappySummary = () => {
         <section key={section.heading} aria-label={section.heading}>
           <h2>{section.heading}</h2>
           <ul>
-            {section.items.map((item) => (
-              <li key={item}>{item}</li>
+            {section.items.map((item, index) => (
+              <li key={`${section.heading}-${index}`}>{item}</li>
             ))}
           </ul>
         </section>

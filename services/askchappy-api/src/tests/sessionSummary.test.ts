@@ -29,6 +29,25 @@ describe('phase 7 session summary generation', () => {
     expect(summary.followUpDraft).toContain('More transcript context is needed');
   });
 
+
+  it('does not throw when mode_change event meta is malformed', () => {
+    const session = createLocalSession();
+    const loaded = getLocalSession(session.session_id);
+    expect(loaded).toBeDefined();
+
+    loaded!.events.push({
+      id: 'event_malformed',
+      ts: new Date().toISOString(),
+      session_id: session.session_id,
+      event_type: 'mode_change',
+      meta: { from_mode: 'open_qa', actor: 'user' },
+    });
+
+    expect(() => generateSessionSummary(loaded!)).not.toThrow();
+    const summary = generateSessionSummary(loaded!);
+    expect(summary.modeHistory.some((line) => line.includes('details unavailable'))).toBe(true);
+  });
+
   it('uses mode change events for mode history and defaults to open_qa history message without changes', () => {
     const first = createLocalSession();
     const firstSummary = generateSessionSummary(first);

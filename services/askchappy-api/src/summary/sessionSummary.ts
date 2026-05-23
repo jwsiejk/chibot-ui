@@ -1,4 +1,4 @@
-import type { SessionMode } from '../../../../shared/contracts/modes';
+import { isSessionMode, type SessionMode } from '../../../../shared/contracts/modes';
 import type { AskChappySession } from '../sessions/sessionStore';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import type { ModeChangeEventMeta } from '../events/sessionEvents';
@@ -21,6 +21,9 @@ const isActionLike = (text: string): boolean => /\b(next step|follow up|send|sha
 
 const getUserMessages = (transcript: TranscriptMessage[]): TranscriptMessage[] => transcript.filter((message) => message.role === 'user');
 
+const isModeChangeEventMeta = (meta: Record<string, unknown>): meta is ModeChangeEventMeta =>
+  isSessionMode(meta.from_mode) && isSessionMode(meta.to_mode) && ['user', 'assistant', 'system'].includes(String(meta.actor));
+
 const toModeHistoryLine = (meta: ModeChangeEventMeta, timestamp: string): string => {
   const readableTs = new Date(timestamp).toLocaleString('en-US', { timeZone: 'UTC', hour12: false });
   return `${readableTs} UTC — ${meta.from_mode} → ${meta.to_mode} (${meta.actor})`;
@@ -32,12 +35,18 @@ export const generateSessionSummary = (session: AskChappySession): SessionSummar
 
   const modeChangeEvents = session.events
     .filter((event) => event.event_type === 'mode_change')
-    .map((event) => ({ meta: event.meta as ModeChangeEventMeta, ts: event.ts }));
+    .map((event) => ({ meta: event.meta, ts: event.ts }));
+
+  const modeHistoryLines = modeChangeEvents.flatMap((event) =>
+    isModeChangeEventMeta(event.meta)
+      ? [toModeHistoryLine(event.meta, event.ts)]
+      : [`${new Date(event.ts).toLocaleString('en-US', { timeZone: 'UTC', hour12: false })} UTC — mode change recorded (details unavailable)`],
+  );
 
   const modeHistory =
-    modeChangeEvents.length === 0
+    modeHistoryLines.length === 0
       ? ['No mode changes recorded. Session stayed in Open Q&A.']
-      : modeChangeEvents.map((event) => toModeHistoryLine(event.meta, event.ts));
+      : modeHistoryLines;
 
   const keyDiscussionNotes =
     userMessages.length === 0
