@@ -26,6 +26,12 @@ npm run start
 
 Default local runtime URL: `http://127.0.0.1:4173/chappy`.
 
+Additional local runtime commands:
+```bash
+npm run build:local-runtime
+npm run smoke:local-runtime
+```
+
 ## Terminology and route policy
 - Deployment model: local-first, local production/local MVP.
 - Retired `/demo*` and `/visual-session*` routes remain inactive historical routes.

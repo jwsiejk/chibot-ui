@@ -21,7 +21,8 @@ npm run verify
 
 Notes:
 - `npm run verify` runs test and lint in sequence.
-- Dedicated `build`/`typecheck` scripts are not included in this phase. A full repo typecheck currently requires Node type definitions that are not installable in this environment, so verification is intentionally test+lint based.
+- `npm run build:local-runtime` builds the AskChappy React/router app with Vite into `dist/`.
+- `npm run smoke:local-runtime` runs a noninteractive build + app-shell wiring check against `dist/index.html`.
 
 ## Start/use local app scaffold
 Use the dedicated local-first runtime script:
@@ -30,7 +31,7 @@ Use the dedicated local-first runtime script:
 npm run start
 ```
 
-This launches the AskChappy React/router scaffold through local TypeScript build output + Node static server at:
+This launches the AskChappy React/router scaffold with the Vite local server at:
 - `http://127.0.0.1:4173/chappy` (entry/login)
 - `http://127.0.0.1:4173/chappy/session/:sessionId` (active session route after start)
 - `http://127.0.0.1:4173/chappy/summary/:sessionId` (recap route)
@@ -42,7 +43,11 @@ npm run build:local-runtime
 npm run smoke:local-runtime
 ```
 
-`npm run smoke:local-runtime` is a noninteractive check that verifies local runtime wiring by executing the runtime TypeScript build.
+`npm run dev` and `npm run start` both run Vite on `127.0.0.1:4173` for the same local-first runtime.
+
+`npm run build:local-runtime` performs a noninteractive production-style build via Vite.
+
+`npm run smoke:local-runtime` performs the build and verifies the built app shell wiring (`dist/index.html` + built asset references) without requiring a long-running dev server.
 
 ## Current auth behavior
 - Email-only local auth is used on `/chappy`.

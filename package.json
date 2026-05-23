@@ -7,9 +7,10 @@
     "test": "vitest run",
     "lint": "eslint .",
     "verify": "npm run test && npm run lint",
-    "dev": "node scripts/local-runtime-server.mjs",
+    "dev": "vite --host 127.0.0.1 --port 4173",
     "start": "npm run dev",
-    "smoke:local-runtime": "vitest run apps/askchappy-ui/src/tests/localDevWorkflow.test.ts"
+    "smoke:local-runtime": "npm run build:local-runtime && node scripts/smoke-local-runtime.mjs",
+    "build:local-runtime": "vite build"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -27,6 +28,7 @@
     "jsdom": "^26.1.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.33.1",
-    "vitest": "^3.2.1"
+    "vitest": "^3.2.1",
+    "vite": "^5.4.19"
   }
 }
