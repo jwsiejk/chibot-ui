@@ -1,7 +1,6 @@
-# AskChappy Current Implementation Status (After Phase 13)
+# AskChappy Current Implementation Status (After Phase 14)
 
 ## Completed phases
-- Phase 14: local-first start/dev runtime workflow
 - Phase 1: app skeleton and canonical route scaffold
 - Phase 2: shared contracts and validation helpers
 - Phase 3: email-only local auth + admin role mapping
@@ -15,6 +14,7 @@
 - Phase 11: state-aware Chappy avatar placeholder scaffold
 - Phase 12: local-first production hardening and packaging docs/scripts
 - Phase 13: cloned voice provider contract package and readiness gate
+- Phase 14: local-first start/dev runtime workflow
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.

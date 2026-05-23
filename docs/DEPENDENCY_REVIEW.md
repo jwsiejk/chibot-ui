@@ -34,3 +34,7 @@
 - No real voice/avatar asset dependencies were added.
 - No database dependency was added.
 - No STT/microphone runtime dependencies were added.
+
+## Package lockfile status
+- No `package-lock.json` is currently tracked in this repository.
+- Phase 14 cleanup does not introduce a new package manager policy or lockfile convention.
