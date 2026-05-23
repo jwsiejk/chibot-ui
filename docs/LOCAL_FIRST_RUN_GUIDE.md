@@ -24,9 +24,25 @@ Notes:
 - Dedicated `build`/`typecheck` scripts are not included in this phase. A full repo typecheck currently requires Node type definitions that are not installable in this environment, so verification is intentionally test+lint based.
 
 ## Start/use local app scaffold
-There is no dedicated `start`/`dev` script in the current Phase 13 repository state.
-Use route, contract, and runtime verification through the automated tests and lint checks while the local-first product scaffold is hardened.
-Phase 14 is expected to define and add this workflow.
+Use the dedicated local-first runtime script:
+
+```bash
+npm run start
+```
+
+This launches the AskChappy React/router scaffold through local TypeScript build output + Node static server at:
+- `http://127.0.0.1:4173/chappy` (entry/login)
+- `http://127.0.0.1:4173/chappy/session/:sessionId` (active session route after start)
+- `http://127.0.0.1:4173/chappy/summary/:sessionId` (recap route)
+
+Related scripts:
+```bash
+npm run dev
+npm run build:local-runtime
+npm run smoke:local-runtime
+```
+
+`npm run smoke:local-runtime` is a noninteractive check that verifies local runtime wiring by executing the runtime TypeScript build.
 
 ## Current auth behavior
 - Email-only local auth is used on `/chappy`.

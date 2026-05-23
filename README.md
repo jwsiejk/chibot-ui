@@ -19,6 +19,13 @@ npm run lint
 npm run verify
 ```
 
+## Local run
+```bash
+npm run start
+```
+
+Default local runtime URL: `http://127.0.0.1:4173/chappy`.
+
 ## Terminology and route policy
 - Deployment model: local-first, local production/local MVP.
 - Retired `/demo*` and `/visual-session*` routes remain inactive historical routes.

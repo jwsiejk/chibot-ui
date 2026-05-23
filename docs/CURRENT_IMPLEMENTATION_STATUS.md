@@ -1,6 +1,7 @@
 # AskChappy Current Implementation Status (After Phase 13)
 
 ## Completed phases
+- Phase 14: local-first start/dev runtime workflow
 - Phase 1: app skeleton and canonical route scaffold
 - Phase 2: shared contracts and validation helpers
 - Phase 3: email-only local auth + admin role mapping
@@ -41,6 +42,7 @@
 - `npm test`: passing
 - `npm run lint`: passing
 - `npm run verify`: passing
+- `npm run smoke:local-runtime`: passing
 
 ## Active route map
 - `/`
@@ -70,7 +72,6 @@ Retired and inactive:
 ## Phase 10 blocker summary
 Cloned voice runtime integration remains blocked until provider selection, local config shape, published profile configuration, and admin publication gating details are approved for local production use.
 
-## Next recommended work after Phase 13
-- Phase 14: local-first start/dev runtime workflow (documentation + implementation plan for stable startup path).
+## Next recommended work after Phase 14
 - Phase 15: cloned voice provider adapter is only next when provider/config/audio/consent prerequisites are actually available and approved.
 - Phase 16: plan enterprise-auth replacement path while preserving local-first development/testing workflow.
