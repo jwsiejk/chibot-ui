@@ -144,8 +144,9 @@ describe('phase 5 chappy UI', () => {
     for (const lifecycleState of VOICE_PROFILE_STATES) {
       expect(screen.getByText(lifecycleState)).toBeInTheDocument();
     }
-    expect(screen.getByText('Standard voice: active/default.')).toBeInTheDocument();
-    expect(screen.getByText('Optional cloned Chappy voice: pending configuration/approval.')).toBeInTheDocument();
+    expect(screen.getByText('Standard voice active (default).')).toBeInTheDocument();
+    expect(screen.getByText('Optional cloned Chappy voice is not required for AskChappy runtime.')).toBeInTheDocument();
+    expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByText('Not configured')).toBeInTheDocument();
     expect(screen.getByText('Missing provider config')).toBeInTheDocument();
     expect(screen.getByText('Consent required')).toBeInTheDocument();
@@ -224,6 +225,7 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Avatar asset status: placeholder')).toBeInTheDocument();
     expect(screen.getByText('Speech provider status: Standard voice active.')).toBeInTheDocument();
+    expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
   });

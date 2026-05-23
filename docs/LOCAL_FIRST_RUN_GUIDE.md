@@ -67,3 +67,5 @@ Vite handles browser-history fallback for canonical React routes (`/chappy`, `/c
 ## Local-first terminology and route policy
 - AskChappy is local-first production software in a local production/local MVP deployment model.
 - Retired `/demo*` and `/visual-session*` routes remain inactive historical routes.
+
+- Standard voice remains active/default even when cloned voice config/provider adapter are missing or not ready; AskChappy runs normally without cloned voice assets.

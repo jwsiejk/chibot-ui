@@ -32,3 +32,5 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm standard voice remains active/default for synthesis.
 - [ ] Confirm cloned voice readiness gate does not claim active cloned synthesis without approved provider adapter + prerequisites.
 - [ ] Confirm no cloud voice provider runtime was added.
+
+- [ ] Confirm Standard voice remains explicitly selected when cloned config is missing/incomplete, consent is false, publication is not `published`, `enabled` is false, adapter is missing, or readiness has errors.

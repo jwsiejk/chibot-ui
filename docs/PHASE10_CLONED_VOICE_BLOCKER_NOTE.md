@@ -21,3 +21,5 @@ Current runtime behavior (intended and non-blocking):
 
 
 Phase 13 follow-up: see `docs/CLONED_VOICE_PROVIDER_CONTRACT.md` for the cloned voice config contract and readiness gate package that preserves standard voice as default.
+
+- Additional guardrail: if cloned config is missing/incomplete, consent is false, publication is not `published`, `enabled` is false, adapter is missing, or readiness has errors, runtime explicitly selects Standard voice.

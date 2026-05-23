@@ -76,3 +76,5 @@ Cloned voice runtime integration remains blocked until provider selection, local
 ## Next recommended work after Phase 14
 - Phase 15: cloned voice provider adapter is only next when provider/config/audio/consent prerequisites are actually available and approved.
 - Phase 16: plan enterprise-auth replacement path while preserving local-first development/testing workflow.
+
+- Phase 15: standard-vs-cloned voice guardrails keep Standard voice explicitly active/default unless a future real cloned provider adapter is available and readiness checks pass.
