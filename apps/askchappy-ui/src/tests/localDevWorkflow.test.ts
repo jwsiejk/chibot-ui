@@ -26,6 +26,24 @@ describe('phase 14 local-first runtime workflow wiring', () => {
     expect(indexHtml).not.toContain('/dist-runtime/');
   });
 
+
+
+  it('does not reference retired dist-runtime output or local-runtime-server script in package/docs', () => {
+    const packageJson = readFileSync(packageJsonPath, 'utf8');
+    const docs = [
+      'docs/CURRENT_IMPLEMENTATION_STATUS.md',
+      'docs/LOCAL_FIRST_RUN_GUIDE.md',
+      'docs/DEPENDENCY_REVIEW.md',
+    ]
+      .map((docPath) => readFileSync(resolve(process.cwd(), docPath), 'utf8'))
+      .join('\n');
+
+    const combined = `${packageJson}\n${docs}`;
+
+    expect(combined).not.toContain('dist-runtime');
+    expect(combined).not.toContain('scripts/local-runtime-server.mjs');
+  });
+
   it('keeps canonical route constants unchanged while retired routes remain inactive', () => {
     expect(ROUTES.chappy).toBe('/chappy');
     expect(ROUTES.chappySession).toBe('/chappy/session/:sessionId');

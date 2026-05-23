@@ -45,6 +45,8 @@ npm run smoke:local-runtime
 
 `npm run dev` and `npm run start` both run Vite on `127.0.0.1:4173` for the same local-first runtime.
 
+Vite handles browser-history fallback for canonical React routes (`/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, `/admin`, etc.) during local-first runtime use.
+
 `npm run build:local-runtime` performs a noninteractive production-style build via Vite.
 
 `npm run smoke:local-runtime` performs the build and verifies the built app shell wiring (`dist/index.html` + built asset references) without requiring a long-running dev server.
@@ -59,7 +61,7 @@ npm run smoke:local-runtime
 - No RAG/DDN ingestion yet.
 - No real cloned voice provider adapter yet; Phase 13 only added contract/readiness gating and standard voice remains active/default.
 - No STT/browser microphone runtime yet.
-- No real avatar assets/visemes yet.
+- No real avatar assets/visemes/3D rendering yet.
 - No database persistence yet.
 
 ## Local-first terminology and route policy
