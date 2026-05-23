@@ -210,11 +210,11 @@ Rules:
 
 ## 9) MVP auth, role, and admin route contract
 
-### 9.1 Login model (local/demo only)
-- `/chappy` entry includes an email-only login modal for MVP/demo.
-- No password is required in MVP/demo mode.
-- Email is used for local/demo role selection and personalization only.
-- This is explicitly not production authentication and may be replaced later.
+### 9.1 Login model (local-first only)
+- `/chappy` entry includes an email-only login modal for local MVP.
+- No password is required in local MVP mode.
+- Email is used for local-first role selection and personalization only.
+- This is email-only local auth for the current local production MVP; future enterprise auth may replace it.
 
 ### 9.2 Role model
 Allowed V1 MVP roles:

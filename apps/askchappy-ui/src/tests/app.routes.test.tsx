@@ -34,7 +34,7 @@ describe('app render scaffold', () => {
         <App />
       </MemoryRouter>,
     );
-    expect(screen.getByText('Local/demo-only MVP login. Enter email to continue.')).toBeInTheDocument();
+    expect(screen.getByText('Local-first MVP login. Enter email to continue.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
   });
 

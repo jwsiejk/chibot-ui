@@ -208,7 +208,7 @@ Implement email-only MVP login and role detection.
 - `jsiejk@ddn.com => admin`
 - all other emails => `standard_user`
 - no password
-- local/demo only label visible in docs/comments/UI copy where appropriate
+- local-first only label visible in docs/comments/UI copy where appropriate
 
 **Required tests:**
 - admin role mapping
@@ -227,7 +227,7 @@ Build:
   - jsiejk@ddn.com => admin
   - all other emails => standard_user
 - no password flow
-- local/demo-only labeling in docs/comments/UI copy where appropriate
+- local-first or local-only labeling in docs/comments/UI copy where appropriate
 - role-aware nav visibility (hide admin nav for standard_user)
 
 Required tests:
@@ -717,7 +717,7 @@ PR summary must use required format in docs/BUILD_PLAYBOOK.md section 3.
 ### Phase 12 — Production hardening / packaging
 
 **Goal:**  
-Prepare for stable local/demo deployment.
+Prepare for stable local-first deployment.
 
 **Include:**
 - environment config
@@ -744,7 +744,7 @@ Build:
 - lint/test CI setup
 - docs updates
 - dependency review updates
-- run guide for stable local/demo deployment
+- run guide for stable local-first deployment
 
 Required tests:
 - full test suite

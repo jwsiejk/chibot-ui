@@ -29,7 +29,7 @@
 - Do not satisfy audit/diagnostic needs by injecting hidden app telemetry into the visible chat transcript.
 
 ## MVP auth/admin guardrails (documentation + future implementation)
-- Preserve the lightweight MVP login model: email-only on `/chappy`, no password, local/demo scope only.
+- Preserve the lightweight MVP login model: email-only on `/chappy`, no password, local-first scope only.
 - Preserve fixed initial admin mapping: `jsiejk@ddn.com` is `admin`, all other emails are `standard_user` unless a later ADR changes this.
 - Keep admin controls hidden from standard user navigation.
 - Keep voice cloning/profile management controls out of normal `/chappy/session/:sessionId` UX.
