@@ -7,7 +7,7 @@ const FUTURE_WORKFLOW_STEPS = [
   'Test generated speech',
   'Approve profile',
   'Publish global voice',
-  'Disable or revert to fallback',
+  'Disable cloned profile (standard voice remains active)',
 ] as const;
 
 const formatState = (state: VoiceProfileState) => state.replace('_', ' ');
@@ -28,9 +28,9 @@ export const VoiceStudioPage = () => (
 
     <section aria-label="current voice status">
       <h2>Current voice status</h2>
-      <p>No published Chappy voice profile.</p>
-      <p>Fallback voice path is active.</p>
-      <p>Real voice cloning is not implemented in Phase 8.</p>
+      <p>Standard voice is active/default.</p>
+      <p>Cloned Chappy voice is not configured (awaiting approved asset/provider config).</p>
+      <p>Cloned voice integration prerequisites are still pending in this phase.</p>
       <p>Chapman voice use must be approved before publishing a cloned voice profile.</p>
     </section>
 

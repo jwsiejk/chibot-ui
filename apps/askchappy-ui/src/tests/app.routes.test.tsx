@@ -125,7 +125,7 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Admin' }));
 
     expect(screen.getByRole('heading', { name: 'AskChappy local-first admin dashboard' })).toBeInTheDocument();
-    expect(screen.getByText(/fallback voice active/i)).toBeInTheDocument();
+    expect(screen.getByText('Voice status: standard voice active/default; cloned Chappy voice not configured yet.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Voice Studio' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Avatar review' })).toBeInTheDocument();
   });
@@ -144,13 +144,13 @@ describe('phase 5 chappy UI', () => {
     for (const lifecycleState of VOICE_PROFILE_STATES) {
       expect(screen.getByText(lifecycleState)).toBeInTheDocument();
     }
-    expect(screen.getByText('No published Chappy voice profile.')).toBeInTheDocument();
-    expect(screen.getByText('Fallback voice path is active.')).toBeInTheDocument();
-    expect(screen.getByText('Real voice cloning is not implemented in Phase 8.')).toBeInTheDocument();
+    expect(screen.getByText('Standard voice is active/default.')).toBeInTheDocument();
+    expect(screen.getByText('Cloned Chappy voice is not configured (awaiting approved asset/provider config).')).toBeInTheDocument();
+    expect(screen.getByText('Cloned voice integration prerequisites are still pending in this phase.')).toBeInTheDocument();
 
     const futureControlsSection = screen.getByRole('region', { name: 'future voice workflow controls' });
     const disabledControls = within(futureControlsSection).getAllByRole('button', {
-      name: /Record or upload voice samples|Create draft profile|Test generated speech|Approve profile|Publish global voice|Disable or revert to fallback/,
+      name: /Record or upload voice samples|Create draft profile|Test generated speech|Approve profile|Publish global voice|Disable cloned profile \(standard voice remains active\)/,
     });
     expect(disabledControls).toHaveLength(6);
     disabledControls.forEach((control) => expect(control).toBeDisabled());
@@ -219,7 +219,7 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByText('Chappy avatar stage placeholder')).toBeInTheDocument();
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Avatar asset status: placeholder')).toBeInTheDocument();
-    expect(screen.getByText('Speech provider status: Local fallback voice active (no published voice profile).')).toBeInTheDocument();
+    expect(screen.getByText('Speech provider status: Standard voice active.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
   });

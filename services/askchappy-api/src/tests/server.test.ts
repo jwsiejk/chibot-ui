@@ -6,6 +6,7 @@ import {
   getHealth,
   getLocalSession,
   getLocalTranscript,
+  getLocalVoiceStatus,
   setLocalSessionMode,
   synthesizeLocalAssistantMessage,
 } from '../api/server';
@@ -131,7 +132,7 @@ describe('askchappy-api scaffold', () => {
   });
 
 
-  it('synthesizes assistant transcript text via fallback provider without creating new transcript messages', () => {
+  it('synthesizes assistant transcript text via standard voice provider without creating new transcript messages', () => {
     const session = createLocalSession();
     const assistantMessage = appendLocalTranscriptMessage(session.session_id, {
       id: 'msg_assistant_tts',
@@ -151,6 +152,16 @@ describe('askchappy-api scaffold', () => {
     expect(output.provider_id).toBe('local_fallback_tts');
     expect(afterCount).toBe(beforeCount);
   });
+
+
+  it('reports standard voice active by default with no cloned voice profile configured', () => {
+    const status = getLocalVoiceStatus();
+
+    expect(status.active_provider_id).toBe('local_fallback_tts');
+    expect(status.active_provider_label).toBe('Standard voice');
+    expect(status.published_voice_profile_state).toBe('none');
+  });
+
   it('rejects invalid mode changes through service validation', () => {
     const session = createLocalSession();
     expect(() => setLocalSessionMode(session.session_id, 'bad_mode' as never, 'user')).toThrowError(
