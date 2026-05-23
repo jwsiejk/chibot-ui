@@ -63,10 +63,22 @@ Guardrail intent:
 
 ## 3. File size and module boundary guardrails
 
-### 3.1 Hard limits
-- No source file should exceed **500 lines** without explicit architecture note and justification.
-- No route/controller/service file should exceed **300 lines** in normal implementation.
-- Files approaching **250 lines** should be proactively split by responsibility.
+### 3.1 File size guardrails
+- Target file size: under **350 lines**.
+- Soft warning: over **450 lines**.
+- Hard warning: over **600 lines**.
+- Must split: over **800 lines** unless there is a documented reason.
+- Test files may exceed **800 lines** when they are table-driven, readable, and organized clearly.
+- Generated files are exempt, but generated files should not be committed unless intentionally required.
+
+Guardrail interpretation rules:
+- File size alone is not the only concern; mixed responsibility is the real problem.
+- A focused **500-line** file is acceptable.
+- A **250-line** file that mixes route handling, state, API calls, rendering, persistence, and business logic is not acceptable.
+- A route/page file should mostly compose smaller components.
+- A component file should not also own API calls, persistence, mode logic, and styling complexity.
+- A service file should not mix validation, persistence, prompt behavior, and HTTP routing.
+- If a file is growing because it owns multiple concerns, split it before adding more behavior.
 
 ### 3.2 Split triggers
 Split a file immediately if any of the following are true:
@@ -104,7 +116,7 @@ Split a file immediately if any of the following are true:
 ## 7. PR checklist for implementation-phase changes
 
 Implementation PRs should confirm:
-- File/module sizes remain within limits (or include explicit justified exception).
+- File/module sizes are reviewed against tiered thresholds (target <350, soft warning >450, hard warning >600, split required >800 unless justified).
 - No duplicate contract declarations were introduced.
 - Route map changes are documented and contract-aligned.
 - Transcript/event separation is preserved.
