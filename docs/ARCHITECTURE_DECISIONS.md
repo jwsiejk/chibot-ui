@@ -39,3 +39,19 @@ Consequences:
 - Mode changes remain auditable.
 - Recaps can use both transcript and session events while clearly distinguishing them.
 - The app must not create fake user or assistant messages to represent hidden state changes.
+
+## ADR-013: MVP login is email-only and local/demo scoped
+Decision: AskChappy V1 starts with an email-only login modal on `/chappy` with no password. Email is used only for demo/local role selection and personalization, and is not production authentication.
+
+## ADR-014: Two-role MVP with fixed initial admin
+Decision: V1 MVP role model is `standard_user` and `admin`, with `jsiejk@ddn.com` as initial admin and all other emails as standard users.
+
+## ADR-015: Admin-only Voice Studio for UX governance
+Decision: Voice Studio is restricted to admin routes (`/admin/voice`) so normal users cannot alter the shared Chappy voice experience. This is primarily product/UX governance, not a heavy security-hardening boundary.
+
+## ADR-016: Voice profile lifecycle and publish model
+Decision: Chappy voice profiles follow `draft -> testing -> approved -> published -> disabled`. Normal user sessions only consume the currently published voice profile; cloning workflows occur outside standard `/chappy/session/:sessionId` sessions.
+
+## ADR-017: MVP consent workflow remains lightweight
+Decision: MVP requires lightweight admin confirmation that Chapman approved voice usage (for example: “I confirm Chapman approved using this voice for AskChappy.”), without heavy legal/security workflow implementation in docs scope.
+

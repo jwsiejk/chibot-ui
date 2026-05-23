@@ -101,3 +101,51 @@ Minimum V1 state model:
 - Implementation must follow `docs/IMPLEMENTATION_CONTRACTS.md` for route map, session metadata, transcript schema, state machine, and summary contracts.
 - Canonical V1 user flow is `/chappy` and `/chappy/session/:sessionId` with recap on `/chappy/summary/:sessionId`.
 - Legacy `/demo*` and `/visual-session/:sessionId` routes remain retired history only (see `docs/ASKCHIP_REFERENCE_NOTES.md`).
+
+## 16) MVP login and role model
+- `/chappy` begins with an email-only login modal.
+- No password is required for MVP/demo.
+- Email is used for local/demo role selection and personalization only.
+- This is not production authentication and may be replaced later.
+
+Role mapping rule (MVP):
+- `jsiejk@ddn.com` => `admin`
+- all other emails => `standard_user`
+
+## 17) Admin routes and visibility
+Planned routes:
+- `/admin`
+- `/admin/voice`
+- `/admin/avatar`
+
+Rules:
+- Admin routes are hidden unless logged in as admin.
+- Standard users must not see admin navigation.
+- Standard-user access to admin routes returns a simple “not authorized” state.
+- No voice cloning controls appear in normal `/chappy/session/:sessionId` sessions.
+
+## 18) Voice Studio (admin-only planned workflow)
+Voice Studio is planned workflow, not implemented in this docs-only phase:
+1. Admin opens `/admin/voice`.
+2. Admin records/uploads voice samples.
+3. System creates draft profile.
+4. Admin tests generated speech.
+5. Admin approves profile.
+6. Admin publishes as global AskChappy voice.
+7. Standard users hear published voice in future sessions.
+
+Voice profile lifecycle states:
+
+```text
+draft
+testing
+approved
+published
+disabled
+```
+
+## 19) MVP consent note
+- Chapman should approve usage of his voice for AskChappy.
+- For MVP, lightweight admin confirmation is sufficient (example: “I confirm Chapman approved using this voice for AskChappy.”).
+- Do not over-engineer legal/security workflow for this docs-only MVP scope.
+
