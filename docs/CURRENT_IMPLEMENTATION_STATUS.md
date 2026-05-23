@@ -16,7 +16,7 @@
 - Phase 13: cloned voice provider contract package and readiness gate
 - Phase 14: local-first start/dev runtime workflow
 - Phase 15: standard-vs-cloned voice mode selection guardrails
-- Phase 16: browser-local persistence for sessions/transcripts/metadata/events
+- Phase 16: browser-local persistence adapter for sessions/transcripts/metadata/events (local runtime only; no backend/database/cloud persistence)
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -85,3 +85,6 @@ Cloned voice runtime integration remains blocked until provider selection, local
 - Phase 17 is the next logical phase.
 - Keep local browser persistence schema-versioned and add migrations only when needed.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.
+
+
+- Implementation boundary: `services/askchappy-api/src/sessions/browserLocalSessionPersistenceAdapter.ts` is the explicit browser-local persistence adapter used by the local-first runtime scaffold.

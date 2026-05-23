@@ -11,6 +11,10 @@ import {
   synthesizeLocalAssistantMessage,
 } from '../api/server';
 import { hydrateSessionStoreFromPersistence, resetSessionStore } from '../sessions/sessionStore';
+import {
+  BROWSER_LOCAL_SESSION_SCHEMA_VERSION,
+  BROWSER_LOCAL_SESSION_STORAGE_KEY,
+} from '../sessions/browserLocalSessionPersistenceAdapter';
 import { DEFAULT_SESSION_MODE } from '../../../../shared/contracts/modes';
 
 describe('askchappy-api scaffold', () => {
@@ -187,9 +191,113 @@ describe('askchappy-api scaffold', () => {
 
   it('safely recovers from malformed persisted payloads', () => {
     const storage = window.localStorage;
-    storage.setItem('askchappy.local.session_store.v1', '{bad-json');
+    storage.setItem(BROWSER_LOCAL_SESSION_STORAGE_KEY, '{bad-json');
 
     expect(() => hydrateSessionStoreFromPersistence()).not.toThrow();
-    expect(storage.getItem('askchappy.local.session_store.v1')).toBeNull();
+    expect(storage.getItem(BROWSER_LOCAL_SESSION_STORAGE_KEY)).toBeNull();
   });
+
+  it('no-ops safely when browser localStorage is unavailable', () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => {
+        throw new Error('blocked storage');
+      },
+    });
+
+    expect(() => createLocalSession()).not.toThrow();
+    expect(() => hydrateSessionStoreFromPersistence()).not.toThrow();
+    expect(() => resetSessionStore()).not.toThrow();
+
+    if (original) Object.defineProperty(window, 'localStorage', original);
+  });
+
+  it('removes only malformed local persistence payload and leaves unrelated keys', () => {
+    const storage = window.localStorage;
+    storage.setItem('askchappy.unrelated.key', 'keep-me');
+    storage.setItem(BROWSER_LOCAL_SESSION_STORAGE_KEY, JSON.stringify({ schema_version: 99, sessions: [] }));
+
+    hydrateSessionStoreFromPersistence();
+
+    expect(storage.getItem(BROWSER_LOCAL_SESSION_STORAGE_KEY)).toBeNull();
+    expect(storage.getItem('askchappy.unrelated.key')).toBe('keep-me');
+  });
+
+  it('rejects persisted transcript payloads that use content instead of text', () => {
+    const storage = window.localStorage;
+    const now = new Date().toISOString();
+    storage.setItem(
+      BROWSER_LOCAL_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        schema_version: BROWSER_LOCAL_SESSION_SCHEMA_VERSION,
+        sessions: [
+          {
+            session_id: 'session_bad_content',
+            created_at: now,
+            updated_at: now,
+            metadata: {
+              askchappy: {
+                session_mode: 'open_qa',
+                persona_id: 'ddn_chappy_vptm',
+                persona_label: 'Chappy',
+                context: { customer_name: null, issue_summary: null, locale: null },
+              },
+            },
+            transcript: [
+              {
+                id: 'msg1',
+                ts: now,
+                role: 'user',
+                source: 'typed',
+                session_id: 'session_bad_content',
+                meta: {},
+                content: 'invalid',
+              },
+            ],
+            events: [],
+          },
+        ],
+      }),
+    );
+
+    hydrateSessionStoreFromPersistence();
+
+    expect(storage.getItem(BROWSER_LOCAL_SESSION_STORAGE_KEY)).toBeNull();
+    expect(getLocalSession('session_bad_content')).toBeUndefined();
+  });
+
+  it('keeps schema-versioned browser-local persistence payload', () => {
+    const session = createLocalSession();
+    appendLocalUserTextMessage(session.session_id, 'schema check');
+
+    const persisted = JSON.parse(window.localStorage.getItem(BROWSER_LOCAL_SESSION_STORAGE_KEY) ?? '{}');
+    expect(persisted.schema_version).toBe(BROWSER_LOCAL_SESSION_SCHEMA_VERSION);
+  });
+
+  it('reset clears in-memory sessions and browser-local payload', () => {
+    const session = createLocalSession();
+    appendLocalUserTextMessage(session.session_id, 'to be cleared');
+
+    expect(window.localStorage.getItem(BROWSER_LOCAL_SESSION_STORAGE_KEY)).not.toBeNull();
+
+    resetSessionStore();
+
+    expect(getLocalSession(session.session_id)).toBeUndefined();
+    expect(window.localStorage.getItem(BROWSER_LOCAL_SESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  it('voice runtime remains standard-default and cloned voice optional after hydration', () => {
+    const session = createLocalSession();
+    appendLocalUserTextMessage(session.session_id, 'voice status check');
+
+    hydrateSessionStoreFromPersistence();
+
+    const status = getLocalVoiceStatus();
+    expect(status.active_provider_id).toBe('local_fallback_tts');
+    expect(status.active_provider_label).toBe('Standard voice');
+    expect(status.published_voice_profile_state).toBe('none');
+    expect(status.cloned_voice_ready).toBe(false);
+  });
+
 });
