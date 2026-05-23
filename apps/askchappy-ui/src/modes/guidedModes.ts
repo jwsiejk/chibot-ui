@@ -1,4 +1,4 @@
-import { SESSION_MODES, type SessionMode } from '../../../../shared/contracts/modes';
+import { type SessionMode } from '../../../../shared/contracts/modes';
 
 export type ModeDefinition = {
   mode: SessionMode;
@@ -53,7 +53,5 @@ export const MODE_LOOKUP = Object.fromEntries(MODE_DEFINITIONS.map((item) => [it
   SessionMode,
   ModeDefinition
 >;
-
-export const isKnownModeDefinition = (mode: SessionMode): boolean => SESSION_MODES.includes(mode);
 
 export const GUIDED_MODE_CARDS = MODE_DEFINITIONS.filter((mode) => mode.mode !== 'open_qa');
