@@ -42,6 +42,7 @@
 - `npm test`: passing
 - `npm run lint`: passing
 - `npm run verify`: passing
+- `npm run build:local-runtime`: passing
 - `npm run smoke:local-runtime`: passing
 
 ## Active route map

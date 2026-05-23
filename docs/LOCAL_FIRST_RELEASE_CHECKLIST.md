@@ -7,8 +7,10 @@ Use this checklist before local production/local MVP handoff.
 - [ ] `npm test`
 - [ ] `npm run lint`
 - [ ] `npm run verify`
-- [ ] `npm run start` launches local-first runtime at `http://127.0.0.1:4173/chappy`
-- [ ] `npm run smoke:local-runtime` passes as noninteractive local runtime wiring check
+- [ ] `npm run dev` launches the AskChappy React/router scaffold at `http://127.0.0.1:4173/chappy`
+- [ ] `npm run start` aliases the same local-first runtime workflow
+- [ ] `npm run build:local-runtime` succeeds (production-style local build)
+- [ ] `npm run smoke:local-runtime` passes as noninteractive app-shell wiring check (`dist/index.html` + built asset entry)
 
 ## Contract and route checks
 - [ ] Confirm canonical routes are active and unchanged (`/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin routes).

@@ -17,9 +17,11 @@
 - `globals`: known global definitions for browser/node lint environments.
 - `@types/react`: React TypeScript types.
 - `@types/react-dom`: React DOM TypeScript types.
+- `vite`: local-first React runtime server + production-style build output for AskChappy app shell verification.
 
-## Local runtime tooling note (Phase 14)
-- Phase 14 local start/dev uses existing `typescript` + a tiny Node static server script (`scripts/local-runtime-server.mjs`) to avoid adding cloud/runtime dependencies.
+## Local runtime tooling note (Phase 14 fix)
+- Phase 14 local start/dev now uses `vite` as the real local runtime for the AskChappy React/router scaffold.
+- This replaces the retired plain-text local runtime server behavior and enables app-shell serving, history fallback, and noninteractive production-style local build checks.
 
 ## Why these dependencies are present
 - The dependency set is intentionally minimal for local-first production scaffolding.
