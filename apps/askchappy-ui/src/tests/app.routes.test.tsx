@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { App } from '../app/App';
 import { getLocalSession } from '../../../../services/askchappy-api/src/api/server';
 import { RETIRED_ROUTES, ROUTES } from '../../../../shared/contracts/askchappy';
 import { MVP_ADMIN_EMAIL } from '../../../../shared/contracts/auth';
+import { VOICE_PROFILE_STATES } from '../../../../shared/contracts/voice';
 import { routeMap } from '../routes/routeMap';
 
 describe('route map', () => {
@@ -138,16 +141,48 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Voice Studio' }));
 
     expect(screen.getByRole('heading', { name: 'Voice Studio shell (admin only)' })).toBeInTheDocument();
-    for (const lifecycleState of ['draft', 'testing', 'approved', 'published', 'disabled']) {
+    for (const lifecycleState of VOICE_PROFILE_STATES) {
       expect(screen.getByText(lifecycleState)).toBeInTheDocument();
     }
     expect(screen.getByText('No published Chappy voice profile.')).toBeInTheDocument();
     expect(screen.getByText('Fallback voice path is active.')).toBeInTheDocument();
     expect(screen.getByText('Real voice cloning is not implemented in Phase 8.')).toBeInTheDocument();
 
-    const disabledControls = screen.getAllByRole('button', { name: /Record or upload voice samples|Create draft profile|Test generated speech|Approve profile|Publish global voice|Disable or revert to fallback/ });
+    const futureControlsSection = screen.getByRole('region', { name: 'future voice workflow controls' });
+    const disabledControls = within(futureControlsSection).getAllByRole('button', {
+      name: /Record or upload voice samples|Create draft profile|Test generated speech|Approve profile|Publish global voice|Disable or revert to fallback/,
+    });
     expect(disabledControls).toHaveLength(6);
     disabledControls.forEach((control) => expect(control).toBeDisabled());
+  });
+
+  it('does not show Voice Studio controls in normal /chappy/session/:sessionId user sessions', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+
+    expect(screen.queryByRole('heading', { name: 'Voice Studio shell (admin only)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Record or upload voice samples' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create draft profile' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Test generated speech' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve profile' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Publish global voice' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Disable or revert to fallback' })).not.toBeInTheDocument();
+  });
+
+  it('keeps admin voice/avatar shells free of committed private voice/avatar asset imports', () => {
+    const voiceShellSource = readFileSync(resolve(process.cwd(), 'apps/askchappy-ui/src/admin/voice/VoiceStudioPage.tsx'), 'utf8');
+    const avatarShellSource = readFileSync(resolve(process.cwd(), 'apps/askchappy-ui/src/admin/avatar/AvatarAdminPage.tsx'), 'utf8');
+    const combinedSource = `${voiceShellSource}\n${avatarShellSource}`.toLowerCase();
+
+    expect(combinedSource).not.toMatch(/\.(wav|mp3|m4a|ogg|flac|webm|bin|pt|ckpt|onnx|npy|npz|pkl|emb|embedding|jpg|jpeg|png|webp|gif|glb|gltf|fbx|obj)['"]/);
+    expect(combinedSource).not.toContain('/assets/voice');
+    expect(combinedSource).not.toContain('/assets/avatar');
   });
 
   it('renders avatar shell placeholder and future state placeholders', () => {
