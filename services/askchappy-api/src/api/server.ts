@@ -9,6 +9,7 @@ import {
 } from '../sessions/sessionStore';
 import type { SessionMode } from '../../../../shared/contracts/modes';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
+import { getLocalVoiceRuntimeStatus, synthesizeAssistantTranscriptMessage } from '../voice/voiceRuntime';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
@@ -53,3 +54,13 @@ export const setLocalSessionMode = (
   if (!session) throw new Error(`Session not found: ${sessionId}`);
   return updateSessionMode(session, toMode, actor);
 };
+
+export const synthesizeLocalAssistantMessage = (sessionId: string, messageId: string) => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+  const message = session.transcript.find((entry) => entry.id === messageId);
+  if (!message) throw new Error(`Transcript message not found: ${messageId}`);
+  return synthesizeAssistantTranscriptMessage({ session_id: sessionId, message });
+};
+
+export const getLocalVoiceStatus = () => getLocalVoiceRuntimeStatus();

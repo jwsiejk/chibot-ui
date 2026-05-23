@@ -216,6 +216,7 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByRole('heading', { name: 'AskChappy session' })).toBeInTheDocument();
     expect(screen.getByLabelText('chappy stage')).toBeInTheDocument();
     expect(screen.getByText('Session state indicator: ready')).toBeInTheDocument();
+    expect(screen.getByText('Speech provider status: Local fallback voice active (no published voice profile).')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
   });
