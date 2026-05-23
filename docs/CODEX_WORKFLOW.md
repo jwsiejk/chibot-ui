@@ -9,6 +9,7 @@
 - Do not reintroduce retired AskChip/Expert Desk/VMware runtime concepts as active product behavior.
 
 ## Implementation standards (when coding begins)
+- Future implementation work should follow `docs/BUILD_PLAYBOOK.md` as the phased execution guide and prompt source of truth.
 - Do not use mocks/fake integrations unless explicitly requested.
 - Deliver production-ready code for implemented scope.
 - Run tests/lints before delivery once code exists.
