@@ -32,3 +32,8 @@
 
 ## Asset safety rule
 Do not commit real voice samples, trained voice artifacts, or private avatar likeness assets to the public repo unless explicitly approved.
+
+
+## Implementation contract alignment
+- Voice and avatar integrations must attach to the canonical transcript and session states defined in `docs/IMPLEMENTATION_CONTRACTS.md`.
+- No voice/avatar feature may introduce a parallel message model or bypass route/session contracts.

@@ -94,3 +94,9 @@ Minimum V1 state model:
 - Basic mode switching overlays can be applied without changing bot identity.
 - Session states (`ready` through `error`) are visible and coherent.
 - Session recap can be generated from canonical transcript.
+
+
+## 15) Implementation contracts handoff
+- Implementation must follow `docs/IMPLEMENTATION_CONTRACTS.md` for route map, session metadata, transcript schema, state machine, and summary contracts.
+- Canonical V1 user flow is `/chappy` and `/chappy/session/:sessionId` with recap on `/chappy/summary/:sessionId`.
+- Legacy `/demo*` and `/visual-session/:sessionId` routes remain retired history only (see `docs/ASKCHIP_REFERENCE_NOTES.md`).

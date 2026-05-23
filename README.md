@@ -17,3 +17,4 @@ This repository is now the planning and reference home for a clean **AskChappy**
 - `docs/ARCHITECTURE_DECISIONS.md` — key architecture and product decisions
 - `docs/VOICE_AND_AVATAR_PLAN.md` — future voice clone and avatar planning guardrails
 - `docs/CODEX_WORKFLOW.md` — workflow expectations for future Codex/GitHub bot changes
+- `docs/IMPLEMENTATION_CONTRACTS.md` — implementation-level contracts for routes, metadata, transcript, state, and recap

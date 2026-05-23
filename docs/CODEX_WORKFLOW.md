@@ -17,3 +17,9 @@
 ## Documentation discipline
 - Update architecture/product docs whenever core behavior or contracts change.
 - Keep decisions discoverable in architecture decision notes.
+
+
+## Implementation contract gate
+- Before any implementation PR, confirm compliance with `docs/IMPLEMENTATION_CONTRACTS.md`.
+- Reject PRs that reintroduce retired `/demo*` or `/visual-session*` primary routes.
+- Treat contract drift as a blocking architecture issue, not a minor doc mismatch.

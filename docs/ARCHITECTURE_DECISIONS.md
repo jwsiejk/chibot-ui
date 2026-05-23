@@ -26,3 +26,7 @@ Decision: Avatar system supports placeholder-to-advanced evolution while keeping
 
 ## ADR-009: No stale Expert Desk / VMware app code in active repository
 Decision: Remove outdated routes, services, and runtime files that imply legacy product continuity.
+
+
+## ADR-010: Implementation contracts are normative for V1 build
+Decision: `docs/IMPLEMENTATION_CONTRACTS.md` is the required contract source for route map, metadata shape, transcript schema, session state model, and recap behavior.
