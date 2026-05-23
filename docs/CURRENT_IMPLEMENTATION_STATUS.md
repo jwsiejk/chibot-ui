@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 15)
+# AskChappy Current Implementation Status (After Phase 16)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -16,6 +16,7 @@
 - Phase 13: cloned voice provider contract package and readiness gate
 - Phase 14: local-first start/dev runtime workflow
 - Phase 15: standard-vs-cloned voice mode selection guardrails
+- Phase 16: browser-local persistence for sessions/transcripts/metadata/events
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -30,6 +31,7 @@
 - Optional cloned voice is guarded and requires both readiness checks and explicit real provider adapter availability.
 - AskChappy runs normally without cloned voice assets.
 - Verification scripts for test/lint (`npm run verify`).
+- Browser-local persistence survives reloads for session records, canonical transcript messages, `metadata.askchappy`, and session events.
 
 ## Intentionally not implemented
 - OpenAI/model runtime integration
@@ -79,7 +81,7 @@ Retired and inactive:
 ## Phase 10 blocker summary
 Cloned voice runtime integration remains blocked until provider selection, local config shape, published profile configuration, and admin publication gating details are approved for local production use.
 
-## Next recommended work after Phase 15
-- Phase 16 is the next logical phase.
-- Phase 16 should prioritize local persistence for sessions/transcripts unless project direction changes.
+## Next recommended work after Phase 16
+- Phase 17 is the next logical phase.
+- Keep local browser persistence schema-versioned and add migrations only when needed.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.

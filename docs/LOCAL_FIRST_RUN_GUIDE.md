@@ -63,9 +63,16 @@ Vite handles browser-history fallback for canonical React routes (`/chappy`, `/c
 - No STT/browser microphone runtime yet.
 - No real avatar assets/visemes/3D rendering yet.
 - No database persistence yet.
+- Session data now persists in browser localStorage (browser-local only; no sync across devices/browsers).
 
 ## Local-first terminology and route policy
 - AskChappy is local-first production software in a local production/local MVP deployment model.
 - Retired `/demo*` and `/visual-session*` routes remain inactive historical routes.
 
 - Standard voice remains active/default even when cloned voice config/provider adapter are missing or not ready; AskChappy runs normally without cloned voice assets.
+
+
+## Local persistence behavior
+- AskChappy stores a schema-versioned local payload in browser localStorage for session records, canonical transcript messages (`text` field), `metadata.askchappy`, and session events.
+- Mode changes persist as session events and do not create fake transcript messages.
+- Malformed persisted payloads are discarded safely to restore clean local state.
