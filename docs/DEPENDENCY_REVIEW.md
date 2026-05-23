@@ -1,4 +1,4 @@
-# AskChappy Dependency Review (Phase 13)
+# AskChappy Dependency Review (Phase 14)
 
 ## Direct dependencies
 - `react`: UI rendering for AskChappy pages/components.
@@ -17,6 +17,9 @@
 - `globals`: known global definitions for browser/node lint environments.
 - `@types/react`: React TypeScript types.
 - `@types/react-dom`: React DOM TypeScript types.
+
+## Local runtime tooling note (Phase 14)
+- Phase 14 local start/dev uses existing `typescript` + a tiny Node static server script (`scripts/local-runtime-server.mjs`) to avoid adding cloud/runtime dependencies.
 
 ## Why these dependencies are present
 - The dependency set is intentionally minimal for local-first production scaffolding.

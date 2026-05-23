@@ -6,7 +6,10 @@
   "scripts": {
     "test": "vitest run",
     "lint": "eslint .",
-    "verify": "npm run test && npm run lint"
+    "verify": "npm run test && npm run lint",
+    "dev": "node scripts/local-runtime-server.mjs",
+    "start": "npm run dev",
+    "smoke:local-runtime": "vitest run apps/askchappy-ui/src/tests/localDevWorkflow.test.ts"
   },
   "dependencies": {
     "react": "^19.1.0",
