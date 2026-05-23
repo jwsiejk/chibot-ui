@@ -51,7 +51,7 @@ export const ChappySession = () => {
       <h1>AskChappy session</h1>
       <p>Local production working session ID: {sessionId}</p>
       <p>Session state indicator: {state}</p>
-      <p>Speech provider status: {voiceStatus.active_provider_label} active (no published voice profile).</p>
+      <p>Speech provider status: {voiceStatus.active_provider_label} active.</p>
       <ChappyStage state={state} />
       <TranscriptPanel messages={messages} />
       <TypedInput onSubmitText={onSubmitText} />

@@ -42,7 +42,7 @@ const FORBIDDEN_VOICE_ASSET_PATTERNS = [
 ] as const;
 
 describe('voice runtime', () => {
-  it('fallback provider conforms to TTS provider interface and preserves spoken text exactly', () => {
+  it('standard voice provider is active by default, conforms to TTS provider interface, and preserves spoken text exactly', () => {
     const output = fallbackTtsProvider.synthesize({
       text: 'Exact text, punctuation intact!',
       session_id: 'session_1',
@@ -59,7 +59,7 @@ describe('voice runtime', () => {
     expect(output.audio_url).toBeNull();
   });
 
-  it('synthesizes only from assistant transcript text with exact spoken_text', () => {
+  it('synthesizes only from assistant transcript text with exact spoken_text and no cloned voice config', () => {
     const output = synthesizeAssistantTranscriptMessage({
       session_id: 'session_1',
       message: assistantMessage('session_1', 'Do not rewrite this sentence.'),
@@ -67,6 +67,7 @@ describe('voice runtime', () => {
 
     expect(output.spoken_text).toBe('Do not rewrite this sentence.');
     expect(output.provider_id).toBe('local_fallback_tts');
+    expect(output.provider_label).toBe('Standard voice');
     expect(output.audio_status).toBe('fallback_placeholder');
     expect(output.audio_url).toBeNull();
   });
@@ -105,7 +106,7 @@ describe('voice runtime', () => {
     );
   });
 
-  it('selects published voice profile and excludes non-published states', () => {
+  it('selects only published cloned voice profile and excludes non-published states from selection', () => {
     const profiles = [
       { id: 'voice_draft', state: 'draft' },
       { id: 'voice_testing', state: 'testing' },

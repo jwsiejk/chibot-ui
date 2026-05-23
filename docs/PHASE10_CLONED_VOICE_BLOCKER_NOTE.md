@@ -1,18 +1,20 @@
-# Phase 10 Blocker Note — Chappy cloned voice integration
+# Phase 10 Governance Note — standard voice active, cloned voice prerequisites pending
 
-Phase 10 cloned-voice runtime integration is blocked in the current repository context.
+AskChappy is expected to run normally with the **standard voice** as the active/default path.
 
-Missing prerequisites:
-- Approved provider choice for the Chappy cloned-voice adapter (provider name/SDK/API contract not yet approved in-repo).
-- Local configuration values for that approved provider (endpoint + auth variable names/shape beyond placeholders).
-- Approved published profile identifier/configuration for local production runtime selection.
-- Explicit admin consent/status confirmation wiring for publication gating in local production beyond current static shell text.
+Cloned Chappy voice integration is **not yet configured** in this repository because the remaining governance prerequisites are still pending:
+- Approved cloned-voice provider choice (provider/SDK/API contract).
+- Approved local configuration shape for that provider (endpoint/auth variable names beyond placeholders).
+- Approved cloned profile publication configuration and runtime selection wiring.
+- Explicit admin publication gating confirmation for approved Chapman voice use.
 
-What is intentionally not implemented in this blocker PR:
-- No fake provider adapter.
+What is intentionally not implemented in this governance note update:
+- No real cloned-voice provider adapter.
 - No hardcoded private provider IDs/secrets.
 - No committed voice samples/model artifacts/embeddings/private likeness assets.
 
-Current safe behavior retained:
-- Local fallback voice remains the active runtime behavior.
-- Canonical transcript-first TTS constraints remain unchanged.
+Current runtime behavior (intended and non-blocking):
+- **Standard voice remains active/default** in runtime.
+- AskChappy sessions run normally without cloned voice assets/provider/config.
+- Missing cloned provider/config/audio is **not** an app runtime blocker.
+- Transcript-first TTS constraints remain unchanged.

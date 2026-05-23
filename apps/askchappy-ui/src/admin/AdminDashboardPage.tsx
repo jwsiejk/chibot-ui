@@ -9,7 +9,7 @@ export const AdminDashboardPage = () => (
 
     <section aria-label="local production status">
       <h2>Current local production status</h2>
-      <p>Voice status: fallback voice active; no published Chappy voice profile yet.</p>
+      <p>Voice status: standard voice active/default; cloned Chappy voice not configured yet.</p>
       <p>Avatar status: placeholder avatar active; no real avatar asset yet.</p>
     </section>
 
