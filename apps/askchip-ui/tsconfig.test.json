@@ -1,9 +1,0 @@
-{
-  "extends": "./tsconfig.app.json",
-  "compilerOptions": {
-    "noEmit": false,
-    "outDir": "./.test-dist",
-    "rootDir": "./src"
-  },
-  "include": ["src"]
-}

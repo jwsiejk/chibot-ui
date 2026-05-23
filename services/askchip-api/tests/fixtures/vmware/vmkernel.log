@@ -1,3 +1,0 @@
-2026-03-10 09:10:11 cpu0:12345)WARNING: NMP: nmp_DeviceAttemptFailover: Retry world failover device naa.1234
-2026-03-10 09:10:20 cpu1:12346)ERROR: ScsiDeviceIO: 1225: Cmd(0x45abc) 0x28, CmdSN 0x1 from world 1234 to dev "naa.1234" failed H:0x0 D:0x2 P:0x0
-2026-03-10 09:10:35 cpu2:12347)INFO: VMFS: datastore datastore1 heartbeat restored
