@@ -96,22 +96,21 @@ describe('app render scaffold', () => {
     expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
   });
 
-  it('renders standard access routes', () => {
-    const activeRouteCases = [
-      { path: ROUTES.home, heading: 'AskChappy entry placeholder' },
-      { path: '/chappy/session/session_123', heading: 'AskChappy Zoom-like session placeholder' },
-      { path: '/chappy/summary/session_123', heading: 'AskChappy recap placeholder' },
-      { path: ROUTES.dev, heading: 'Diagnostics placeholder (hidden from main flow)' },
-    ] as const;
+  const activeRouteCases = [
+    { path: ROUTES.home, heading: 'AskChappy entry placeholder' },
+    { path: '/chappy/session/session_123', heading: 'AskChappy Zoom-like session placeholder' },
+    { path: '/chappy/summary/session_123', heading: 'AskChappy recap placeholder' },
+    { path: ROUTES.dev, heading: 'Diagnostics placeholder (hidden from main flow)' },
+  ] as const;
 
-    for (const routeCase of activeRouteCases) {
-      render(
-        <MemoryRouter initialEntries={[routeCase.path]}>
-          <App />
-        </MemoryRouter>,
-      );
-      expect(screen.getByRole('heading', { name: routeCase.heading })).toBeInTheDocument();
-    }
+  it.each(activeRouteCases)('renders standard access route $path', ({ path, heading }) => {
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
   });
 
   it('keeps voice studio controls absent in normal /chappy/session route', () => {
