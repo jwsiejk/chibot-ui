@@ -12,7 +12,12 @@ export type AskChappySession = {
   events: SessionEvent[];
 };
 
-const cloneDefaultMetadata = (): AskChappyMetadata => structuredClone(DEFAULT_METADATA);
+const cloneDefaultMetadata = (): AskChappyMetadata => ({
+  askchappy: {
+    ...DEFAULT_METADATA.askchappy,
+    context: { ...DEFAULT_METADATA.askchappy.context },
+  },
+});
 
 const sessions = new Map<string, AskChappySession>();
 
