@@ -4,12 +4,26 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**'],
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/coverage/**',
+      '.venv/**',
+      '**/.venv/**',
+      'apps/askchip-ui/dist/**',
+      'services/askchip-api/.venv/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.{ts,tsx}'],
+    files: [
+      'apps/askchappy-ui/**/*.{ts,tsx}',
+      'services/askchappy-api/**/*.ts',
+      'shared/contracts/**/*.ts',
+      '*.config.{js,ts}',
+    ],
     languageOptions: {
       parserOptions: {
         ecmaFeatures: {
