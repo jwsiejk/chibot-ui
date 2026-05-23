@@ -36,7 +36,9 @@
 ## Intentionally not implemented
 - OpenAI/model runtime integration
 - Real-time or batch model inference runtime
-- RAG or DDN ingestion pipeline
+- DDN-specific uploaded document ingestion
+- Content grounding, embeddings, vector search, or RAG pipeline
+- Proprietary DDN content bundle / knowledge-base management workflows
 - Real cloned voice provider adapter/runtime
 - STT/microphone/browser recording features
 - Real avatar assets, visemes, 3D rendering, or speaking animation
@@ -82,8 +84,11 @@ Retired and inactive:
 Cloned voice runtime integration remains blocked until provider selection, local config shape, published profile configuration, and admin publication gating details are approved for local production use.
 
 ## Next recommended work after Phase 16
-- Phase 17 is the next logical phase.
+- Phase 17: assistant/model runtime scaffold using standard LLM knowledge (local-first production path; no DDN document ingestion dependency).
+- Phase 18: content grounding / document ingestion / RAG is deferred for now, but remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
+- Phase 19: STT / browser microphone input, unless project direction changes.
 - Keep local browser persistence schema-versioned and add migrations only when needed.
+- Do not block the first usable assistant conversation/runtime phase on content grounding.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.
 
 
