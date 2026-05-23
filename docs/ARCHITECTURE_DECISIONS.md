@@ -73,10 +73,13 @@ Consequences:
 - Preserves asset/privacy boundaries by avoiding committed private voice artifacts.
 
 ## ADR-020: Assistant runtime can ship before DDN content grounding
-Decision: AskChappy may ship its first usable assistant/model runtime phase using standard LLM knowledge without requiring DDN-specific document upload, ingestion, embeddings, vector search, RAG, or knowledge-base workflows.
+Decision: AskChappy may ship its first usable assistant/model runtime phase using local open-source LLM knowledge via a local Ollama runtime (default model: `gemma3:4b`) without requiring DDN-specific document upload, ingestion, embeddings, vector search, RAG, or knowledge-base workflows.
 
 Consequences:
 - Phase 17 assistant/model runtime is not blocked on proprietary DDN content pipelines.
+- Phase 17 runtime target is local-only: local Ollama runtime, default model `gemma3:4b`, with no OpenAI runtime, no hosted/cloud LLM SDK, and no cloud LLM API key path.
+- Planned Phase 17 runtime config: `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`), `OLLAMA_MODEL` (default `gemma3:4b`), optional `OLLAMA_KEEP_ALIVE=30m`, optional `OLLAMA_NUM_CTX=8192`.
+- If Ollama or the configured local model is missing, runtime must surface a clear local-runtime-not-configured state and must not fake assistant intelligence.
 - DDN content grounding remains tracked as required future work in a later phase.
 - No document-ingestion or RAG runtime behavior should be implied as implemented until that deferred phase is complete.
 

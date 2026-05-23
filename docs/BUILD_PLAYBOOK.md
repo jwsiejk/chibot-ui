@@ -31,7 +31,7 @@ Every future implementation prompt must include these rules:
 - Update docs if contracts or architecture change.
 
 Roadmap guardrail:
-- Phase 17 should ship assistant/model runtime scaffold with standard LLM knowledge first.
+- Phase 17 should ship assistant/model runtime scaffold with local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default).
 - Phase 18 (DDN document upload/content grounding/embeddings/RAG/vector search/knowledge-base workflows) is explicitly deferred in near-term execution and tracked as required later work.
 - Phase 19 remains STT/browser microphone input unless direction changes.
 

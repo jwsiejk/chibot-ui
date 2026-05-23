@@ -30,7 +30,8 @@
 
 ## Explicit exclusions retained in Phase 13
 - No cloud voice/model SDK dependencies were added.
-- No OpenAI/model runtime dependency was added.
+- No OpenAI runtime dependency was added.
+- No hosted/cloud LLM SDK dependency was added.
 - No DDN document ingestion/upload dependency was added.
 - No embeddings/vector database/RAG dependency was added.
 - No real voice/avatar asset dependencies were added.
@@ -42,4 +43,4 @@
 - Phase 14 cleanup does not introduce a new package manager policy or lockfile convention.
 
 - Phase 15 keeps existing dependency boundaries: no cloned provider SDK added, no cloud voice SDK added, and standard voice remains the only active synthesis runtime.
-- Planned near-term runtime sequencing remains: Phase 17 may use standard LLM knowledge first; DDN content grounding and RAG dependencies are deferred to a later required phase.
+- Planned near-term runtime sequencing remains: Phase 17 uses local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default); DDN content grounding and RAG dependencies are deferred to a later required phase.
