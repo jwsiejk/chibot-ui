@@ -10,7 +10,7 @@ import {
   setLocalSessionMode,
   synthesizeLocalAssistantMessage,
 } from '../api/server';
-import { resetSessionStore } from '../sessions/sessionStore';
+import { hydrateSessionStoreFromPersistence, resetSessionStore } from '../sessions/sessionStore';
 import { DEFAULT_SESSION_MODE } from '../../../../shared/contracts/modes';
 
 describe('askchappy-api scaffold', () => {
@@ -167,5 +167,29 @@ describe('askchappy-api scaffold', () => {
     expect(() => setLocalSessionMode(session.session_id, 'bad_mode' as never, 'user')).toThrowError(
       'Invalid session mode: bad_mode',
     );
+  });
+
+  it('persists sessions, transcript text, metadata.askchappy, and session events across reload-style hydration', () => {
+    const session = createLocalSession();
+    const message = appendLocalUserTextMessage(session.session_id, 'persist this text');
+    setLocalSessionMode(session.session_id, 'learn_ddn', 'user');
+
+    hydrateSessionStoreFromPersistence();
+    const loaded = getLocalSession(session.session_id);
+
+    expect(loaded?.metadata.askchappy.session_mode).toBe('learn_ddn');
+    expect(loaded?.transcript[0]?.text).toBe('persist this text');
+    expect(loaded?.transcript[0]).toMatchObject({ id: message.id, source: 'typed', session_id: session.session_id });
+    expect('content' in (loaded?.transcript[0] ?? {})).toBe(false);
+    expect(loaded?.events.some((event) => event.event_type === 'mode_change')).toBe(true);
+    expect(loaded?.transcript.every((entry) => entry.text !== 'mode_change')).toBe(true);
+  });
+
+  it('safely recovers from malformed persisted payloads', () => {
+    const storage = window.localStorage;
+    storage.setItem('askchappy.local.session_store.v1', '{bad-json');
+
+    expect(() => hydrateSessionStoreFromPersistence()).not.toThrow();
+    expect(storage.getItem('askchappy.local.session_store.v1')).toBeNull();
   });
 });

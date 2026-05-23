@@ -3,6 +3,7 @@ import { DEFAULT_METADATA, type AskChappyMetadata } from '../../../../shared/con
 import { createSessionEvent, type SessionEvent } from '../events/sessionEvents';
 import { appendTranscriptMessageToSession } from '../transcript/transcriptEngine';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
+import { loadPersistedSessions, persistSessions, clearPersistedSessions } from './localSessionPersistence';
 
 export type AskChappySession = {
   session_id: string;
@@ -20,10 +21,11 @@ const cloneDefaultMetadata = (): AskChappyMetadata => ({
   },
 });
 
-const sessions = new Map<string, AskChappySession>();
+const { sessions, recovered_from_malformed_payload } = loadPersistedSessions();
 
 const touchSession = (session: AskChappySession, ts: string): AskChappySession => {
   session.updated_at = ts;
+  persistSessions(sessions);
   return session;
 };
 
@@ -52,6 +54,7 @@ export const createSession = (): AskChappySession => {
 
   appendSessionEvent(session, 'session_created', {}, now);
   sessions.set(session.session_id, session);
+  persistSessions(sessions);
   return session;
 };
 
@@ -86,4 +89,18 @@ export const listTranscript = (session: AskChappySession): TranscriptMessage[] =
 
 export const resetSessionStore = (): void => {
   sessions.clear();
+  clearPersistedSessions();
 };
+
+export const hydrateSessionStoreFromPersistence = (): void => {
+  const loaded = loadPersistedSessions();
+  sessions.clear();
+  loaded.sessions.forEach((session, sessionId) => sessions.set(sessionId, session));
+};
+
+if (recovered_from_malformed_payload) {
+  const activeSession = sessions.values().next().value as AskChappySession | undefined;
+  if (activeSession) {
+    appendSessionEvent(activeSession, 'session_created', { persistence_recovery: true });
+  }
+}

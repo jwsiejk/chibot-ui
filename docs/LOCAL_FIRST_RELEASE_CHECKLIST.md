@@ -12,6 +12,8 @@ Use this checklist before local production/local MVP handoff.
 - [ ] `npm run build:local-runtime` succeeds (production-style local build)
 - [ ] `npm run smoke:local-runtime` passes as noninteractive app-shell wiring check (`dist/index.html` + built asset entry)
 
+- [ ] Confirm browser-local persistence restores sessions/transcripts/metadata.askchappy/events across reloads.
+- [ ] Confirm malformed local persistence payload recovers safely without app crash.
 ## Contract and route checks
 - [ ] Confirm canonical routes are active and unchanged (`/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin routes).
 - [ ] Confirm retired `/demo*` and `/visual-session*` routes remain inactive.
