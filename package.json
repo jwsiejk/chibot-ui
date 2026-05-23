@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "verify": "npm run test && npm run lint"
   },
   "dependencies": {
     "react": "^19.1.0",
