@@ -93,9 +93,9 @@ describe('phase 5 chappy UI', () => {
   );
 
   it.each([
-    ['Admin', 'Admin placeholder'],
-    ['Voice Studio', 'Admin Voice Studio placeholder'],
-    ['Avatar', 'Admin Avatar placeholder'],
+    ['Admin', 'AskChappy local-first admin dashboard'],
+    ['Voice Studio', 'Voice Studio shell (admin only)'],
+    ['Avatar', 'Avatar setup and review shell (admin only)'],
   ] as const)('allows admin navigation access to %s', (linkName, heading) => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
@@ -108,6 +108,64 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('link', { name: linkName }));
 
     expect(screen.getByText(heading)).toBeInTheDocument();
+  });
+
+
+  it('renders local-first admin dashboard shell with voice and avatar links', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Admin' }));
+
+    expect(screen.getByRole('heading', { name: 'AskChappy local-first admin dashboard' })).toBeInTheDocument();
+    expect(screen.getByText(/fallback voice active/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Voice Studio' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Avatar review' })).toBeInTheDocument();
+  });
+
+  it('renders voice studio shell using shared voice lifecycle states with inactive controls', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Voice Studio' }));
+
+    expect(screen.getByRole('heading', { name: 'Voice Studio shell (admin only)' })).toBeInTheDocument();
+    for (const lifecycleState of ['draft', 'testing', 'approved', 'published', 'disabled']) {
+      expect(screen.getByText(lifecycleState)).toBeInTheDocument();
+    }
+    expect(screen.getByText('No published Chappy voice profile.')).toBeInTheDocument();
+    expect(screen.getByText('Fallback voice path is active.')).toBeInTheDocument();
+    expect(screen.getByText('Real voice cloning is not implemented in Phase 8.')).toBeInTheDocument();
+
+    const disabledControls = screen.getAllByRole('button', { name: /Record or upload voice samples|Create draft profile|Test generated speech|Approve profile|Publish global voice|Disable or revert to fallback/ });
+    expect(disabledControls).toHaveLength(6);
+    disabledControls.forEach((control) => expect(control).toBeDisabled());
+  });
+
+  it('renders avatar shell placeholder and future state placeholders', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Avatar' }));
+
+    expect(screen.getByRole('heading', { name: 'Avatar setup and review shell (admin only)' })).toBeInTheDocument();
+    expect(screen.getByText('Placeholder avatar is active.')).toBeInTheDocument();
+    expect(screen.getByText('Real avatar implementation is not implemented in Phase 8.')).toBeInTheDocument();
+    expect(screen.getByText('Static branded Chappy image')).toBeInTheDocument();
+    expect(screen.getByText('State-aware avatar')).toBeInTheDocument();
+    expect(screen.getByText('Speaking/viseme-capable avatar')).toBeInTheDocument();
   });
 
   it('start open q&a creates local session and navigates to session shell', () => {

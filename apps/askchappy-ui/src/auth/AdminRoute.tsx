@@ -1,7 +1,6 @@
 import React from 'react';
 import { AUTH_ROLES } from '../../../../shared/contracts/auth';
 import { useAuth } from './authState';
-import { PlaceholderPage } from '../routes/PlaceholderPage';
 
 const NotAuthorized = () => (
   <main>
@@ -10,12 +9,12 @@ const NotAuthorized = () => (
   </main>
 );
 
-export const AdminRoute = ({ title }: { title: string }) => {
+export const AdminRoute = ({ children }: { children: React.ReactNode }) => {
   const { user } = useAuth();
 
   if (!user || user.role !== AUTH_ROLES[0]) {
     return <NotAuthorized />;
   }
 
-  return <PlaceholderPage title={title} />;
+  return <>{children}</>;
 };
