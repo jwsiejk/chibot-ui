@@ -1,3 +1,4 @@
+import { assertSessionMode, type SessionMode } from '../../../../shared/contracts/modes';
 import { DEFAULT_METADATA, type AskChappyMetadata } from '../../../../shared/contracts/session';
 import { createSessionEvent, type SessionEvent } from '../events/sessionEvents';
 import { appendTranscriptMessageToSession } from '../transcript/transcriptEngine';
@@ -28,7 +29,7 @@ const touchSession = (session: AskChappySession, ts: string): AskChappySession =
 
 export const appendSessionEvent = (
   session: AskChappySession,
-  eventType: 'session_created' | 'transcript_message_appended',
+  eventType: 'session_created' | 'transcript_message_appended' | 'mode_change',
   meta: Record<string, unknown> = {},
   ts = new Date().toISOString(),
 ): SessionEvent => {
@@ -63,6 +64,22 @@ export const appendTranscriptMessage = (
   const appendedMessage = appendTranscriptMessageToSession(session, message);
   appendSessionEvent(session, 'transcript_message_appended', { message_id: appendedMessage.id }, appendedMessage.ts);
   return appendedMessage;
+};
+
+export const updateSessionMode = (
+  session: AskChappySession,
+  toMode: SessionMode,
+  actor: 'user' | 'assistant' | 'system',
+): AskChappySession => {
+  assertSessionMode(toMode);
+  const fromMode = session.metadata.askchappy.session_mode;
+  if (fromMode === toMode) return session;
+
+  const ts = new Date().toISOString();
+  session.metadata.askchappy.session_mode = toMode;
+  appendSessionEvent(session, 'mode_change', { from_mode: fromMode, to_mode: toMode, actor }, ts);
+  touchSession(session, ts);
+  return session;
 };
 
 export const listTranscript = (session: AskChappySession): TranscriptMessage[] => session.transcript;

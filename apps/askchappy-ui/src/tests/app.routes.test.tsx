@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { App } from '../app/App';
+import { getLocalSession } from '../../../../services/askchappy-api/src/api/server';
 import { RETIRED_ROUTES, ROUTES } from '../../../../shared/contracts/askchappy';
 import { MVP_ADMIN_EMAIL } from '../../../../shared/contracts/auth';
 import { routeMap } from '../routes/routeMap';
@@ -159,7 +160,7 @@ describe('phase 5 chappy UI', () => {
     expect(screen.queryByText('user:')).not.toBeInTheDocument();
   });
 
-  it('renders right rail mode scaffold without switching behavior', () => {
+  it('renders right rail in open_qa mode initially', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
         <App />
@@ -169,11 +170,50 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
 
-    expect(screen.getByText('Open Q&A')).toBeInTheDocument();
-    expect(screen.getByText('Learn DDN')).toBeInTheDocument();
-    expect(screen.getByText('Meeting Prep')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Current mode' })).toBeInTheDocument();
+    expect(screen.getAllByText('Open Q&A').length).toBeGreaterThan(0);
+    expect(screen.getByText('Ask Chappy anything about DDN positioning, use cases, or partner scenarios.')).toBeInTheDocument();
   });
 
+
+
+  it('switches guided modes and keeps session id/transcript intact', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+
+    const sessionText = screen.getByText(/Local production working session ID:/).textContent ?? '';
+    const sessionId = sessionText.split(': ').at(-1) ?? '';
+    fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'keep this transcript' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Learn DDN' }));
+    expect(screen.getByText('Build foundational DDN understanding from basics to field usage.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Meeting Prep' }));
+    expect(screen.getByText('Prepare meeting objectives, agenda, discovery questions, and talk tracks.')).toBeInTheDocument();
+    expect(screen.getByText(/keep this transcript/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Q&A' }));
+    expect(screen.getByText('Ask Chappy anything about DDN positioning, use cases, or partner scenarios.')).toBeInTheDocument();
+
+    const session = getLocalSession(sessionId);
+    expect(session?.session_id).toBe(sessionId);
+    expect(session?.metadata.askchappy.session_mode).toBe('open_qa');
+    expect(session?.metadata.askchappy.persona_id).toBe('ddn_chappy_vptm');
+    expect(session?.metadata.askchappy.persona_label).toBe('Chappy');
+    expect(session?.events.some((event) => event.event_type === 'mode_change')).toBe(true);
+    const modeChange = session?.events.find((event) => event.event_type === 'mode_change');
+    expect(modeChange?.meta).toHaveProperty('from_mode');
+    expect(modeChange?.meta).toHaveProperty('to_mode');
+    expect(modeChange?.meta).toHaveProperty('actor');
+    expect(screen.queryByText('mode_change')).not.toBeInTheDocument();
+  });
   it('keeps voice studio controls absent in normal /chappy/session route', () => {
     render(
       <MemoryRouter initialEntries={['/chappy/session/session_123']}>

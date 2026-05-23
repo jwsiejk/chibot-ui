@@ -6,6 +6,7 @@ import {
   getHealth,
   getLocalSession,
   getLocalTranscript,
+  setLocalSessionMode,
 } from '../api/server';
 import { resetSessionStore } from '../sessions/sessionStore';
 import { DEFAULT_SESSION_MODE } from '../../../../shared/contracts/modes';
@@ -108,5 +109,30 @@ describe('askchappy-api scaffold', () => {
         content: 'invalid field',
       } as unknown as never),
     ).toThrowError('Invalid transcript message: must match canonical TranscriptMessage contract.');
+  });
+
+
+  it('updates metadata mode and records mode_change event without transcript pollution', () => {
+    const session = createLocalSession();
+    const existing = appendLocalUserTextMessage(session.session_id, 'before switching');
+
+    const updated = setLocalSessionMode(session.session_id, 'meeting_prep', 'user');
+
+    expect(updated.session_id).toBe(session.session_id);
+    expect(updated.metadata.askchappy.session_mode).toBe('meeting_prep');
+    expect(updated.metadata.askchappy.persona_id).toBe('ddn_chappy_vptm');
+    expect(updated.metadata.askchappy.persona_label).toBe('Chappy');
+    expect(updated.transcript).toEqual([existing]);
+
+    const modeEvent = updated.events.at(-1);
+    expect(modeEvent?.event_type).toBe('mode_change');
+    expect(modeEvent?.meta).toMatchObject({ from_mode: 'open_qa', to_mode: 'meeting_prep', actor: 'user' });
+  });
+
+  it('rejects invalid mode changes through service validation', () => {
+    const session = createLocalSession();
+    expect(() => setLocalSessionMode(session.session_id, 'bad_mode' as never, 'user')).toThrowError(
+      'Invalid session mode: bad_mode',
+    );
   });
 });

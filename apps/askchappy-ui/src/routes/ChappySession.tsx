@@ -1,8 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { SessionState } from '../../../../shared/contracts/session';
+import type { SessionMode } from '../../../../shared/contracts/modes';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
-import { appendLocalUserTextMessage, getLocalSession, getLocalTranscript } from '../../../../services/askchappy-api/src/api/server';
+import {
+  appendLocalUserTextMessage,
+  getLocalSession,
+  getLocalTranscript,
+  setLocalSessionMode,
+} from '../../../../services/askchappy-api/src/api/server';
 import { ChappyStage } from '../session/ChappyStage';
 import { TypedInput } from '../session/TypedInput';
 import { TranscriptPanel } from '../transcript/TranscriptPanel';
@@ -33,6 +39,11 @@ export const ChappySession = () => {
     setVersion((previous) => previous + 1);
   };
 
+  const onSelectMode = (mode: SessionMode) => {
+    setLocalSessionMode(sessionId, mode, 'user');
+    setVersion((previous) => previous + 1);
+  };
+
   return (
     <main>
       <h1>AskChappy session</h1>
@@ -41,7 +52,7 @@ export const ChappySession = () => {
       <ChappyStage state={state} />
       <TranscriptPanel messages={messages} />
       <TypedInput onSubmitText={onSubmitText} />
-      <SessionRightRail />
+      <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} />
     </main>
   );
 };

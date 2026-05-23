@@ -5,7 +5,9 @@ import {
   getSession,
   listTranscript,
   type AskChappySession,
+  updateSessionMode,
 } from '../sessions/sessionStore';
+import type { SessionMode } from '../../../../shared/contracts/modes';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
@@ -39,4 +41,15 @@ export const getLocalTranscript = (sessionId: string): TranscriptMessage[] => {
   const session = getSession(sessionId);
   if (!session) throw new Error(`Session not found: ${sessionId}`);
   return listTranscript(session);
+};
+
+
+export const setLocalSessionMode = (
+  sessionId: string,
+  toMode: SessionMode,
+  actor: 'user' | 'assistant' | 'system' = 'user',
+): AskChappySession => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+  return updateSessionMode(session, toMode, actor);
 };
