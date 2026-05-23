@@ -247,3 +247,9 @@ Access behavior:
 - Standard-user direct access to admin routes must return a simple “not authorized” state.
 - Voice cloning controls must never appear in normal `/chappy/session/:sessionId` user sessions.
 
+## 10) Project structure and anti-bloat compliance
+
+- Implementation PRs must comply with `docs/PROJECT_STRUCTURE_AND_CODE_GUARDRAILS.md`.
+- Shared code contracts belong in `shared/contracts` and must not be duplicated across UI/API code.
+- UI and API modules should follow documented domain folder boundaries to avoid tangled architecture.
+- Route changes must remain aligned with canonical route contracts and stale-route retirement policy.
