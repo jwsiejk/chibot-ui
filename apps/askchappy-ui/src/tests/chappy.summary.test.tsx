@@ -65,6 +65,24 @@ describe('phase 7 summary route', () => {
     expect(screen.getByText(/More transcript context is needed/)).toBeInTheDocument();
   });
 
+
+  it('does not render support-ticket or triage framing in summary UI copy', () => {
+    const session = createLocalSession();
+    appendLocalUserTextMessage(session.session_id, 'Please send a follow-up note to the partner.');
+
+    render(
+      <MemoryRouter initialEntries={[`/chappy/summary/${session.session_id}`]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    const pageText = screen.getByRole('main').textContent?.toLowerCase() ?? '';
+    expect(pageText).not.toContain('support ticket');
+    expect(pageText).not.toContain('case handoff');
+    expect(pageText).not.toContain('triage');
+    expect(pageText).not.toContain('helpdesk');
+  });
+
   it('retired summary route remains inactive', () => {
     render(
       <MemoryRouter initialEntries={['/demo/summary/session_123']}>
