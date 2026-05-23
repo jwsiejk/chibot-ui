@@ -38,3 +38,5 @@
 ## Package lockfile status
 - No `package-lock.json` is currently tracked in this repository.
 - Phase 14 cleanup does not introduce a new package manager policy or lockfile convention.
+
+- Phase 15 keeps existing dependency boundaries: no cloned provider SDK added, no cloud voice SDK added, and standard voice remains the only active synthesis runtime.

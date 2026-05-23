@@ -205,11 +205,23 @@ describe('voice runtime', () => {
   it('complete published config + consent => cloned readiness is true / Ready for provider adapter', () => {
     const selection = getVoiceProviderSelection({ clonedVoiceConfig: baseConfig });
 
-    expect(selection.selected_provider).toBe('cloned_chappy');
+    expect(selection.selected_provider).toBe('standard');
+    expect(selection.provider_adapter_available).toBe(false);
+    expect(selection.standard_voice_active).toBe(true);
     expect(selection.cloned_voice_ready).toBe(true);
     expect(selection.cloned_voice_status_label).toBe('Ready for provider adapter');
   });
 
+
+  it('selects cloned provider only when readiness passes and adapter is explicitly available', () => {
+    const selection = getVoiceProviderSelection({
+      clonedVoiceConfig: baseConfig,
+      providerAdapterAvailable: true,
+    });
+
+    expect(selection.selected_provider).toBe('cloned_chappy');
+    expect(selection.standard_voice_active).toBe(false);
+  });
   it('readiness never claims cloned active with errors', () => {
     const readiness = evaluateClonedVoiceReadiness({
       ...baseConfig,

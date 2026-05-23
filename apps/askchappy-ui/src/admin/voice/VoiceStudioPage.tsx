@@ -36,8 +36,9 @@ export const VoiceStudioPage = () => (
 
     <section aria-label="current voice status">
       <h2>Current voice status</h2>
-      <p>Standard voice: active/default.</p>
-      <p>Optional cloned Chappy voice: pending configuration/approval.</p>
+      <p>Standard voice active (default).</p>
+      <p>Optional cloned Chappy voice is not required for AskChappy runtime.</p>
+      <p>Cloned voice status: Cloned voice not configured.</p>
       <h3>Cloned Chappy voice readiness</h3>
       <ul>
         {CLONED_VOICE_READINESS_STATES.map((status) => (

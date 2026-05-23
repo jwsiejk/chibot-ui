@@ -48,3 +48,5 @@ When readiness passes, status is `Ready for provider adapter`; synthesis still s
 
 ## Relation to Phase 10 blocker
 This contract extends `docs/PHASE10_CLONED_VOICE_BLOCKER_NOTE.md` by defining the approved readiness gate/package needed before any real provider integration.
+
+- Even with readiness passing, runtime stays on Standard voice unless a future real provider adapter is available; status may report `Ready for provider adapter` while Standard voice remains active.
