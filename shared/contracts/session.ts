@@ -45,12 +45,17 @@ export const isSessionState = (value: unknown): value is SessionState =>
   typeof value === 'string' && SESSION_STATES.includes(value as SessionState);
 
 export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata => {
-  if (!value || typeof value !== 'object') return false;
-  const metadata = value as Record<string, unknown>;
+  const isRecord = (input: unknown): input is Record<string, unknown> => input !== null && typeof input === 'object';
+
+  if (!isRecord(value)) return false;
+  const metadata = value;
   if ('expert_desk' in metadata || !('askchappy' in metadata)) return false;
 
-  const askchappy = metadata.askchappy as Record<string, unknown>;
-  const context = askchappy.context as Record<string, unknown>;
+  if (!isRecord(metadata.askchappy)) return false;
+  const askchappy = metadata.askchappy;
+  if (!isRecord(askchappy.context)) return false;
+  const context = askchappy.context;
+
   return (
     askchappy.persona_id === 'ddn_chappy_vptm' &&
     askchappy.persona_label === 'Chappy' &&

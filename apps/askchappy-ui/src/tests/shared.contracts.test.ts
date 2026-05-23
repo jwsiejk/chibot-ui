@@ -96,6 +96,37 @@ describe('session contracts', () => {
       }),
     ).toBe(false);
   });
+
+  it('safely rejects malformed metadata inputs without throwing', () => {
+    const malformedInputs: unknown[] = [
+      null,
+      undefined,
+      'bad',
+      123,
+      true,
+      {},
+      { askchappy: null },
+      { askchappy: 'bad' },
+      { askchappy: {} },
+      { askchappy: { context: null } },
+      { askchappy: { context: 'bad' } },
+      {
+        askchappy: {
+          ...DEFAULT_METADATA.askchappy,
+          context: {},
+        },
+      },
+      {
+        expert_desk: {},
+        askchappy: DEFAULT_METADATA.askchappy,
+      },
+    ];
+
+    for (const input of malformedInputs) {
+      expect(() => isAskChappyMetadata(input)).not.toThrow();
+      expect(isAskChappyMetadata(input)).toBe(false);
+    }
+  });
 });
 
 describe('voice contracts', () => {
