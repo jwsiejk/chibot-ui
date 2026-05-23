@@ -24,10 +24,16 @@ Every future implementation prompt must include these rules:
 - Do not create separate voice/chat transcript models.
 - Do not expose Voice Studio controls to standard users.
 - Do not implement features outside the current phase.
+- Do not block the first usable assistant/model runtime phase on DDN content grounding or document ingestion.
 - Keep files focused and under guardrail thresholds.
 - Add tests in the same PR.
 - Run tests/lints and include command output in PR summary.
 - Update docs if contracts or architecture change.
+
+Roadmap guardrail:
+- Phase 17 should ship assistant/model runtime scaffold with standard LLM knowledge first.
+- Phase 18 (DDN document upload/content grounding/embeddings/RAG/vector search/knowledge-base workflows) is explicitly deferred in near-term execution and tracked as required later work.
+- Phase 19 remains STT/browser microphone input unless direction changes.
 
 ## 3. Required PR summary format
 

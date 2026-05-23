@@ -72,6 +72,14 @@ Consequences:
 - Keeps local-first runtime stable with standard voice default.
 - Preserves asset/privacy boundaries by avoiding committed private voice artifacts.
 
+## ADR-020: Assistant runtime can ship before DDN content grounding
+Decision: AskChappy may ship its first usable assistant/model runtime phase using standard LLM knowledge without requiring DDN-specific document upload, ingestion, embeddings, vector search, RAG, or knowledge-base workflows.
+
+Consequences:
+- Phase 17 assistant/model runtime is not blocked on proprietary DDN content pipelines.
+- DDN content grounding remains tracked as required future work in a later phase.
+- No document-ingestion or RAG runtime behavior should be implied as implemented until that deferred phase is complete.
+
 
 ## ADR: Phase 16 browser-local persistence boundary
 - Phase 16 persistence is browser-local only (`window.localStorage`) and currently schema-versioned (`schema_version = 1`).
