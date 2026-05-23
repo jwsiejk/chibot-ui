@@ -104,9 +104,9 @@ Minimum V1 state model:
 
 ## 16) MVP login and role model
 - `/chappy` begins with an email-only login modal.
-- No password is required for MVP/demo.
-- Email is used for local/demo role selection and personalization only.
-- This is not production authentication and may be replaced later.
+- No password is required for local MVP.
+- Email is used for local-first role selection and personalization only.
+- This is email-only local auth for the current local production MVP; future enterprise auth may replace it.
 
 Role mapping rule (MVP):
 - `jsiejk@ddn.com` => `admin`

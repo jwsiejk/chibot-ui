@@ -1,20 +1,20 @@
 # AskChappy MVP Login, Roles, and Admin Voice Studio
 
 ## Purpose
-This document defines the lightweight MVP login model and admin-only Voice Studio concept for AskChappy V1. It is intentionally simple for local/demo use and product UX control.
+This document defines the lightweight MVP login model and admin-only Voice Studio concept for AskChappy V1. It is intentionally simple for local production use and product UX control.
 
-## 1) MVP login model (local/demo only)
+## 1) MVP login model (local-first)
 AskChappy V1 starts with a lightweight email-only login modal.
 
 User flow:
 1. User opens `/chappy`.
 2. Login modal asks for email address only.
-3. No password for MVP/demo.
-4. Email is used only for local/demo role selection and personalization.
+3. No password for local MVP.
+4. Email is used only for local-first role selection and personalization in the current local production MVP.
 
 Important notes:
-- This is not production authentication.
-- Email-only login is for local/demo MVP only.
+- This is email-only local auth for the current local production MVP; future enterprise auth may replace it.
+- Email-only local auth is for the current local production MVP.
 - This login approach can be replaced later if needed.
 
 ## 2) MVP roles

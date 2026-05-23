@@ -21,7 +21,7 @@ export const AuthGate = ({ children }: { children: React.ReactNode }) => {
   return (
     <main>
       <h1>AskChappy entry placeholder</h1>
-      <p>Local/demo-only MVP login. Enter email to continue.</p>
+      <p>Local-first MVP login. Enter email to continue.</p>
       <form onSubmit={onSubmit} aria-label="email login form">
         <label htmlFor="email">Email</label>
         <input
@@ -34,7 +34,7 @@ export const AuthGate = ({ children }: { children: React.ReactNode }) => {
         />
         <button type="submit">Continue</button>
       </form>
-      <p>Admin demo email: {MVP_ADMIN_EMAIL}</p>
+      <p>Admin local MVP email: {MVP_ADMIN_EMAIL}</p>
     </main>
   );
 };

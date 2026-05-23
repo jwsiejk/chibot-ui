@@ -6,7 +6,7 @@ import { PlaceholderPage } from '../routes/PlaceholderPage';
 const NotAuthorized = () => (
   <main>
     <h1>Not authorized</h1>
-    <p>This admin area is restricted in MVP/demo mode.</p>
+    <p>This admin area is restricted in local MVP mode.</p>
   </main>
 );
 

@@ -7,7 +7,7 @@ export const ChappyEntry = () => (
     <main>
       <h1>AskChappy entry placeholder</h1>
       <AppNav />
-      <p>Welcome to AskChappy MVP/demo entry.</p>
+      <p>Welcome to AskChappy local MVP entry.</p>
     </main>
   </AuthGate>
 );
