@@ -1,23 +1,24 @@
-# AskChappy Planning Repository
+# AskChappy
 
-This repository is now the planning and reference home for a clean **AskChappy** rebuild.
+AskChappy is local-first production software for DDN partner enablement workflows.
 
-## Repository status
+## Core docs
+- V1 specification: `docs/ASKCHAPPY_V1_SPEC.md`
+- Implementation contracts: `docs/IMPLEMENTATION_CONTRACTS.md`
+- Build playbook: `docs/BUILD_PLAYBOOK.md`
+- Local-first run guide: `docs/LOCAL_FIRST_RUN_GUIDE.md`
+- Current implementation status: `docs/CURRENT_IMPLEMENTATION_STATUS.md`
+- Local-first release checklist: `docs/LOCAL_FIRST_RELEASE_CHECKLIST.md`
+- Dependency review: `docs/DEPENDENCY_REVIEW.md`
+- Phase 10 cloned voice blocker note: `docs/PHASE10_CLONED_VOICE_BLOCKER_NOTE.md`
 
-- AskChappy is a Zoom-like **DDN virtual Partner Technical Manager (vPTM)** and partner enablement agent experience.
-- The previous AskChip Local / Expert Desk implementation has been retired as active product code.
-- This repository intentionally contains **documentation only**.
-- New implementation work should begin from `docs/ASKCHAPPY_V1_SPEC.md`, not from stale app code.
+## Local verification
+```bash
+npm test
+npm run lint
+npm run verify
+```
 
-## Documentation index
-
-- `docs/ASKCHAPPY_V1_SPEC.md` — V1 product and architecture specification
-- `docs/ASKCHIP_REFERENCE_NOTES.md` — reference notes from the retired AskChip/Expert Desk direction
-- `docs/REBUILD_PLAN.md` — phased clean rebuild plan
-- `docs/ARCHITECTURE_DECISIONS.md` — key architecture and product decisions
-- `docs/VOICE_AND_AVATAR_PLAN.md` — future voice clone and avatar planning guardrails
-- `docs/CODEX_WORKFLOW.md` — workflow expectations for future Codex/GitHub bot changes
-- `docs/BUILD_PLAYBOOK.md` — phased execution playbook with exact Codex prompts for implementation phases
-- `docs/IMPLEMENTATION_CONTRACTS.md` — implementation-level contracts for routes, metadata, transcript, state, and recap
-
-- `docs/PROJECT_STRUCTURE_AND_CODE_GUARDRAILS.md` — required structure, anti-bloat, and anti-duplication guardrails for implementation PRs
+## Terminology and route policy
+- Deployment model: local-first, local production/local MVP.
+- Retired `/demo*` and `/visual-session*` routes remain inactive historical routes.
