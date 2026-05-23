@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 12)
+# AskChappy Current Implementation Status (After Phase 13)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -13,6 +13,7 @@
 - Phase 10: cloned voice integration safely blocked/documented
 - Phase 11: state-aware Chappy avatar placeholder scaffold
 - Phase 12: local-first production hardening and packaging docs/scripts
+- Phase 13: cloned voice provider contract package and readiness gate
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -27,8 +28,9 @@
 
 ## Intentionally not implemented
 - OpenAI/model runtime integration
+- Real-time or batch model inference runtime
 - RAG or DDN ingestion pipeline
-- Real cloned voice provider runtime
+- Real cloned voice provider adapter/runtime
 - STT/microphone/browser recording features
 - Real avatar assets, visemes, 3D rendering, or speaking animation
 - Database-backed persistence
@@ -61,14 +63,14 @@ Retired and inactive:
 - Summary/recap remains grounded in canonical transcript + metadata.
 
 ## Voice/avatar status
-- Voice runtime: local fallback provider active via provider abstraction.
-- Cloned voice runtime: blocked (Phase 10 prerequisites not met).
+- Voice runtime: standard voice path remains active/default via provider abstraction.
+- Cloned voice runtime: readiness gate/contract added in Phase 13, but no real provider adapter/runtime is implemented.
 - Avatar runtime: placeholder, state-aware UI only; no real likeness/media assets.
 
 ## Phase 10 blocker summary
 Cloned voice runtime integration remains blocked until provider selection, local config shape, published profile configuration, and admin publication gating details are approved for local production use.
 
-## Next recommended work after Phase 12
-- Phase 13: define approved provider contract package for cloned voice integration prerequisites.
-- Phase 14: implement optional local dev/start workflow scripts only when a stable runtime boot path is intentionally added.
-- Phase 15: plan enterprise-auth replacement path while preserving local-first development/testing workflow.
+## Next recommended work after Phase 13
+- Phase 14: local-first start/dev runtime workflow (documentation + implementation plan for stable startup path).
+- Phase 15: cloned voice provider adapter is only next when provider/config/audio/consent prerequisites are actually available and approved.
+- Phase 16: plan enterprise-auth replacement path while preserving local-first development/testing workflow.

@@ -792,3 +792,24 @@ Every prompt must be explicit about:
 
 The next implementation prompt should be **Phase 1 only: app skeleton and route scaffold**.  
 Do not jump to voice, avatar, AI responses, or full session intelligence.
+
+
+## 5. Current lock/state snapshot
+
+- Phases 1–13 are completed.
+- Phase 13 (cloned voice provider contract package + readiness gate) is complete and locked after cleanup commit `e0e183e`.
+- Phase 13 did not add a real cloned voice provider adapter/runtime.
+- Standard voice remains active/default until a future approved provider adapter is implemented.
+
+### Proposed Phase 14 — Local-first start/dev runtime workflow
+
+**Goal:** Define and implement a stable local-first app startup workflow (documentation-ready and implementation-ready).
+
+**Scope (proposed):**
+- Add dedicated local runtime start/dev command workflow.
+- Keep canonical routes, transcript contracts, metadata rules, and admin boundaries unchanged.
+- Preserve standard voice default behavior; cloned voice remains optional and gated.
+
+**Not in scope:**
+- Real cloned voice provider adapter integration unless all provider/config/audio/consent prerequisites are available and approved.
+- Model runtime/STT/database/cloud/avatar-asset integrations.

@@ -1,4 +1,4 @@
-# AskChappy Dependency Review (Phase 12)
+# AskChappy Dependency Review (Phase 13)
 
 ## Direct dependencies
 - `react`: UI rendering for AskChappy pages/components.
@@ -23,8 +23,9 @@
 - Dependencies support typed contract enforcement, route/runtime tests, lint checks, and UI component validation.
 - No dependency exists solely for speculative future cloud features.
 
-## Explicit exclusions retained in Phase 12
+## Explicit exclusions retained in Phase 13
 - No cloud voice/model SDK dependencies were added.
+- No OpenAI/model runtime dependency was added.
 - No real voice/avatar asset dependencies were added.
 - No database dependency was added.
 - No STT/microphone runtime dependencies were added.

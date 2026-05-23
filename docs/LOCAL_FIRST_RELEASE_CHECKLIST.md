@@ -25,4 +25,6 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm local-first/local production/local MVP terminology is used.
 - [ ] Confirm no private voice/avatar assets were committed.
 - [ ] Confirm no model/cloud/db integrations were accidentally introduced.
+- [ ] Confirm standard voice remains active/default for synthesis.
+- [ ] Confirm cloned voice readiness gate does not claim active cloned synthesis without approved provider adapter + prerequisites.
 - [ ] Confirm no cloud voice provider runtime was added.

@@ -62,3 +62,12 @@ Consequences:
 - Reduces risk of oversized, tangled modules as implementation begins.
 - Keeps shared contracts centralized and versioned intentionally.
 - Prevents route drift and accidental reintroduction of retired flows.
+
+
+## ADR-019: Cloned voice readiness gate precedes provider adapter integration
+Decision: Phase 13 adds a cloned voice configuration contract and readiness gate only; synthesis remains on the standard voice path until a future approved provider adapter is implemented and prerequisites are available (provider, config, consent, audio/publication readiness).
+
+Consequences:
+- Prevents premature claims that cloned voice is live.
+- Keeps local-first runtime stable with standard voice default.
+- Preserves asset/privacy boundaries by avoiding committed private voice artifacts.
