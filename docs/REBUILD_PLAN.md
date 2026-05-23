@@ -56,3 +56,7 @@
 - Ensure `/chappy/session/:sessionId` only consumes currently published voice profile.
 - Keep consent handling lightweight for MVP docs intent.
 
+## Phase 0.5 — Structure guardrails before coding
+- Adopt `docs/PROJECT_STRUCTURE_AND_CODE_GUARDRAILS.md` as mandatory implementation scaffold policy.
+- Lock intended UI/API/shared folder boundaries before feature work starts.
+- Enforce anti-bloat file-size and anti-duplication rules from first code PR onward.

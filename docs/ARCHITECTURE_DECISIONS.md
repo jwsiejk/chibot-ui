@@ -55,3 +55,10 @@ Decision: Chappy voice profiles follow `draft -> testing -> approved -> publishe
 ## ADR-017: MVP consent workflow remains lightweight
 Decision: MVP requires lightweight admin confirmation that Chapman approved voice usage (for example: “I confirm Chapman approved using this voice for AskChappy.”), without heavy legal/security workflow implementation in docs scope.
 
+## ADR-018: Project structure and anti-bloat guardrails are mandatory
+Decision: AskChappy implementation must follow `docs/PROJECT_STRUCTURE_AND_CODE_GUARDRAILS.md`, including repository structure targets, file-size thresholds, split triggers, contract centralization, and stale-route prevention.
+
+Consequences:
+- Reduces risk of oversized, tangled modules as implementation begins.
+- Keeps shared contracts centralized and versioned intentionally.
+- Prevents route drift and accidental reintroduction of retired flows.
