@@ -23,3 +23,6 @@
 - Before any implementation PR, confirm compliance with `docs/IMPLEMENTATION_CONTRACTS.md`.
 - Reject PRs that reintroduce retired `/demo*` or `/visual-session*` primary routes.
 - Treat contract drift as a blocking architecture issue, not a minor doc mismatch.
+
+- Future implementation PRs must keep conversational transcript messages separate from internal session events.
+- Do not satisfy audit/diagnostic needs by injecting hidden app telemetry into the visible chat transcript.

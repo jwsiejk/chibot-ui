@@ -83,7 +83,10 @@ Guided modes are behavioral overlays and must follow these invariants:
 - One assistant identity: guided modes do not change `persona_id` or `persona_label`.
 - One transcript: all mode interactions persist into the same canonical transcript schema.
 - One route pattern: guided mode sessions still use `/chappy/session/:sessionId`.
-- Mid-session mode change is allowed and must be logged as a system transcript event.
+- Mid-session mode change is allowed and must be auditable as a session event or metadata event.
+- Mode changes must not automatically create visible chat/transcript messages.
+- Chappy may acknowledge a mode change in a normal assistant message when useful; that acknowledgement is then part of the canonical transcript because Chappy actually said/displayed it.
+- Internal app-state events must not be represented as fake user or assistant messages.
 - Recaps must include the active mode at generation time and may summarize mode transitions.
 
 ### 3.3 Mode behavior table (implementation contract)
@@ -101,18 +104,38 @@ Guided modes are behavioral overlays and must follow these invariants:
 
 ### 3.4 Mode transitions and lifecycle
 
-- Transition events must append a canonical `system` message with at least:
-  - transition type (`mode_change`)
+- Mode transitions preserve `session_id`.
+- Mode transitions preserve transcript history.
+- Mode transitions update `metadata.askchappy.session_mode` and, when applicable, `metadata.askchappy.context`.
+- Mode transitions must be recorded in an auditable session-event stream or metadata-event list.
+- A mode transition event should include at least:
+  - `event_type`: `mode_change`
   - `from_mode`
   - `to_mode`
-  - actor (`user` or `system`)
-- Transition events must not overwrite prior metadata/transcript entries.
-- Recap generators must read transition events in chronological order and treat the latest mode as active final mode.
+  - `actor`: `user`, `assistant`, or `system`
+  - `created_at`
+- Mode transition events are not chat messages by default.
+- Mode transition events must not be rendered in the visible chat transcript unless the UI deliberately has a separate diagnostics/events view.
+- Chappy may optionally acknowledge the switch in a normal assistant message, for example: “Got it — I’ll switch into meeting prep mode.”
+- If Chappy acknowledges the switch, that acknowledgement is a normal assistant transcript message with `role=assistant` and `source=assistant_stream` or equivalent.
+- Recap generators may read mode transition events in chronological order and treat the latest valid mode as active final mode.
+- Recap generators should not pretend internal mode events were spoken by the user or Chappy.
 
-### 3.5 Validation and fallback behavior
+### 3.5 Transcript-visible messages vs session events
+
+- The canonical transcript is for things the user typed, the user said, Chappy displayed, Chappy said, or explicit system messages intended to be visible.
+- Internal state changes, routing decisions, UI events, and diagnostics belong in session events or metadata events.
+- Do not create fake transcript messages to represent internal state.
+- `system` transcript messages are allowed only for user-visible or recap-relevant system notices, not routine hidden app events.
+- Session events may be used for audit, diagnostics, replay, and recap context.
+- Chat and transcript remain interchangeable views of conversational content, not raw application telemetry.
+
+### 3.6 Validation and fallback behavior
 
 - Invalid `session_mode` input must fail fast with a typed validation error.
-- Recovery behavior: if an invalid mode is encountered in a persisted payload, runtime must fall back to `open_qa` and log a `system` correction event.
+- Recovery behavior: if an invalid mode is encountered in a persisted payload, runtime must fall back to `open_qa`.
+- The correction must be recorded as a session event or metadata event.
+- A visible `system` transcript message should only be added if the user needs to see the correction.
 - Fallback must preserve all existing transcript records unchanged.
 
 ## 4) Canonical transcript schema contract
@@ -139,6 +162,9 @@ Rules:
 - `source` allowed values (V1): `typed`, `voice`, `assistant_stream`, `speech`, `system`, `summary`.
 - Voice output must be derived from the exact assistant `text` committed to transcript.
 - No modality may bypass transcript persistence.
+- Internal app events must not be forced into the canonical transcript.
+- Use session events / metadata events for internal mode changes, diagnostics, and lifecycle telemetry.
+- If an event is intended to be visible in chat, it must be represented as a deliberate `system` message; otherwise it remains outside the visible transcript.
 
 ## 5) Session state machine contract
 
@@ -176,4 +202,8 @@ Rules:
 - Transcript entries enforce `text`/`role`/`source` semantics.
 - Session states include `ready`→`error` minimum set.
 - Summary generation pipeline is transcript + metadata grounded.
+- Mode changes are auditable without automatically creating visible chat messages.
+- Internal session events are separated from conversational transcript messages.
+- No fake user/assistant transcript messages are created for app-state changes.
+- Recap generation may use session events, but must distinguish them from spoken/displayed conversation.
 - Legacy `/demo*` and `/visual-session*` routes are absent from active UX.

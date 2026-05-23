@@ -30,3 +30,12 @@ Decision: Remove outdated routes, services, and runtime files that imply legacy 
 
 ## ADR-010: Implementation contracts are normative for V1 build
 Decision: `docs/IMPLEMENTATION_CONTRACTS.md` is the required contract source for route map, metadata shape, transcript schema, session state model, and recap behavior.
+
+## ADR-012: Separate conversational transcript from internal session events
+Decision: AskChappy keeps one canonical transcript for conversational content, while internal app-state changes such as mode switches, validation corrections, diagnostics, and lifecycle telemetry are recorded as session events or metadata events. Visible transcript messages are only for user/assistant/system content intended to be shown or spoken.
+
+Consequences:
+- Chat/transcript stays clean and human-readable.
+- Mode changes remain auditable.
+- Recaps can use both transcript and session events while clearly distinguishing them.
+- The app must not create fake user or assistant messages to represent hidden state changes.
