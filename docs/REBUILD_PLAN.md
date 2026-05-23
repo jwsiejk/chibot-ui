@@ -1,5 +1,7 @@
 # AskChappy Rebuild Plan
 
+- Execute implementation phases using `docs/BUILD_PLAYBOOK.md` as the phase-by-phase prompt and verification guide.
+
 ## Phase 0 — Docs-only cleanup
 - Remove stale app/runtime code and outdated product framing.
 - Preserve essential lessons as reference docs only.
