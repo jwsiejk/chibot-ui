@@ -60,6 +60,8 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Voice Studio' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Avatar' })).toBeInTheDocument();
   });
 
   it('hides admin nav links for standard users', () => {
@@ -72,6 +74,39 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Voice Studio' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Avatar' })).not.toBeInTheDocument();
+  });
+
+  it.each([ROUTES.admin, ROUTES.adminVoice, ROUTES.adminAvatar] as const)(
+    'blocks standard user direct access to %s with not authorized',
+    (path) => {
+      render(
+        <MemoryRouter initialEntries={[path]}>
+          <App />
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByText('Not authorized')).toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    ['Admin', 'Admin placeholder'],
+    ['Voice Studio', 'Admin Voice Studio placeholder'],
+    ['Avatar', 'Admin Avatar placeholder'],
+  ] as const)('allows admin navigation access to %s', (linkName, heading) => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('link', { name: linkName }));
+
+    expect(screen.getByText(heading)).toBeInTheDocument();
   });
 
   it('start open q&a creates local session and navigates to session shell', () => {
