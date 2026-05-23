@@ -83,7 +83,7 @@ describe('app render scaffold', () => {
     { path: ROUTES.adminAvatar, heading: 'Admin Avatar placeholder' },
   ] as const;
 
-  it.each(adminAccessCases)('allows admin access to $path', ({ path, heading }) => {
+  it.each(adminAccessCases)('allows admin access to $heading', ({ heading }) => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
         <App />
