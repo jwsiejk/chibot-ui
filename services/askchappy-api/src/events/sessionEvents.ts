@@ -1,4 +1,6 @@
-export const SESSION_EVENT_TYPES = ['session_created', 'transcript_message_appended'] as const;
+import type { SessionMode } from '../../../../shared/contracts/modes';
+
+export const SESSION_EVENT_TYPES = ['session_created', 'transcript_message_appended', 'mode_change'] as const;
 
 export type SessionEventType = (typeof SESSION_EVENT_TYPES)[number];
 
@@ -8,6 +10,12 @@ export type SessionEvent = {
   session_id: string;
   event_type: SessionEventType;
   meta: Record<string, unknown>;
+};
+
+export type ModeChangeEventMeta = {
+  from_mode: SessionMode;
+  to_mode: SessionMode;
+  actor: 'user' | 'assistant' | 'system';
 };
 
 export const isSessionEventType = (value: unknown): value is SessionEventType =>
