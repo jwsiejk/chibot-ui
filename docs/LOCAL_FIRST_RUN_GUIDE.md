@@ -24,8 +24,9 @@ Notes:
 - Dedicated `build`/`typecheck` scripts are not included in this phase. A full repo typecheck currently requires Node type definitions that are not installable in this environment, so verification is intentionally test+lint based.
 
 ## Start/use local app scaffold
-There is no dedicated `start`/`dev` script in the current Phase 12 repository state.
+There is no dedicated `start`/`dev` script in the current Phase 13 repository state.
 Use route, contract, and runtime verification through the automated tests and lint checks while the local-first product scaffold is hardened.
+Phase 14 is expected to define and add this workflow.
 
 ## Current auth behavior
 - Email-only local auth is used on `/chappy`.
@@ -35,7 +36,7 @@ Use route, contract, and runtime verification through the automated tests and li
 ## Current known limitations
 - No OpenAI/model runtime yet.
 - No RAG/DDN ingestion yet.
-- No real voice cloning yet; Phase 10 remains blocked by provider prerequisites.
+- No real cloned voice provider adapter yet; Phase 13 only added contract/readiness gating and standard voice remains active/default.
 - No STT/browser microphone runtime yet.
 - No real avatar assets/visemes yet.
 - No database persistence yet.
