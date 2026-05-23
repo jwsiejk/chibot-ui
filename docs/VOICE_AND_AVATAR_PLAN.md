@@ -1,0 +1,34 @@
+# Voice and Avatar Plan
+
+## Voice cloning (future requirement)
+- AskChappy should support future cloning of Chapman’s voice for Chappy delivery.
+- This capability is planned, not implemented in the docs-only cleanup.
+
+## Consent requirement
+- Voice clone creation and usage require Chapman’s explicit consent.
+- Consent records/process should be documented before any clone training or deployment.
+
+## Sample recording guidance (future)
+- Collect clear, diverse, consented recordings with representative speaking styles.
+- Use controlled capture quality and labeling for downstream provider compatibility.
+- Keep all raw recordings outside the public repository.
+
+## Private asset handling
+- Do not commit voice samples, embeddings, model artifacts, or private likeness files without explicit approval.
+- Configure app/runtime to reference private local or secured storage paths.
+
+## Provider abstraction
+- TTS/voice stack should be provider-agnostic with adapter boundaries.
+- Planned providers:
+  - Local/simple development TTS fallback
+  - Chappy cloned-voice provider
+  - Optional premium/cloud provider
+
+## Avatar evolution plan
+1. Placeholder silhouette/avatar
+2. Static branded Chappy image
+3. Animated state avatar (idle/listening/thinking/speaking)
+4. Speaking/viseme-capable avatar layer
+
+## Asset safety rule
+Do not commit real voice samples, trained voice artifacts, or private avatar likeness assets to the public repo unless explicitly approved.
