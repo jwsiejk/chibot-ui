@@ -36,6 +36,8 @@
 - Do not over-engineer consent/legal workflow in MVP implementation unless scope is explicitly expanded.
 
 ## Project structure and anti-bloat gate
+- Code review should focus first on mixed responsibilities and contract duplication, then on line count.
+- File-size thresholds are guardrails, not an excuse to over-split coherent modules.
 - Before implementation PR approval, validate against `docs/PROJECT_STRUCTURE_AND_CODE_GUARDRAILS.md`.
 - Block PRs that introduce god files, duplicate contracts, or route drift from canonical maps.
 - Require module splits when files exceed guardrail thresholds without explicit exception rationale.
