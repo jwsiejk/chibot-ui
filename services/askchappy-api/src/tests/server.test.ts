@@ -7,6 +7,7 @@ import {
   getLocalSession,
   getLocalTranscript,
   setLocalSessionMode,
+  synthesizeLocalAssistantMessage,
 } from '../api/server';
 import { resetSessionStore } from '../sessions/sessionStore';
 import { DEFAULT_SESSION_MODE } from '../../../../shared/contracts/modes';
@@ -129,6 +130,27 @@ describe('askchappy-api scaffold', () => {
     expect(modeEvent?.meta).toMatchObject({ from_mode: 'open_qa', to_mode: 'meeting_prep', actor: 'user' });
   });
 
+
+  it('synthesizes assistant transcript text via fallback provider without creating new transcript messages', () => {
+    const session = createLocalSession();
+    const assistantMessage = appendLocalTranscriptMessage(session.session_id, {
+      id: 'msg_assistant_tts',
+      ts: new Date().toISOString(),
+      role: 'assistant',
+      text: 'Speak the canonical assistant transcript.',
+      source: 'assistant_stream',
+      session_id: session.session_id,
+      meta: {},
+    });
+
+    const beforeCount = getLocalTranscript(session.session_id).length;
+    const output = synthesizeLocalAssistantMessage(session.session_id, assistantMessage.id);
+    const afterCount = getLocalTranscript(session.session_id).length;
+
+    expect(output.spoken_text).toBe('Speak the canonical assistant transcript.');
+    expect(output.provider_id).toBe('local_fallback_tts');
+    expect(afterCount).toBe(beforeCount);
+  });
   it('rejects invalid mode changes through service validation', () => {
     const session = createLocalSession();
     expect(() => setLocalSessionMode(session.session_id, 'bad_mode' as never, 'user')).toThrowError(
