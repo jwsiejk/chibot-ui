@@ -1,7 +1,47 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import type { SessionState } from '../../../../shared/contracts/session';
+import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
+import { appendLocalUserTextMessage, getLocalSession, getLocalTranscript } from '../../../../services/askchappy-api/src/api/server';
+import { ChappyStage } from '../session/ChappyStage';
+import { TypedInput } from '../session/TypedInput';
+import { TranscriptPanel } from '../transcript/TranscriptPanel';
+import { SessionRightRail } from '../session/SessionRightRail';
 
-export const ChappySession = () => (
-  <main>
-    <h1>AskChappy Zoom-like session placeholder</h1>
-  </main>
-);
+export const ChappySession = () => {
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const [state] = useState<SessionState>('ready');
+  const [version, setVersion] = useState(0);
+
+  const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
+  const messages: TranscriptMessage[] = useMemo(() => {
+    if (!sessionId || !session) return [];
+    return getLocalTranscript(sessionId);
+  }, [sessionId, session, version]);
+
+  if (!sessionId || !session) {
+    return (
+      <main>
+        <h1>Session not found</h1>
+        <p>Start a local-first Open Q&amp;A session from /chappy.</p>
+      </main>
+    );
+  }
+
+  const onSubmitText = (text: string) => {
+    appendLocalUserTextMessage(sessionId, text);
+    setVersion((previous) => previous + 1);
+  };
+
+  return (
+    <main>
+      <h1>AskChappy session</h1>
+      <p>Local production working session ID: {sessionId}</p>
+      <p>Session state indicator: {state}</p>
+      <ChappyStage state={state} />
+      <TranscriptPanel messages={messages} />
+      <TypedInput onSubmitText={onSubmitText} />
+      <SessionRightRail />
+    </main>
+  );
+};
