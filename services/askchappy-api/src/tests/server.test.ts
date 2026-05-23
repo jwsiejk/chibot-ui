@@ -33,6 +33,19 @@ describe('askchappy-api scaffold', () => {
     expect(getLocalSession(session.session_id)).toBe(session);
   });
 
+
+  it('creates isolated metadata objects per session', () => {
+    const first = createLocalSession();
+    const second = createLocalSession();
+
+    first.metadata.askchappy.context.customer_name = 'Acme Corp';
+
+    expect(second.metadata.askchappy.context.customer_name).toBeNull();
+    expect(first.metadata).not.toBe(second.metadata);
+    expect(first.metadata.askchappy).not.toBe(second.metadata.askchappy);
+    expect(first.metadata.askchappy.context).not.toBe(second.metadata.askchappy.context);
+  });
+
   it('appends typed user transcript messages with canonical text field', () => {
     const session = createLocalSession();
 
