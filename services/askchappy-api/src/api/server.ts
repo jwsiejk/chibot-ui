@@ -1,5 +1,42 @@
+import { appendUserTextMessage } from '../transcript/transcriptEngine';
+import {
+  appendTranscriptMessage,
+  createSession,
+  getSession,
+  listTranscript,
+  type AskChappySession,
+} from '../sessions/sessionStore';
+import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
+
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
 export function getHealth(): ApiHealth {
   return { service: 'askchappy-api', status: 'placeholder' };
 }
+
+export const createLocalSession = (): AskChappySession => createSession();
+
+export const getLocalSession = (sessionId: string): AskChappySession | undefined => getSession(sessionId);
+
+export const appendLocalTranscriptMessage = (
+  sessionId: string,
+  message: TranscriptMessage,
+): TranscriptMessage => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+  return appendTranscriptMessage(session, message);
+};
+
+export const appendLocalUserTextMessage = (sessionId: string, text: string): TranscriptMessage => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+  const userMessage = appendUserTextMessage(session, text);
+  return appendTranscriptMessage(session, userMessage);
+};
+
+export const getLocalTranscript = (sessionId: string): TranscriptMessage[] => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+  return listTranscript(session);
+};
