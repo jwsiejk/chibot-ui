@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 14)
+# AskChappy Current Implementation Status (After Phase 15)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -15,6 +15,7 @@
 - Phase 12: local-first production hardening and packaging docs/scripts
 - Phase 13: cloned voice provider contract package and readiness gate
 - Phase 14: local-first start/dev runtime workflow
+- Phase 15: standard-vs-cloned voice mode selection guardrails
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -25,6 +26,9 @@
 - Admin-only Voice Studio and avatar control surfaces.
 - Avatar state placeholder aligned to session lifecycle states.
 - Local fallback TTS runtime consistent with transcript-first voice constraints.
+- Standard voice remains explicitly active/default.
+- Optional cloned voice is guarded and requires both readiness checks and explicit real provider adapter availability.
+- AskChappy runs normally without cloned voice assets.
 - Verification scripts for test/lint (`npm run verify`).
 
 ## Intentionally not implemented
@@ -66,15 +70,16 @@ Retired and inactive:
 - Summary/recap remains grounded in canonical transcript + metadata.
 
 ## Voice/avatar status
-- Voice runtime: standard voice path remains active/default via provider abstraction.
-- Cloned voice runtime: readiness gate/contract added in Phase 13, but no real provider adapter/runtime is implemented.
+- Standard voice path remains active/default.
+- Cloned voice readiness gate exists.
+- Cloned voice is not selected for synthesis unless a future real provider adapter is explicitly available.
+- No real cloned voice provider adapter/runtime is implemented.
 - Avatar runtime: placeholder, state-aware UI only; no real likeness/media assets.
 
 ## Phase 10 blocker summary
 Cloned voice runtime integration remains blocked until provider selection, local config shape, published profile configuration, and admin publication gating details are approved for local production use.
 
-## Next recommended work after Phase 14
-- Phase 15: cloned voice provider adapter is only next when provider/config/audio/consent prerequisites are actually available and approved.
-- Phase 16: plan enterprise-auth replacement path while preserving local-first development/testing workflow.
-
-- Phase 15: standard-vs-cloned voice guardrails keep Standard voice explicitly active/default unless a future real cloned provider adapter is available and readiness checks pass.
+## Next recommended work after Phase 15
+- Phase 16 is the next logical phase.
+- Phase 16 should prioritize local persistence for sessions/transcripts unless project direction changes.
+- Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.
