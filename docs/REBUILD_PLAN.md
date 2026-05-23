@@ -48,8 +48,11 @@
 - Add production hardening and operational checks.
 
 ## Phase 17 — Assistant/model runtime scaffold (knowledge-first)
-- Implement first usable assistant conversation/runtime path using standard LLM knowledge.
+- Implement first usable assistant conversation/runtime path using local open-source LLM knowledge via a local Ollama runtime (default model: `gemma3:4b`).
 - Keep local-first production framing and canonical transcript/session contracts.
+- Runtime target for this phase is local Ollama only (`OLLAMA_BASE_URL` default `http://127.0.0.1:11434`; `OLLAMA_MODEL` default `gemma3:4b`; optional `OLLAMA_KEEP_ALIVE=30m`; optional `OLLAMA_NUM_CTX=8192`).
+- No OpenAI runtime, no hosted/cloud LLM SDK, and no cloud LLM API keys in this phase.
+- Missing Ollama runtime or missing local model must yield a clear local runtime not-configured state (no fake assistant intelligence).
 - Do not require DDN document upload, ingestion, embeddings, vector search, or RAG before shipping this phase.
 
 ## Phase 18 — Content grounding / document ingestion / RAG (required later, deferred now)

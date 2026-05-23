@@ -34,7 +34,8 @@
 - Browser-local persistence survives reloads for session records, canonical transcript messages, `metadata.askchappy`, and session events.
 
 ## Intentionally not implemented
-- OpenAI/model runtime integration
+- OpenAI runtime integration
+- Hosted/cloud LLM SDK integration
 - Real-time or batch model inference runtime
 - DDN-specific uploaded document ingestion
 - Content grounding, embeddings, vector search, or RAG pipeline
@@ -84,7 +85,10 @@ Retired and inactive:
 Cloned voice runtime integration remains blocked until provider selection, local config shape, published profile configuration, and admin publication gating details are approved for local production use.
 
 ## Next recommended work after Phase 16
-- Phase 17: assistant/model runtime scaffold using standard LLM knowledge (local-first production path; no DDN document ingestion dependency).
+- Phase 17: assistant/model runtime scaffold using local open-source LLM knowledge via a local Ollama runtime (default model: `gemma3:4b`) (local-first production path; no DDN document ingestion dependency).
+- Phase 17 planned config: `OLLAMA_BASE_URL` default `http://127.0.0.1:11434`, `OLLAMA_MODEL` default `gemma3:4b`, optional `OLLAMA_KEEP_ALIVE=30m`, optional `OLLAMA_NUM_CTX=8192`.
+- Phase 17 excludes OpenAI runtime, hosted/cloud LLM SDKs, and cloud LLM API keys.
+- If Ollama/local model is unavailable, show a clear local runtime not-configured state (no fake assistant intelligence).
 - Phase 18: content grounding / document ingestion / RAG is deferred for now, but remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
 - Phase 19: STT / browser microphone input, unless project direction changes.
 - Keep local browser persistence schema-versioned and add migrations only when needed.
