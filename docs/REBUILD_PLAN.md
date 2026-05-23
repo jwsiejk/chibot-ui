@@ -44,3 +44,15 @@
 ## Phase 10 — Packaging/deployment
 - Define deployment targets, configuration profiles, and release workflows.
 - Add production hardening and operational checks.
+
+## Phase 1.5 — MVP login, roles, and admin surface
+- Add lightweight email-only login modal to `/chappy` for local/demo role selection.
+- Establish two roles: `standard_user` and `admin` (`jsiejk@ddn.com` initial admin).
+- Add hidden admin route scaffold (`/admin`, `/admin/voice`, `/admin/avatar`) with simple not-authorized state for standard users.
+
+## Phase 7.5 — Admin Voice Studio workflow
+- Implement admin-only Voice Studio workflow outside normal user sessions.
+- Support voice profile lifecycle: `draft`, `testing`, `approved`, `published`, `disabled`.
+- Ensure `/chappy/session/:sessionId` only consumes currently published voice profile.
+- Keep consent handling lightweight for MVP docs intent.
+

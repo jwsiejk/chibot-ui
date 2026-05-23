@@ -207,3 +207,43 @@ Rules:
 - No fake user/assistant transcript messages are created for app-state changes.
 - Recap generation may use session events, but must distinguish them from spoken/displayed conversation.
 - Legacy `/demo*` and `/visual-session*` routes are absent from active UX.
+
+## 9) MVP auth, role, and admin route contract
+
+### 9.1 Login model (local/demo only)
+- `/chappy` entry includes an email-only login modal for MVP/demo.
+- No password is required in MVP/demo mode.
+- Email is used for local/demo role selection and personalization only.
+- This is explicitly not production authentication and may be replaced later.
+
+### 9.2 Role model
+Allowed V1 MVP roles:
+
+```text
+standard_user
+admin
+```
+
+Initial admin rule:
+- `jsiejk@ddn.com` => `admin`
+- Any other email => `standard_user`
+
+Permissions contract:
+- `standard_user` can enter AskChappy, run Open Q&A/guided sessions, view recap, and hear the published Chappy voice.
+- `standard_user` cannot access Voice Studio or publish/modify Chappy voice profiles.
+- `admin` can access admin controls, run Voice Studio workflow, and approve/publish/disable active voice profiles when implemented.
+
+Important framing:
+- Admin-only controls exist for UX control and shared voice consistency, not heavy security hardening for MVP.
+
+### 9.3 Admin route map additions
+Planned admin routes:
+- `/admin` — admin dashboard
+- `/admin/voice` — Voice Studio
+- `/admin/avatar` — future avatar setup/review
+
+Access behavior:
+- Admin routes are hidden from standard user navigation.
+- Standard-user direct access to admin routes must return a simple “not authorized” state.
+- Voice cloning controls must never appear in normal `/chappy/session/:sessionId` user sessions.
+

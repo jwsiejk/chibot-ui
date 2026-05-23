@@ -26,3 +26,12 @@
 
 - Future implementation PRs must keep conversational transcript messages separate from internal session events.
 - Do not satisfy audit/diagnostic needs by injecting hidden app telemetry into the visible chat transcript.
+
+## MVP auth/admin guardrails (documentation + future implementation)
+- Preserve the lightweight MVP login model: email-only on `/chappy`, no password, local/demo scope only.
+- Preserve fixed initial admin mapping: `jsiejk@ddn.com` is `admin`, all other emails are `standard_user` unless a later ADR changes this.
+- Keep admin controls hidden from standard user navigation.
+- Keep voice cloning/profile management controls out of normal `/chappy/session/:sessionId` UX.
+- Treat admin-only Voice Studio as UX-governance boundary, not heavy security-hardening work for MVP.
+- Do not over-engineer consent/legal workflow in MVP implementation unless scope is explicitly expanded.
+
