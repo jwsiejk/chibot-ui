@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { App } from '../app/App';
 import { getLocalSession } from '../../../../services/askchappy-api/src/api/server';
@@ -170,12 +170,11 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
 
-    expect(screen.getByRole('heading', { name: 'Current mode' })).toBeInTheDocument();
-    expect(screen.getAllByText('Open Q&A').length).toBeGreaterThan(0);
-    expect(screen.getByText('Ask Chappy anything about DDN positioning, use cases, or partner scenarios.')).toBeInTheDocument();
+    const rightRail = screen.getByRole('complementary', { name: 'session right rail' });
+    expect(within(rightRail).getByRole('heading', { name: 'Current mode' })).toBeInTheDocument();
+    expect(within(rightRail).getByRole('button', { name: 'Open Q&A' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(rightRail).getByText('Ask Chappy anything about DDN positioning, use cases, or partner scenarios.')).toBeInTheDocument();
   });
-
-
 
   it('switches guided modes and keeps session id/transcript intact', () => {
     render(
@@ -202,16 +201,31 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Q&A' }));
     expect(screen.getByText('Ask Chappy anything about DDN positioning, use cases, or partner scenarios.')).toBeInTheDocument();
 
+    fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'still typing after mode switch' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(screen.getByText(/still typing after mode switch/)).toBeInTheDocument();
+
     const session = getLocalSession(sessionId);
     expect(session?.session_id).toBe(sessionId);
     expect(session?.metadata.askchappy.session_mode).toBe('open_qa');
     expect(session?.metadata.askchappy.persona_id).toBe('ddn_chappy_vptm');
     expect(session?.metadata.askchappy.persona_label).toBe('Chappy');
-    expect(session?.events.some((event) => event.event_type === 'mode_change')).toBe(true);
-    const modeChange = session?.events.find((event) => event.event_type === 'mode_change');
-    expect(modeChange?.meta).toHaveProperty('from_mode');
-    expect(modeChange?.meta).toHaveProperty('to_mode');
-    expect(modeChange?.meta).toHaveProperty('actor');
+
+    const modeChanges = session?.events.filter((event) => event.event_type === 'mode_change') ?? [];
+    expect(modeChanges).toHaveLength(3);
+    expect(modeChanges.map((event) => ({
+      event_type: event.event_type,
+      from_mode: event.meta.from_mode,
+      to_mode: event.meta.to_mode,
+      actor: event.meta.actor,
+    }))).toEqual([
+      { event_type: 'mode_change', from_mode: 'open_qa', to_mode: 'learn_ddn', actor: 'user' },
+      { event_type: 'mode_change', from_mode: 'learn_ddn', to_mode: 'meeting_prep', actor: 'user' },
+      { event_type: 'mode_change', from_mode: 'meeting_prep', to_mode: 'open_qa', actor: 'user' },
+    ]);
+
+    expect(session?.transcript.every((message) => message.role === 'user')).toBe(true);
+    expect(session?.transcript.every((message) => message.text !== 'mode_change')).toBe(true);
     expect(screen.queryByText('mode_change')).not.toBeInTheDocument();
   });
   it('keeps voice studio controls absent in normal /chappy/session route', () => {
