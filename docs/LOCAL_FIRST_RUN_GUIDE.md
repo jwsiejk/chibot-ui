@@ -73,6 +73,6 @@ Vite handles browser-history fallback for canonical React routes (`/chappy`, `/c
 
 
 ## Local persistence behavior
-- AskChappy stores a schema-versioned local payload in browser localStorage for session records, canonical transcript messages (`text` field), `metadata.askchappy`, and session events.
+- AskChappy stores a schema-versioned local payload in browser localStorage for session records, canonical transcript messages (`text` field), `metadata.askchappy`, and session events via the browser-local adapter (`services/askchappy-api/src/sessions/browserLocalSessionPersistenceAdapter.ts`).
 - Mode changes persist as session events and do not create fake transcript messages.
 - Malformed persisted payloads are discarded safely to restore clean local state.

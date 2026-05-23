@@ -71,3 +71,10 @@ Consequences:
 - Prevents premature claims that cloned voice is live.
 - Keeps local-first runtime stable with standard voice default.
 - Preserves asset/privacy boundaries by avoiding committed private voice artifacts.
+
+
+## ADR: Phase 16 browser-local persistence boundary
+- Phase 16 persistence is browser-local only (`window.localStorage`) and currently schema-versioned (`schema_version = 1`).
+- This boundary is implemented as a browser-local adapter (`browserLocalSessionPersistenceAdapter`) for the local-first runtime scaffold.
+- This is not database, backend, or cloud persistence.
+- Any future database/cloud persistence must be introduced as a separate phase and must not silently replace browser-local behavior.

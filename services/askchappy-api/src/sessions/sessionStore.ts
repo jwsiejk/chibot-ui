@@ -3,7 +3,7 @@ import { DEFAULT_METADATA, type AskChappyMetadata } from '../../../../shared/con
 import { createSessionEvent, type SessionEvent } from '../events/sessionEvents';
 import { appendTranscriptMessageToSession } from '../transcript/transcriptEngine';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
-import { loadPersistedSessions, persistSessions, clearPersistedSessions } from './localSessionPersistence';
+import { loadPersistedSessions, persistSessions, clearPersistedSessions } from './browserLocalSessionPersistenceAdapter';
 
 export type AskChappySession = {
   session_id: string;

@@ -3,8 +3,10 @@ import { isTranscriptMessage } from '../../../../shared/contracts/transcript';
 import { isSessionEventType, type SessionEvent } from '../events/sessionEvents';
 import type { AskChappySession } from './sessionStore';
 
-const STORAGE_KEY = 'askchappy.local.session_store.v1';
-const SCHEMA_VERSION = 1;
+// Browser-local, local-first persistence adapter only.
+// This module intentionally uses window.localStorage and is not backend/database/cloud persistence.
+export const BROWSER_LOCAL_SESSION_STORAGE_KEY = 'askchappy.local.session_store.v1';
+export const BROWSER_LOCAL_SESSION_SCHEMA_VERSION = 1;
 
 type PersistedPayload = {
   schema_version: number;
@@ -40,7 +42,11 @@ const isAskChappySession = (value: unknown): value is AskChappySession => {
 
 const getStorage = (): Storage | null => {
   if (typeof window === 'undefined') return null;
-  return window.localStorage;
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
 };
 
 export const loadPersistedSessions = (): {
@@ -50,19 +56,23 @@ export const loadPersistedSessions = (): {
   const storage = getStorage();
   if (!storage) return { sessions: new Map(), recovered_from_malformed_payload: false };
 
-  const raw = storage.getItem(STORAGE_KEY);
+  const raw = storage.getItem(BROWSER_LOCAL_SESSION_STORAGE_KEY);
   if (!raw) return { sessions: new Map(), recovered_from_malformed_payload: false };
 
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!isRecord(parsed) || parsed.schema_version !== SCHEMA_VERSION || !Array.isArray(parsed.sessions)) {
-      storage.removeItem(STORAGE_KEY);
+    if (
+      !isRecord(parsed) ||
+      parsed.schema_version !== BROWSER_LOCAL_SESSION_SCHEMA_VERSION ||
+      !Array.isArray(parsed.sessions)
+    ) {
+      storage.removeItem(BROWSER_LOCAL_SESSION_STORAGE_KEY);
       return { sessions: new Map(), recovered_from_malformed_payload: true };
     }
 
     const sessions = parsed.sessions.filter(isAskChappySession);
     if (sessions.length !== parsed.sessions.length) {
-      storage.removeItem(STORAGE_KEY);
+      storage.removeItem(BROWSER_LOCAL_SESSION_STORAGE_KEY);
       return { sessions: new Map(), recovered_from_malformed_payload: true };
     }
 
@@ -71,7 +81,7 @@ export const loadPersistedSessions = (): {
       recovered_from_malformed_payload: false,
     };
   } catch {
-    storage.removeItem(STORAGE_KEY);
+    storage.removeItem(BROWSER_LOCAL_SESSION_STORAGE_KEY);
     return { sessions: new Map(), recovered_from_malformed_payload: true };
   }
 };
@@ -80,14 +90,13 @@ export const persistSessions = (sessions: Map<string, AskChappySession>): void =
   const storage = getStorage();
   if (!storage) return;
   const payload: PersistedPayload = {
-    schema_version: SCHEMA_VERSION,
+    schema_version: BROWSER_LOCAL_SESSION_SCHEMA_VERSION,
     sessions: Array.from(sessions.values()),
   };
-  storage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  storage.setItem(BROWSER_LOCAL_SESSION_STORAGE_KEY, JSON.stringify(payload));
 };
 
 export const clearPersistedSessions = (): void => {
   const storage = getStorage();
-  storage?.removeItem(STORAGE_KEY);
+  storage?.removeItem(BROWSER_LOCAL_SESSION_STORAGE_KEY);
 };
-
