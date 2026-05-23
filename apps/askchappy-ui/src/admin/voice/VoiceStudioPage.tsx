@@ -31,6 +31,7 @@ export const VoiceStudioPage = () => (
       <p>No published Chappy voice profile.</p>
       <p>Fallback voice path is active.</p>
       <p>Real voice cloning is not implemented in Phase 8.</p>
+      <p>Chapman voice use must be approved before publishing a cloned voice profile.</p>
     </section>
 
     <section aria-label="future voice workflow controls">
