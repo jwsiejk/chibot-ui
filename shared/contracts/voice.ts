@@ -1,0 +1,2 @@
+export const VOICE_PROFILE_STATES = ['draft', 'testing', 'approved', 'published', 'disabled'] as const;
+export type VoiceProfileState = (typeof VOICE_PROFILE_STATES)[number];
