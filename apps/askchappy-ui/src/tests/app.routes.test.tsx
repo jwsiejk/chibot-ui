@@ -27,23 +27,32 @@ describe('route map', () => {
 });
 
 describe('app render scaffold', () => {
-  it('redirects / to /chappy', () => {
-    render(<MemoryRouter initialEntries={[ROUTES.home]}><App /></MemoryRouter>);
-    expect(screen.getByRole('heading', { name: 'AskChappy entry placeholder' })).toBeInTheDocument();
+  const activeRouteCases = [
+    { path: ROUTES.home, heading: 'AskChappy entry placeholder' },
+    { path: ROUTES.chappy, heading: 'AskChappy entry placeholder' },
+    { path: '/chappy/session/session_123', heading: 'AskChappy Zoom-like session placeholder' },
+    { path: '/chappy/summary/session_123', heading: 'AskChappy recap placeholder' },
+    { path: ROUTES.dev, heading: 'Diagnostics placeholder (hidden from main flow)' },
+    { path: ROUTES.admin, heading: 'Admin placeholder' },
+    { path: ROUTES.adminVoice, heading: 'Admin Voice Studio placeholder' },
+    { path: ROUTES.adminAvatar, heading: 'Admin Avatar placeholder' },
+  ] as const;
+
+  it.each(activeRouteCases)('renders active route $path', ({ path, heading }) => {
+    render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
+    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
   });
 
-  it('renders session placeholder route', () => {
-    render(<MemoryRouter initialEntries={['/chappy/session/session_123']}><App /></MemoryRouter>);
-    expect(screen.getByRole('heading', { name: 'AskChappy Zoom-like session placeholder' })).toBeInTheDocument();
-  });
+  const retiredRouteCases = [
+    '/demo',
+    '/demo/intake',
+    '/demo/recommendation',
+    '/visual-session/session_123',
+    '/demo/summary/session_123',
+  ] as const;
 
-  it('renders recap placeholder route', () => {
-    render(<MemoryRouter initialEntries={['/chappy/summary/session_123']}><App /></MemoryRouter>);
-    expect(screen.getByRole('heading', { name: 'AskChappy recap placeholder' })).toBeInTheDocument();
-  });
-
-  it('retired routes resolve as non-active UX', () => {
-    render(<MemoryRouter initialEntries={['/demo']}><App /></MemoryRouter>);
+  it.each(retiredRouteCases)('resolves retired route %s as non-active UX', (path) => {
+    render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
     expect(screen.getByRole('heading', { name: 'Route not found' })).toBeInTheDocument();
   });
 });
