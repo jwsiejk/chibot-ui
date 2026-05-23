@@ -185,7 +185,7 @@ describe('phase 5 chappy UI', () => {
     expect(combinedSource).not.toContain('/assets/avatar');
   });
 
-  it('renders avatar shell placeholder and future state placeholders', () => {
+  it('renders phase 11 avatar shell placeholder readiness status', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
         <App />
@@ -197,10 +197,10 @@ describe('phase 5 chappy UI', () => {
 
     expect(screen.getByRole('heading', { name: 'Avatar setup and review shell (admin only)' })).toBeInTheDocument();
     expect(screen.getByText('Placeholder avatar is active.')).toBeInTheDocument();
-    expect(screen.getByText('Real avatar implementation is not implemented in Phase 8.')).toBeInTheDocument();
-    expect(screen.getByText('Static branded Chappy image')).toBeInTheDocument();
-    expect(screen.getByText('State-aware avatar')).toBeInTheDocument();
-    expect(screen.getByText('Speaking/viseme-capable avatar')).toBeInTheDocument();
+    expect(screen.getByText('Real avatar implementation is not implemented in Phase 11.')).toBeInTheDocument();
+    expect(screen.getByText('State-aware avatar scaffold is active.')).toBeInTheDocument();
+    expect(screen.getByText('Speaking/viseme-capable avatar is not implemented in Phase 11.')).toBeInTheDocument();
+    expect(screen.getByText('No private avatar assets are committed.')).toBeInTheDocument();
   });
 
   it('start open q&a creates local session and navigates to session shell', () => {
@@ -216,6 +216,9 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByRole('heading', { name: 'AskChappy session' })).toBeInTheDocument();
     expect(screen.getByLabelText('chappy stage')).toBeInTheDocument();
     expect(screen.getByText('Session state indicator: ready')).toBeInTheDocument();
+    expect(screen.getByText('Chappy avatar stage placeholder')).toBeInTheDocument();
+    expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
+    expect(screen.getByText('Avatar asset status: placeholder')).toBeInTheDocument();
     expect(screen.getByText('Speech provider status: Local fallback voice active (no published voice profile).')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
@@ -236,6 +239,36 @@ describe('phase 5 chappy UI', () => {
 
     expect(screen.getByText('user:')).toBeInTheDocument();
     expect(screen.getByText(/hello chappy/)).toBeInTheDocument();
+  });
+
+
+  it('avatar stage state text does not append transcript messages or fake assistant messages', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+
+    expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
+    expect(screen.queryByText('assistant:')).not.toBeInTheDocument();
+    expect(screen.queryByText('user:')).not.toBeInTheDocument();
+  });
+
+  it('does not show avatar admin controls in normal /chappy/session/:sessionId user sessions', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+
+    expect(screen.queryByRole('heading', { name: 'Avatar setup and review shell (admin only)' })).not.toBeInTheDocument();
+    expect(screen.queryByText('State-aware avatar scaffold is active.')).not.toBeInTheDocument();
   });
 
   it('empty typed input does not append transcript message', () => {

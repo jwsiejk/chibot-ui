@@ -8,16 +8,10 @@ export const AvatarAdminPage = () => (
     <section aria-label="avatar status">
       <h2>Current avatar status</h2>
       <p>Placeholder avatar is active.</p>
-      <p>Real avatar implementation is not implemented in Phase 8.</p>
-    </section>
-
-    <section aria-label="future avatar states">
-      <h2>Future avatar state placeholders</h2>
-      <ul>
-        <li>Static branded Chappy image</li>
-        <li>State-aware avatar</li>
-        <li>Speaking/viseme-capable avatar</li>
-      </ul>
+      <p>State-aware avatar scaffold is active.</p>
+      <p>Real avatar implementation is not implemented in Phase 11.</p>
+      <p>Speaking/viseme-capable avatar is not implemented in Phase 11.</p>
+      <p>No private avatar assets are committed.</p>
     </section>
   </main>
 );
