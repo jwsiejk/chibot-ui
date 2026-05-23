@@ -49,6 +49,7 @@ Chappy is a virtual Partner Technical Manager for DDN. He helps build and enable
 - No voice-only response is allowed without transcript text.
 - No chat-only response is allowed that cannot be spoken later.
 - Transcript powers chat rendering, voice playback alignment, recap, and future memory.
+- Internal app events such as mode changes may inform recap/diagnostics but are not automatically visible chat transcript messages.
 
 ## 9) Session state model
 Minimum V1 state model:
