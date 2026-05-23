@@ -1,4 +1,4 @@
-import { DEFAULT_SESSION_MODE, type SessionMode } from './modes';
+import { DEFAULT_SESSION_MODE, isSessionMode, type SessionMode } from './modes';
 
 export const SESSION_STATES = ['ready', 'listening', 'transcribing', 'thinking', 'speaking', 'error'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];
@@ -39,4 +39,29 @@ export const DEFAULT_METADATA: AskChappyMetadata = {
       meeting_goal: null,
     },
   },
+};
+
+export const isSessionState = (value: unknown): value is SessionState =>
+  typeof value === 'string' && SESSION_STATES.includes(value as SessionState);
+
+export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata => {
+  if (!value || typeof value !== 'object') return false;
+  const metadata = value as Record<string, unknown>;
+  if ('expert_desk' in metadata || !('askchappy' in metadata)) return false;
+
+  const askchappy = metadata.askchappy as Record<string, unknown>;
+  const context = askchappy.context as Record<string, unknown>;
+  return (
+    askchappy.persona_id === 'ddn_chappy_vptm' &&
+    askchappy.persona_label === 'Chappy' &&
+    isSessionMode(askchappy.session_mode) &&
+    askchappy.audience === 'partner_seller_or_se' &&
+    (typeof askchappy.topic === 'string' || askchappy.topic === null) &&
+    askchappy.desired_output === 'answer_questions_and_offer_guidance' &&
+    context !== null &&
+    typeof context === 'object' &&
+    ['customer_name', 'partner_name', 'industry', 'use_case', 'competitor', 'meeting_goal'].every(
+      (field) => field in context && (typeof context[field] === 'string' || context[field] === null),
+    )
+  );
 };
