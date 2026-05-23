@@ -7,6 +7,7 @@
 ## Phase 1 — New app skeleton
 - Create fresh repository/app structure for AskChappy implementation.
 - Define clean module boundaries for UI, session, transcript, and runtime adapters.
+- Enforce `docs/IMPLEMENTATION_CONTRACTS.md` as required scaffold input before coding routes/runtime behavior.
 
 ## Phase 2 — Sessions and canonical transcript
 - Implement transcript-first session engine.
