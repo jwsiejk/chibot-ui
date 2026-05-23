@@ -144,9 +144,13 @@ describe('phase 5 chappy UI', () => {
     for (const lifecycleState of VOICE_PROFILE_STATES) {
       expect(screen.getByText(lifecycleState)).toBeInTheDocument();
     }
-    expect(screen.getByText('Standard voice is active/default.')).toBeInTheDocument();
-    expect(screen.getByText('Cloned Chappy voice is not configured (awaiting approved asset/provider config).')).toBeInTheDocument();
-    expect(screen.getByText('Cloned voice integration prerequisites are still pending in this phase.')).toBeInTheDocument();
+    expect(screen.getByText('Standard voice: active/default.')).toBeInTheDocument();
+    expect(screen.getByText('Optional cloned Chappy voice: pending configuration/approval.')).toBeInTheDocument();
+    expect(screen.getByText('Not configured')).toBeInTheDocument();
+    expect(screen.getByText('Missing provider config')).toBeInTheDocument();
+    expect(screen.getByText('Consent required')).toBeInTheDocument();
+    expect(screen.getByText('Published profile required')).toBeInTheDocument();
+    expect(screen.getByText('Ready for provider adapter')).toBeInTheDocument();
 
     const futureControlsSection = screen.getByRole('region', { name: 'future voice workflow controls' });
     const disabledControls = within(futureControlsSection).getAllByRole('button', {

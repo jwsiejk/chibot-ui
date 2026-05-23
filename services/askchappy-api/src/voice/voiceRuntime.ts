@@ -1,6 +1,8 @@
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import type { VoiceProfileState } from '../../../../shared/contracts/voice';
 import { fallbackTtsProvider } from './fallbackTtsProvider';
+import { getLocalClonedVoiceConfig } from './clonedVoiceConfig';
+import { getVoiceProviderSelection } from './voiceProviderSelection';
 import type { TtsSynthesisOutput } from './ttsProvider';
 
 export type VoiceProfileRuntime = { id: string; state: VoiceProfileState };
@@ -35,11 +37,22 @@ export const synthesizeAssistantTranscriptMessage = (
 
 export const getLocalVoiceRuntimeStatus = (
   profiles: readonly VoiceProfileRuntime[] = [],
-): { active_provider_id: string; active_provider_label: string; published_voice_profile_state: VoiceProfileState | 'none' } => {
+): {
+  active_provider_id: string;
+  active_provider_label: string;
+  published_voice_profile_state: VoiceProfileState | 'none';
+  cloned_voice_ready: boolean;
+  cloned_voice_reasons: string[];
+  cloned_voice_status_label: string;
+} => {
   const published = getPublishedVoiceProfile(profiles);
+  const selection = getVoiceProviderSelection({ clonedVoiceConfig: getLocalClonedVoiceConfig() });
   return {
     active_provider_id: fallbackTtsProvider.provider_id,
     active_provider_label: fallbackTtsProvider.provider_label,
     published_voice_profile_state: published?.state ?? 'none',
+    cloned_voice_ready: selection.cloned_voice_ready,
+    cloned_voice_reasons: selection.reasons,
+    cloned_voice_status_label: selection.cloned_voice_status_label,
   };
 };

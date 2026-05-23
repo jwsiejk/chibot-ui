@@ -18,3 +18,6 @@ Current runtime behavior (intended and non-blocking):
 - AskChappy sessions run normally without cloned voice assets/provider/config.
 - Missing cloned provider/config/audio is **not** an app runtime blocker.
 - Transcript-first TTS constraints remain unchanged.
+
+
+Phase 13 follow-up: see `docs/CLONED_VOICE_PROVIDER_CONTRACT.md` for the cloned voice config contract and readiness gate package that preserves standard voice as default.

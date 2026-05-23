@@ -10,12 +10,20 @@ const FUTURE_WORKFLOW_STEPS = [
   'Disable cloned profile (standard voice remains active)',
 ] as const;
 
+const CLONED_VOICE_READINESS_STATES = [
+  'Not configured',
+  'Missing provider config',
+  'Consent required',
+  'Published profile required',
+  'Ready for provider adapter',
+] as const;
+
 const formatState = (state: VoiceProfileState) => state.replace('_', ' ');
 
 export const VoiceStudioPage = () => (
   <main>
     <h1>Voice Studio shell (admin only)</h1>
-    <p>This local-first Voice Studio shell governs future voice lifecycle workflows for AskChappy.</p>
+    <p>This local-first Voice Studio shell governs optional cloned Chappy voice readiness for AskChappy local production.</p>
 
     <section aria-label="voice profile lifecycle">
       <h2>Voice profile lifecycle</h2>
@@ -28,16 +36,22 @@ export const VoiceStudioPage = () => (
 
     <section aria-label="current voice status">
       <h2>Current voice status</h2>
-      <p>Standard voice is active/default.</p>
-      <p>Cloned Chappy voice is not configured (awaiting approved asset/provider config).</p>
-      <p>Cloned voice integration prerequisites are still pending in this phase.</p>
+      <p>Standard voice: active/default.</p>
+      <p>Optional cloned Chappy voice: pending configuration/approval.</p>
+      <h3>Cloned Chappy voice readiness</h3>
+      <ul>
+        {CLONED_VOICE_READINESS_STATES.map((status) => (
+          <li key={status}>{status}</li>
+        ))}
+      </ul>
+      <p>Cloned Chappy voice is only considered active after readiness checks pass and a provider adapter is wired.</p>
       <p>Chapman voice use must be approved before publishing a cloned voice profile.</p>
     </section>
 
     <section aria-label="future voice workflow controls">
       <h2>Future workflow controls (inactive in this phase)</h2>
       {FUTURE_WORKFLOW_STEPS.map((step) => (
-        <button key={step} type="button" disabled aria-disabled="true" title="Future phase; inactive in Phase 8">
+        <button key={step} type="button" disabled aria-disabled="true" title="Future phase; inactive in Phase 13">
           {step}
         </button>
       ))}
