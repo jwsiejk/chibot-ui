@@ -32,12 +32,12 @@ describe('phase 11 avatar state module', () => {
   });
 
   it.each([
-    ['ready', 'Chappy is ready'],
-    ['listening', 'Chappy is listening'],
-    ['transcribing', 'Chappy is transcribing'],
-    ['thinking', 'Chappy is thinking'],
-    ['speaking', 'Chappy is speaking'],
-    ['error', 'Chappy needs attention'],
+    ['ready', 'vChappy is ready'],
+    ['listening', 'vChappy is listening'],
+    ['transcribing', 'vChappy is transcribing'],
+    ['thinking', 'vChappy is thinking'],
+    ['speaking', 'vChappy is speaking'],
+    ['error', 'vChappy needs attention'],
   ] as const)('maps %s to expected label', (state, label) => {
     expect(getChappyAvatarStateConfig(state as SessionState).label).toBe(label);
   });

@@ -15,7 +15,7 @@ export const ChappyStage = ({ state }: { state: SessionState }) => {
 
       <div className="chappy-stage-center">
         <div className="chappy-avatar-placeholder" aria-label="chappy avatar placeholder">C</div>
-        <h2>Chappy</h2>
+        <h2>vChappy</h2>
         <p>{stateConfig.description}</p>
       </div>
     </section>

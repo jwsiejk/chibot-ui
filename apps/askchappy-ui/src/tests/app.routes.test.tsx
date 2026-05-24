@@ -445,8 +445,8 @@ describe('phase 22 chappy UI', () => {
     expect(stage).not.toHaveClass('card');
     expect(screen.getByLabelText('meeting stage')).toBeInTheDocument();
     expect(screen.getByLabelText('chappy avatar placeholder')).toBeInTheDocument();
-    expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
-    expect(screen.getByText('Chappy is ready')).toHaveClass('stage-status-pill');
+    expect(screen.getByText('vChappy is ready')).toBeInTheDocument();
+    expect(screen.getByText('vChappy is ready')).toHaveClass('stage-status-pill');
     expect(screen.queryByText('Primary participant')).not.toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toHaveClass('meeting-chat-panel');
         expect(screen.getByText('Ask Chappy anything. He’ll keep it conversational and go deeper when you ask.')).toBeInTheDocument();
@@ -566,8 +566,8 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
-    expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
-    expect(screen.getByText('Chappy is ready')).toHaveClass('stage-status-pill');
+    expect(screen.getByText('vChappy is ready')).toBeInTheDocument();
+    expect(screen.getByText('vChappy is ready')).toHaveClass('stage-status-pill');
     expect(screen.queryByText('assistant:')).not.toBeInTheDocument();
     expect(screen.queryByText('user:')).not.toBeInTheDocument();
   });
