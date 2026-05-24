@@ -295,7 +295,7 @@ describe('phase 22 chappy UI', () => {
   });
 
 
-  it('shows time to Chappy speaking for successful unmuted typed turn', async () => {
+  it('shows processing-to-speaking latency for successful unmuted typed turn', async () => {
     vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({ audio_status: 'ready', audio_base64: 'ZmFrZQ==', audio_format: 'wav' } as never);
 
     render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
@@ -306,8 +306,11 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
-    await waitFor(() => expect(screen.getByText(/Time to Chappy speaking:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Processing to Chappy speaking:/)).toBeInTheDocument());
+    expect(screen.getByText(/Processing to assistant text:/)).toBeInTheDocument();
     expect(screen.queryByText(/^Total:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Time to assistant text ready:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Time to Chappy speaking:/)).not.toBeInTheDocument();
   });
   it('opens and closes Admin Runtime Console from toolbar for admin only', async () => {
     render(

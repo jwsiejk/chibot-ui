@@ -14,8 +14,10 @@ export type TurnLatencyEntry = {
   tts_ms: number | null;
   playback_start_ms: number | null;
   total_ms: number | null;
-  time_to_text_ready_ms?: number | null;
-  time_to_playback_start_ms?: number | null;
+  post_submit_to_text_ready_ms?: number | null;
+  post_submit_to_chappy_speaking_ms?: number | null;
+  total_mic_start_to_text_ready_ms?: number | null;
+  total_mic_start_to_chappy_speaking_ms?: number | null;
   time_to_failure_ms?: number | null;
   failure_stage?: 'stt' | 'assistant_generation' | 'tts' | 'playback' | null;
   tts_skipped_reason?: 'muted' | null;
@@ -118,7 +120,7 @@ export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, di
           <h3>Turn Latency</h3>
           {turnLatency.length === 0 ? <p>No turn latency metrics yet.</p> : (
             <>
-              <p>All latency metrics are local-only in-memory diagnostics. “Time to Chappy speaking” means time to playback start (not playback end).</p>
+              <p>All latency metrics are local-only in-memory diagnostics. Mic capture is user-controlled time. Processing latency starts after mic submit. “Time to Chappy speaking” means playback start (not playback end).</p>
               <h4>Latest turn</h4>
               <ul>
                 <li>Type: {turnLatency[0].turn_type}</li>
@@ -126,8 +128,11 @@ export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, di
                 <li>STT: {turnLatency[0].stt_ms ?? 'n/a'} ms</li>
                 <li>Assistant generation: {turnLatency[0].generation_ms ?? 'n/a'} ms</li>
                 <li>TTS synthesis: {turnLatency[0].tts_ms ?? 'n/a'} ms</li>
-                <li>Time to assistant text ready: {turnLatency[0].time_to_text_ready_ms ?? 'n/a'} ms</li>
-                <li>Time to Chappy speaking: {turnLatency[0].time_to_playback_start_ms ?? 'n/a'} ms</li>
+                <li>Mic capture: {turnLatency[0].mic_capture_ms ?? 'n/a'} ms</li>
+                <li>Processing to assistant text: {turnLatency[0].post_submit_to_text_ready_ms ?? 'n/a'} ms</li>
+                <li>Processing to Chappy speaking: {turnLatency[0].post_submit_to_chappy_speaking_ms ?? 'n/a'} ms</li>
+                {turnLatency[0].turn_type === 'voice' ? <li>Total from Mic start to assistant text: {turnLatency[0].total_mic_start_to_text_ready_ms ?? 'n/a'} ms</li> : null}
+                {turnLatency[0].turn_type === 'voice' ? <li>Total from Mic start to Chappy speaking: {turnLatency[0].total_mic_start_to_chappy_speaking_ms ?? 'n/a'} ms</li> : null}
                 {turnLatency[0].tts_skipped_reason ? <li>TTS skipped: {turnLatency[0].tts_skipped_reason}</li> : null}
                 {turnLatency[0].playback_skipped_reason ? <li>Playback skipped: {turnLatency[0].playback_skipped_reason}</li> : null}
                 {turnLatency[0].stt_failed ? <li>STT failed</li> : null}
@@ -137,7 +142,7 @@ export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, di
               </ul>
               <h4>Last 5 turns</h4>
               <ul>
-                {turnLatency.slice(0, 5).map((entry) => <li key={entry.id}>{entry.ts} — {entry.turn_type} — Failure {entry.failure_stage ?? 'none'} — STT {entry.stt_ms ?? 'n/a'}ms — Assistant {entry.generation_ms ?? 'n/a'}ms — TTS {entry.tts_ms ?? 'n/a'}ms — Text ready {entry.time_to_text_ready_ms ?? 'n/a'}ms — Chappy speaking {entry.time_to_playback_start_ms ?? 'n/a'}ms{entry.tts_skipped_reason ? ` — TTS skipped: ${entry.tts_skipped_reason}` : ''}{entry.playback_skipped_reason ? ` — Playback skipped: ${entry.playback_skipped_reason}` : ''}{entry.stt_failed ? ' — STT failed' : ''}{entry.assistant_failed ? ' — Assistant failed' : ''}{entry.tts_failed && entry.failure_stage === 'tts' ? ' — TTS failed' : ''}{entry.tts_failed && entry.failure_stage === 'playback' ? ' — Playback failed' : ''}</li>)}
+                {turnLatency.slice(0, 5).map((entry) => <li key={entry.id}>{entry.ts} — {entry.turn_type} — Failure {entry.failure_stage ?? 'none'} — Mic capture {entry.mic_capture_ms ?? 'n/a'}ms — STT {entry.stt_ms ?? 'n/a'}ms — Assistant {entry.generation_ms ?? 'n/a'}ms — TTS {entry.tts_ms ?? 'n/a'}ms — Processing to text {entry.post_submit_to_text_ready_ms ?? 'n/a'}ms — Processing to Chappy speaking {entry.post_submit_to_chappy_speaking_ms ?? 'n/a'}ms{entry.turn_type === 'voice' ? ` — Total mic start to text ${entry.total_mic_start_to_text_ready_ms ?? 'n/a'}ms` : ''}{entry.turn_type === 'voice' ? ` — Total mic start to Chappy speaking ${entry.total_mic_start_to_chappy_speaking_ms ?? 'n/a'}ms` : ''}{entry.tts_skipped_reason ? ` — TTS skipped: ${entry.tts_skipped_reason}` : ''}{entry.playback_skipped_reason ? ` — Playback skipped: ${entry.playback_skipped_reason}` : ''}{entry.stt_failed ? ' — STT failed' : ''}{entry.assistant_failed ? ' — Assistant failed' : ''}{entry.tts_failed && entry.failure_stage === 'tts' ? ' — TTS failed' : ''}{entry.tts_failed && entry.failure_stage === 'playback' ? ' — Playback failed' : ''}</li>)}
               </ul>
             </>
           )}

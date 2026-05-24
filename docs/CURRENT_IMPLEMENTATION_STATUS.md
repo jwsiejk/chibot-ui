@@ -206,6 +206,9 @@ Retired and inactive:
 
 ## Phase 22E latency console accuracy cleanup
 - Admin Runtime Console turn latency is local-only and in-memory (bounded to last 5 turns), with no persistence, no transcript text storage, and no telemetry export.
-- “Time to Chappy speaking” now explicitly means time to audio playback start (`audio.play()` resolve), not end of spoken audio.
+- Voice turns now separate user-controlled `Mic capture` time (mic start → submit) from processing latency (submit → downstream milestones).
+- Processing latency starts only after submit, with explicit metrics for `Processing to assistant text` and `Processing to Chappy speaking`.
+- `Time to Chappy speaking` semantics remain playback start (`audio.play()` resolve), not end of spoken audio.
 - Muted turns still record turn latency with assistant text-ready timing and explicit `TTS skipped: muted` and `Playback skipped: muted`.
+- Voice turns also expose total wall-clock from mic start for text-ready and speaking milestones; typed turns use submit-time totals.
 - Failure stages are explicitly surfaced for STT, assistant generation, TTS synthesis, and playback start failures.

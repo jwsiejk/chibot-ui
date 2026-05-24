@@ -58,14 +58,16 @@ export const ChappySession = () => {
   const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : getLocalTranscript(sessionId)), [sessionId, session, version]);
   if (!sessionId || !session) return <main><h1>Session not found</h1><p>Start a local-first Open Q&amp;A session from /chappy.</p></main>;
 
-  const speakAssistant = async (messageId: string, inFlight: Omit<TurnLatencyEntry, 'id' | 'ts' | 'turn_type'> & { turnStartAt: number; turnType: 'typed' | 'voice' }) => {
+  const speakAssistant = async (messageId: string, inFlight: Omit<TurnLatencyEntry, 'id' | 'ts' | 'turn_type'> & { turnStartAt: number; turnType: 'typed' | 'voice'; submitAt: number }) => {
     if (chappyMuted) {
       setVoiceNotice('Chappy voice muted. Transcript only.');
       pushTurnLatency({
         id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...inFlight,
         tts_ms: null, playback_start_ms: null,
-        time_to_text_ready_ms: inFlight.time_to_text_ready_ms ?? msBetween(inFlight.turnStartAt, performance.now()),
-        time_to_playback_start_ms: null,
+        post_submit_to_text_ready_ms: inFlight.post_submit_to_text_ready_ms ?? msBetween(inFlight.submitAt, performance.now()),
+        post_submit_to_chappy_speaking_ms: null,
+        total_mic_start_to_text_ready_ms: inFlight.total_mic_start_to_text_ready_ms ?? msBetween(inFlight.turnStartAt, performance.now()),
+        total_mic_start_to_chappy_speaking_ms: null,
         tts_skipped_reason: 'muted', playback_skipped_reason: 'muted', failure_stage: null, tts_failed: false,
       });
       return;
@@ -81,7 +83,7 @@ export const ChappySession = () => {
       if (tts.unavailable_reason === 'request_cancelled') pushDiagnostic('tts request cancelled');
       else if (tts.unavailable_reason === 'invalid_response') pushDiagnostic('tts invalid response');
       else pushDiagnostic('tts synthesis failed');
-      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, time_to_playback_start_ms: null, failure_stage: 'tts', tts_failed: true });
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, post_submit_to_chappy_speaking_ms: null, total_mic_start_to_chappy_speaking_ms: null, failure_stage: 'tts', tts_failed: true });
       setVoiceNotice(tts.unavailable_message ?? 'Chappy voice unavailable. Transcript response is still available.');
       setState('ready');
       return;
@@ -99,11 +101,11 @@ export const ChappySession = () => {
       await audio.play();
       const playSuccessAt = performance.now();
       pushDiagnostic('audio playback started');
-      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: msBetween(playStartAt, playSuccessAt), total_ms: msBetween(inFlight.turnStartAt, playSuccessAt), time_to_playback_start_ms: msBetween(inFlight.turnStartAt, playSuccessAt), failure_stage: null, tts_failed: false });
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: msBetween(playStartAt, playSuccessAt), total_ms: msBetween(inFlight.turnStartAt, playSuccessAt), post_submit_to_chappy_speaking_ms: msBetween(inFlight.submitAt, playSuccessAt), total_mic_start_to_chappy_speaking_ms: msBetween(inFlight.turnStartAt, playSuccessAt), failure_stage: null, tts_failed: false });
     } catch (error) {
       const blocked = error instanceof DOMException && error.name === 'NotAllowedError';
       pushDiagnostic(blocked ? 'audio playback blocked' : 'audio playback failed');
-      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, time_to_playback_start_ms: null, failure_stage: 'playback', tts_failed: true });
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, post_submit_to_chappy_speaking_ms: null, total_mic_start_to_chappy_speaking_ms: null, failure_stage: 'playback', tts_failed: true });
       setVoiceNotice('Browser blocked or failed Chappy voice playback. Click in the room or unmute Chappy to enable audio.');
       setState('ready');
       return;
@@ -112,7 +114,7 @@ export const ChappySession = () => {
     setVoiceNotice('Chappy voice on');
   };
 
-  const runAssistantTurn = async (turnStartAt: number, turnType: 'typed' | 'voice', micCaptureMs: number | null, sttMs: number | null) => {
+  const runAssistantTurn = async (turnStartAt: number, submitAt: number, turnType: 'typed' | 'voice', micCaptureMs: number | null, sttMs: number | null) => {
     const generationStartAt = performance.now();
     setState('thinking');
     const result = await generateLocalAssistantMessage(sessionId);
@@ -136,7 +138,8 @@ export const ChappySession = () => {
         stt_ms: sttMs,
         generation_ms: msBetween(generationStartAt, generationEndAt),
         tts_ms: null,
-        time_to_text_ready_ms: msBetween(turnStartAt, generationEndAt),
+        post_submit_to_text_ready_ms: msBetween(submitAt, generationEndAt),
+        total_mic_start_to_text_ready_ms: msBetween(turnStartAt, generationEndAt),
       });
     }
   };
@@ -147,7 +150,7 @@ export const ChappySession = () => {
     appendLocalUserTextMessage(sessionId, text);
     pushDiagnostic('typed message submitted');
     setVersion((v) => v + 1);
-    await runAssistantTurn(turnStartAt, 'typed', null, null);
+    await runAssistantTurn(turnStartAt, turnStartAt, 'typed', null, null);
   };
 
   const onSelectMode = (mode: SessionMode) => { setLocalSessionMode(sessionId, mode, 'user'); setVersion((previous) => previous + 1); };
@@ -171,7 +174,7 @@ export const ChappySession = () => {
       return;
     }
     setVersion((v) => v + 1);
-    await runAssistantTurn(turnStartAt, 'voice', micCaptureMs, msBetween(sttStartAt, sttEndAt));
+    await runAssistantTurn(turnStartAt, micSubmitAt, 'voice', micCaptureMs, msBetween(sttStartAt, sttEndAt));
   };
 
   return (
