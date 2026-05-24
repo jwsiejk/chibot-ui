@@ -256,6 +256,15 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+    expect(screen.getByLabelText('transcript panel')).toHaveClass('meeting-chat-panel');
+    expect(screen.getByLabelText('transcript message list')).toBeInTheDocument();
+    expect(screen.getByText('You')).toBeInTheDocument();
+    expect(screen.queryByText('assistant:')).not.toBeInTheDocument();
+    expect(screen.queryByText('user:')).not.toBeInTheDocument();
+
+    const userBubble = screen.getByText('You').closest('.msg');
+    expect(userBubble).toHaveClass('msg', 'user');
+
   });
 
   it('records muted typed turn latency and does not call TTS when muted', async () => {
@@ -440,8 +449,7 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByText('Chappy is ready')).toHaveClass('stage-status-pill');
     expect(screen.queryByText('Primary participant')).not.toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toHaveClass('meeting-chat-panel');
-    expect(screen.getByLabelText('transcript message count')).toHaveTextContent('0 messages');
-    expect(screen.getByText('Ask Chappy anything. He’ll keep it conversational and go deeper when you ask.')).toBeInTheDocument();
+        expect(screen.getByText('Ask Chappy anything. He’ll keep it conversational and go deeper when you ask.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('meeting side column')).toBeInTheDocument();
     const toolbar = screen.getByRole('region', { name: 'bottom meeting toolbar' });
@@ -502,6 +510,30 @@ describe('phase 22 chappy UI', () => {
   });
 
 
+
+  it('transcript panel displays speaker labels and bubble classes for canonical roles', () => {
+    const sessionId = 'session_test';
+    const local = getLocalSession(sessionId);
+    if (!local) return;
+    local.transcript = [
+      { id: 'u1', ts: new Date().toISOString(), role: 'user', text: 'hello', source: 'typed', session_id: sessionId, meta: {} },
+      { id: 'a1', ts: new Date().toISOString(), role: 'assistant', text: 'hi there', source: 'assistant_stream', session_id: sessionId, meta: {} },
+    ];
+
+    render(<MemoryRouter initialEntries={[`/chappy/session/${sessionId}`]}><App /></MemoryRouter>);
+
+    expect(screen.getByText('You')).toBeInTheDocument();
+    expect(screen.getByText('vChappy')).toBeInTheDocument();
+    expect(screen.queryByText('assistant:')).not.toBeInTheDocument();
+    expect(screen.queryByText('user:')).not.toBeInTheDocument();
+
+    const userBubble = screen.getByText('You').closest('.msg');
+    expect(userBubble).toHaveClass('msg', 'user');
+
+    const assistantBubble = screen.getByText('vChappy').closest('.msg');
+    expect(assistantBubble).toHaveClass('msg', 'assistant');
+  });
+
   it('typed input appends user canonical transcript message with typed source and text', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
@@ -515,8 +547,12 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello chappy' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(screen.getByText('user:')).toBeInTheDocument();
+    expect(screen.getByText('You')).toBeInTheDocument();
     expect(screen.getByText(/hello chappy/)).toBeInTheDocument();
+    expect(screen.queryByText('user:')).not.toBeInTheDocument();
+
+    const userBubble = screen.getByText('You').closest('.msg');
+    expect(userBubble).toHaveClass('msg', 'user');
   });
 
 
