@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { App } from '../app/App';
+import * as serverApi from '../../../../services/askchappy-api/src/api/server';
 import { getLocalSession } from '../../../../services/askchappy-api/src/api/server';
 import { RETIRED_ROUTES, ROUTES } from '../../../../shared/contracts/askchappy';
 import { MVP_ADMIN_EMAIL } from '../../../../shared/contracts/auth';
@@ -182,6 +183,96 @@ describe('phase 22 chappy UI', () => {
   });
 
 
+
+
+  it('renders GPU validation from services array and manual guidance in admin modal', async () => {
+    vi.spyOn(serverApi, 'getLocalGpuValidationReport').mockResolvedValue({
+      generated_at: '2026-05-24T00:00:00.000Z',
+      services: [
+        { service: 'ollama', status: 'gpu_confirmed', reason: 'Ollama on CUDA', suggested_commands: ['nvidia-smi -l 1'] },
+        { service: 'faster_whisper', status: 'cpu_only', reason: 'Running on CPU', suggested_commands: ['nvidia-smi -l 1'] },
+        { service: 'kokoro_onnx', status: 'unknown', reason: 'Provider omitted', suggested_commands: ['nvidia-smi -l 1'] },
+      ],
+      manual_guidance: ['Use nvidia-smi -l 1', 'Trigger each service and watch utilization'],
+    });
+
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Ollama GPU: gpu_confirmed — Ollama on CUDA')).toBeInTheDocument();
+      expect(screen.getByText('faster-whisper GPU: cpu_only — Running on CPU')).toBeInTheDocument();
+      expect(screen.getByText('Kokoro provider/GPU: unknown — Provider omitted')).toBeInTheDocument();
+      expect(screen.getByText('Use nvidia-smi -l 1')).toBeInTheDocument();
+    });
+  });
+
+  it('renders unknown status when a GPU service entry is missing', async () => {
+    vi.spyOn(serverApi, 'getLocalGpuValidationReport').mockResolvedValue({
+      generated_at: '2026-05-24T00:00:00.000Z',
+      services: [{ service: 'ollama', status: 'unknown', reason: 'No endpoint confirmation', suggested_commands: [] }],
+      manual_guidance: ['Use nvidia-smi -l 1'],
+    });
+
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('faster-whisper GPU: unknown — Service validation entry not available in this report.')).toBeInTheDocument();
+      expect(screen.getByText('Kokoro provider/GPU: unknown — Service validation entry not available in this report.')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps transcript text visible in unmuted mode while assistant turn runs', async () => {
+    vi.spyOn(serverApi, 'generateLocalAssistantMessage').mockResolvedValue({ ok: true, text: 'assistant response', runtime: 'local_ollama' } as never);
+
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+  });
+
+  it('does not call TTS when muted', async () => {
+    vi.spyOn(serverApi, 'generateLocalAssistantMessage').mockResolvedValue({ ok: true, text: 'assistant muted response', runtime: 'local_ollama' } as never);
+    const synthSpy = vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({ audio_status: 'unavailable', audio_base64: null, audio_format: null });
+
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mute Chappy' }));
+    fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello muted' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(screen.getByText(/hello muted/)).toBeInTheDocument());
+    expect(synthSpy).not.toHaveBeenCalled();
+  });
 
   it('opens and closes Admin Runtime Console from toolbar for admin only', async () => {
     render(
