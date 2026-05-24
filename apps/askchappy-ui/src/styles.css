@@ -63,11 +63,16 @@ a { color: inherit; text-decoration: none; }
 .chappy-avatar-placeholder { width: 154px; height: 154px; border-radius: 50%; display: grid; place-items: center; font-size: 3.15rem; font-weight: 800; background: radial-gradient(circle at 35% 28%, rgba(94, 128, 208, 0.34), transparent 34%), #263f79; border: 2px solid rgba(110, 151, 232, 0.78); box-shadow: 0 24px 60px rgba(0, 0, 0, .34), inset 0 0 0 1px rgba(255,255,255,.06); margin: 0; }
 .chappy-stage-center h2 { margin: .35rem 0 0; font-size: 1.45rem; }
 .chappy-stage-center p { margin: 0; color: #d9e4ff; }
-.stage-state-row { position: absolute; top: 1rem; left: 1rem; right: 1rem; display: flex; justify-content: space-between; pointer-events: none; }
+.stage-state-row { position: absolute; top: 1rem; left: 1rem; right: 1rem; display: flex; justify-content: flex-start; pointer-events: none; }
 .state-pill, .state-dot { border-radius: 999px; padding: .34rem .75rem; font-size: .82rem; background: rgba(31, 53, 99, .72); border: 1px solid rgba(101, 140, 220, .7); color: #edf4ff; width: fit-content; box-shadow: 0 10px 24px rgba(0,0,0,.18); }
+.stage-status-pill { padding: .2rem .62rem; font-size: .74rem; font-weight: 600; letter-spacing: .01em; text-transform: uppercase; background: rgba(8, 14, 28, .42); border: 1px solid rgba(145, 176, 241, .42); box-shadow: 0 6px 16px rgba(0,0,0,.16); backdrop-filter: blur(5px); }
 .meeting-side-column { min-height: 0; display: flex; overflow: hidden; }
-.meeting-chat-panel { display: flex; flex-direction: column; min-height: 0; width: 100%; overflow: hidden; }
-.transcript-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .6rem; overflow-y: auto; min-height: 0; flex: 1; }
+.meeting-chat-panel { display: flex; flex-direction: column; min-height: 0; width: 100%; overflow: hidden; border: 1px solid rgba(103, 130, 186, .32); border-radius: 18px; background: linear-gradient(180deg, rgba(11, 19, 36, .94), rgba(8, 15, 29, .96)); box-shadow: 0 18px 38px rgba(0,0,0,.28); }
+.meeting-chat-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .85rem .95rem .65rem; border-bottom: 1px solid rgba(117, 145, 207, .22); }
+.meeting-chat-header h3 { margin: 0; font-size: .86rem; letter-spacing: .04em; text-transform: uppercase; color: #c8d8ff; }
+.meeting-chat-meta { font-size: .72rem; color: rgba(193, 210, 245, .74); }
+.transcript-empty { margin: 0; padding: .9rem .95rem 1rem; color: #c9d8fb; font-size: .9rem; line-height: 1.45; }
+.transcript-list { list-style: none; padding: .2rem .95rem .95rem; margin: 0; display: grid; gap: .6rem; overflow-y: auto; min-height: 0; flex: 1; }
 .guided-modes-panel { max-height: 220px; overflow-y: auto; }
 .guided-modes-panel.compact { max-height: 180px; }
 .msg { padding: .6rem .75rem; border-radius: 12px; background: #13264b; border: 1px solid #30508b; }
