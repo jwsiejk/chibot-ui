@@ -252,11 +252,11 @@ describe('phase 5 chappy UI', () => {
 
     expect(screen.getByRole('heading', { name: 'AskChappy session' })).toBeInTheDocument();
     expect(screen.getByLabelText('chappy stage')).toBeInTheDocument();
-    expect(screen.getByText('Session state indicator: ready')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Session status: Ready' })).toBeInTheDocument();
     expect(screen.getByText('Chappy avatar stage placeholder')).toBeInTheDocument();
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Avatar asset status: placeholder')).toBeInTheDocument();
-    expect(screen.getByText('Speech provider status: Standard local voice selected — Kokoro runtime not configured.')).toBeInTheDocument();
+    expect(screen.getByText('Standard local voice is selected. Kokoro is not configured/reachable, so transcript responses stay text-first.')).toBeInTheDocument();
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
@@ -275,6 +275,8 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
 
     await waitFor(() => {
+      expect(screen.getByText('Runtime readiness details')).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Runtime readiness details'));
       expect(screen.getByText(/Ollama: .* — /)).toBeInTheDocument();
     });
     expect(screen.getByText(/Kokoro TTS: .* — /)).toBeInTheDocument();

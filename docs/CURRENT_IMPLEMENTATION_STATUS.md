@@ -111,3 +111,10 @@ Retired and inactive:
 - Documented required service start order and full local runtime validation pass.
 - Added troubleshooting matrix for runtime reachability/readiness, microphone, STT/TTS behavior, and local persistence recovery.
 - Reaffirmed no scope drift: no RAG/content grounding/DDN ingestion, no cloud providers, no cloned voice provider adapter runtime, no real avatar/visemes, no database/cloud persistence.
+
+## Phase 21 session UX polish and local runtime clarity
+- `/chappy/session/:sessionId` now shows a focused session status area with friendly labels for `ready`, `listening`, `transcribing`, `thinking`, `speaking`, and recoverable `error` states.
+- Empty transcript now invites users to ask Chappy anything via typed or voice input.
+- Runtime readiness remains visible with status + reason text in a minimal details panel (non-diagnostic-heavy).
+- Voice flow clarifies recording/transcribing/no-speech and preserves canonical transcript behavior (no fake messages on STT failures/no-speech).
+- TTS unavailable behavior is explicit and non-blocking: assistant text remains visible and no fake transcript messages are created.
