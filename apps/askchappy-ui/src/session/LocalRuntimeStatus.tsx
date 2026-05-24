@@ -31,10 +31,10 @@ export const LocalRuntimeStatus = ({ compact = false }: { compact?: boolean }) =
     }).catch(() => setMic('available'));
   }, []);
 
-  if (!status) return <p className={compact ? 'toolbar-runtime' : 'card panel'}>Local runtime status: checking…</p>;
+  if (!status) return <p className={compact ? 'toolbar-runtime utility-btn' : 'card panel'}>Local runtime status: checking…</p>;
 
   return (
-    <details className={compact ? 'toolbar-runtime runtime-details' : 'card panel runtime-details'}>
+    <details className={compact ? 'toolbar-runtime utility-btn runtime-details' : 'card panel runtime-details'}>
       <summary>{compact ? 'Runtime' : 'Runtime readiness details'}</summary>
       <ul>
         <li>Ollama: {status.ollama.status} — {status.ollama.reason}</li>
