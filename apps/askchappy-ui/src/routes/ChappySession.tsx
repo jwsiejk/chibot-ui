@@ -17,6 +17,7 @@ import { TypedInput } from '../session/TypedInput';
 import { TranscriptPanel } from '../transcript/TranscriptPanel';
 import { SessionRightRail } from '../session/SessionRightRail';
 import { VoiceInput } from '../session/VoiceInput';
+import { LocalRuntimeStatus } from '../session/LocalRuntimeStatus';
 import { transcribeLocalVoiceInput } from '../../../../services/askchappy-api/src/api/server';
 
 export const ChappySession = () => {
@@ -75,10 +76,12 @@ export const ChappySession = () => {
     const tts = await synthesizeLocalAssistantMessage(sessionId, latestAssistant.id);
     if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) {
       setVoiceNotice('Standard local voice selected — Kokoro runtime not configured.');
+      setState('ready');
       return;
     }
     const audio = new Audio(`data:audio/${tts.audio_format};base64,${tts.audio_base64}`);
     await audio.play();
+    setState('ready');
     setVoiceNotice('Ready');
   };
 
@@ -87,7 +90,7 @@ export const ChappySession = () => {
     setVoiceNotice('Transcribing');
     const stt = await transcribeLocalVoiceInput(sessionId, blob);
     if (!stt.ok) {
-      setState('error');
+      setState('ready');
       setVoiceNotice(stt.code === 'not_configured' ? 'Local STT not configured' : stt.message);
       return;
     }
@@ -96,7 +99,7 @@ export const ChappySession = () => {
     const result = await generateLocalAssistantMessage(sessionId);
     if (!result.ok) {
       setRuntimeNotice(result.message);
-      setState('error');
+      setState('ready');
       return;
     }
     setVersion((previous) => previous + 1);
@@ -112,6 +115,7 @@ export const ChappySession = () => {
       <p>Speech provider status: {voiceStatus.standard_tts_configured ? 'Standard local voice active.' : 'Standard local voice selected — Kokoro runtime not configured.'}</p>
       <p>Voice playback status: {voiceNotice}</p>
       <p>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured' : voiceStatus.cloned_voice_status_label}.</p>
+      <LocalRuntimeStatus />
       <button type="button" onClick={onSpeakLatestAssistant} disabled={!latestAssistant}>Speak response</button>
       <ChappyStage state={state} />
       <TranscriptPanel messages={messages} />
