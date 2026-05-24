@@ -7,8 +7,9 @@ export const ChappyStage = ({ state }: { state: SessionState }) => {
   const avatarStatus = getChappyAvatarRuntimeStatus(state);
 
   return (
-    <section aria-label="chappy stage">
-      <h2>Chappy avatar stage placeholder</h2>
+    <section className="card stage-card" aria-label="chappy stage">
+      <h2>Chappy Stage</h2>
+      <p>Chappy avatar stage placeholder</p>
       <p>{stateConfig.label}</p>
       <p>{stateConfig.description}</p>
       <p>State: {stateConfig.state}</p>

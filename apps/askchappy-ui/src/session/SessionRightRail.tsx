@@ -9,7 +9,7 @@ export const SessionRightRail = ({
   activeMode: SessionMode;
   onSelectMode: (mode: SessionMode) => void;
 }) => (
-  <aside aria-label="session right rail">
+  <aside className="card panel" aria-label="session right rail">
     <h3>Current mode</h3>
     <p>{MODE_LOOKUP[activeMode].title}</p>
     <p>{MODE_LOOKUP[activeMode].guidance}</p>
@@ -17,7 +17,7 @@ export const SessionRightRail = ({
     <ul>
       {MODE_DEFINITIONS.map((card) => (
         <li key={card.mode}>
-          <button type="button" onClick={() => onSelectMode(card.mode)} aria-pressed={card.mode === activeMode}>
+          <button className="btn secondary" type="button" onClick={() => onSelectMode(card.mode)} aria-pressed={card.mode === activeMode}>
             {card.title}
           </button>
         </li>

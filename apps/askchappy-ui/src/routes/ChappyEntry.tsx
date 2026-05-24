@@ -15,7 +15,7 @@ export const ChappyEntry = () => {
 
   return (
     <AuthGate>
-      <main>
+      <main className="app-shell">
         <AppNav />
         <ChappyEntryScreen onStartOpenQa={onStartOpenQa} />
       </main>
