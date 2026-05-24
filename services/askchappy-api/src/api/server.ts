@@ -10,6 +10,7 @@ import {
 import type { SessionMode } from '../../../../shared/contracts/modes';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import { getLocalVoiceRuntimeStatus, synthesizeAssistantTranscriptMessage } from '../voice/voiceRuntime';
+import { generateAssistantResponse } from '../assistant/ollamaAdapter';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
@@ -55,6 +56,36 @@ export const setLocalSessionMode = (
   return updateSessionMode(session, toMode, actor);
 };
 
+
+export const generateLocalAssistantMessage = async (sessionId: string) => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+  const latestUser = [...session.transcript].reverse().find((entry) => entry.role === 'user');
+  if (!latestUser) throw new Error('Cannot generate assistant response without a user transcript message.');
+
+  const result = await generateAssistantResponse({
+    session_id: session.session_id,
+    metadata: session.metadata,
+    transcript: session.transcript,
+    latest_user_text: latestUser.text,
+  });
+
+  if (!result.ok) return result;
+
+  const assistantMessage: TranscriptMessage = {
+    id: `msg_${crypto.randomUUID()}`,
+    ts: new Date().toISOString(),
+    role: 'assistant',
+    text: result.text,
+    source: 'assistant_stream',
+    session_id: session.session_id,
+    meta: { runtime: result.runtime },
+  };
+
+  appendTranscriptMessage(session, assistantMessage);
+  return result;
+};
 export const synthesizeLocalAssistantMessage = (sessionId: string, messageId: string) => {
   const session = getSession(sessionId);
   if (!session) throw new Error(`Session not found: ${sessionId}`);

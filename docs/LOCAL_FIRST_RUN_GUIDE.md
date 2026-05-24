@@ -78,3 +78,11 @@ Vite handles browser-history fallback for canonical React routes (`/chappy`, `/c
 - AskChappy stores a schema-versioned local payload in browser localStorage for session records, canonical transcript messages (`text` field), `metadata.askchappy`, and session events via the browser-local adapter (`services/askchappy-api/src/sessions/browserLocalSessionPersistenceAdapter.ts`).
 - Mode changes persist as session events and do not create fake transcript messages.
 - Malformed persisted payloads are discarded safely to restore clean local state.
+
+## Phase 17 local assistant runtime
+Set optional env vars for local Ollama runtime:
+- `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`)
+- `OLLAMA_MODEL` (default `gemma3:4b`)
+- `OLLAMA_KEEP_ALIVE` (optional, e.g. `30m`)
+- `OLLAMA_NUM_CTX` (optional, e.g. `8192`)
+If Ollama is not reachable, AskChappy shows: "Local Ollama runtime is not configured or not reachable." No cloud fallback is used.

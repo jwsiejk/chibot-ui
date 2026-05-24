@@ -46,3 +46,9 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm local voice input/output does not create separate transcript models (voice input -> canonical user transcript text; voice output <- canonical assistant transcript text).
 
 - [ ] Confirm Standard voice remains explicitly selected when cloned config is missing/incomplete, consent is false, publication is not `published`, `enabled` is false, adapter is missing, or readiness has errors.
+
+- [x] Phase 17 local Ollama typed assistant runtime wired (`gemma3:4b` default).
+- [x] No OpenAI/cloud LLM runtime added.
+- [x] No RAG/content grounding/document ingestion added.
+- [ ] Phase 18 local Kokoro/kokoro-onnx TTS.
+- [ ] Phase 19 local faster-whisper STT.
