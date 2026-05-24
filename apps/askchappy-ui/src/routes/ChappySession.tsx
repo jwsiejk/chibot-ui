@@ -19,6 +19,7 @@ export const ChappySession = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [state, setState] = useState<SessionState>('ready');
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [showModes, setShowModes] = useState(false);
   const [version, setVersion] = useState(0);
   const [voiceNotice, setVoiceNotice] = useState('Ready to record.');
   const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
@@ -35,8 +36,10 @@ export const ChappySession = () => {
 
   return (
     <main className="app-shell">
-      <h1>AskChappy session</h1>
-      <p>Local production working session ID: {sessionId}</p>
+      <header className="card status-bar top-meeting-bar">
+        <h1>AskChappy session</h1>
+        <p>Local production working session ID: {sessionId}</p>
+      </header>
       <section className="card status-bar" aria-label="session status">
         <div><h2>Session status: {stateUi.label}</h2><p>{stateUi.description}</p></div>
         <span className="state-pill">{state}</span>
@@ -45,18 +48,30 @@ export const ChappySession = () => {
         <section className="main-col">
           <ChappyStage state={state} />
           <TranscriptPanel messages={messages} />
-          <TypedInput onSubmitText={onSubmitText} />
-          <VoiceInput onStart={() => { setState('listening'); setVoiceNotice('Recording. Press stop when done.'); }} onStop={() => { setState('transcribing'); setVoiceNotice('Transcribing voice input.'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
-          <section className="card panel" aria-label="input controls area">
-            <p>Voice input: {voiceNotice}</p>{runtimeNotice ? <p>{runtimeNotice}</p> : null}
-            {!voiceStatus.standard_tts_configured ? <p>Standard local voice is selected. Kokoro is not configured/reachable, so transcript responses stay text-first.</p> : null}
-            <button className="btn secondary" type="button" onClick={onSpeakLatestAssistant} disabled={!latestAssistant}>Speak response</button>
-            <p>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured.' : `${voiceStatus.cloned_voice_status_label}.`}</p>
-          </section>
-          <LocalRuntimeStatus />
         </section>
         <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} />
       </div>
+      {showModes ? (
+        <div className="modes-overlay card panel" role="dialog" aria-label="guided modes overlay">
+          <button className="btn secondary" type="button" onClick={() => setShowModes(false)}>Close</button>
+          <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={(mode) => { onSelectMode(mode); setShowModes(false); }} />
+        </div>
+      ) : null}
+      <section className="bottom-toolbar" aria-label="bottom meeting toolbar">
+        <div className="toolbar-notice" role="status">Voice input: {voiceNotice} {runtimeNotice ? `• ${runtimeNotice}` : ''}</div>
+        <div className="toolbar-controls">
+          <VoiceInput compact onStart={() => { setState('listening'); setVoiceNotice('Recording. Press stop when done.'); }} onStop={() => { setState('transcribing'); setVoiceNotice('Transcribing voice input.'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
+          <TypedInput compact onSubmitText={onSubmitText} />
+          <button className="meeting-btn" type="button" onClick={onSpeakLatestAssistant} disabled={!latestAssistant}><span aria-hidden="true">🔊</span> Speak</button>
+          <LocalRuntimeStatus compact />
+          <button className="meeting-btn" type="button" onClick={() => setShowModes(true)}>Modes</button>
+          <button className="meeting-btn meeting-btn-end" type="button" disabled aria-label="End session (not yet available)">End (soon)</button>
+        </div>
+        <div className="toolbar-subnotice">
+          {!voiceStatus.standard_tts_configured ? <span className="mini-badge">Kokoro unavailable: text-first responses continue.</span> : null}
+          <span>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured.' : `${voiceStatus.cloned_voice_status_label}.`}</span>
+        </div>
+      </section>
     </main>
   );
 };

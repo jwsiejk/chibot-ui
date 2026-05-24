@@ -258,12 +258,15 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByText('Chappy avatar stage placeholder')).toBeInTheDocument();
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Avatar asset status: placeholder')).toBeInTheDocument();
-    expect(screen.getByText('Standard local voice is selected. Kokoro is not configured/reachable, so transcript responses stay text-first.')).toBeInTheDocument();
+    expect(screen.getByText('Kokoro unavailable: text-first responses continue.')).toBeInTheDocument();
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'bottom meeting toolbar' })).toBeInTheDocument();
+    expect(screen.getByLabelText('voice input panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
+    expect(screen.getByText(/Local runtime status: checking/)).toBeInTheDocument();
 
-    expect(screen.getByRole('button', { name: 'Speak response' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Speak' })).toBeDisabled();
   });
 
   it('shows local runtime readiness statuses with reason text', async () => {
@@ -277,10 +280,10 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Runtime readiness details')).toBeInTheDocument();
-      fireEvent.click(screen.getByText('Runtime readiness details'));
-      expect(screen.getByText(/Ollama: .* — /)).toBeInTheDocument();
+      expect(screen.getByText('Runtime')).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByText('Runtime'));
+    expect(screen.getByText(/Ollama: .* — /)).toBeInTheDocument();
     expect(screen.getByText(/Kokoro TTS: .* — /)).toBeInTheDocument();
     expect(screen.getByText(/faster-whisper STT: .* — /)).toBeInTheDocument();
     expect(screen.getByText(/Browser mic: .* — /)).toBeInTheDocument();
@@ -383,9 +386,9 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start speaking' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop recording' })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }));
+    fireEvent.click(screen.getByRole('button', { name: 'microphone control ready to record' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'microphone control recording' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'microphone control recording' }));
 
     await waitFor(() => {
       expect(screen.getByText('Voice input: No speech detected. Try again and speak clearly.')).toBeInTheDocument();
@@ -393,7 +396,7 @@ describe('phase 5 chappy UI', () => {
     });
 
     expect(screen.queryByText('user:')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start speaking' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'microphone control ready to record' })).toBeInTheDocument();
   });
 
   it('renders right rail in open_qa mode initially', () => {
