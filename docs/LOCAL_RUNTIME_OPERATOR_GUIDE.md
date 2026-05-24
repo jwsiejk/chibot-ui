@@ -28,6 +28,8 @@ Use these defaults unless intentionally overridden:
 
 Optional runtime knobs may also be used where supported (for example timeout/context settings), but defaults above define the baseline operator validation loop.
 
+Env-file behavior: `.env.local` values are loaded by Vite (`loadEnv`) and only these local runtime keys are surfaced to runtime config helpers through `process.env.*` constants. This keeps config local-first and avoids introducing cloud/provider secret paths.
+
 ## Start order (required)
 Always start in this order:
 1. Start Ollama.

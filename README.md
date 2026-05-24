@@ -46,6 +46,11 @@ npm run build:local-runtime
 npm run smoke:local-runtime
 ```
 
+## Env-file loading behavior (Phase 20B cleanup)
+- Vite now loads `.env.local`/`.env` via `loadEnv` in `vite.config.ts` and maps only the local runtime keys used by AskChappy runtime helpers (`OLLAMA_*`, `KOKORO_TTS_*`, `FASTER_WHISPER_*`) onto `process.env.*` compile-time constants.
+- This keeps the existing runtime config helpers (`getOllamaConfig`, `getKokoroTtsConfig`, `getFasterWhisperConfig`) as the single config contract while ensuring `.env.local` overrides are actually applied at runtime.
+- No cloud/OpenAI/provider API secrets are introduced, and `.env.local` remains gitignored.
+
 ## Terminology and route policy
 - Deployment model: local-first, local production/local MVP.
 - Retired `/demo*` and `/visual-session*` routes remain inactive historical routes.
