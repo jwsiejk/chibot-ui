@@ -5,11 +5,13 @@ import { MODE_DEFINITIONS, MODE_LOOKUP } from '../modes/guidedModes';
 export const SessionRightRail = ({
   activeMode,
   onSelectMode,
+  compact = false,
 }: {
   activeMode: SessionMode;
   onSelectMode: (mode: SessionMode) => void;
+  compact?: boolean;
 }) => (
-  <aside className="card panel guided-modes-panel" aria-label="session right rail">
+  <aside className={`card panel guided-modes-panel${compact ? ' compact' : ''}`} aria-label="session right rail">
     <h3>Current mode</h3>
     <p>{MODE_LOOKUP[activeMode].title}</p>
     <p>{MODE_LOOKUP[activeMode].guidance}</p>

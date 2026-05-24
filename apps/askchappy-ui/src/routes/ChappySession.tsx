@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { SessionState } from '../../../../shared/contracts/session';
 import type { SessionMode } from '../../../../shared/contracts/modes';
@@ -22,6 +22,10 @@ export const ChappySession = () => {
   const [showModes, setShowModes] = useState(false);
   const [version, setVersion] = useState(0);
   const [voiceNotice, setVoiceNotice] = useState('Ready');
+  useEffect(() => {
+    document.body.classList.add('session-viewport-lock');
+    return () => document.body.classList.remove('session-viewport-lock');
+  }, []);
   const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
   const voiceStatus = useMemo(() => getLocalVoiceStatus(), []);
   const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : getLocalTranscript(sessionId)), [sessionId, session, version]);
@@ -35,16 +39,19 @@ export const ChappySession = () => {
   const stateUi = STATE_COPY[state];
 
   return (
-    <main className="meeting-room">
+    <main className="meeting-room session-shell" aria-label="askchappy session room">
       <header className="card status-bar top-meeting-bar" aria-label="top meeting bar">
         <h1>AskChappy</h1>
         <p>Open Q&amp;A • {stateUi.label} • session {sessionId}</p>
       </header>
-      <div className="meeting-content">
+      <div className="meeting-content" aria-label="meeting body">
         <section className="meeting-stage" aria-label="meeting stage">
           <ChappyStage state={state} />
         </section>
-        <TranscriptPanel messages={messages} />
+        <section className="meeting-side-column" aria-label="meeting side column">
+          <TranscriptPanel messages={messages} />
+          <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} compact />
+        </section>
       </div>
       {showModes ? (
         <div className="modes-overlay card panel" role="dialog" aria-label="guided modes overlay">
@@ -66,7 +73,6 @@ export const ChappySession = () => {
           <span>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured.' : `${voiceStatus.cloned_voice_status_label}.`}</span>
         </div>
       </section>
-      <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} />
     </main>
   );
 };
