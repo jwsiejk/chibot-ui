@@ -182,6 +182,28 @@ describe('phase 22 chappy UI', () => {
   });
 
 
+
+  it('opens and closes Admin Runtime Console from toolbar for admin only', async () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+    expect(screen.getByRole('dialog', { name: 'Admin Runtime Console' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Local Runtime Readiness' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'GPU Validation' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Service Endpoints' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Troubleshooting' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Admin Runtime Console' })).not.toBeInTheDocument());
+  });
+
   it('does not expose local gpu validation panel in normal /chappy/session/:sessionId', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
@@ -271,7 +293,8 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
     expect(screen.getByText(/Local runtime status: checking/)).toBeInTheDocument();
 
-    expect(screen.getByRole('button', { name: 'Speak' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Speak' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mute Chappy' })).toBeInTheDocument();
 
     expect(screen.queryByText('Start recording')).not.toBeInTheDocument();
     expect(screen.queryByText('Stop recording')).not.toBeInTheDocument();

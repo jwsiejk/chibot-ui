@@ -156,3 +156,19 @@ Use this checklist before local production/local MVP handoff.
 - [x] No stage debug metadata in normal session.
 - [x] Runtime readiness is compact.
 - [x] Admin controls hidden from normal session.
+
+
+## Phase 22D checklist additions
+- [ ] Login/lobby feels modern and meeting-like.
+- [ ] /chappy is pre-call lobby (not landing page).
+- [ ] Session uses Zoom-room layout with dominant Chappy stage.
+- [ ] Bottom toolbar is always visible and meeting-style.
+- [ ] Mic acts as user push-to-talk input (no recorder wording).
+- [ ] Mute Chappy controls output audio only.
+- [ ] Assistant responses auto-play when unmuted.
+- [ ] Muted mode remains transcript-only and recoverable.
+- [ ] TTS failures are non-blocking (transcript still shown).
+- [ ] Only transcript/chat message area scrolls in session.
+- [ ] Admin runtime console appears only for admin users.
+- [ ] Diagnostics are client-only, in-memory, bounded.
+- [ ] No OS/native log collection is claimed.

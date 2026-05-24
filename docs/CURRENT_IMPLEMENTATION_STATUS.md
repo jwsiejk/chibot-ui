@@ -171,3 +171,13 @@ Retired and inactive:
 - Transcript panel remains visible in-room and transcript message list is the dedicated vertical scroller (`overflow-y: auto`) as conversation grows.
 - Guided/current mode panel is compact and internally scrollable so mode content no longer forces the entire page taller than the viewport.
 - `/chappy` lobby remains viewport-friendly; if content exceeds available space, internal container scrolling is used instead of overflowing the browser page.
+
+
+## Phase 22D update
+- /chappy now presents a true pre-call meeting lobby with centered room preview, compact guided mode chips, and Join Chappy Room CTA.
+- /chappy/session/:sessionId now uses a true Zoom-style meeting-room shell with top bar, dominant Chappy stage tile, right transcript panel, and persistent bottom toolbar.
+- Toolbar semantics updated: Mic is push-to-talk user input, Modes is compact overlay access, Runtime is compact disclosure, and admin-only Admin opens runtime modal.
+- Assistant responses now auto-play via TTS by default when available/unmuted; transcript remains canonical regardless of TTS success.
+- Speak control replaced by Mute Chappy / Unmute Chappy output toggle; muted mode is transcript-only and non-blocking.
+- Added Admin Runtime Console modal with readiness, GPU validation, local endpoints, troubleshooting hints, and bounded client diagnostics (max 25 events, in-memory only).
+- Session shell is viewport-contained with transcript message list as the primary scrolling area.
