@@ -58,3 +58,14 @@
 - Local Kokoro/kokoro-onnx TTS uses native `fetch` + local HTTP endpoint only.
 - No cloud voice SDK dependency was added.
 - No additional TTS npm dependency was added for Phase 18.
+
+## Phase 21D local runtime wrapper dependencies
+- Added local-only Python runtime dependency manifest at `services/local-runtime/requirements.txt`:
+  - `fastapi`
+  - `uvicorn`
+  - `python-multipart`
+  - `kokoro-onnx`
+  - `onnxruntime-gpu`
+  - `faster-whisper`
+- No OpenAI/cloud/hosted provider SDKs were added.
+- No npm/package.json dependency changes were made for wrapper runtime concerns.

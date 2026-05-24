@@ -184,3 +184,23 @@ CPUExecutionProvider
 Keep local model/audio assets outside git, for example:
 - `C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`
 - `C:\AskChipAssets\kokoro\voices-v1.0.bin`
+
+## Phase 21D: local runtime wrapper servers
+- Install wrapper dependencies into `.venv-local-runtime` only:
+```powershell
+py -m venv .venv-local-runtime
+.\.venv-local-runtime\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r services/local-runtime/requirements.txt
+```
+- Validate ONNX providers:
+```powershell
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+- Required machine-local command defaults now point at committed wrappers in `.env.example` (`KOKORO_TTS_RUN_COMMAND`, `FASTER_WHISPER_RUN_COMMAND`).
+- Wrapper startup:
+  - `./scripts/start-kokoro-tts.ps1`
+  - `./scripts/start-faster-whisper-stt.ps1`
+  - `./scripts/check-local-runtime.ps1`
+  - `./scripts/start-local-runtime.ps1`
+- GPU validation policy unchanged: AskChappy reports only local health payloads; confirm live process GPU usage with `nvidia-smi -l 1`.
