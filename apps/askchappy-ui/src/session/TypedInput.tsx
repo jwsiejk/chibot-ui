@@ -1,6 +1,6 @@
 import React, { FormEvent, useState } from 'react';
 
-export const TypedInput = ({ onSubmitText, disabled }: { onSubmitText: (text: string) => void | Promise<void>; disabled?: boolean }) => {
+export const TypedInput = ({ onSubmitText, disabled, compact = false }: { onSubmitText: (text: string) => void | Promise<void>; disabled?: boolean; compact?: boolean }) => {
   const [text, setText] = useState('');
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -10,6 +10,16 @@ export const TypedInput = ({ onSubmitText, disabled }: { onSubmitText: (text: st
     onSubmitText(trimmed);
     setText('');
   };
+
+  if (compact) {
+    return (
+      <form className="meeting-composer" onSubmit={onSubmit} aria-label="typed input form">
+        <label htmlFor="typed-input" className="sr-only">Type a message</label>
+        <input className="input" id="typed-input" placeholder="Message Chappy" value={text} onChange={(event) => setText(event.target.value)} disabled={disabled} />
+        <button className="meeting-btn" type="submit" disabled={disabled}>Send</button>
+      </form>
+    );
+  }
 
   return (
     <form className="card panel" onSubmit={onSubmit} aria-label="typed input form">

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 
 export type VoiceInputStatus = 'checking_mic' | 'mic_unavailable' | 'permission_denied' | 'ready_to_record' | 'recording' | 'transcribing';
 
-export const VoiceInput = ({ onStart, onStop, onTranscribe, onError, disabled }: { onStart: () => void; onStop: () => void; onTranscribe: (blob: Blob) => Promise<void>; onError: (message: string) => void; disabled?: boolean; }) => {
+export const VoiceInput = ({ onStart, onStop, onTranscribe, onError, disabled, compact = false }: { onStart: () => void; onStop: () => void; onTranscribe: (blob: Blob) => Promise<void>; onError: (message: string) => void; disabled?: boolean; compact?: boolean; }) => {
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const chunks = useRef<BlobPart[]>([]);
@@ -23,6 +23,18 @@ export const VoiceInput = ({ onStart, onStop, onTranscribe, onError, disabled }:
   } catch { setStatus('permission_denied'); onError('Microphone permission denied or unavailable.'); } };
 
   const stopRecording = () => { onStop(); recorder.current?.stop(); stream.current?.getTracks().forEach((track) => track.stop()); };
+
+  const micCta = status === 'recording' ? 'Stop mic' : 'Mic';
+
+  if (compact) {
+    return (
+      <div className="meeting-control meeting-mic" aria-label="voice input panel">
+        <button className="meeting-btn" type="button" onClick={status === 'recording' ? stopRecording : startRecording} disabled={disabled || status === 'checking_mic' || status === 'transcribing' || status === 'mic_unavailable' || status === 'permission_denied'} aria-label={`microphone control ${status.replaceAll('_', ' ')}`}>
+          <span aria-hidden="true">🎙️</span> {micCta}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <section className="card panel" aria-label="voice input panel">

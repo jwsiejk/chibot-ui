@@ -11,7 +11,7 @@ const getMicReason = (mic: MicStatus): string => {
   return 'Checking browser microphone capability.';
 };
 
-export const LocalRuntimeStatus = () => {
+export const LocalRuntimeStatus = ({ compact = false }: { compact?: boolean }) => {
   const [status, setStatus] = useState<LocalRuntimeReadiness | null>(null);
   const [mic, setMic] = useState<MicStatus>('checking');
 
@@ -31,11 +31,11 @@ export const LocalRuntimeStatus = () => {
     }).catch(() => setMic('available'));
   }, []);
 
-  if (!status) return <p className="card panel">Local runtime status: checking…</p>;
+  if (!status) return <p className={compact ? 'toolbar-runtime' : 'card panel'}>Local runtime status: checking…</p>;
 
   return (
-    <details className="card panel runtime-details">
-      <summary>Runtime readiness details</summary>
+    <details className={compact ? 'toolbar-runtime runtime-details' : 'card panel runtime-details'}>
+      <summary>{compact ? 'Runtime' : 'Runtime readiness details'}</summary>
       <ul>
         <li>Ollama: {status.ollama.status} — {status.ollama.reason}</li>
         <li>Kokoro TTS: {status.kokoro_tts.status} — {status.kokoro_tts.reason}</li>
