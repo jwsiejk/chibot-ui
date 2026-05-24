@@ -160,3 +160,10 @@ Actions:
 - Local-first release checklist: `docs/LOCAL_FIRST_RELEASE_CHECKLIST.md`
 - Current implementation status: `docs/CURRENT_IMPLEMENTATION_STATUS.md`
 - Implementation contracts: `docs/IMPLEMENTATION_CONTRACTS.md`
+
+## Windows startup scripts
+- `.\scripts\check-local-runtime.ps1` checks Ollama runtime/model, Kokoro health (`/health` then `/v1/health`), faster-whisper `/health`, and prints a status table.
+- If Kokoro health endpoints are unsupported, the check script reports that AskChappy runtime may still use synthetic readiness fallback, but the script itself does not synthesize audio.
+- `.\scripts\start-kokoro-tts.ps1` and `.\scripts\start-faster-whisper-stt.ps1` require local runner command variables in `.env.local` (`KOKORO_TTS_RUN_COMMAND`, `FASTER_WHISPER_RUN_COMMAND`).
+- `.\scripts\start-local-runtime.ps1` enforces startup sequence: Ollama -> Kokoro -> faster-whisper -> `npm run start`.
+- Use `nvidia-smi -l 1` manually for GPU monitoring; AskChappy has no native Windows GPU process helper yet.

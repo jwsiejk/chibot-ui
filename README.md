@@ -70,3 +70,14 @@ npm run smoke:local-runtime
 - Readiness checks use local HTTP only and never append transcript messages.
 - Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
 - Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized.
+
+## Windows local runtime startup scripts (Phase 21B)
+- Committed operator scripts: `scripts/check-local-runtime.ps1`, `scripts/start-kokoro-tts.ps1`, `scripts/start-faster-whisper-stt.ps1`, and `scripts/start-local-runtime.ps1`.
+- Keep model/audio assets outside the repo (example default: `C:\\AskChipAssets\\kokoro`).
+- Copy `.env.example` to `.env.local` and set machine-local runtime commands: `KOKORO_TTS_RUN_COMMAND` and `FASTER_WHISPER_RUN_COMMAND`.
+- Start/check sequence from repo root:
+  - `.\scripts\check-local-runtime.ps1`
+  - `.\scripts\start-kokoro-tts.ps1`
+  - `.\scripts\start-faster-whisper-stt.ps1`
+  - `.\scripts\start-local-runtime.ps1`
+- Manual GPU validation: `nvidia-smi -l 1`. AskChappy cannot directly inspect Windows GPU process usage without a native helper/agent. Prioritize Ollama and faster-whisper GPU checks first; Kokoro GPU is optional unless TTS latency is poor.
