@@ -6,14 +6,17 @@ export const ChappyStage = ({ state }: { state: SessionState }) => {
   const stateConfig = getChappyAvatarStateConfig(state);
 
   return (
-    <section className="card stage-card chappy-video-tile" aria-label="chappy stage">
+    <section className="stage-card chappy-video-tile" aria-label="chappy stage">
       <div className="stage-state-row">
         <p className="state-pill">Primary participant</p>
         <span className={`state-dot state-${stateConfig.state}`}>{stateConfig.label}</span>
       </div>
-      <div className="chappy-avatar-placeholder" aria-label="chappy avatar placeholder">C</div>
-      <h2>Chappy</h2>
-      <p>{stateConfig.description}</p>
+
+      <div className="chappy-stage-center">
+        <div className="chappy-avatar-placeholder" aria-label="chappy avatar placeholder">C</div>
+        <h2>Chappy</h2>
+        <p>{stateConfig.description}</p>
+      </div>
     </section>
   );
 };

@@ -204,10 +204,36 @@ export const ChappySession = () => {
         <div className="toolbar-controls">
           <VoiceInput compact onStart={() => { micCaptureStartRef.current = performance.now(); setState('listening'); setVoiceNotice('Listening…'); pushDiagnostic('mic listening started'); }} onStop={() => { pushDiagnostic('mic capture submitted'); setState('transcribing'); setVoiceNotice('Transcribing…'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
           <TypedInput compact onSubmitText={onSubmitText} />
-          <button className="meeting-btn" type="button" onClick={() => { setChappyMuted((m) => !m); setVoiceNotice(chappyMuted ? 'Chappy voice on' : 'Chappy voice muted. Transcript only.'); pushDiagnostic(chappyMuted ? 'Chappy unmuted' : 'Chappy muted'); }}>{chappyMuted ? 'Unmute Chappy' : 'Mute Chappy'}</button>
+          <button
+            className={`meeting-control-btn output-control ${chappyMuted ? 'muted' : ''}`}
+            type="button"
+            onClick={() => {
+              setChappyMuted((m) => !m);
+              setVoiceNotice(chappyMuted ? 'Chappy voice on' : 'Chappy voice muted. Transcript only.');
+              pushDiagnostic(chappyMuted ? 'Chappy unmuted' : 'Chappy muted');
+            }}
+          >
+            <span className="meeting-control-icon" aria-hidden="true">{chappyMuted ? '🔇' : '🔊'}</span>
+            <span className="meeting-control-label">{chappyMuted ? 'Unmute' : 'Mute Chappy'}</span>
+          </button>
           <LocalRuntimeStatus compact />
-          <button className="meeting-btn utility-btn" type="button" onClick={() => setShowModes(true)}>Modes</button>
-          {user?.role === 'admin' ? <button className="meeting-btn utility-btn" type="button" onClick={() => { setShowAdminModal(true); pushDiagnostic('admin modal opened'); }}>Admin</button> : null}
+          <button className="meeting-control-btn utility-control" type="button" onClick={() => setShowModes(true)}>
+            <span className="meeting-control-icon" aria-hidden="true">▦</span>
+            <span className="meeting-control-label">Modes</span>
+          </button>
+          {user?.role === 'admin' ? (
+            <button
+              className="meeting-control-btn utility-control"
+              type="button"
+              onClick={() => {
+                setShowAdminModal(true);
+                pushDiagnostic('admin modal opened');
+              }}
+            >
+              <span className="meeting-control-icon" aria-hidden="true">⚙</span>
+              <span className="meeting-control-label">Admin</span>
+            </button>
+          ) : null}
         </div>
         <div className="toolbar-subnotice">
           {!voiceStatus.standard_tts_configured ? <span className="mini-badge">Chappy voice unavailable. Transcript response is still available.</span> : null}
