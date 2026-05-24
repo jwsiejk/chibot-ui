@@ -4,6 +4,13 @@ import type { LocalRuntimeReadiness } from '../../../../services/askchappy-api/s
 
 type MicStatus = 'checking' | 'available' | 'permission_denied' | 'unavailable';
 
+const getMicReason = (mic: MicStatus): string => {
+  if (mic === 'permission_denied') return 'Microphone permission is denied in this browser.';
+  if (mic === 'unavailable') return 'Browser microphone APIs are unavailable in this environment.';
+  if (mic === 'available') return 'Browser microphone is available for local STT capture.';
+  return 'Checking browser microphone capability.';
+};
+
 export const LocalRuntimeStatus = () => {
   const [status, setStatus] = useState<LocalRuntimeReadiness | null>(null);
   const [mic, setMic] = useState<MicStatus>('checking');
@@ -30,12 +37,12 @@ export const LocalRuntimeStatus = () => {
     <section>
       <h2>Local runtime readiness</h2>
       <ul>
-        <li>Ollama: {status.ollama.status}</li>
-        <li>Kokoro TTS: {status.kokoro_tts.status}</li>
-        <li>faster-whisper STT: {status.faster_whisper_stt.status}</li>
-        <li>Browser mic: {mic}</li>
-        <li>Standard voice: selected/default</li>
-        <li>Cloned voice: optional/gated, not required</li>
+        <li>Ollama: {status.ollama.status} — {status.ollama.reason}</li>
+        <li>Kokoro TTS: {status.kokoro_tts.status} — {status.kokoro_tts.reason}</li>
+        <li>faster-whisper STT: {status.faster_whisper_stt.status} — {status.faster_whisper_stt.reason}</li>
+        <li>Browser mic: {mic} — {getMicReason(mic)}</li>
+        <li>Standard voice: {status.standard_voice.status} — {status.standard_voice.reason}</li>
+        <li>Cloned voice: {status.cloned_voice.status} — {status.cloned_voice.reason}</li>
       </ul>
     </section>
   );
