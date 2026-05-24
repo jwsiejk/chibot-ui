@@ -1,13 +1,33 @@
 import React, { useEffect, useState } from 'react';
 import { getLocalGpuValidationReport, getLocalRuntimeReadinessStatus } from '../../../../services/askchappy-api/src/api/server';
 import type { LocalRuntimeReadiness } from '../../../../services/askchappy-api/src/api/localRuntimeReadiness';
-import type { LocalGpuValidationStatus } from '../../../../services/askchappy-api/src/api/localGpuValidation';
+import type { LocalGpuValidationReport, LocalGpuValidationService, LocalGpuValidationStatus } from '../../../../shared/contracts/gpu';
 
 export type ClientDiagnosticEvent = { id: string; ts: string; event: string };
 
+const STATUS_LABELS: Record<LocalGpuValidationStatus, string> = {
+  gpu_confirmed: 'gpu_confirmed',
+  cpu_only: 'cpu_only',
+  unknown: 'unknown',
+  runtime_unreachable: 'runtime_unreachable',
+  not_configured: 'not_configured',
+  not_applicable: 'not_applicable',
+};
+
+const gpuServiceView = (report: LocalGpuValidationReport, service: LocalGpuValidationService) => {
+  const match = report.services.find((entry) => entry.service === service);
+  if (match) return match;
+  return {
+    service,
+    status: 'unknown' as const,
+    reason: 'Service validation entry not available in this report.',
+    suggested_commands: [],
+  };
+};
+
 export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, diagnostics }: { isOpen: boolean; onClose: () => void; browserMicStatus: string; diagnostics: ClientDiagnosticEvent[] }) => {
   const [readiness, setReadiness] = useState<LocalRuntimeReadiness | null>(null);
-  const [gpu, setGpu] = useState<LocalGpuValidationStatus | null>(null);
+  const [gpu, setGpu] = useState<LocalGpuValidationReport | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -43,10 +63,10 @@ export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, di
           <h3>GPU Validation</h3>
           {!gpu ? <p>Loading GPU validation…</p> : (
             <ul>
-              <li>Ollama GPU: {gpu.ollama.status} — {gpu.ollama.reason}</li>
-              <li>faster-whisper GPU: {gpu.faster_whisper.status} — {gpu.faster_whisper.reason}</li>
-              <li>Kokoro provider/GPU: {gpu.kokoro.status} — {gpu.kokoro.reason}</li>
-              <li>Suggested validation: <code>nvidia-smi -l 1</code></li>
+              <li>Ollama GPU: {STATUS_LABELS[gpuServiceView(gpu, 'ollama').status]} — {gpuServiceView(gpu, 'ollama').reason}</li>
+              <li>faster-whisper GPU: {STATUS_LABELS[gpuServiceView(gpu, 'faster_whisper').status]} — {gpuServiceView(gpu, 'faster_whisper').reason}</li>
+              <li>Kokoro provider/GPU: {STATUS_LABELS[gpuServiceView(gpu, 'kokoro_onnx').status]} — {gpuServiceView(gpu, 'kokoro_onnx').reason}</li>
+              {gpu.manual_guidance.map((guidance) => <li key={guidance}>Manual guidance: <code>{guidance}</code></li>)}
             </ul>
           )}
         </section>
