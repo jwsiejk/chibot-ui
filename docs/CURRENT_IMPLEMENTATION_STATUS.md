@@ -195,3 +195,10 @@ Retired and inactive:
 - Kokoro `/v1/tts` wrapper now logs synthesis exceptions with traceback and returns structured failure detail (`error`, `detail`, `voice`, `format`, `text_length`) without logging full assistant text.
 - Session voice UX now separates TTS synthesis failures from browser playback failures, with distinct user guidance and bounded diagnostics events.
 - Browser playback failures are non-blocking and no longer mislabeled as TTS unavailable.
+
+
+## Phase 22E latency console accuracy cleanup
+- Admin Runtime Console turn latency is local-only and in-memory (bounded to last 5 turns), with no persistence, no transcript text storage, and no telemetry export.
+- “Time to Chappy speaking” now explicitly means time to audio playback start (`audio.play()` resolve), not end of spoken audio.
+- Muted turns still record turn latency with assistant text-ready timing and explicit `TTS skipped: muted` and `Playback skipped: muted`.
+- Failure stages are explicitly surfaced for STT, assistant generation, TTS synthesis, and playback start failures.
