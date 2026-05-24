@@ -93,7 +93,7 @@ Consequences:
 - Standard voice path target is local Kokoro/kokoro-onnx TTS.
 - Future voice input/STT target is faster-whisper, mapped into canonical user transcript text.
 - Cloned Chappy voice remains an optional future provider/adapter path and must never block standard local voice runtime.
-- Content grounding/document ingestion/embeddings/vector retrieval/RAG remains required follow-on scope in Phase 20 or later and must not be represented as already implemented during Phases 17-19 local runtime work.
+- Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized. No RAG, embeddings, vector search, file upload, or proprietary DDN content bundle is implemented.
 - No OpenAI runtime, no hosted model SDK, no cloud voice SDK, and no cloud TTS path should be introduced without explicit ADR change.
 
 ## ADR-022: Phase 16 browser-local persistence boundary

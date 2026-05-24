@@ -66,10 +66,10 @@
 - Voice input must be normalized into canonical user transcript text (no modality-specific transcript model).
 - Do not introduce cloud speech-to-text providers in this phase.
 
-## Phase 20+ — Content grounding / document ingestion / RAG (required later, deferred now)
+## Deferred scope — Content grounding / document ingestion / RAG
 - Add DDN-specific content grounding workflows after local assistant + local voice runtime phases are established.
 - Include proprietary DDN content bundle handling, file ingestion/upload, embeddings, vector retrieval/search, and knowledge-base lifecycle management.
-- Treat this phase as required follow-on scope, but not a blocker for first usable assistant/model + local voice runtime.
+- Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized.
 
 ## Phase 1.5 — MVP login, roles, and admin surface
 - Add lightweight email-only login modal to `/chappy` for local/demo role selection.

@@ -111,6 +111,6 @@ If Ollama is not reachable, AskChappy shows: "Local Ollama runtime is not config
 - Added local runtime readiness checks for Ollama runtime/model, Kokoro TTS, faster-whisper STT, browser microphone availability, standard voice default, and cloned voice optional/gated status.
 - Readiness checks use local HTTP only and never append transcript messages.
 - Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
-- Content grounding/RAG remains deferred until after Phase 20A lock; target Phase 20B+ follow-on.
+- Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized.
 
 - Kokoro readiness checks prefer non-synthesis health probes (`/health`, then `/v1/health`) and only fall back to a synthetic `/v1/tts` probe when health paths are unsupported (fixed non-user text, output discarded).

@@ -81,5 +81,5 @@ Boundary rule:
 - Voice input is appended as canonical transcript messages using `text` with `source: voice`.
 - No separate voice transcript model was added.
 - No cloud STT/speech SDK was added; no cloud fallback exists.
-- No RAG/document ingestion/content grounding added; Phase 20+ remains RAG/content grounding.
+- No RAG/document ingestion/content grounding added; content grounding / DDN document ingestion / RAG is deferred for now.
 - No cloned voice provider adapter was added.
