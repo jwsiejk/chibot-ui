@@ -34,7 +34,7 @@ Roadmap guardrail:
 - Phase 17 should ship assistant/model runtime scaffold with local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default).
 - Phase 18 should ship standard local TTS output via Kokoro/kokoro-onnx.
 - Phase 19 remains local STT/browser microphone input (faster-whisper) unless direction changes.
-- Phase 20A is reserved for local runtime readiness/hardening. Content grounding/RAG (including DDN document upload/content grounding/embeddings/vector search/knowledge-base workflows) is deferred to Phase 20B or later and remains required follow-on work.
+- Phase 20A is reserved for local runtime readiness/hardening. Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized. No RAG, embeddings, vector search, file upload, or proprietary DDN content bundle is implemented.
 - Standard local voice direction is Kokoro/kokoro-onnx; cloned voice remains optional and must not block standard local voice.
 - No OpenAI/cloud runtime/model SDK/cloud voice SDK/cloud TTS path unless a future ADR explicitly changes policy.
 

@@ -87,8 +87,8 @@ Retired and inactive:
 - No real cloned voice provider adapter/runtime is implemented.
 - Avatar runtime: placeholder, state-aware UI only; no real likeness/media assets.
 
-## Next recommended work after Phase 19
-- Phase 20B+: content grounding / document ingestion / RAG remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
+## Deferred scope and next recommended work
+- Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized.
 - Keep local browser persistence schema-versioned and add migrations only when needed.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.
 
@@ -97,6 +97,6 @@ Retired and inactive:
 - Added local runtime readiness checks for Ollama runtime/model, Kokoro TTS, faster-whisper STT, browser microphone availability, standard voice default, and cloned voice optional/gated status.
 - Readiness checks use local HTTP only and never append transcript messages.
 - Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
-- Content grounding/RAG remains deferred until after Phase 20A lock; target Phase 20B+ follow-on.
+- Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized.
 
 - Kokoro readiness now prefers non-synthesis health probes (`/health`, then `/v1/health`) and uses fixed-text synthetic `/v1/tts` fallback only when health endpoints are unsupported; readiness never exposes synthetic audio/text artifacts.

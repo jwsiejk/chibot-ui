@@ -63,6 +63,6 @@ Use this checklist before local production/local MVP handoff.
 - Added local runtime readiness checks for Ollama runtime/model, Kokoro TTS, faster-whisper STT, browser microphone availability, standard voice default, and cloned voice optional/gated status.
 - Readiness checks use local HTTP only and never append transcript messages.
 - Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
-- Content grounding/RAG remains deferred (Phase 20+).
+- Content grounding / DDN document ingestion / RAG is deferred for now.
 
 - [ ] Confirm Kokoro readiness prefers non-synthesis health probes (`/health` then `/v1/health`) and only falls back to fixed-text synthetic `/v1/tts` when health endpoints are unsupported (no synthetic output exposed).

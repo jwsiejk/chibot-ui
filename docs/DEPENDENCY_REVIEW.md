@@ -45,7 +45,7 @@
 - Phase 19 cleanup does not introduce a new package manager policy or lockfile convention.
 
 - Phase 15 keeps existing dependency boundaries: no cloned provider SDK added, no cloud voice SDK added, and standard voice remains the only active synthesis runtime.
-- Planned near-term runtime sequencing remains: Phase 17 uses local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default); DDN content grounding and RAG dependencies are deferred to a later required phase.
+- Planned near-term runtime sequencing remains: Phase 17 uses local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default); content grounding / DDN document ingestion / RAG is deferred for now and remains out of scope until explicitly re-prioritized.
 
 
 ## Runtime direction exclusions (roadmap policy)
