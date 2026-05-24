@@ -143,3 +143,12 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm mic is PTT/Mic based and avoids recorder terminology.
 - [ ] Confirm /chappy is a pre-call lobby, not landing-page scaffold wording.
 - [ ] Confirm session is a Zoom-like room with Chappy stage as focal participant.
+
+- [x] `/chappy` is a pre-call lobby.
+- [x] Session uses Zoom-room layout.
+- [x] Chappy stage is dominant.
+- [x] Persistent bottom toolbar is present.
+- [x] No recorder terminology in normal session.
+- [x] No stage debug metadata in normal session.
+- [x] Runtime readiness is compact.
+- [x] Admin controls hidden from normal session.

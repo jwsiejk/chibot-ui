@@ -35,21 +35,16 @@ export const ChappySession = () => {
   const stateUi = STATE_COPY[state];
 
   return (
-    <main className="app-shell">
-      <header className="card status-bar top-meeting-bar">
+    <main className="meeting-room">
+      <header className="card status-bar top-meeting-bar" aria-label="top meeting bar">
         <h1>AskChappy</h1>
-        <p>Live room • session {sessionId}</p>
+        <p>Open Q&amp;A • {stateUi.label} • session {sessionId}</p>
       </header>
-      <section className="card status-bar" aria-label="session status">
-        <div><h2>Session state: {stateUi.label}</h2><p>{stateUi.description}</p></div>
-        <span className="state-pill">{state}</span>
-      </section>
-      <div className="session-grid">
-        <section className="main-col">
+      <div className="meeting-content">
+        <section className="meeting-stage" aria-label="meeting stage">
           <ChappyStage state={state} />
-          <TranscriptPanel messages={messages} />
         </section>
-        <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} />
+        <TranscriptPanel messages={messages} />
       </div>
       {showModes ? (
         <div className="modes-overlay card panel" role="dialog" aria-label="guided modes overlay">
@@ -57,7 +52,7 @@ export const ChappySession = () => {
           <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={(mode) => { onSelectMode(mode); setShowModes(false); }} />
         </div>
       ) : null}
-      <section className="bottom-toolbar" aria-label="bottom meeting toolbar">
+      <section className="meeting-toolbar" aria-label="bottom meeting toolbar">
         <div className="toolbar-notice" role="status">Mic state: {voiceNotice} {runtimeNotice ? `• ${runtimeNotice}` : ''}</div>
         <div className="toolbar-controls">
           <VoiceInput compact onStart={() => { setState('listening'); setVoiceNotice('Listening…'); }} onStop={() => { setState('transcribing'); setVoiceNotice('Transcribing…'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
@@ -65,13 +60,13 @@ export const ChappySession = () => {
           <button className="meeting-btn" type="button" onClick={onSpeakLatestAssistant} disabled={!latestAssistant}><span aria-hidden="true">🔊</span> Speak</button>
           <LocalRuntimeStatus compact />
           <button className="meeting-btn" type="button" onClick={() => setShowModes(true)}>Modes</button>
-          <button className="meeting-btn meeting-btn-end" type="button" disabled aria-label="End session (not yet available)">End (soon)</button>
         </div>
         <div className="toolbar-subnotice">
           {!voiceStatus.standard_tts_configured ? <span className="mini-badge">Kokoro unavailable: text-first responses continue.</span> : null}
           <span>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured.' : `${voiceStatus.cloned_voice_status_label}.`}</span>
         </div>
       </section>
+      <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} />
     </main>
   );
 };

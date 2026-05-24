@@ -9,7 +9,7 @@ export const SessionRightRail = ({
   activeMode: SessionMode;
   onSelectMode: (mode: SessionMode) => void;
 }) => (
-  <aside className="card panel" aria-label="session right rail">
+  <aside className="card panel guided-modes-panel" aria-label="session right rail">
     <h3>Current mode</h3>
     <p>{MODE_LOOKUP[activeMode].title}</p>
     <p>{MODE_LOOKUP[activeMode].guidance}</p>
