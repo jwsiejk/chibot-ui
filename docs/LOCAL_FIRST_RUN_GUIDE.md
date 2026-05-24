@@ -62,7 +62,6 @@ Vite handles browser-history fallback for canonical React routes (`/chappy`, `/c
 - Missing Ollama/model in Phase 17 must show clear local runtime not-configured state (no fake assistant output, no cloud fallback).
 - No RAG/DDN ingestion yet.
 - No real cloned voice provider adapter yet; Phase 13 only added contract/readiness gating and standard voice remains active/default (planned standard local TTS direction: Kokoro/kokoro-onnx).
-- No STT/browser microphone runtime yet (future direction: faster-whisper).
 - No real avatar assets/visemes/3D rendering yet.
 - No database persistence yet.
 - Session data now persists in browser localStorage (browser-local only; no sync across devices/browsers).
@@ -98,10 +97,11 @@ If Ollama is not reachable, AskChappy shows: "Local Ollama runtime is not config
 - No STT/microphone input, cloud TTS SDK, or cloned voice provider adapter is added in Phase 18.
 
 
-## Phase 19 update
-- Added local faster-whisper STT with browser microphone input.
-- Voice input is appended as canonical transcript messages using `text` with `source: voice`.
-- No separate voice transcript model was added.
-- No cloud STT/speech SDK was added; no cloud fallback exists.
-- No RAG/document ingestion/content grounding added; Phase 20+ remains RAG/content grounding.
-- No cloned voice provider adapter was added.
+## Local faster-whisper STT configuration
+- `FASTER_WHISPER_BASE_URL`: local faster-whisper HTTP runtime URL (default target `http://127.0.0.1:8890`).
+- `FASTER_WHISPER_MODEL`: model id (default `base.en`).
+- `FASTER_WHISPER_LANGUAGE`: language hint (default `en`).
+- `FASTER_WHISPER_TIMEOUT_MS`: request timeout in milliseconds (default `20000`).
+- Missing runtime/config behavior: if STT runtime is missing or unreachable, AskChappy returns clear local errors (`not_configured` or `runtime_unreachable`) and does not append fake transcript messages.
+- Voice input is committed as canonical user transcript `text` with `source: voice`; no separate voice transcript model exists.
+- No cloud STT/speech SDK or fallback is used.

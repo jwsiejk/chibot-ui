@@ -18,7 +18,8 @@ export const transcribeWithFasterWhisper = async (audioBlob: Blob): Promise<SttR
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), config.timeoutMs);
   try {
-    const res = await fetch(`${config.baseUrl}/v1/transcribe`, {
+    const normalizedBaseUrl = config.baseUrl.replace(/\/$/, '');
+    const res = await fetch(`${normalizedBaseUrl}/v1/transcribe`, {
       method: 'POST',
       body: formData,
       signal: ctrl.signal,
