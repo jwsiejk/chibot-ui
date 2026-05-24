@@ -21,7 +21,7 @@ export const ChappySession = () => {
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
   const [showModes, setShowModes] = useState(false);
   const [version, setVersion] = useState(0);
-  const [voiceNotice, setVoiceNotice] = useState('Ready to record.');
+  const [voiceNotice, setVoiceNotice] = useState('Ready');
   const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
   const voiceStatus = useMemo(() => getLocalVoiceStatus(), []);
   const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : getLocalTranscript(sessionId)), [sessionId, session, version]);
@@ -30,18 +30,18 @@ export const ChappySession = () => {
   const onSubmitText = async (text: string) => { setRuntimeNotice(null); appendLocalUserTextMessage(sessionId, text); setVersion((v) => v + 1); setState('thinking'); const result = await generateLocalAssistantMessage(sessionId); if (!result.ok) { setRuntimeNotice(result.message); setState('error'); return; } setState('ready'); setVersion((v) => v + 1); };
   const onSelectMode = (mode: SessionMode) => { setLocalSessionMode(sessionId, mode, 'user'); setVersion((previous) => previous + 1); };
   const latestAssistant = useMemo(() => [...messages].reverse().find((entry) => entry.role === 'assistant') ?? null, [messages]);
-  const onSpeakLatestAssistant = async () => { if (!latestAssistant) return; setState('speaking'); setVoiceNotice('Speaking response.'); const tts = await synthesizeLocalAssistantMessage(sessionId, latestAssistant.id); if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) { setVoiceNotice('Standard local voice is selected, but Kokoro is unavailable. Text response is still available.'); setState('ready'); return; } const audio = new Audio(`data:audio/${tts.audio_format};base64,${tts.audio_base64}`); await audio.play(); setState('ready'); setVoiceNotice('Ready to record.'); };
-  const onTranscribeVoice = async (blob: Blob) => { setState('transcribing'); setVoiceNotice('Transcribing voice input.'); const stt = await transcribeLocalVoiceInput(sessionId, blob); if (!stt.ok) { setState('ready'); setVoiceNotice(stt.code === 'no_speech' ? 'No speech detected. Try again and speak clearly.' : stt.code === 'not_configured' ? 'Local STT not configured.' : stt.message); return; } setVersion((v) => v + 1); setState('thinking'); const result = await generateLocalAssistantMessage(sessionId); if (!result.ok) { setRuntimeNotice(result.message); setState('error'); return; } setVersion((v) => v + 1); setState('ready'); setVoiceNotice('Ready to record.'); };
+  const onSpeakLatestAssistant = async () => { if (!latestAssistant) return; setState('speaking'); setVoiceNotice('Speaking…'); const tts = await synthesizeLocalAssistantMessage(sessionId, latestAssistant.id); if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) { setVoiceNotice('Standard local voice is selected, but Kokoro is unavailable. Text response is still available.'); setState('ready'); return; } const audio = new Audio(`data:audio/${tts.audio_format};base64,${tts.audio_base64}`); await audio.play(); setState('ready'); setVoiceNotice('Ready'); };
+  const onTranscribeVoice = async (blob: Blob) => { setState('transcribing'); setVoiceNotice('Transcribing…'); const stt = await transcribeLocalVoiceInput(sessionId, blob); if (!stt.ok) { setState('ready'); setVoiceNotice(stt.code === 'no_speech' ? 'No speech detected' : stt.code === 'not_configured' ? 'Mic unavailable' : stt.message); return; } setVersion((v) => v + 1); setState('thinking'); const result = await generateLocalAssistantMessage(sessionId); if (!result.ok) { setRuntimeNotice(result.message); setState('error'); return; } setVersion((v) => v + 1); setState('ready'); setVoiceNotice('Ready'); };
   const stateUi = STATE_COPY[state];
 
   return (
     <main className="app-shell">
       <header className="card status-bar top-meeting-bar">
-        <h1>AskChappy session</h1>
-        <p>Local production working session ID: {sessionId}</p>
+        <h1>AskChappy</h1>
+        <p>Live room • session {sessionId}</p>
       </header>
       <section className="card status-bar" aria-label="session status">
-        <div><h2>Session status: {stateUi.label}</h2><p>{stateUi.description}</p></div>
+        <div><h2>Session state: {stateUi.label}</h2><p>{stateUi.description}</p></div>
         <span className="state-pill">{state}</span>
       </section>
       <div className="session-grid">
@@ -58,9 +58,9 @@ export const ChappySession = () => {
         </div>
       ) : null}
       <section className="bottom-toolbar" aria-label="bottom meeting toolbar">
-        <div className="toolbar-notice" role="status">Voice input: {voiceNotice} {runtimeNotice ? `• ${runtimeNotice}` : ''}</div>
+        <div className="toolbar-notice" role="status">Mic state: {voiceNotice} {runtimeNotice ? `• ${runtimeNotice}` : ''}</div>
         <div className="toolbar-controls">
-          <VoiceInput compact onStart={() => { setState('listening'); setVoiceNotice('Recording. Press stop when done.'); }} onStop={() => { setState('transcribing'); setVoiceNotice('Transcribing voice input.'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
+          <VoiceInput compact onStart={() => { setState('listening'); setVoiceNotice('Listening…'); }} onStop={() => { setState('transcribing'); setVoiceNotice('Transcribing…'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
           <TypedInput compact onSubmitText={onSubmitText} />
           <button className="meeting-btn" type="button" onClick={onSpeakLatestAssistant} disabled={!latestAssistant}><span aria-hidden="true">🔊</span> Speak</button>
           <LocalRuntimeStatus compact />

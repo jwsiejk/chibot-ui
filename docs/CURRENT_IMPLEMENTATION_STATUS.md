@@ -151,10 +151,10 @@ Retired and inactive:
   - faster-whisper: `/health`, `/v1/transcribe`
 - CUDA/provider/device readiness is surfaced honestly from wrapper health payloads; no fake GPU claims are introduced.
 
-## Phase 22 UI shell modernization
+## Phase 22 true Zoom-room UI with push-to-talk toolbar
 - AskChappy now uses a modern global CSS shell instead of raw browser-default scaffold styling.
 - `/chappy` login gate is a centered branded local-first modal/card with email-only auth behavior unchanged.
-- `/chappy` entry is a polished hero/card with primary **Start Open Q&A** CTA and guided mode cards; stale Phase 5 scaffold wording removed.
+- `/chappy` entry is a polished hero/card with primary **Join Chappy Room** CTA and guided mode cards; stale Phase 5 scaffold wording removed.
 - `/chappy/session/:sessionId` now renders a Zoom-like room layout with prominent stage, session status bar, transcript panel, input controls area, compact runtime readiness disclosure, and right rail modes.
 - Transcript rows and typed/voice controls are modernized visually without changing canonical transcript/runtime contracts.
 - Admin dashboard receives light card-based shell styling; no new admin capabilities introduced.

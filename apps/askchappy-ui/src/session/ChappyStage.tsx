@@ -1,21 +1,19 @@
 import React from 'react';
 import type { SessionState } from '../../../../shared/contracts/session';
-import { getChappyAvatarRuntimeStatus, getChappyAvatarStateConfig } from '../avatar/avatarState';
+import { getChappyAvatarStateConfig } from '../avatar/avatarState';
 
 export const ChappyStage = ({ state }: { state: SessionState }) => {
   const stateConfig = getChappyAvatarStateConfig(state);
-  const avatarStatus = getChappyAvatarRuntimeStatus(state);
 
   return (
-    <section className="card stage-card" aria-label="chappy stage">
-      <h2>Chappy Stage</h2>
-      <p>Chappy avatar stage placeholder</p>
-      <p>{stateConfig.label}</p>
+    <section className="card stage-card chappy-video-tile" aria-label="chappy stage">
+      <div className="stage-state-row">
+        <p className="state-pill">Primary participant</p>
+        <span className={`state-dot state-${stateConfig.state}`}>{stateConfig.label}</span>
+      </div>
+      <div className="chappy-avatar-placeholder" aria-label="chappy avatar placeholder">C</div>
+      <h2>Chappy</h2>
       <p>{stateConfig.description}</p>
-      <p>State: {stateConfig.state}</p>
-      <p>Avatar asset status: {avatarStatus.avatar_asset_status}</p>
-      <p>Supports visemes: {String(avatarStatus.supports_visemes)}</p>
-      <p>Supports speaking animation: {String(avatarStatus.supports_speaking_animation)}</p>
     </section>
   );
 };

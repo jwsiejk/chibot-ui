@@ -31,7 +31,7 @@ describe('route map', () => {
   });
 });
 
-describe('phase 5 chappy UI', () => {
+describe('phase 22 chappy UI', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -42,7 +42,7 @@ describe('phase 5 chappy UI', () => {
         <App />
       </MemoryRouter>,
     );
-    expect(screen.getByText('Local-first MVP login. Enter email to continue.')).toBeInTheDocument();
+    expect(screen.getByText('Enter your email to join a local-first DDN vPTM working room.')).toBeInTheDocument();
   });
 
   it('renders /chappy entry screen after login', () => {
@@ -54,8 +54,8 @@ describe('phase 5 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
-    expect(screen.getByRole('heading', { name: 'AskChappy' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start Open Q&A' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'AskChappy Room' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Join Chappy Room' })).toBeInTheDocument();
   });
 
   it('shows admin nav links for admin login', () => {
@@ -189,7 +189,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     expect(screen.queryByRole('heading', { name: 'Local GPU Validation' })).not.toBeInTheDocument();
     expect(screen.queryByText(/nvidia-smi -l 1/)).not.toBeInTheDocument();
@@ -203,7 +203,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     expect(screen.queryByRole('heading', { name: 'Voice Studio shell (admin only)' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Record or upload voice samples' })).not.toBeInTheDocument();
@@ -250,14 +250,14 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
-    expect(screen.getByRole('heading', { name: 'AskChappy session' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'AskChappy' })).toBeInTheDocument();
     expect(screen.getByLabelText('chappy stage')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Session status: Ready' })).toBeInTheDocument();
-    expect(screen.getByText('Chappy avatar stage placeholder')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Session state: Ready' })).toBeInTheDocument();
+    expect(screen.getByLabelText('chappy avatar placeholder')).toBeInTheDocument();
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
-    expect(screen.getByText('Avatar asset status: placeholder')).toBeInTheDocument();
+    expect(screen.getByText('Primary participant')).toBeInTheDocument();
     expect(screen.getByText('Kokoro unavailable: text-first responses continue.')).toBeInTheDocument();
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
@@ -267,6 +267,9 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByText(/Local runtime status: checking/)).toBeInTheDocument();
 
     expect(screen.getByRole('button', { name: 'Speak' })).toBeDisabled();
+
+    expect(screen.queryByText('Start recording')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stop recording')).not.toBeInTheDocument();
   });
 
   it('shows local runtime readiness statuses with reason text', async () => {
@@ -277,7 +280,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     await waitFor(() => {
       expect(screen.getByText('Runtime')).toBeInTheDocument();
@@ -300,7 +303,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello chappy' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -318,7 +321,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.queryByText('assistant:')).not.toBeInTheDocument();
@@ -333,7 +336,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     expect(screen.queryByRole('heading', { name: 'Avatar setup and review shell (admin only)' })).not.toBeInTheDocument();
     expect(screen.queryByText('State-aware avatar scaffold is active.')).not.toBeInTheDocument();
@@ -347,7 +350,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: '   ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -384,19 +387,19 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'microphone control ready to record' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'microphone control recording' })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'microphone control recording' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mic ready to record' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mic recording' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Mic recording' }));
 
     await waitFor(() => {
       expect(screen.getByText('Voice input: No speech detected. Try again and speak clearly.')).toBeInTheDocument();
-      expect(screen.getByRole('heading', { name: 'Session status: Ready' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Session state: Ready' })).toBeInTheDocument();
     });
 
     expect(screen.queryByText('user:')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'microphone control ready to record' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mic ready to record' })).toBeInTheDocument();
   });
 
   it('renders right rail in open_qa mode initially', () => {
@@ -407,7 +410,7 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     const rightRail = screen.getByRole('complementary', { name: 'session right rail' });
     expect(within(rightRail).getByRole('heading', { name: 'Current mode' })).toBeInTheDocument();
@@ -423,9 +426,9 @@ describe('phase 5 chappy UI', () => {
     );
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
-    const sessionText = screen.getByText(/Local production working session ID:/).textContent ?? '';
+    const sessionText = screen.getByText(/Live room • session/).textContent ?? '';
     const sessionId = sessionText.split(': ').at(-1) ?? '';
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'keep this transcript' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));

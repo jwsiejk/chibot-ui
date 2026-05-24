@@ -32,9 +32,9 @@ describe('voice input browser microphone ui', () => {
     render(<VoiceInput onStart={vi.fn()} onStop={vi.fn()} onTranscribe={onTranscribe} onError={onError} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Start speaking' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop recording' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop speaking' })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop speaking' }));
     await waitFor(() => expect(onTranscribe).toHaveBeenCalledTimes(1));
     expect(onError).not.toHaveBeenCalled();
   });
@@ -51,7 +51,7 @@ describe('voice input browser microphone ui', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start speaking' }));
 
     await waitFor(() => {
-      expect(onError).toHaveBeenCalledWith('Microphone permission denied or unavailable.');
+      expect(onError).toHaveBeenCalledWith('Permission denied');
     });
   });
 });
