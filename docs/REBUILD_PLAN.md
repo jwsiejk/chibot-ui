@@ -54,6 +54,7 @@
 - No OpenAI runtime, no hosted/cloud LLM SDK, and no cloud LLM API keys in this phase.
 - Missing Ollama runtime or missing local model must yield a clear local runtime not-configured state (no fake assistant intelligence).
 - Do not require DDN document upload, ingestion, embeddings, vector search, or RAG before shipping this phase.
+- Standard local voice output direction remains Kokoro/kokoro-onnx and is not blocked by optional cloned voice provider work.
 
 ## Phase 18 — Content grounding / document ingestion / RAG (required later, deferred now)
 - Add DDN-specific content grounding workflows after Phase 17 runtime is established.
@@ -61,8 +62,9 @@
 - Treat this phase as required follow-on scope, but not a blocker for first usable assistant/model runtime.
 
 ## Phase 19 — STT and browser microphone input
-- Add STT/browser microphone runtime unless project direction changes.
+- Add local STT/browser microphone runtime with faster-whisper unless project direction changes.
 - Preserve transcript-first guarantees and avoid modality-specific transcript forks.
+- Do not introduce cloud speech-to-text providers in this phase.
 
 ## Phase 1.5 — MVP login, roles, and admin surface
 - Add lightweight email-only login modal to `/chappy` for local/demo role selection.

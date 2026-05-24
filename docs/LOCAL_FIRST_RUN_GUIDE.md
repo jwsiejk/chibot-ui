@@ -58,9 +58,11 @@ Vite handles browser-history fallback for canonical React routes (`/chappy`, `/c
 
 ## Current known limitations
 - No OpenAI/model runtime yet.
+- Planned Phase 17 local runtime direction: Ollama (`OLLAMA_BASE_URL` default `http://127.0.0.1:11434`, `OLLAMA_MODEL` default `gemma3:4b`, optional `OLLAMA_KEEP_ALIVE=30m`, optional `OLLAMA_NUM_CTX=8192`).
+- Missing Ollama/model in Phase 17 must show clear local runtime not-configured state (no fake assistant output, no cloud fallback).
 - No RAG/DDN ingestion yet.
-- No real cloned voice provider adapter yet; Phase 13 only added contract/readiness gating and standard voice remains active/default.
-- No STT/browser microphone runtime yet.
+- No real cloned voice provider adapter yet; Phase 13 only added contract/readiness gating and standard voice remains active/default (planned standard local TTS direction: Kokoro/kokoro-onnx).
+- No STT/browser microphone runtime yet (future direction: faster-whisper).
 - No real avatar assets/visemes/3D rendering yet.
 - No database persistence yet.
 - Session data now persists in browser localStorage (browser-local only; no sync across devices/browsers).

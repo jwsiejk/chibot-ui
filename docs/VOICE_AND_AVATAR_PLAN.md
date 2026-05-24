@@ -20,9 +20,8 @@
 ## Provider abstraction
 - TTS/voice stack should be provider-agnostic with adapter boundaries.
 - Planned providers:
-  - Local/simple development TTS fallback
-  - Chappy cloned-voice provider
-  - Optional premium/cloud provider
+  - Local Kokoro/kokoro-onnx standard TTS (default direction)
+  - Chappy cloned-voice provider (optional future path)
 
 ## Avatar evolution plan
 1. Placeholder silhouette/avatar
@@ -65,3 +64,11 @@ Boundary rule:
 - Voice cloning is not part of normal Zoom-like user session flow.
 - User sessions consume only the currently published voice profile.
 
+
+
+## Standard local voice and STT direction
+- Standard AskChappy voice must remain available/default and local-first.
+- Standard local TTS direction is Kokoro/kokoro-onnx.
+- Future voice input/STT direction is faster-whisper.
+- Cloned Chappy voice remains optional and must not block standard local voice behavior.
+- Do not add cloud voice/TTS providers unless a future ADR explicitly changes direction.

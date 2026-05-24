@@ -90,7 +90,8 @@ Cloned voice runtime integration remains blocked until provider selection, local
 - Phase 17 excludes OpenAI runtime, hosted/cloud LLM SDKs, and cloud LLM API keys.
 - If Ollama/local model is unavailable, show a clear local runtime not-configured state (no fake assistant intelligence).
 - Phase 18: content grounding / document ingestion / RAG is deferred for now, but remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
-- Phase 19: STT / browser microphone input, unless project direction changes.
+- Phase 19: STT / browser microphone input with faster-whisper, unless project direction changes.
+- Standard local voice target remains Kokoro/kokoro-onnx and cloned voice remains optional/gated.
 - Keep local browser persistence schema-versioned and add migrations only when needed.
 - Do not block the first usable assistant conversation/runtime phase on content grounding.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.

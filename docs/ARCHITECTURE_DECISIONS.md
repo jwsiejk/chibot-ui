@@ -84,7 +84,18 @@ Consequences:
 - No document-ingestion or RAG runtime behavior should be implied as implemented until that deferred phase is complete.
 
 
-## ADR: Phase 16 browser-local persistence boundary
+## ADR-021: Local open-source runtime is required for assistant + standard voice
+Decision: AskChappy Phase 17 assistant runtime must use local Ollama with default model `gemma3:4b`, standard local voice output must use Kokoro/kokoro-onnx, and future STT direction is faster-whisper. Cloud hosted LLM/TTS providers remain excluded unless a future ADR explicitly changes this.
+
+Consequences:
+- Phase 17 assistant runtime baseline is local Ollama only (`OLLAMA_BASE_URL` default `http://127.0.0.1:11434`; `OLLAMA_MODEL` default `gemma3:4b`; optional `OLLAMA_KEEP_ALIVE=30m`; optional `OLLAMA_NUM_CTX=8192`).
+- Missing Ollama runtime or missing configured local model must show an explicit local-runtime-not-configured state; do not fake assistant output; do not silently fall back to any cloud runtime.
+- Standard voice path target is local Kokoro/kokoro-onnx TTS.
+- Future voice input/STT target is faster-whisper.
+- Cloned Chappy voice remains an optional future provider/adapter path and must never block standard local voice runtime.
+- No OpenAI runtime, no hosted model SDK, no cloud voice SDK, and no cloud TTS path should be introduced without explicit ADR change.
+
+## ADR-022: Phase 16 browser-local persistence boundary
 - Phase 16 persistence is browser-local only (`window.localStorage`) and currently schema-versioned (`schema_version = 1`).
 - This boundary is implemented as a browser-local adapter (`browserLocalSessionPersistenceAdapter`) for the local-first runtime scaffold.
 - This is not database, backend, or cloud persistence.

@@ -33,7 +33,9 @@ Every future implementation prompt must include these rules:
 Roadmap guardrail:
 - Phase 17 should ship assistant/model runtime scaffold with local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default).
 - Phase 18 (DDN document upload/content grounding/embeddings/RAG/vector search/knowledge-base workflows) is explicitly deferred in near-term execution and tracked as required later work.
-- Phase 19 remains STT/browser microphone input unless direction changes.
+- Phase 19 remains STT/browser microphone input (faster-whisper) unless direction changes.
+- Standard local voice direction is Kokoro/kokoro-onnx; cloned voice remains optional and must not block standard local voice.
+- No OpenAI/cloud runtime/model SDK/cloud voice SDK/cloud TTS path unless a future ADR explicitly changes policy.
 
 ## 3. Required PR summary format
 
