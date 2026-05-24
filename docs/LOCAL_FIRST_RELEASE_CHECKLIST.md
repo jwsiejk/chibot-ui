@@ -119,6 +119,10 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm local model/audio assets remain out of git (example: `C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`, `C:\AskChipAssets\kokoro\voices-v1.0.bin`).
 
 ## Phase 21D wrapper checklist additions
+- [ ] Confirm wrapper CORS headers allow browser runtime checks from `http://127.0.0.1:4173` (and `http://localhost:4173`) for local `:8880`/`:8890` services.
+- [ ] Confirm wrapper CORS defaults are explicit local origins (no unrestricted wildcard by default).
+- [ ] Confirm browser health fetch works after restarting Kokoro/faster-whisper service windows (PowerShell `curl` alone is insufficient CORS validation).
+
 - [ ] Confirm `services/local-runtime/kokoro_tts_server.py` exists and is used by default `KOKORO_TTS_RUN_COMMAND` template.
 - [ ] Confirm `services/local-runtime/faster_whisper_stt_server.py` exists and is used by default `FASTER_WHISPER_RUN_COMMAND` template.
 - [ ] Confirm `services/local-runtime/requirements.txt` exists and includes only local runtime packages.

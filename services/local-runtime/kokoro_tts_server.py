@@ -8,6 +8,7 @@ from typing import Any
 
 import onnxruntime as ort
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 
@@ -15,6 +16,19 @@ class TtsRequest(BaseModel):
     text: str
     voice: str = "af_sarah"
     format: str = "wav"
+
+def parse_allowed_origins(values: list[str] | None) -> list[str]:
+    if not values:
+        return ["http://127.0.0.1:4173", "http://localhost:4173"]
+
+    origins: list[str] = []
+    for item in values:
+        for origin in item.split(","):
+            clean = origin.strip()
+            if clean:
+                origins.append(clean)
+
+    return origins or ["http://127.0.0.1:4173", "http://localhost:4173"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--voices", required=True)
     parser.add_argument("--provider", choices=["cuda", "cpu"], default="cpu")
+    parser.add_argument("--allowed-origin", action="append", default=None)
     return parser.parse_args()
 
 
@@ -106,6 +121,14 @@ def main() -> None:
         )
 
     app = FastAPI(title="AskChappy Kokoro Local Runtime")
+    allowed_origins = parse_allowed_origins(args.allowed_origin)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health")
     @app.get("/v1/health")
