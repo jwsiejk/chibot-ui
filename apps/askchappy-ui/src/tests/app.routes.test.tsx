@@ -280,6 +280,18 @@ describe('phase 22 chappy UI', () => {
   });
 
 
+
+  it('shows turn latency section in admin console only', async () => {
+    render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+    expect(screen.getByRole('heading', { name: 'Turn Latency' })).toBeInTheDocument();
+
+    render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
+  });
+
   it('opens and closes Admin Runtime Console from toolbar for admin only', async () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
