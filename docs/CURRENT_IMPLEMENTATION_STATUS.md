@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 18)
+# AskChappy Current Implementation Status (After Phase 19)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -19,6 +19,7 @@
 - Phase 16: browser-local persistence adapter for sessions/transcripts/metadata/events (local runtime only; no backend/database/cloud persistence)
 - Phase 17: local Ollama typed assistant runtime
 - Phase 18: local Kokoro/kokoro-onnx standard TTS output
+- Phase 19: local faster-whisper STT / browser microphone input
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -38,6 +39,7 @@
 - Optional Ollama config: `OLLAMA_KEEP_ALIVE`, `OLLAMA_NUM_CTX`.
 - No OpenAI/cloud runtime integration.
 - No RAG/content grounding/document ingestion in the assistant runtime.
+- Local faster-whisper STT with browser microphone capture feeding canonical user transcript `text` with `source: voice`.
 
 ## Intentionally not implemented
 - OpenAI runtime integration
@@ -46,7 +48,7 @@
 - Content grounding, embeddings, vector search, or RAG pipeline
 - Proprietary DDN content bundle / knowledge-base management workflows
 - Real cloned voice provider adapter/runtime
-- STT/microphone/browser recording features
+
 - Real avatar assets, visemes, 3D rendering, or speaking animation
 - Database-backed persistence
 - Cloud deployment/runtime targets
@@ -86,8 +88,7 @@ Retired and inactive:
 - No real cloned voice provider adapter/runtime is implemented.
 - Avatar runtime: placeholder, state-aware UI only; no real likeness/media assets.
 
-## Next recommended work after Phase 18
-- Phase 19: local faster-whisper STT / browser microphone input.
+## Next recommended work after Phase 19
 - Phase 20+: content grounding / document ingestion / RAG remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
 - Keep local browser persistence schema-versioned and add migrations only when needed.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.

@@ -41,7 +41,7 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm standard voice remains active/default for synthesis.
 - [ ] Confirm cloned voice readiness gate does not claim active cloned synthesis without approved provider adapter + prerequisites.
 - [ ] Confirm standard local TTS direction is Kokoro/kokoro-onnx and remains default/available.
-- [ ] Confirm local STT implementation uses faster-whisper when introduced (no cloud STT provider introduced).
+- [x] Confirm local STT implementation uses faster-whisper (no cloud STT provider introduced).
 - [ ] Confirm no cloud voice provider runtime was added.
 - [ ] Confirm local voice input/output does not create separate transcript models (voice input -> canonical user transcript text; voice output <- canonical assistant transcript text).
 
@@ -51,9 +51,9 @@ Use this checklist before local production/local MVP handoff.
 - [x] No OpenAI/cloud LLM runtime added.
 - [x] No RAG/content grounding/document ingestion added.
 - [x] Phase 18 local Kokoro/kokoro-onnx TTS (standard local voice default path).
-- [ ] Phase 19 local faster-whisper STT.
+- [x] Phase 19 local faster-whisper STT.
 
-- [x] No STT/browser microphone runtime added in Phase 18.
+- [x] No cloud STT/speech SDK added.
 - [x] No cloud TTS/voice SDK added.
 - [x] No cloned voice provider adapter added.
 - [x] No RAG/document ingestion/content grounding added.

@@ -1,4 +1,4 @@
-# AskChappy Dependency Review (Phase 14)
+# AskChappy Dependency Review (Phase 19)
 
 ## Direct dependencies
 - `react`: UI rendering for AskChappy pages/components.
@@ -19,8 +19,8 @@
 - `@types/react-dom`: React DOM TypeScript types.
 - `vite`: local-first React runtime server + production-style build output for AskChappy app shell verification.
 
-## Local runtime tooling note (Phase 14 fix)
-- Phase 14 local start/dev now uses `vite` as the real local runtime for the AskChappy React/router scaffold.
+## Local runtime tooling note (Phase 19 fix)
+- Phase 19 local start/dev now uses `vite` as the real local runtime for the AskChappy React/router scaffold.
 - This replaces the retired plain-text local runtime server behavior and enables app-shell serving, history fallback, and noninteractive production-style local build checks.
 
 ## Why these dependencies are present
@@ -36,11 +36,13 @@
 - No embeddings/vector database/RAG dependency was added.
 - No real voice/avatar asset dependencies were added.
 - No database dependency was added.
-- No STT/microphone runtime dependencies were added.
+- No cloud STT SDK dependency was added.
+- Phase 19 STT uses native browser microphone APIs plus local HTTP `fetch`/`FormData` to faster-whisper.
+- No additional STT npm dependency was added for Phase 19.
 
 ## Package lockfile status
 - No `package-lock.json` is currently tracked in this repository.
-- Phase 14 cleanup does not introduce a new package manager policy or lockfile convention.
+- Phase 19 cleanup does not introduce a new package manager policy or lockfile convention.
 
 - Phase 15 keeps existing dependency boundaries: no cloned provider SDK added, no cloud voice SDK added, and standard voice remains the only active synthesis runtime.
 - Planned near-term runtime sequencing remains: Phase 17 uses local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default); DDN content grounding and RAG dependencies are deferred to a later required phase.

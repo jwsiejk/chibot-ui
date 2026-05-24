@@ -32,6 +32,8 @@ describe('route map', () => {
 });
 
 describe('phase 5 chappy UI', () => {
+
+
   it('renders email login gate on /chappy', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
@@ -231,6 +233,7 @@ describe('phase 5 chappy UI', () => {
 
     expect(screen.getByRole('button', { name: 'Speak response' })).toBeDisabled();
   });
+
 
   it('typed input appends user canonical transcript message with typed source and text', () => {
     render(

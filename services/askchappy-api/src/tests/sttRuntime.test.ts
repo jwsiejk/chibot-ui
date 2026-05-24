@@ -11,14 +11,34 @@ describe('phase 19 local faster-whisper stt', () => {
     delete process.env.FASTER_WHISPER_BASE_URL;
     delete process.env.FASTER_WHISPER_MODEL;
     delete process.env.FASTER_WHISPER_LANGUAGE;
+    delete process.env.FASTER_WHISPER_TIMEOUT_MS;
   });
 
   it('uses faster-whisper defaults', () => {
-    expect(getFasterWhisperConfig({})).toMatchObject({ baseUrl: 'http://127.0.0.1:8890', model: 'base.en', language: 'en' });
+    expect(getFasterWhisperConfig({})).toMatchObject({
+      baseUrl: 'http://127.0.0.1:8890',
+      model: 'base.en',
+      language: 'en',
+      timeoutMs: 20000,
+      configured: false,
+    });
   });
 
   it('supports faster-whisper overrides', () => {
-    expect(getFasterWhisperConfig({ FASTER_WHISPER_BASE_URL: 'http://localhost:8891', FASTER_WHISPER_MODEL: 'small.en', FASTER_WHISPER_LANGUAGE: 'fr', FASTER_WHISPER_TIMEOUT_MS: '1234' })).toMatchObject({ baseUrl: 'http://localhost:8891', model: 'small.en', language: 'fr', timeoutMs: 1234, configured: true });
+    expect(
+      getFasterWhisperConfig({
+        FASTER_WHISPER_BASE_URL: 'http://localhost:8891',
+        FASTER_WHISPER_MODEL: 'small.en',
+        FASTER_WHISPER_LANGUAGE: 'fr',
+        FASTER_WHISPER_TIMEOUT_MS: '1234',
+      }),
+    ).toMatchObject({
+      baseUrl: 'http://localhost:8891',
+      model: 'small.en',
+      language: 'fr',
+      timeoutMs: 1234,
+      configured: true,
+    });
   });
 
   it('returns not_configured when env missing', async () => {
@@ -30,8 +50,37 @@ describe('phase 19 local faster-whisper stt', () => {
     process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
     process.env.FASTER_WHISPER_MODEL = 'base.en';
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+
     const result = await transcribeWithFasterWhisper(new Blob(['x'], { type: 'audio/webm' }));
+
     expect(result).toMatchObject({ ok: false, code: 'runtime_unreachable' });
+  });
+
+  it('normalizes trailing slash and posts file/model/language to /v1/transcribe exactly once', async () => {
+    process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890/';
+    process.env.FASTER_WHISPER_MODEL = 'base.en';
+    process.env.FASTER_WHISPER_LANGUAGE = 'en';
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ text: '  voice text  ' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await transcribeWithFasterWhisper(new Blob(['x'], { type: 'audio/webm' }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8890/v1/transcribe',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    const body = fetchMock.mock.calls[0][1].body as FormData;
+    expect(body.get('file')).toBeInstanceOf(File);
+    expect(body.get('model')).toBe('base.en');
+    expect(body.get('language')).toBe('en');
+
+    expect(result).toMatchObject({ ok: true, text: 'voice text' });
   });
 
   it('returns transcript text and appends canonical voice user message', async () => {
@@ -54,9 +103,11 @@ describe('phase 19 local faster-whisper stt', () => {
     process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
     process.env.FASTER_WHISPER_MODEL = 'base.en';
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ text: '   ' }) }));
+
     const session = createLocalSession();
     const before = getLocalTranscript(session.session_id).length;
     const out = await transcribeLocalVoiceInput(session.session_id, new Blob(['x'], { type: 'audio/webm' }));
+
     expect(out).toMatchObject({ ok: false, code: 'no_speech' });
     expect(getLocalTranscript(session.session_id)).toHaveLength(before);
   });
@@ -64,10 +115,14 @@ describe('phase 19 local faster-whisper stt', () => {
   it('typed input flow still works and voice triggers same assistant path', async () => {
     process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
     process.env.FASTER_WHISPER_MODEL = 'base.en';
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ text: 'spoken hello' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: 'assistant reply' } }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: 'assistant typed' } }) }));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ text: 'spoken hello' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: 'assistant reply' } }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ message: { content: 'assistant typed' } }) }),
+    );
 
     const session = createLocalSession();
     await transcribeLocalVoiceInput(session.session_id, new Blob(['x'], { type: 'audio/webm' }));
