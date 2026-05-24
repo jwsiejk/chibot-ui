@@ -35,6 +35,32 @@ describe('phase 21B windows local runtime startup scripts', () => {
     expect(gitignore).toContain('.env.local');
   });
 
+  it('keeps start-local-runtime as preflight orchestrator and does not inline-exit after service script invocation', () => {
+    const startLocal = readFileSync(resolve(root, 'scripts/start-local-runtime.ps1'), 'utf8');
+    expect(startLocal).not.toContain("& (Join-Path $root 'scripts/start-kokoro-tts.ps1')");
+    expect(startLocal).not.toContain("& (Join-Path $root 'scripts/start-faster-whisper-stt.ps1')");
+    expect(startLocal).not.toContain('exit $LASTEXITCODE');
+    expect(startLocal).toContain('.\\scripts\\start-kokoro-tts.ps1');
+    expect(startLocal).toContain('.\\scripts\\start-faster-whisper-stt.ps1');
+    expect(startLocal).toContain('.\\scripts\\check-local-runtime.ps1');
+  });
+
+  it('documents separate PowerShell windows for focused service startup before app launch', () => {
+    const docs = [
+      'README.md',
+      'docs/LOCAL_FIRST_RUN_GUIDE.md',
+      'docs/LOCAL_RUNTIME_OPERATOR_GUIDE.md',
+    ]
+      .map((f) => readFileSync(resolve(root, f), 'utf8'))
+      .join('\n');
+
+    expect(docs).toContain('separate PowerShell windows');
+    expect(docs).toContain('.\\scripts\\start-kokoro-tts.ps1');
+    expect(docs).toContain('.\\scripts\\start-faster-whisper-stt.ps1');
+    expect(docs).toContain('.\\scripts\\check-local-runtime.ps1');
+    expect(docs).toContain('.\\scripts\\start-local-runtime.ps1');
+  });
+
   it('documents startup scripts in operator docs', () => {
     const docs = [
       'README.md',

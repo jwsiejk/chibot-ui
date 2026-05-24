@@ -141,9 +141,9 @@ This includes:
   - `KOKORO_TTS_RUN_COMMAND=` (required for scripted start)
   - `FASTER_WHISPER_RUN_COMMAND=` (required for scripted start)
 - Committed scripts (run from repo root):
+  - `.\scripts\start-kokoro-tts.ps1` (run in a separate PowerShell window)
+  - `.\scripts\start-faster-whisper-stt.ps1` (run in a separate PowerShell window)
   - `.\scripts\check-local-runtime.ps1`
-  - `.\scripts\start-kokoro-tts.ps1`
-  - `.\scripts\start-faster-whisper-stt.ps1`
-  - `.\scripts\start-local-runtime.ps1`
+  - `.\scripts\start-local-runtime.ps1` (preflight orchestrator; launches AskChappy only after required services are reachable)
 - Assets remain outside git; do not commit model/audio files.
 - Manual GPU validation remains `nvidia-smi -l 1`. AskChappy cannot directly inspect Windows GPU process usage without a native helper/agent; prioritize Ollama and faster-whisper first, Kokoro optional unless TTS latency is poor.

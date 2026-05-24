@@ -75,9 +75,9 @@ npm run smoke:local-runtime
 - Committed operator scripts: `scripts/check-local-runtime.ps1`, `scripts/start-kokoro-tts.ps1`, `scripts/start-faster-whisper-stt.ps1`, and `scripts/start-local-runtime.ps1`.
 - Keep model/audio assets outside the repo (example default: `C:\\AskChipAssets\\kokoro`).
 - Copy `.env.example` to `.env.local` and set machine-local runtime commands: `KOKORO_TTS_RUN_COMMAND` and `FASTER_WHISPER_RUN_COMMAND`.
-- Start/check sequence from repo root:
-  - `.\scripts\check-local-runtime.ps1`
-  - `.\scripts\start-kokoro-tts.ps1`
-  - `.\scripts\start-faster-whisper-stt.ps1`
-  - `.\scripts\start-local-runtime.ps1`
+- Start/check sequence from repo root (use separate PowerShell windows for focused service starters):
+  - In window 1: `.\scripts\start-kokoro-tts.ps1`
+  - In window 2: `.\scripts\start-faster-whisper-stt.ps1`
+  - In another window: `.\scripts\check-local-runtime.ps1`
+  - Then launch AskChappy: `.\scripts\start-local-runtime.ps1`
 - Manual GPU validation: `nvidia-smi -l 1`. AskChappy cannot directly inspect Windows GPU process usage without a native helper/agent. Prioritize Ollama and faster-whisper GPU checks first; Kokoro GPU is optional unless TTS latency is poor.
