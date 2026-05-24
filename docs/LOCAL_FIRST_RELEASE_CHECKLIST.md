@@ -66,3 +66,11 @@ Use this checklist before local production/local MVP handoff.
 - Content grounding / DDN document ingestion / RAG is deferred for now.
 
 - [ ] Confirm Kokoro readiness prefers non-synthesis health probes (`/health` then `/v1/health`) and only falls back to fixed-text synthetic `/v1/tts` when health endpoints are unsupported (no synthetic output exposed).
+
+## Phase 20B local runtime operator validation
+- [ ] Confirm operator runbook exists and is current: `docs/LOCAL_RUNTIME_OPERATOR_GUIDE.md`.
+- [ ] Confirm required local runtime defaults are documented (`OLLAMA_*`, `KOKORO_TTS_*`, `FASTER_WHISPER_*`).
+- [ ] Confirm required start order is documented and followed (Ollama -> model pull/check -> Kokoro -> faster-whisper -> `npm run start`).
+- [ ] Confirm operator validation pass is executable end-to-end (`/chappy`, start session, readiness panel, typed input, microphone input, canonical transcript checks, standard voice playback).
+- [ ] Confirm troubleshooting coverage includes Ollama runtime/model failures, Kokoro health/fallback behavior, faster-whisper failures, microphone denial, TTS/STT runtime issues, and localStorage malformed recovery.
+- [ ] Confirm runbook explicitly states out-of-scope items (no RAG/content grounding/DDN ingestion, no cloud fallback/providers, no cloned voice provider adapter, no real avatar/visemes, no database/cloud persistence).

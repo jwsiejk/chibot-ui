@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 19)
+# AskChappy Current Implementation Status (After Phase 20B)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -20,6 +20,8 @@
 - Phase 17: local Ollama typed assistant runtime
 - Phase 18: local Kokoro/kokoro-onnx standard TTS output
 - Phase 19: local faster-whisper STT / browser microphone input
+- Phase 20A: local runtime readiness/hardening
+- Phase 20B: local runtime operator guide and validation pass documentation
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -100,3 +102,11 @@ Retired and inactive:
 - Content grounding / DDN document ingestion / RAG is deferred for now. Future content grounding work remains out of scope until explicitly re-prioritized.
 
 - Kokoro readiness now prefers non-synthesis health probes (`/health`, then `/v1/health`) and uses fixed-text synthetic `/v1/tts` fallback only when health endpoints are unsupported; readiness never exposes synthetic audio/text artifacts.
+
+
+## Phase 20B local runtime operator guide and validation pass
+- Added operator-focused runbook: `docs/LOCAL_RUNTIME_OPERATOR_GUIDE.md`.
+- Standardized required local runtime defaults for Ollama, Kokoro/kokoro-onnx, and faster-whisper in one operator reference.
+- Documented required service start order and full local runtime validation pass.
+- Added troubleshooting matrix for runtime reachability/readiness, microphone, STT/TTS behavior, and local persistence recovery.
+- Reaffirmed no scope drift: no RAG/content grounding/DDN ingestion, no cloud providers, no cloned voice provider adapter runtime, no real avatar/visemes, no database/cloud persistence.
