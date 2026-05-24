@@ -1,6 +1,6 @@
 import React, { FormEvent, useState } from 'react';
 
-export const TypedInput = ({ onSubmitText }: { onSubmitText: (text: string) => void }) => {
+export const TypedInput = ({ onSubmitText }: { onSubmitText: (text: string) => void | Promise<void> }) => {
   const [text, setText] = useState('');
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {

@@ -99,3 +99,12 @@ Cloned voice runtime integration remains blocked until provider selection, local
 
 
 - Implementation boundary: `services/askchappy-api/src/sessions/browserLocalSessionPersistenceAdapter.ts` is the explicit browser-local persistence adapter used by the local-first runtime scaffold.
+
+## Phase 17 update
+- Local Ollama typed assistant runtime is implemented for AskChappy typed chat.
+- Default local model is `gemma3:4b` and default base URL is `http://127.0.0.1:11434`.
+- No OpenAI/cloud runtime was added.
+- No RAG/content grounding/document ingestion was added.
+- Phase 18 remains local Kokoro/kokoro-onnx TTS.
+- Phase 19 remains local faster-whisper STT.
+- Content grounding/RAG remains Phase 20+.

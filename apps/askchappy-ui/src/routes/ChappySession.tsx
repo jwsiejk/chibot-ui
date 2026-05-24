@@ -5,6 +5,7 @@ import type { SessionMode } from '../../../../shared/contracts/modes';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import {
   appendLocalUserTextMessage,
+  generateLocalAssistantMessage,
   getLocalSession,
   getLocalTranscript,
   setLocalSessionMode,
@@ -17,7 +18,8 @@ import { SessionRightRail } from '../session/SessionRightRail';
 
 export const ChappySession = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const [state] = useState<SessionState>('ready');
+  const [state, setState] = useState<SessionState>('ready');
+  const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
 
   const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
@@ -36,8 +38,20 @@ export const ChappySession = () => {
     );
   }
 
-  const onSubmitText = (text: string) => {
+  const onSubmitText = async (text: string) => {
+    setRuntimeNotice(null);
     appendLocalUserTextMessage(sessionId, text);
+    setVersion((previous) => previous + 1);
+    setState('thinking');
+    const result = await generateLocalAssistantMessage(sessionId);
+    if (!result.ok) {
+      setRuntimeNotice(result.message);
+      setState('error');
+      setVersion((previous) => previous + 1);
+      return;
+    }
+
+    setState('ready');
     setVersion((previous) => previous + 1);
   };
 
@@ -55,6 +69,7 @@ export const ChappySession = () => {
       <p>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured' : voiceStatus.cloned_voice_status_label}.</p>
       <ChappyStage state={state} />
       <TranscriptPanel messages={messages} />
+      {runtimeNotice ? <p>{runtimeNotice}</p> : null}
       <TypedInput onSubmitText={onSubmitText} />
       <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} />
     </main>
