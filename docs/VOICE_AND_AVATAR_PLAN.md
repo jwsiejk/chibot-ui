@@ -74,3 +74,12 @@ Boundary rule:
 - Voice input must become canonical user transcript text.
 - Cloned Chappy voice remains optional and must not block standard local voice behavior.
 - Do not add cloud voice/TTS providers unless a future ADR explicitly changes direction.
+
+
+## Phase 19 update
+- Added local faster-whisper STT with browser microphone input.
+- Voice input is appended as canonical transcript messages using `text` with `source: voice`.
+- No separate voice transcript model was added.
+- No cloud STT/speech SDK was added; no cloud fallback exists.
+- No RAG/document ingestion/content grounding added; Phase 20+ remains RAG/content grounding.
+- No cloned voice provider adapter was added.

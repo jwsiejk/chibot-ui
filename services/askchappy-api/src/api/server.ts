@@ -1,4 +1,4 @@
-import { appendUserTextMessage } from '../transcript/transcriptEngine';
+import { appendUserTextMessage, appendUserVoiceMessage } from '../transcript/transcriptEngine';
 import {
   appendTranscriptMessage,
   createSession,
@@ -11,6 +11,7 @@ import type { SessionMode } from '../../../../shared/contracts/modes';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import { getLocalVoiceRuntimeStatus, synthesizeAssistantTranscriptMessage } from '../voice/voiceRuntime';
 import { generateAssistantResponse } from '../assistant/ollamaAdapter';
+import { transcribeWithFasterWhisper } from '../voice/stt/fasterWhisperAdapter';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
@@ -37,6 +38,24 @@ export const appendLocalUserTextMessage = (sessionId: string, text: string): Tra
 
   const userMessage = appendUserTextMessage(session, text);
   return appendTranscriptMessage(session, userMessage);
+};
+
+export const appendLocalUserVoiceMessage = (sessionId: string, text: string, meta: Record<string, unknown>): TranscriptMessage => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+  const userMessage = appendUserVoiceMessage(session, text, meta);
+  return appendTranscriptMessage(session, userMessage);
+};
+
+export const transcribeLocalVoiceInput = async (sessionId: string, audioBlob: Blob) => {
+  const session = getSession(sessionId);
+  if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+  const stt = await transcribeWithFasterWhisper(audioBlob);
+  if (!stt.ok) return stt;
+
+  const message = appendLocalUserVoiceMessage(sessionId, stt.text, { stt: stt.provider });
+  return { ok: true as const, message, provider: stt.provider };
 };
 
 export const getLocalTranscript = (sessionId: string): TranscriptMessage[] => {

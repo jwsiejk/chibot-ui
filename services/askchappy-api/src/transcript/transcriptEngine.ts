@@ -30,3 +30,13 @@ export const appendUserTextMessage = (session: AskChappySession, text: string): 
   session_id: session.session_id,
   meta: {},
 });
+
+export const appendUserVoiceMessage = (session: AskChappySession, text: string, meta: Record<string, unknown>): TranscriptMessage => ({
+  id: `msg_${crypto.randomUUID()}`,
+  ts: new Date().toISOString(),
+  role: 'user',
+  text,
+  source: 'voice',
+  session_id: session.session_id,
+  meta,
+});

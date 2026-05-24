@@ -16,6 +16,8 @@ import { ChappyStage } from '../session/ChappyStage';
 import { TypedInput } from '../session/TypedInput';
 import { TranscriptPanel } from '../transcript/TranscriptPanel';
 import { SessionRightRail } from '../session/SessionRightRail';
+import { VoiceInput } from '../session/VoiceInput';
+import { transcribeLocalVoiceInput } from '../../../../services/askchappy-api/src/api/server';
 
 export const ChappySession = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -80,6 +82,28 @@ export const ChappySession = () => {
     setVoiceNotice('Ready');
   };
 
+  const onTranscribeVoice = async (blob: Blob) => {
+    setState('transcribing');
+    setVoiceNotice('Transcribing');
+    const stt = await transcribeLocalVoiceInput(sessionId, blob);
+    if (!stt.ok) {
+      setState('error');
+      setVoiceNotice(stt.code === 'not_configured' ? 'Local STT not configured' : stt.message);
+      return;
+    }
+    setVersion((previous) => previous + 1);
+    setState('thinking');
+    const result = await generateLocalAssistantMessage(sessionId);
+    if (!result.ok) {
+      setRuntimeNotice(result.message);
+      setState('error');
+      return;
+    }
+    setVersion((previous) => previous + 1);
+    setState('ready');
+    setVoiceNotice('Ready');
+  };
+
   return (
     <main>
       <h1>AskChappy session</h1>
@@ -93,6 +117,21 @@ export const ChappySession = () => {
       <TranscriptPanel messages={messages} />
       {runtimeNotice ? <p>{runtimeNotice}</p> : null}
       <TypedInput onSubmitText={onSubmitText} />
+      <VoiceInput
+        onStart={() => {
+          setState('listening');
+          setVoiceNotice('Listening');
+        }}
+        onStop={() => {
+          setState('transcribing');
+          setVoiceNotice('Transcribing');
+        }}
+        onTranscribe={onTranscribeVoice}
+        onError={(message) => {
+          setState('error');
+          setVoiceNotice(message);
+        }}
+      />
       <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} />
     </main>
   );

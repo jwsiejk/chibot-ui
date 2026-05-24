@@ -35,3 +35,12 @@ npm run smoke:local-runtime
 ## Terminology and route policy
 - Deployment model: local-first, local production/local MVP.
 - Retired `/demo*` and `/visual-session*` routes remain inactive historical routes.
+
+
+## Phase 19 update
+- Added local faster-whisper STT with browser microphone input.
+- Voice input is appended as canonical transcript messages using `text` with `source: voice`.
+- No separate voice transcript model was added.
+- No cloud STT/speech SDK was added; no cloud fallback exists.
+- No RAG/document ingestion/content grounding added; Phase 20+ remains RAG/content grounding.
+- No cloned voice provider adapter was added.

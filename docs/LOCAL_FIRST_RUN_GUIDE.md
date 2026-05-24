@@ -96,3 +96,12 @@ If Ollama is not reachable, AskChappy shows: "Local Ollama runtime is not config
 - If `KOKORO_TTS_BASE_URL` is not set, standard local voice remains selected/default but synthesis reports runtime not configured.
 - TTS always consumes committed assistant transcript `text` and returns matching `spoken_text`.
 - No STT/microphone input, cloud TTS SDK, or cloned voice provider adapter is added in Phase 18.
+
+
+## Phase 19 update
+- Added local faster-whisper STT with browser microphone input.
+- Voice input is appended as canonical transcript messages using `text` with `source: voice`.
+- No separate voice transcript model was added.
+- No cloud STT/speech SDK was added; no cloud fallback exists.
+- No RAG/document ingestion/content grounding added; Phase 20+ remains RAG/content grounding.
+- No cloned voice provider adapter was added.
