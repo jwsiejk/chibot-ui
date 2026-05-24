@@ -56,6 +56,20 @@ describe('phase 19 local faster-whisper stt', () => {
     expect(result).toMatchObject({ ok: false, code: 'runtime_unreachable' });
   });
 
+  it('maps http 500 stt failures to transcription_failed (not runtime_unreachable)', async () => {
+    process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
+    process.env.FASTER_WHISPER_MODEL = 'base.en';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: { error: 'transcription_failed', detail: 'decode failed' } }),
+    }));
+
+    const result = await transcribeWithFasterWhisper(new Blob(['x'], { type: 'audio/webm' }));
+    expect(result).toMatchObject({ ok: false, code: 'transcription_failed' });
+    if (!result.ok) expect(result.message).toContain('decode failed');
+  });
+
   it('normalizes trailing slash and posts file/model/language to /v1/transcribe exactly once', async () => {
     process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890/';
     process.env.FASTER_WHISPER_MODEL = 'base.en';
@@ -109,6 +123,22 @@ describe('phase 19 local faster-whisper stt', () => {
     const out = await transcribeLocalVoiceInput(session.session_id, new Blob(['x'], { type: 'audio/webm' }));
 
     expect(out).toMatchObject({ ok: false, code: 'no_speech' });
+    expect(getLocalTranscript(session.session_id)).toHaveLength(before);
+  });
+
+  it('transcription failure does not append fake transcript messages', async () => {
+    process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
+    process.env.FASTER_WHISPER_MODEL = 'base.en';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: { error: 'transcription_failed', detail: 'codec unsupported' } }),
+    }));
+
+    const session = createLocalSession();
+    const before = getLocalTranscript(session.session_id).length;
+    const out = await transcribeLocalVoiceInput(session.session_id, new Blob(['x'], { type: 'audio/webm' }));
+    expect(out).toMatchObject({ ok: false, code: 'transcription_failed' });
     expect(getLocalTranscript(session.session_id)).toHaveLength(before);
   });
 

@@ -528,6 +528,42 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByRole('button', { name: 'Mic ready to record' })).toBeInTheDocument();
   });
 
+  it('shows transcription-failed notice when STT runtime returns HTTP 500', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+      configurable: true,
+    });
+    class MockMediaRecorder {
+      static isTypeSupported = vi.fn().mockReturnValue(true);
+      ondataavailable: ((event: { data: BlobPart }) => void) | null = null;
+      onstop: (() => void | Promise<void>) | null = null;
+      start = vi.fn();
+      stop = vi.fn(() => {
+        this.ondataavailable?.({ data: new Blob(['audio'], { type: 'audio/webm' }) });
+        void this.onstop?.();
+      });
+    }
+    vi.stubGlobal('MediaRecorder', MockMediaRecorder as unknown as typeof MediaRecorder);
+    process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
+    process.env.FASTER_WHISPER_MODEL = 'base.en';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: { error: 'transcription_failed', detail: 'decode failed' } }),
+    }));
+
+    render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mic ready to record' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mic recording' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Mic recording' }));
+
+    await waitFor(() => expect(screen.getByText(/Mic state: STT failed during transcription\./)).toBeInTheDocument());
+    expect(screen.queryByText('user:')).not.toBeInTheDocument();
+  });
+
   it('renders right rail in open_qa mode initially', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>

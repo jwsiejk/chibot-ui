@@ -183,3 +183,8 @@ Retired and inactive:
 - Speak control replaced by Mute Chappy / Unmute Chappy output toggle; muted mode is transcript-only and non-blocking.
 - Added Admin Runtime Console modal with readiness, GPU validation, local endpoints, troubleshooting hints, and bounded client diagnostics (max 25 events, in-memory only).
 - Session shell is viewport-contained with transcript message list as the primary scrolling area.
+
+## STT diagnostics cleanup update
+- faster-whisper wrapper now emits traceback-oriented server-side error logs for `/v1/transcribe` failures and returns safe structured error details for operator troubleshooting.
+- STT adapter now differentiates network reachability failures (`runtime_unreachable`) from runtime processing failures (`transcription_failed`) and malformed client/runtime interactions (`invalid_response`).
+- Session UI messaging now reports transcription-processing failures clearly instead of incorrectly labeling all failures as runtime unreachable.

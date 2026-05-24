@@ -1,11 +1,15 @@
 import argparse
+import logging
 import os
 import tempfile
+import traceback
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
+
+logger = logging.getLogger("faster_whisper_stt_server")
 
 
 def parse_allowed_origins(values: list[str] | None) -> list[str]:
@@ -35,6 +39,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
     args = parse_args()
 
     try:
@@ -75,6 +80,9 @@ def main() -> None:
         model_override: str | None = Form(default=None, alias="model"),
         language_override: str | None = Form(default=None, alias="language"),
     ) -> dict[str, str]:
+        if file.filename is None:
+            raise HTTPException(status_code=400, detail="missing uploaded filename")
+
         if file.size == 0:
             return {"text": ""}
 
@@ -83,11 +91,15 @@ def main() -> None:
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
                 tmp_path = tmp_file.name
+                total_bytes = 0
                 while True:
                     chunk = await file.read(1024 * 1024)
                     if not chunk:
                         break
+                    total_bytes += len(chunk)
                     tmp_file.write(chunk)
+            if total_bytes == 0:
+                return {"text": ""}
 
             active_language = (language_override or args.language or "").strip() or None
             _ = model_override  # accepted for compatibility; fixed local model remains loaded from CLI args
@@ -95,7 +107,24 @@ def main() -> None:
             text = " ".join(segment.text.strip() for segment in segments).strip()
             return {"text": text}
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"transcription failed: {exc}") from exc
+            logger.error(
+                "STT transcription failed for uploaded audio: filename=%r content_type=%r suffix=%r error=%s\n%s",
+                file.filename,
+                file.content_type,
+                suffix,
+                str(exc),
+                traceback.format_exc(),
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "transcription_failed",
+                    "detail": str(exc),
+                    "filename": file.filename,
+                    "content_type": file.content_type,
+                    "suffix": suffix,
+                },
+            ) from exc
         finally:
             await file.close()
             if tmp_path and os.path.exists(tmp_path):
