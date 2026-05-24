@@ -4,6 +4,19 @@ import type { LocalRuntimeReadiness } from '../../../../services/askchappy-api/s
 import type { LocalGpuValidationReport, LocalGpuValidationService, LocalGpuValidationStatus } from '../../../../shared/contracts/gpu';
 
 export type ClientDiagnosticEvent = { id: string; ts: string; event: string };
+export type TurnLatencyEntry = {
+  id: string;
+  ts: string;
+  turn_type: 'typed' | 'voice';
+  mic_capture_ms: number | null;
+  stt_ms: number | null;
+  generation_ms: number | null;
+  tts_ms: number | null;
+  playback_start_ms: number | null;
+  total_ms: number | null;
+  stt_failed?: boolean;
+  tts_failed?: boolean;
+};
 
 const STATUS_LABELS: Record<LocalGpuValidationStatus, string> = {
   gpu_confirmed: 'gpu_confirmed',
@@ -25,7 +38,7 @@ const gpuServiceView = (report: LocalGpuValidationReport, service: LocalGpuValid
   };
 };
 
-export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, diagnostics }: { isOpen: boolean; onClose: () => void; browserMicStatus: string; diagnostics: ClientDiagnosticEvent[] }) => {
+export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, diagnostics, turnLatency }: { isOpen: boolean; onClose: () => void; browserMicStatus: string; diagnostics: ClientDiagnosticEvent[]; turnLatency: TurnLatencyEntry[] }) => {
   const [readiness, setReadiness] = useState<LocalRuntimeReadiness | null>(null);
   const [gpu, setGpu] = useState<LocalGpuValidationReport | null>(null);
 
@@ -91,6 +104,29 @@ export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, di
             <li>If TTS unavailable: transcript text still works.</li>
             <li>If STT no speech: no transcript message is created.</li>
           </ul>
+        </section>
+
+
+        <section>
+          <h3>Turn Latency</h3>
+          {turnLatency.length === 0 ? <p>No turn latency metrics yet.</p> : (
+            <>
+              <h4>Latest turn</h4>
+              <ul>
+                <li>Type: {turnLatency[0].turn_type}</li>
+                <li>Mic capture: {turnLatency[0].mic_capture_ms ?? 'n/a'} ms</li>
+                <li>STT: {turnLatency[0].stt_ms ?? 'n/a'} ms</li>
+                <li>Assistant generation: {turnLatency[0].generation_ms ?? 'n/a'} ms</li>
+                <li>TTS synthesis: {turnLatency[0].tts_ms ?? 'n/a'} ms</li>
+                <li>Playback start: {turnLatency[0].playback_start_ms ?? 'n/a'} ms</li>
+                <li>Total: {turnLatency[0].total_ms ?? 'n/a'} ms</li>
+              </ul>
+              <h4>Last 5 turns</h4>
+              <ul>
+                {turnLatency.slice(0, 5).map((entry) => <li key={entry.id}>{entry.ts} — {entry.turn_type} — STT {entry.stt_ms ?? 'n/a'}ms — Assistant generation {entry.generation_ms ?? 'n/a'}ms — TTS {entry.tts_ms ?? 'n/a'}ms — Playback start {entry.playback_start_ms ?? 'n/a'}ms — Total {entry.total_ms ?? 'n/a'}ms{entry.stt_failed ? ' — STT failed' : ''}{entry.tts_failed ? ' — TTS/playback failed' : ''}</li>)}
+              </ul>
+            </>
+          )}
         </section>
 
         <section>

@@ -11,9 +11,15 @@ import { TranscriptPanel } from '../transcript/TranscriptPanel';
 import { SessionRightRail } from '../session/SessionRightRail';
 import { VoiceInput } from '../session/VoiceInput';
 import { LocalRuntimeStatus } from '../session/LocalRuntimeStatus';
-import { AdminRuntimeConsoleModal, type ClientDiagnosticEvent } from '../session/AdminRuntimeConsoleModal';
+import { AdminRuntimeConsoleModal, type ClientDiagnosticEvent, type TurnLatencyEntry } from '../session/AdminRuntimeConsoleModal';
 
 const STATE_COPY: Record<SessionState, string> = { ready: 'Ready', listening: 'Listening', transcribing: 'Transcribing', thinking: 'Thinking', speaking: 'Speaking', error: 'Needs attention' };
+const MAX_TURN_LATENCY = 5;
+
+const msBetween = (start?: number, end?: number): number | null => {
+  if (typeof start !== 'number' || typeof end !== 'number') return null;
+  return Math.max(0, Math.round(end - start));
+};
 
 export const ChappySession = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -26,9 +32,12 @@ export const ChappySession = () => {
   const [voiceNotice, setVoiceNotice] = useState('Ready');
   const [chappyMuted, setChappyMuted] = useState(false);
   const [diagnostics, setDiagnostics] = useState<ClientDiagnosticEvent[]>([]);
+  const [turnLatency, setTurnLatency] = useState<TurnLatencyEntry[]>([]);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const micCaptureStartRef = useRef<number | null>(null);
 
   const pushDiagnostic = (event: string) => setDiagnostics((prev) => [{ id: crypto.randomUUID(), ts: new Date().toISOString(), event }, ...prev].slice(0, 25));
+  const pushTurnLatency = (entry: TurnLatencyEntry) => setTurnLatency((prev) => [entry, ...prev].slice(0, MAX_TURN_LATENCY));
 
   useEffect(() => {
     document.body.classList.add('session-viewport-lock');
@@ -49,19 +58,23 @@ export const ChappySession = () => {
   const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : getLocalTranscript(sessionId)), [sessionId, session, version]);
   if (!sessionId || !session) return <main><h1>Session not found</h1><p>Start a local-first Open Q&amp;A session from /chappy.</p></main>;
 
-  const speakAssistant = async (messageId: string) => {
+  const speakAssistant = async (messageId: string, inFlight: Omit<TurnLatencyEntry, 'id' | 'ts' | 'turn_type'> & { turnStartAt: number; turnType: 'typed' | 'voice' }) => {
     if (chappyMuted) {
       setVoiceNotice('Chappy voice muted. Transcript only.');
       return;
     }
+    const ttsStartAt = performance.now();
     pushDiagnostic('tts request started');
     setState('speaking');
     setVoiceNotice('Chappy speaking…');
     const tts = await synthesizeLocalAssistantMessage(sessionId, messageId);
+    const ttsEndAt = performance.now();
+    const nextInFlight = { ...inFlight, tts_ms: msBetween(ttsStartAt, ttsEndAt) };
     if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) {
       if (tts.unavailable_reason === 'request_cancelled') pushDiagnostic('tts request cancelled');
       else if (tts.unavailable_reason === 'invalid_response') pushDiagnostic('tts invalid response');
       else pushDiagnostic('tts synthesis failed');
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, tts_failed: true });
       setVoiceNotice(tts.unavailable_message ?? 'Chappy voice unavailable. Transcript response is still available.');
       setState('ready');
       return;
@@ -74,12 +87,16 @@ export const ChappySession = () => {
     }
     const audio = new Audio(`data:audio/${tts.audio_format};base64,${tts.audio_base64}`);
     activeAudioRef.current = audio;
+    const playStartAt = performance.now();
     try {
       await audio.play();
+      const playSuccessAt = performance.now();
       pushDiagnostic('audio playback started');
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: msBetween(playStartAt, playSuccessAt), total_ms: msBetween(inFlight.turnStartAt, playSuccessAt), tts_failed: false });
     } catch (error) {
       const blocked = error instanceof DOMException && error.name === 'NotAllowedError';
       pushDiagnostic(blocked ? 'audio playback blocked' : 'audio playback failed');
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, tts_failed: true });
       setVoiceNotice('Browser blocked or failed Chappy voice playback. Click in the room or unmute Chappy to enable audio.');
       setState('ready');
       return;
@@ -88,9 +105,11 @@ export const ChappySession = () => {
     setVoiceNotice('Chappy voice on');
   };
 
-  const runAssistantTurn = async () => {
+  const runAssistantTurn = async (turnStartAt: number, turnType: 'typed' | 'voice', micCaptureMs: number | null, sttMs: number | null) => {
+    const generationStartAt = performance.now();
     setState('thinking');
     const result = await generateLocalAssistantMessage(sessionId);
+    const generationEndAt = performance.now();
     if (!result.ok) {
       pushDiagnostic('assistant generation failure');
       setRuntimeNotice(result.message);
@@ -101,36 +120,54 @@ export const ChappySession = () => {
     const refreshed = getLocalTranscript(sessionId);
     const newestAssistant = [...refreshed].reverse().find((entry) => entry.role === 'assistant');
     setState('ready');
-    if (newestAssistant) await speakAssistant(newestAssistant.id);
+    if (newestAssistant) {
+      await speakAssistant(newestAssistant.id, {
+        turnStartAt,
+        turnType,
+        mic_capture_ms: micCaptureMs,
+        stt_ms: sttMs,
+        generation_ms: msBetween(generationStartAt, generationEndAt),
+        tts_ms: null,
+      });
+    }
   };
 
   const onSubmitText = async (text: string) => {
+    const turnStartAt = performance.now();
     setRuntimeNotice(null);
     appendLocalUserTextMessage(sessionId, text);
     pushDiagnostic('typed message submitted');
     setVersion((v) => v + 1);
-    await runAssistantTurn();
+    await runAssistantTurn(turnStartAt, 'typed', null, null);
   };
 
   const onSelectMode = (mode: SessionMode) => { setLocalSessionMode(sessionId, mode, 'user'); setVersion((previous) => previous + 1); };
   const onTranscribeVoice = async (blob: Blob) => {
+    const turnStartAt = micCaptureStartRef.current ?? performance.now();
+    const micSubmitAt = performance.now();
+    const micCaptureMs = msBetween(micCaptureStartRef.current ?? undefined, micSubmitAt);
+    const sttStartAt = performance.now();
     setState('transcribing');
     setVoiceNotice('Transcribing…');
     pushDiagnostic('mic transcribing started');
     const stt = await transcribeLocalVoiceInput(sessionId, blob);
+    const sttEndAt = performance.now();
+    micCaptureStartRef.current = null;
     if (!stt.ok) {
       if (stt.code === 'no_speech') pushDiagnostic('STT no speech');
       else pushDiagnostic('STT failure');
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: 'voice', mic_capture_ms: micCaptureMs, stt_ms: msBetween(sttStartAt, sttEndAt), generation_ms: null, tts_ms: null, playback_start_ms: null, total_ms: null, stt_failed: true, tts_failed: false });
       setState('ready');
       setVoiceNotice(stt.code === 'no_speech' ? 'No speech detected' : stt.code === 'not_configured' ? 'Mic unavailable' : stt.message);
       return;
     }
     setVersion((v) => v + 1);
-    await runAssistantTurn();
+    await runAssistantTurn(turnStartAt, 'voice', micCaptureMs, msBetween(sttStartAt, sttEndAt));
   };
 
   return (
     <main className="meeting-room session-shell" aria-label="askchappy session room">
+      {/* ... unchanged render ... */}
       <header className="card status-bar top-meeting-bar" aria-label="top meeting bar">
         <h1>AskChappy</h1>
         <p>Open Q&amp;A • {STATE_COPY[state]} • session {sessionId}{user?.role === 'admin' ? ' • Admin' : ''}</p>
@@ -146,7 +183,7 @@ export const ChappySession = () => {
       <section className="meeting-toolbar" aria-label="bottom meeting toolbar">
         <div className="toolbar-notice" role="status">Mic state: {voiceNotice} {runtimeNotice ? `• ${runtimeNotice}` : ''}</div>
         <div className="toolbar-controls">
-          <VoiceInput compact onStart={() => { setState('listening'); setVoiceNotice('Listening…'); pushDiagnostic('mic listening started'); }} onStop={() => { setState('transcribing'); setVoiceNotice('Transcribing…'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
+          <VoiceInput compact onStart={() => { micCaptureStartRef.current = performance.now(); setState('listening'); setVoiceNotice('Listening…'); pushDiagnostic('mic listening started'); }} onStop={() => { pushDiagnostic('mic capture submitted'); setState('transcribing'); setVoiceNotice('Transcribing…'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
           <TypedInput compact onSubmitText={onSubmitText} />
           <button className="meeting-btn" type="button" onClick={() => { setChappyMuted((m) => !m); setVoiceNotice(chappyMuted ? 'Chappy voice on' : 'Chappy voice muted. Transcript only.'); pushDiagnostic(chappyMuted ? 'Chappy unmuted' : 'Chappy muted'); }}>{chappyMuted ? 'Unmute Chappy' : 'Mute Chappy'}</button>
           <LocalRuntimeStatus compact />
@@ -158,7 +195,7 @@ export const ChappySession = () => {
           <span>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured.' : `${voiceStatus.cloned_voice_status_label}.`}</span>
         </div>
       </section>
-      <AdminRuntimeConsoleModal isOpen={showAdminModal && user?.role === 'admin'} onClose={() => setShowAdminModal(false)} browserMicStatus={voiceNotice.includes('Permission denied') ? 'permission_denied' : 'available_or_unknown'} diagnostics={diagnostics} />
+      <AdminRuntimeConsoleModal isOpen={showAdminModal && user?.role === 'admin'} onClose={() => setShowAdminModal(false)} browserMicStatus={voiceNotice.includes('Permission denied') ? 'permission_denied' : 'available_or_unknown'} diagnostics={diagnostics} turnLatency={turnLatency} />
     </main>
   );
 };
