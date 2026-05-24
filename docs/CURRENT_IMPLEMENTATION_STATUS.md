@@ -125,5 +125,5 @@ Retired and inactive:
   - `start-kokoro-tts.ps1`
   - `start-faster-whisper-stt.ps1`
   - `start-local-runtime.ps1`
-- Scripts are local-first only, load `.env.local` with `.env.example` fallback, and require explicit local runner commands for Kokoro/faster-whisper instead of guessing or auto-installing.
+- Scripts are local-first only. `start-local-runtime.ps1` requires `.env.local` and acts as a preflight orchestrator (not a process manager). Focused Kokoro/faster-whisper scripts require explicit local runner commands instead of guessing or auto-installing.
 - Scripts do not create transcript messages and do not use cloud/OpenAI/hosted providers.

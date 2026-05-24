@@ -30,36 +30,43 @@ if ([string]::IsNullOrWhiteSpace($kokoroBase)) { $kokoroBase = 'http://127.0.0.1
 $sttBase = [System.Environment]::GetEnvironmentVariable('FASTER_WHISPER_BASE_URL', 'Process')
 if ([string]::IsNullOrWhiteSpace($sttBase)) { $sttBase = 'http://127.0.0.1:8890' }
 
+$missing = @()
+
 Write-Host "[INFO] Step 1: checking Ollama at $ollamaBase"
 if (-not (Test-Health "$ollamaBase/api/tags")) {
   Write-Host '[ERROR] Ollama is not reachable. Start Ollama and verify OLLAMA_BASE_URL.' -ForegroundColor Red
-  exit 1
+  $missing += 'ollama'
 }
 
 Write-Host "[INFO] Step 2: checking Kokoro at $kokoroBase"
 $kokoroReady = (Test-Health "$kokoroBase/health") -or (Test-Health "$kokoroBase/v1/health")
 if (-not $kokoroReady) {
-  $kokoroRunner = [System.Environment]::GetEnvironmentVariable('KOKORO_TTS_RUN_COMMAND', 'Process')
-  if ([string]::IsNullOrWhiteSpace($kokoroRunner)) {
-    Write-Host '[ERROR] Kokoro is not reachable and KOKORO_TTS_RUN_COMMAND is not configured.' -ForegroundColor Red
-    exit 1
-  }
-  Write-Host '[INFO] Kokoro not detected; invoking scripts/start-kokoro-tts.ps1'
-  & (Join-Path $root 'scripts/start-kokoro-tts.ps1')
-  exit $LASTEXITCODE
+  Write-Host '[ERROR] Kokoro is not reachable.' -ForegroundColor Red
+  $missing += 'kokoro'
 }
 
 Write-Host "[INFO] Step 3: checking faster-whisper at $sttBase"
 if (-not (Test-Health "$sttBase/health")) {
-  $whisperRunner = [System.Environment]::GetEnvironmentVariable('FASTER_WHISPER_RUN_COMMAND', 'Process')
-  if ([string]::IsNullOrWhiteSpace($whisperRunner)) {
-    Write-Host '[ERROR] faster-whisper is not reachable and FASTER_WHISPER_RUN_COMMAND is not configured.' -ForegroundColor Red
-    exit 1
-  }
-  Write-Host '[INFO] faster-whisper not detected; invoking scripts/start-faster-whisper-stt.ps1'
-  & (Join-Path $root 'scripts/start-faster-whisper-stt.ps1')
-  exit $LASTEXITCODE
+  Write-Host '[ERROR] faster-whisper is not reachable.' -ForegroundColor Red
+  $missing += 'faster-whisper'
 }
 
-Write-Host '[INFO] Step 4: starting AskChappy app via npm run start'
+if ($missing.Count -gt 0) {
+  Write-Host ''
+  Write-Host '[ERROR] Required local runtime services are missing/unreachable. Start services in separate PowerShell windows and rerun:' -ForegroundColor Red
+  if ($missing -contains 'ollama') {
+    Write-Host '  - Start Ollama using your normal local startup process.'
+  }
+  if ($missing -contains 'kokoro') {
+    Write-Host '  - .\scripts\start-kokoro-tts.ps1'
+  }
+  if ($missing -contains 'faster-whisper') {
+    Write-Host '  - .\scripts\start-faster-whisper-stt.ps1'
+  }
+  Write-Host '  - .\scripts\check-local-runtime.ps1'
+  Write-Host 'Then rerun .\scripts\start-local-runtime.ps1 to launch AskChappy.'
+  exit 1
+}
+
+Write-Host '[INFO] Step 4: all required services reachable; starting AskChappy app via npm run start'
 npm run start
