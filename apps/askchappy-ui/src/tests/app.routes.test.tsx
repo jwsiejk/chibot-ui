@@ -35,6 +35,11 @@ describe('route map', () => {
 describe('phase 22 chappy UI', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'Audio').mockImplementation(() => ({
+      play: vi.fn().mockResolvedValue(undefined),
+      pause: vi.fn(),
+      currentTime: 0,
+    } as unknown as HTMLAudioElement));
   });
 
   it('renders email login gate on /chappy', () => {
@@ -273,6 +278,7 @@ describe('phase 22 chappy UI', () => {
     await waitFor(() => expect(screen.getByText(/hello muted/)).toBeInTheDocument());
     expect(synthSpy).not.toHaveBeenCalled();
   });
+
 
   it('opens and closes Admin Runtime Console from toolbar for admin only', async () => {
     render(

@@ -2,6 +2,8 @@ import argparse
 import base64
 import inspect
 import io
+import logging
+import traceback
 import wave
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,9 @@ class TtsRequest(BaseModel):
     text: str
     voice: str = "af_sarah"
     format: str = "wav"
+
+
+logger = logging.getLogger("kokoro_tts_server")
 
 def parse_allowed_origins(values: list[str] | None) -> list[str]:
     if not values:
@@ -156,7 +161,24 @@ def main() -> None:
             wav_bytes = encode_wav(samples, sample_rate)
             return {"audio_base64": base64.b64encode(wav_bytes).decode("ascii"), "audio_format": "wav"}
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"tts synthesis failed: {exc}") from exc
+            logger.error(
+                "TTS synthesis failed (voice=%s format=%s text_length=%d): %s",
+                payload.voice,
+                payload.format,
+                len(text),
+                exc,
+            )
+            logger.error(traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "synthesis_failed",
+                    "detail": str(exc),
+                    "voice": payload.voice,
+                    "format": payload.format,
+                    "text_length": len(text),
+                },
+            ) from exc
 
     import uvicorn
 

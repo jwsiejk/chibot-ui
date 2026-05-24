@@ -188,3 +188,10 @@ Retired and inactive:
 - faster-whisper wrapper now emits traceback-oriented server-side error logs for `/v1/transcribe` failures and returns safe structured error details for operator troubleshooting.
 - STT adapter now differentiates network reachability failures (`runtime_unreachable`) from runtime processing failures (`transcription_failed`) and malformed client/runtime interactions (`invalid_response`).
 - Session UI messaging now reports transcription-processing failures clearly instead of incorrectly labeling all failures as runtime unreachable.
+
+## TTS synthesis/playback diagnostics cleanup update
+- Kokoro TTS provider now maps unavailable states with finer reasons: `not_configured`, `runtime_unreachable`, `request_cancelled`, `request_rejected`, `synthesis_failed`, and `invalid_response`.
+- Provider output now supports optional safe fields (`unavailable_message`, `provider_error_detail`) to surface runtime detail without changing transcript contracts.
+- Kokoro `/v1/tts` wrapper now logs synthesis exceptions with traceback and returns structured failure detail (`error`, `detail`, `voice`, `format`, `text_length`) without logging full assistant text.
+- Session voice UX now separates TTS synthesis failures from browser playback failures, with distinct user guidance and bounded diagnostics events.
+- Browser playback failures are non-blocking and no longer mislabeled as TTS unavailable.
