@@ -224,3 +224,12 @@ python -c "import onnxruntime as ort; print(ort.get_available_providers())"
   - `./scripts/start-local-runtime.ps1`
 - Model/voice assets stay outside repo (`C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`, `C:\AskChipAssets\kokoro\voices-v1.0.bin`).
 - Admin GPU Validation panel reports what wrappers expose; it cannot replace `nvidia-smi -l 1` process checks.
+
+## Phase 22D local wrapper CORS cleanup
+- Browser CORS behavior matters for AskChappy local runtime checks: AskChappy runs at `http://127.0.0.1:4173` while local wrapper services run at `http://127.0.0.1:8880` and `http://127.0.0.1:8890`.
+- Wrappers now return local-only CORS headers by default for:
+  - `http://127.0.0.1:4173`
+  - `http://localhost:4173`
+- Defaults avoid unrestricted wildcard origins; optional wrapper CLI `--allowed-origin` can be repeated or comma-separated for explicit local overrides.
+- PowerShell `curl` can report HTTP 200 even when browser fetch is still blocked by CORS policy.
+- After wrapper updates, restart Kokoro and faster-whisper service windows, then re-check browser readiness.

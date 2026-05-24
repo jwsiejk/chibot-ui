@@ -37,6 +37,22 @@ describe('phase 21d local http runtime wrappers', () => {
     expect(whisper).toContain('/v1/transcribe');
   });
 
+
+
+  it('adds local-only cors defaults for browser runtime checks', () => {
+    const kokoro = read('services/local-runtime/kokoro_tts_server.py');
+    const whisper = read('services/local-runtime/faster_whisper_stt_server.py');
+
+    expect(kokoro).toContain('CORSMiddleware');
+    expect(whisper).toContain('CORSMiddleware');
+    expect(kokoro).toContain('http://127.0.0.1:4173');
+    expect(kokoro).toContain('http://localhost:4173');
+    expect(whisper).toContain('http://127.0.0.1:4173');
+    expect(whisper).toContain('http://localhost:4173');
+    expect(kokoro).not.toContain('allow_origins=["*"]');
+    expect(whisper).not.toContain('allow_origins=["*"]');
+  });
+
   it('includes explicit cuda validation logic without fake gpu claims', () => {
     const kokoro = read('services/local-runtime/kokoro_tts_server.py').toLowerCase();
     const whisper = read('services/local-runtime/faster_whisper_stt_server.py').toLowerCase();

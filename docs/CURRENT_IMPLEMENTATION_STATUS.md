@@ -174,6 +174,8 @@ Retired and inactive:
 
 
 ## Phase 22D update
+- Phase 22D local wrapper CORS cleanup: Kokoro/faster-whisper wrappers now use FastAPI CORSMiddleware with explicit local Vite origins (`http://127.0.0.1:4173`, `http://localhost:4173`) by default, optional `--allowed-origin` overrides, localhost bind defaults unchanged, and existing `/health`/`/v1/health`/`/v1/tts`/`/v1/transcribe` contracts preserved.
+
 - /chappy now presents a true pre-call meeting lobby with centered room preview, compact guided mode chips, and Join Chappy Room CTA.
 - /chappy/session/:sessionId now uses a true Zoom-style meeting-room shell with top bar, dominant Chappy stage tile, right transcript panel, and persistent bottom toolbar.
 - Toolbar semantics updated: Mic is push-to-talk user input, Modes is compact overlay access, Runtime is compact disclosure, and admin-only Admin opens runtime modal.

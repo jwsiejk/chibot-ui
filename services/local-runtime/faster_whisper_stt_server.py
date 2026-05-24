@@ -4,7 +4,22 @@ import tempfile
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
+
+
+def parse_allowed_origins(values: list[str] | None) -> list[str]:
+    if not values:
+        return ["http://127.0.0.1:4173", "http://localhost:4173"]
+
+    origins: list[str] = []
+    for item in values:
+        for origin in item.split(","):
+            clean = origin.strip()
+            if clean:
+                origins.append(clean)
+
+    return origins or ["http://127.0.0.1:4173", "http://localhost:4173"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
     parser.add_argument("--compute-type", default="int8")
     parser.add_argument("--language", default="en")
+    parser.add_argument("--allowed-origin", action="append", default=None)
     return parser.parse_args()
 
 
@@ -33,6 +49,14 @@ def main() -> None:
         raise
 
     app = FastAPI(title="AskChappy faster-whisper Local Runtime")
+    allowed_origins = parse_allowed_origins(args.allowed_origin)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health")
     def health() -> dict[str, Any]:

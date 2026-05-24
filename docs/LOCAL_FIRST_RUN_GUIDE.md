@@ -74,6 +74,9 @@ npm run smoke:local-runtime
 
 Vite handles browser-history fallback for canonical React routes (`/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, `/admin`, etc.) during local-first runtime use.
 
+
+CORS note: browser fetch from AskChappy (`http://127.0.0.1:4173`) to local wrappers (`http://127.0.0.1:8880`, `http://127.0.0.1:8890`) requires wrapper CORS headers. PowerShell `curl` may pass while browser fetch is blocked without `Access-Control-Allow-Origin`. Default wrapper CORS allows only `http://127.0.0.1:4173` and `http://localhost:4173`; restart Kokoro/faster-whisper windows after wrapper changes.
+
 ## Runtime services and environment defaults
 Operator-required local runtime dependencies and default local endpoint values are defined in:
 - `docs/LOCAL_RUNTIME_OPERATOR_GUIDE.md`
