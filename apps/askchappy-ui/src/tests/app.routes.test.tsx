@@ -116,6 +116,21 @@ describe('phase 5 chappy UI', () => {
   });
 
 
+
+  it('shows local gpu validation panel for admin dashboard only', async () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Admin' }));
+
+    expect(screen.getByRole('heading', { name: 'Local GPU Validation' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText(/Status: /).length).toBeGreaterThan(0));
+  });
+
   it('renders local-first admin dashboard shell with voice and avatar links', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
@@ -161,6 +176,21 @@ describe('phase 5 chappy UI', () => {
     });
     expect(disabledControls).toHaveLength(6);
     disabledControls.forEach((control) => expect(control).toBeDisabled());
+  });
+
+
+  it('does not expose local gpu validation panel in normal /chappy/session/:sessionId', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+
+    expect(screen.queryByRole('heading', { name: 'Local GPU Validation' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/nvidia-smi -l 1/)).not.toBeInTheDocument();
   });
 
   it('does not show Voice Studio controls in normal /chappy/session/:sessionId user sessions', () => {
