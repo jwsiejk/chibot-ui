@@ -1,14 +1,9 @@
-:root {
-  color-scheme: dark;
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: #0b1020;
-  color: #e7ecff;
-}
+:root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0b1020; color: #e7ecff; }
 * { box-sizing: border-box; }
-body { margin: 0; background: radial-gradient(circle at top, #15274f, #0b1020 55%); min-height: 100vh; }
+body { margin: 0; background: #0a0f1d; min-height: 100vh; }
 a { color: inherit; text-decoration: none; }
-.app-shell { max-width: 1320px; margin: 0 auto; padding: 1rem 1.2rem 7.5rem; }
 .card { background: rgba(15, 25, 47, 0.9); border: 1px solid #2a3f75; border-radius: 16px; box-shadow: 0 14px 35px rgba(0,0,0,.35); }
+.app-shell { min-height:100vh; max-width: 1320px; margin: 0 auto; padding: 1rem; }
 .app-nav { display:flex; justify-content:space-between; align-items:center; padding:.75rem 1rem; margin-bottom:1rem; }
 .brand { font-weight:700; font-size:1.1rem; }
 .nav-links { display:flex; gap:.6rem; flex-wrap:wrap; }
@@ -17,44 +12,38 @@ a { color: inherit; text-decoration: none; }
 .auth-card { width:min(520px,95vw); padding:2rem; }
 .input, .btn { border-radius:12px; border:1px solid #3a548d; font: inherit; }
 .input { width:100%; padding:.75rem .9rem; background:#101b34; color:#f6f8ff; }
-.input:focus { outline:2px solid #4f88ff; outline-offset:1px; }
 .btn { padding:.72rem 1rem; background:#285fe8; color:white; cursor:pointer; }
-.btn:disabled { opacity:.55; cursor:not-allowed; }
 .btn.secondary { background:#203664; }
-.entry-hero { padding:1.6rem; }
-.guided-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:.75rem; }
-.mode-chip { padding:.8rem; border-radius:12px; background:#18294f; border:1px solid #38548c; }
-.session-grid { display:grid; grid-template-columns: 2fr 1fr; gap:1rem; }
-.main-col { display:grid; gap:1rem; }
-.status-bar { padding:.8rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:.75rem; }
-.state-pill { border-radius:999px; padding:.3rem .7rem; font-size:.85rem; border:1px solid #5578be; background:#203664; }
-.stage-card, .panel { padding:1rem; }
-.transcript-list { list-style:none; padding:0; margin:0; display:grid; gap:.6rem; max-height:300px; overflow:auto; }
-.msg { padding:.6rem .75rem; border-radius:12px; background:#13264b; border:1px solid #30508b; }
-.msg.user { background:#21407f; }
-.composer { display:grid; grid-template-columns:1fr auto; gap:.5rem; }
-.voice-row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
-.runtime-details summary { cursor:pointer; font-weight:600; }
-.admin-grid { display:grid; gap:1rem; }
-.top-meeting-bar { margin-bottom: .8rem; }
-.bottom-toolbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: .6rem; width: min(1280px, calc(100vw - 1.2rem)); background: rgba(8, 14, 30, 0.96); border: 1px solid #2a3f75; border-radius: 16px; padding: .55rem .7rem; z-index: 50; box-shadow: 0 14px 35px rgba(0,0,0,.45); }
-.toolbar-controls { display:flex; align-items:center; gap:.5rem; justify-content:center; flex-wrap:wrap; }
-.meeting-btn { border-radius:999px; border:1px solid #4668ad; background:#1b2d56; color:#eef4ff; font: inherit; padding:.58rem .85rem; }
-.meeting-btn:disabled { opacity:.5; cursor:not-allowed; }
-.meeting-btn-end { background: #4c1f2f; border-color:#a55; }
-.meeting-composer { display:grid; grid-template-columns:1fr auto; gap:.4rem; min-width: clamp(220px, 34vw, 420px); }
-.toolbar-notice { font-size:.85rem; color:#d7e1ff; margin-bottom:.35rem; text-align:center; }
-.toolbar-subnotice { margin-top:.35rem; font-size:.8rem; opacity:.9; display:flex; gap:.55rem; justify-content:center; flex-wrap:wrap; }
-.mini-badge { padding:.2rem .45rem; border-radius:999px; border:1px solid #7c5f26; background:#3b2f12; }
-.toolbar-runtime { border:1px solid #4668ad; border-radius:999px; padding:.2rem .6rem; background:#1b2d56; margin:0; }
-.toolbar-runtime summary { list-style:none; }
-.toolbar-runtime[open] { border-radius:14px; padding:.55rem .7rem; max-width:420px; }
-.modes-overlay { position: fixed; right: 1rem; bottom: 6rem; width:min(420px, calc(100vw - 2rem)); z-index:60; }
-.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0; }
-@media (max-width: 980px) { .session-grid { grid-template-columns:1fr; } .session-grid > aside { display:none; } .bottom-toolbar { bottom:0; width:100vw; border-radius:12px 12px 0 0; } }
+.entry-lobby { min-height: calc(100vh - 120px); display:grid; place-content:center; gap:1rem; max-width:860px; margin:0 auto; }
+.room-preview { padding:1.2rem; display:grid; gap:.75rem; }
+.lobby-tile { min-height: 280px; }
+.guided-compact { padding: .9rem 1rem; }
+.guided-chips { display:flex; flex-wrap:wrap; gap:.55rem; }
+.mode-chip { padding:.45rem .75rem; border-radius:999px; background:#18294f; border:1px solid #38548c; }
+.state-pill { border-radius:999px; padding:.3rem .7rem; font-size:.85rem; border:1px solid #5578be; background:#203664; width:fit-content; }
 
-.chappy-video-tile { min-height: 420px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; background:linear-gradient(180deg,#10182d,#090f1e); }
-.chappy-avatar-placeholder { width:120px; height:120px; border-radius:50%; display:grid; place-items:center; font-size:2.5rem; font-weight:700; background:#253b70; border:2px solid #4b6fb8; margin:1rem 0; }
+.meeting-room { min-height:100vh; display:grid; grid-template-rows:auto 1fr auto; background:#0a0f1d; }
+.top-meeting-bar { position: sticky; top: 0; z-index: 30; margin: .8rem 1rem; padding:.65rem 1rem; display:flex; justify-content:space-between; }
+.meeting-content { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:1rem; padding:0 1rem 1rem; }
+.meeting-stage { min-height: calc(100vh - 220px); }
+.chappy-video-tile { height:100%; min-height: 520px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; background:linear-gradient(180deg,#111b34,#080d19); }
+.chappy-avatar-placeholder { width:150px; height:150px; border-radius:50%; display:grid; place-items:center; font-size:3rem; font-weight:700; background:#253b70; border:2px solid #4b6fb8; margin:1rem 0; }
 .stage-state-row { position:absolute; top:1rem; left:1rem; right:1rem; display:flex; justify-content:space-between; }
 .stage-card { position:relative; overflow:hidden; }
 .state-dot { border-radius:999px; padding:.3rem .7rem; background:#1d2f5d; border:1px solid #5578be; }
+
+.meeting-chat-panel { display:flex; flex-direction:column; min-height: calc(100vh - 220px); }
+.transcript-list { list-style:none; padding:0; margin:0; display:grid; gap:.6rem; overflow:auto; flex:1; }
+.msg { padding:.6rem .75rem; border-radius:12px; background:#13264b; border:1px solid #30508b; }
+.msg.user { background:#21407f; }
+
+.meeting-toolbar { position: sticky; bottom: 0; margin: 0 1rem 1rem; background: rgba(8, 14, 30, 0.96); border: 1px solid #2a3f75; border-radius: 16px; padding: .55rem .7rem; z-index: 50; }
+.toolbar-controls { display:flex; align-items:center; gap:.5rem; justify-content:center; flex-wrap:wrap; }
+.meeting-btn { border-radius:999px; border:1px solid #4668ad; background:#1b2d56; color:#eef4ff; font: inherit; padding:.58rem .85rem; }
+.meeting-composer { display:grid; grid-template-columns:1fr auto; gap:.4rem; min-width: clamp(220px, 34vw, 420px); }
+.toolbar-notice, .toolbar-subnotice { font-size:.82rem; text-align:center; margin:.2rem 0; }
+.toolbar-runtime { border:1px solid #4668ad; border-radius:999px; padding:.2rem .6rem; background:#1b2d56; margin:0; }
+.toolbar-runtime[open] { border-radius:14px; padding:.55rem .7rem; max-width:420px; }
+.modes-overlay { position: fixed; right: 1rem; bottom: 5.4rem; width:min(420px, calc(100vw - 2rem)); z-index:60; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0; }
+@media (max-width: 980px) { .meeting-content { grid-template-columns:1fr; } .meeting-chat-panel { min-height:320px; } }

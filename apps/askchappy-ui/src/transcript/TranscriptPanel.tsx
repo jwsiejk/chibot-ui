@@ -2,7 +2,7 @@ import React from 'react';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 
 export const TranscriptPanel = ({ messages }: { messages: TranscriptMessage[] }) => (
-  <section className="card panel" aria-label="transcript panel">
+  <aside className="card panel meeting-chat-panel" aria-label="transcript panel">
     <h3>Transcript</h3>
     {messages.length === 0 ? (
       <p>Ask Chappy anything by typing or using your mic.</p>
@@ -15,5 +15,5 @@ export const TranscriptPanel = ({ messages }: { messages: TranscriptMessage[] })
         ))}
       </ul>
     )}
-  </section>
+  </aside>
 );

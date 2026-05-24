@@ -55,6 +55,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
 
     expect(screen.getByRole('heading', { name: 'AskChappy Room' })).toBeInTheDocument();
+    expect(screen.queryByText(/Phase 5|scaffold/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Join Chappy Room' })).toBeInTheDocument();
   });
 
@@ -252,16 +253,16 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
-    expect(screen.getByRole('heading', { name: 'AskChappy' })).toBeInTheDocument();
+    expect(screen.getByLabelText('top meeting bar')).toBeInTheDocument();
     expect(screen.getByLabelText('chappy stage')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Session state: Ready' })).toBeInTheDocument();
+    expect(screen.getByLabelText('meeting stage')).toBeInTheDocument();
     expect(screen.getByLabelText('chappy avatar placeholder')).toBeInTheDocument();
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Primary participant')).toBeInTheDocument();
-    expect(screen.getByText('Kokoro unavailable: text-first responses continue.')).toBeInTheDocument();
+    expect(screen.getByLabelText('transcript panel')).toHaveClass('meeting-chat-panel');
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'bottom meeting toolbar' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'bottom meeting toolbar' })).toHaveClass('meeting-toolbar');
     expect(screen.getByLabelText('voice input panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
     expect(screen.getByText(/Local runtime status: checking/)).toBeInTheDocument();
@@ -270,6 +271,11 @@ describe('phase 22 chappy UI', () => {
 
     expect(screen.queryByText('Start recording')).not.toBeInTheDocument();
     expect(screen.queryByText('Stop recording')).not.toBeInTheDocument();
+    expect(screen.queryByText('Start speaking')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stop speaking')).not.toBeInTheDocument();
+    expect(screen.queryByText('Avatar asset status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Supports visemes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Supports speaking animation')).not.toBeInTheDocument();
   });
 
   it('shows local runtime readiness statuses with reason text', async () => {
@@ -394,8 +400,8 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mic recording' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Voice input: No speech detected. Try again and speak clearly.')).toBeInTheDocument();
-      expect(screen.getByRole('heading', { name: 'Session state: Ready' })).toBeInTheDocument();
+      expect(screen.getByText('Mic state: No speech detected')).toBeInTheDocument();
+      expect(screen.getByLabelText('meeting stage')).toBeInTheDocument();
     });
 
     expect(screen.queryByText('user:')).not.toBeInTheDocument();
@@ -428,8 +434,8 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
-    const sessionText = screen.getByText(/Live room • session/).textContent ?? '';
-    const sessionId = sessionText.split(': ').at(-1) ?? '';
+    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
+    const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'keep this transcript' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 

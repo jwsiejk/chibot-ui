@@ -40,7 +40,7 @@ export const VoiceInput = ({ onStart, onStop, onTranscribe, onError, disabled, c
     <section className="card panel" aria-label="voice input panel">
       <p>Microphone status: {status.replaceAll('_', ' ')}</p>
       <div className="voice-row">
-        {status === 'recording' ? ( <button className="btn secondary" type="button" onClick={stopRecording} disabled={unavailable}>Stop speaking</button>) : (<button className="btn secondary" type="button" onClick={startRecording} disabled={unavailable}>Start speaking</button>)}
+        {status === 'recording' ? ( <button className="btn secondary" type="button" onClick={stopRecording} disabled={unavailable}>Mic on</button>) : (<button className="btn secondary" type="button" onClick={startRecording} disabled={unavailable}>Mic</button>)}
       </div>
     </section>
   );
