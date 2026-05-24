@@ -188,7 +188,10 @@ Use this checklist before local production/local MVP handoff.
 
 
 ## Phase 22E latency console checks
-- [ ] Confirm Turn Latency uses explicit semantics (`Time to Chappy speaking` = playback start only, not audio completion).
+- [ ] Confirm voice turns show `Mic capture` separately (mic start → submit), and do not mix this with processing latency.
+- [ ] Confirm processing latency starts at submit with explicit labels: `Processing to assistant text` and `Processing to Chappy speaking`.
+- [ ] Confirm `Processing to Chappy speaking` means playback start only (not audio completion).
+- [ ] Confirm voice turns show total from mic start (`Total from Mic start to assistant text`, `Total from Mic start to Chappy speaking`) while typed turns remain submit-based.
 - [ ] Confirm muted turns are still recorded with `TTS skipped: muted` and `Playback skipped: muted`.
 - [ ] Confirm text-ready timing is shown for transcript-only/muted paths.
 - [ ] Confirm failure stage visibility for STT, assistant generation, TTS, and playback failures in Admin Runtime Console.
