@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -232,6 +232,26 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
 
     expect(screen.getByRole('button', { name: 'Speak response' })).toBeDisabled();
+  });
+
+  it('shows local runtime readiness statuses with reason text', async () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Ollama: .* — /)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Kokoro TTS: .* — /)).toBeInTheDocument();
+    expect(screen.getByText(/faster-whisper STT: .* — /)).toBeInTheDocument();
+    expect(screen.getByText(/Browser mic: .* — /)).toBeInTheDocument();
+    expect(screen.getByText(/Standard voice: selected_default — /)).toBeInTheDocument();
+    expect(screen.getByText(/Cloned voice: optional_gated — /)).toBeInTheDocument();
   });
 
 

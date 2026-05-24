@@ -17,6 +17,8 @@ describe('phase 20A local runtime hardening and readiness', () => {
     delete process.env.KOKORO_TTS_BASE_URL;
     delete process.env.FASTER_WHISPER_BASE_URL;
     delete process.env.FASTER_WHISPER_MODEL;
+    delete process.env.OLLAMA_BASE_URL;
+    delete process.env.OLLAMA_MODEL;
   });
 
   it('readiness checks never append transcript messages', async () => {
@@ -25,7 +27,36 @@ describe('phase 20A local runtime hardening and readiness', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     const readiness = await getLocalRuntimeReadinessStatus();
     expect(readiness.ollama.status).toBe('unreachable');
+    expect(readiness.ollama.reason).toContain('http://127.0.0.1:11434');
     expect(getLocalTranscript(session.session_id)).toHaveLength(before);
+  });
+
+  it('kokoro readiness probe is synthetic and does not expose audio/speech artifacts', async () => {
+    process.env.KOKORO_TTS_BASE_URL = 'http://127.0.0.1:8880';
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('ollama offline'))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ audio_base64: 'synthetic-audio', spoken_text: 'synthetic' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const readiness = await getLocalRuntimeReadinessStatus();
+    expect(readiness.kokoro_tts.status).toBe('ready');
+    expect(readiness.kokoro_tts.reason).toContain('synthetic readiness probe');
+    expect(JSON.stringify(readiness)).not.toContain('audio_base64');
+    expect(JSON.stringify(readiness)).not.toContain('spoken_text');
+
+    const kokoroCall = fetchMock.mock.calls[1] as [string, { method: string; body: string }];
+    expect(kokoroCall[0]).toBe('http://127.0.0.1:8880/v1/tts');
+    expect(kokoroCall[1].method).toBe('POST');
+    expect(kokoroCall[1].body).toContain('askchappy_local_runtime_readiness_probe');
+  });
+
+  it('ollama model check reports model_unavailable when runtime is reachable but model is absent', async () => {
+    process.env.OLLAMA_MODEL = 'model-that-does-not-exist';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ models: [{ name: 'gemma3:4b' }] }) }));
+
+    const readiness = await getLocalRuntimeReadinessStatus();
+    expect(readiness.ollama.status).toBe('model_unavailable');
+    expect(readiness.ollama.reason).toContain('model-that-does-not-exist');
   });
 
   it('full mocked voice loop commits canonical transcript and exact spoken_text', async () => {
