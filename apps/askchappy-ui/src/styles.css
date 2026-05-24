@@ -54,3 +54,7 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 980px) { .meeting-content { grid-template-columns:1fr; } .meeting-side-column { grid-template-rows:minmax(220px, 1fr) auto; } }
 
 body.session-viewport-lock { overflow: hidden; }
+
+.admin-runtime-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 80; }
+.admin-runtime-modal { width:min(900px,95vw); max-height:85vh; overflow:auto; padding:1rem; }
+.admin-runtime-modal-header { display:flex; justify-content:space-between; align-items:center; }
