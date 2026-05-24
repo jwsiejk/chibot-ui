@@ -7,7 +7,7 @@ export const TranscriptPanel = ({ messages }: { messages: TranscriptMessage[] })
     {messages.length === 0 ? (
       <p>Ask Chappy anything by typing or using your mic.</p>
     ) : (
-      <ul className="transcript-list">
+      <ul className="transcript-list" aria-label="transcript message list">
         {messages.map((message) => (
           <li key={message.id} className={`msg ${message.role}`}>
             <b>{message.role}:</b> {message.text}

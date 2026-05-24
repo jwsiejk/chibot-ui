@@ -162,3 +162,12 @@ Retired and inactive:
 - `/chappy` is now a pre-call lobby with centered Chappy room preview and compact guided mode chips.
 - `/chappy/session/:sessionId` is now a true meeting-room shell (`meeting-room`) with sticky top bar, dominant Chappy stage (`chappy-video-tile`), right transcript panel (`meeting-chat-panel`), and sticky bottom toolbar (`meeting-toolbar`).
 - Recorder-style wording and stage debug metadata are removed from normal user session UI.
+
+
+## Phase 22 layout containment cleanup
+- Session room now applies viewport lock behavior (`body.session-viewport-lock`) so `/chappy/session/:sessionId` prevents page-level scrolling while active.
+- Meeting shell is explicitly viewport-contained (`height: 100vh`, `overflow: hidden`) with stable top bar, fill-center body, and persistent bottom toolbar.
+- Meeting body and nested panes use `min-height: 0` to preserve nested scrolling correctness in grid/flex layouts.
+- Transcript panel remains visible in-room and transcript message list is the dedicated vertical scroller (`overflow-y: auto`) as conversation grows.
+- Guided/current mode panel is compact and internally scrollable so mode content no longer forces the entire page taller than the viewport.
+- `/chappy` lobby remains viewport-friendly; if content exceeds available space, internal container scrolling is used instead of overflowing the browser page.

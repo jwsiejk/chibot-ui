@@ -253,15 +253,19 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
+    expect(screen.getByLabelText('askchappy session room')).toHaveClass('meeting-room', 'session-shell');
     expect(screen.getByLabelText('top meeting bar')).toBeInTheDocument();
+    expect(screen.getByLabelText('meeting body')).toHaveClass('meeting-content');
     expect(screen.getByLabelText('chappy stage')).toBeInTheDocument();
     expect(screen.getByLabelText('meeting stage')).toBeInTheDocument();
     expect(screen.getByLabelText('chappy avatar placeholder')).toBeInTheDocument();
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Primary participant')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toHaveClass('meeting-chat-panel');
+    expect(screen.getByText('Ask Chappy anything by typing or using your mic.')).toBeInTheDocument();
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
+    expect(screen.getByLabelText('meeting side column')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'bottom meeting toolbar' })).toHaveClass('meeting-toolbar');
     expect(screen.getByLabelText('voice input panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
@@ -276,6 +280,8 @@ describe('phase 22 chappy UI', () => {
     expect(screen.queryByText('Avatar asset status')).not.toBeInTheDocument();
     expect(screen.queryByText('Supports visemes')).not.toBeInTheDocument();
     expect(screen.queryByText('Supports speaking animation')).not.toBeInTheDocument();
+    const rightRail = screen.getByRole('complementary', { name: 'session right rail' });
+    expect(rightRail).toHaveClass('guided-modes-panel', 'compact');
   });
 
   it('shows local runtime readiness statuses with reason text', async () => {

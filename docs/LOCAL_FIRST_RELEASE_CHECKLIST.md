@@ -133,6 +133,10 @@ Use this checklist before local production/local MVP handoff.
   - `./scripts/start-local-runtime.ps1`
 
 ## Phase 22 visual UX checks
+- [ ] Confirm room fits entirely within viewport during `/chappy/session/:sessionId` (no page-level vertical scroll).
+- [ ] Confirm only transcript/chat message area scrolls during active conversation growth.
+- [ ] Confirm bottom toolbar remains visible and usable without page scrolling.
+- [ ] Confirm guided modes/current mode panel does not force page scroll (compact and/or internally scrollable).
 - [ ] Confirm modern login modal is present on `/chappy`.
 - [ ] Confirm no raw browser-default scaffold appearance remains in main AskChappy flow.
 - [ ] Confirm Zoom-like room layout is present on `/chappy/session/:sessionId`.
