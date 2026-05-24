@@ -48,7 +48,6 @@
 - Content grounding, embeddings, vector search, or RAG pipeline
 - Proprietary DDN content bundle / knowledge-base management workflows
 - Real cloned voice provider adapter/runtime
-
 - Real avatar assets, visemes, 3D rendering, or speaking animation
 - Database-backed persistence
 - Cloud deployment/runtime targets

@@ -19,8 +19,8 @@
 - `@types/react-dom`: React DOM TypeScript types.
 - `vite`: local-first React runtime server + production-style build output for AskChappy app shell verification.
 
-## Local runtime tooling note (Phase 19 fix)
-- Phase 19 local start/dev now uses `vite` as the real local runtime for the AskChappy React/router scaffold.
+## Local runtime tooling note
+- The local start/dev runtime uses `vite` as the real local runtime for the AskChappy React/router scaffold.
 - This replaces the retired plain-text local runtime server behavior and enables app-shell serving, history fallback, and noninteractive production-style local build checks.
 
 ## Why these dependencies are present
