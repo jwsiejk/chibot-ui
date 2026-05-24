@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .venv/
+.venv-local-runtime/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
