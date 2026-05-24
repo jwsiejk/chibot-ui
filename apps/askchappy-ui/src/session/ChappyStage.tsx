@@ -8,8 +8,9 @@ export const ChappyStage = ({ state }: { state: SessionState }) => {
   return (
     <section className="stage-card chappy-video-tile" aria-label="chappy stage">
       <div className="stage-state-row">
-        <p className="state-pill">Primary participant</p>
-        <span className={`state-dot state-${stateConfig.state}`}>{stateConfig.label}</span>
+        <span className={`state-dot stage-status-pill state-${stateConfig.state}`}>
+          {stateConfig.label}
+        </span>
       </div>
 
       <div className="chappy-stage-center">
