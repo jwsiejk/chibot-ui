@@ -31,20 +31,52 @@ describe('phase 20A local runtime hardening and readiness', () => {
     expect(getLocalTranscript(session.session_id)).toHaveLength(before);
   });
 
-  it('kokoro readiness probe is synthetic and does not expose audio/speech artifacts', async () => {
+  it('kokoro readiness uses /health first and skips synthetic fallback when health succeeds', async () => {
     process.env.KOKORO_TTS_BASE_URL = 'http://127.0.0.1:8880';
     const fetchMock = vi.fn()
       .mockRejectedValueOnce(new Error('ollama offline'))
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ audio_base64: 'synthetic-audio', spoken_text: 'synthetic' }) });
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true }) });
     vi.stubGlobal('fetch', fetchMock);
 
     const readiness = await getLocalRuntimeReadinessStatus();
     expect(readiness.kokoro_tts.status).toBe('ready');
-    expect(readiness.kokoro_tts.reason).toContain('synthetic readiness probe');
+    expect(readiness.kokoro_tts.reason).toBe('Kokoro local TTS runtime reachable via health probe.');
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8880/health');
+    expect(fetchMock).not.toHaveBeenCalledWith('http://127.0.0.1:8880/v1/tts', expect.anything());
+  });
+
+  it('kokoro readiness tries /v1/health when /health is unsupported', async () => {
+    process.env.KOKORO_TTS_BASE_URL = 'http://127.0.0.1:8880';
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('ollama offline'))
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const readiness = await getLocalRuntimeReadinessStatus();
+    expect(readiness.kokoro_tts.status).toBe('ready');
+    expect(readiness.kokoro_tts.reason).toBe('Kokoro local TTS runtime reachable via health probe.');
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8880/health');
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8880/v1/health');
+    expect(fetchMock).not.toHaveBeenCalledWith('http://127.0.0.1:8880/v1/tts', expect.anything());
+  });
+
+  it('kokoro readiness falls back to synthetic /v1/tts only when health probes are unsupported', async () => {
+    process.env.KOKORO_TTS_BASE_URL = 'http://127.0.0.1:8880';
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('ollama offline'))
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: false, status: 405 })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ audio_base64: 'synthetic-audio', spoken_text: 'synthetic' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const readiness = await getLocalRuntimeReadinessStatus();
+    expect(readiness.kokoro_tts.status).toBe('ready');
+    expect(readiness.kokoro_tts.reason).toBe('Kokoro local TTS runtime reachable via synthetic readiness fallback; fixed non-user text used and output discarded.');
     expect(JSON.stringify(readiness)).not.toContain('audio_base64');
     expect(JSON.stringify(readiness)).not.toContain('spoken_text');
 
-    const kokoroCall = fetchMock.mock.calls[1] as [string, { method: string; body: string }];
+    const kokoroCall = fetchMock.mock.calls[3] as [string, { method: string; body: string }];
     expect(kokoroCall[0]).toBe('http://127.0.0.1:8880/v1/tts');
     expect(kokoroCall[1].method).toBe('POST');
     expect(kokoroCall[1].body).toContain('askchappy_local_runtime_readiness_probe');

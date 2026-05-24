@@ -16,6 +16,53 @@ export type LocalRuntimeReadiness = {
 
 const normalize = (url: string) => url.replace(/\/$/, '');
 const KOKORO_SYNTHETIC_READINESS_TEXT = 'askchappy_local_runtime_readiness_probe';
+const KOKORO_HEALTH_PATHS = ['/health', '/v1/health'] as const;
+
+type KokoroReadinessProbeResult = {
+  status: 'ready' | 'unreachable';
+  reason: string;
+};
+
+const getKokoroReadinessViaHealthOrFallback = async (baseUrl: string, voice: string, format: string): Promise<KokoroReadinessProbeResult> => {
+  const normalizedBaseUrl = normalize(baseUrl);
+  let sawHealthUnsupported = false;
+
+  for (const healthPath of KOKORO_HEALTH_PATHS) {
+    try {
+      const healthResponse = await fetch(`${normalizedBaseUrl}${healthPath}`);
+      if (healthResponse.ok) {
+        return { status: 'ready', reason: 'Kokoro local TTS runtime reachable via health probe.' };
+      }
+      if (healthResponse.status === 404 || healthResponse.status === 405) {
+        sawHealthUnsupported = true;
+        continue;
+      }
+      return { status: 'unreachable', reason: 'Kokoro local TTS runtime unreachable.' };
+    } catch {
+      return { status: 'unreachable', reason: 'Kokoro local TTS runtime unreachable.' };
+    }
+  }
+
+  if (!sawHealthUnsupported) {
+    return { status: 'unreachable', reason: 'Kokoro local TTS runtime unreachable.' };
+  }
+
+  try {
+    const syntheticResponse = await fetch(`${normalizedBaseUrl}/v1/tts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: KOKORO_SYNTHETIC_READINESS_TEXT, voice, format }),
+    });
+    return syntheticResponse.ok
+      ? {
+        status: 'ready',
+        reason: 'Kokoro local TTS runtime reachable via synthetic readiness fallback; fixed non-user text used and output discarded.',
+      }
+      : { status: 'unreachable', reason: 'Kokoro local TTS runtime unreachable.' };
+  } catch {
+    return { status: 'unreachable', reason: 'Kokoro local TTS runtime unreachable.' };
+  }
+};
 
 export const getLocalRuntimeReadiness = async (): Promise<LocalRuntimeReadiness> => {
   const ollamaConfig = getOllamaConfig();
@@ -53,22 +100,7 @@ export const getLocalRuntimeReadiness = async (): Promise<LocalRuntimeReadiness>
   }
 
   if (kokoroConfig.configured) {
-    try {
-      const res = await fetch(`${normalize(kokoroConfig.baseUrl)}/v1/tts`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          text: KOKORO_SYNTHETIC_READINESS_TEXT,
-          voice: kokoroConfig.voice,
-          format: kokoroConfig.format,
-        }),
-      });
-      readiness.kokoro_tts = res.ok
-        ? { status: 'ready', reason: 'Kokoro local TTS runtime reachable via synthetic readiness probe (fixed non-user text, output discarded).' }
-        : { status: 'unreachable', reason: 'Kokoro local TTS runtime unreachable.' };
-    } catch {
-      readiness.kokoro_tts = { status: 'unreachable', reason: 'Kokoro local TTS runtime unreachable.' };
-    }
+    readiness.kokoro_tts = await getKokoroReadinessViaHealthOrFallback(kokoroConfig.baseUrl, kokoroConfig.voice, kokoroConfig.format);
   }
 
   if (sttConfig.configured) {

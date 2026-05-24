@@ -112,3 +112,5 @@ If Ollama is not reachable, AskChappy shows: "Local Ollama runtime is not config
 - Readiness checks use local HTTP only and never append transcript messages.
 - Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
 - Content grounding/RAG remains deferred until after Phase 20A lock; target Phase 20B+ follow-on.
+
+- Kokoro readiness checks prefer non-synthesis health probes (`/health`, then `/v1/health`) and only fall back to a synthetic `/v1/tts` probe when health paths are unsupported (fixed non-user text, output discarded).
