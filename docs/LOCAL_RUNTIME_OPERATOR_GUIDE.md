@@ -142,8 +142,14 @@ Symptoms:
 - Assistant transcript appears, but speech playback fails.
 
 Actions:
-- Confirm Kokoro service availability and voice config (`af_sarah`, `wav` defaults).
-- Verify TTS endpoint connectivity from local app runtime.
+- First separate synthesis status from browser playback status.
+- If `GET /health` (or `/v1/health`) is 200 and manual `POST /v1/tts` returns `audio_base64`, Kokoro synthesis is working.
+- In browser devtools, inspect the specific AskChappy `POST /v1/tts` request:
+  - Canceled/aborted request => treat as request cancellation (not synthesis failure).
+  - HTTP 400 => request rejected by runtime input validation.
+  - HTTP 500 => synthesis failed; inspect Kokoro wrapper console traceback.
+  - HTTP 200 without `audio_base64` => invalid runtime response.
+- If TTS is ready but `audio.play()` fails/rejects, this is browser playback failure (autoplay policy/focus/device), not Kokoro synthesis failure.
 
 ### STT no speech
 Symptoms:

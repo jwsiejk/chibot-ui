@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { SessionState } from '../../../../shared/contracts/session';
 import type { SessionMode } from '../../../../shared/contracts/modes';
@@ -26,6 +26,7 @@ export const ChappySession = () => {
   const [voiceNotice, setVoiceNotice] = useState('Ready');
   const [chappyMuted, setChappyMuted] = useState(false);
   const [diagnostics, setDiagnostics] = useState<ClientDiagnosticEvent[]>([]);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const pushDiagnostic = (event: string) => setDiagnostics((prev) => [{ id: crypto.randomUUID(), ts: new Date().toISOString(), event }, ...prev].slice(0, 25));
 
@@ -33,6 +34,14 @@ export const ChappySession = () => {
     document.body.classList.add('session-viewport-lock');
     pushDiagnostic('session started');
     return () => document.body.classList.remove('session-viewport-lock');
+  }, []);
+
+  useEffect(() => () => {
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current.currentTime = 0;
+      activeAudioRef.current = null;
+    }
   }, []);
 
   const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
@@ -45,18 +54,36 @@ export const ChappySession = () => {
       setVoiceNotice('Chappy voice muted. Transcript only.');
       return;
     }
-    pushDiagnostic('TTS playback attempted');
+    pushDiagnostic('tts request started');
     setState('speaking');
     setVoiceNotice('Chappy speaking…');
     const tts = await synthesizeLocalAssistantMessage(sessionId, messageId);
     if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) {
-      pushDiagnostic('TTS unavailable');
-      setVoiceNotice('Chappy voice unavailable. Transcript response is still available.');
+      if (tts.unavailable_reason === 'request_cancelled') pushDiagnostic('tts request cancelled');
+      else if (tts.unavailable_reason === 'invalid_response') pushDiagnostic('tts invalid response');
+      else pushDiagnostic('tts synthesis failed');
+      setVoiceNotice(tts.unavailable_message ?? 'Chappy voice unavailable. Transcript response is still available.');
       setState('ready');
       return;
     }
+    pushDiagnostic('tts ready');
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current.currentTime = 0;
+      activeAudioRef.current = null;
+    }
     const audio = new Audio(`data:audio/${tts.audio_format};base64,${tts.audio_base64}`);
-    await audio.play();
+    activeAudioRef.current = audio;
+    try {
+      await audio.play();
+      pushDiagnostic('audio playback started');
+    } catch (error) {
+      const blocked = error instanceof DOMException && error.name === 'NotAllowedError';
+      pushDiagnostic(blocked ? 'audio playback blocked' : 'audio playback failed');
+      setVoiceNotice('Browser blocked or failed Chappy voice playback. Click in the room or unmute Chappy to enable audio.');
+      setState('ready');
+      return;
+    }
     setState('ready');
     setVoiceNotice('Chappy voice on');
   };

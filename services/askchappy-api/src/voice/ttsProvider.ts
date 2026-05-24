@@ -12,7 +12,15 @@ export type TtsSynthesisOutput = {
   spoken_text: string;
   audio_base64: string | null;
   audio_format: string | null;
-  unavailable_reason?: 'not_configured' | 'runtime_unreachable';
+  unavailable_reason?:
+    | 'not_configured'
+    | 'runtime_unreachable'
+    | 'request_cancelled'
+    | 'request_rejected'
+    | 'synthesis_failed'
+    | 'invalid_response';
+  unavailable_message?: string;
+  provider_error_detail?: string;
   provider_meta?: Record<string, string | number | boolean | null>;
 };
 

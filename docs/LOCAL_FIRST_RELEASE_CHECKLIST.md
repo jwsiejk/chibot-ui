@@ -174,6 +174,13 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Assistant responses auto-play when unmuted.
 - [ ] Muted mode remains transcript-only and recoverable.
 - [ ] TTS failures are non-blocking (transcript still shown).
+- [ ] Confirm TTS diagnostics distinguish:
+  - request cancelled (`request_cancelled`)
+  - request rejected (`request_rejected`, HTTP 400)
+  - synthesis failed (`synthesis_failed`, HTTP 500)
+  - invalid response (`invalid_response`, HTTP 200 missing `audio_base64`)
+- [ ] Confirm browser playback failures (`audio.play()` blocked/rejected) are surfaced separately from TTS synthesis failures.
+- [ ] Confirm `/health` + manual `/v1/tts` success is treated as Kokoro synthesis-capable even if browser playback still fails.
 - [ ] Only transcript/chat message area scrolls in session.
 - [ ] Admin runtime console appears only for admin users.
 - [ ] Diagnostics are client-only, in-memory, bounded.

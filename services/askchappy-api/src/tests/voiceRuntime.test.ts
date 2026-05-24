@@ -349,4 +349,44 @@ describe('kokoro tts provider success path', () => {
     expect(Object.prototype.hasOwnProperty.call(output, 'transcript')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(output, 'message')).toBe(false);
   });
+
+  it('maps HTTP 500 to synthesis_failed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: 'engine crashed' }),
+    } as Response);
+    const output = await kokoroTtsProvider.synthesize({ text: 'hello', session_id: 's1', message_id: 'm1', voice_profile_id: null });
+    expect(output.audio_status).toBe('tts_unavailable');
+    expect(output.unavailable_reason).toBe('synthesis_failed');
+    expect(output.provider_error_detail).toBe('engine crashed');
+  });
+
+  it('maps HTTP 400 to request_rejected', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ detail: 'bad text' }),
+    } as Response);
+    const output = await kokoroTtsProvider.synthesize({ text: 'hello', session_id: 's1', message_id: 'm1', voice_profile_id: null });
+    expect(output.unavailable_reason).toBe('request_rejected');
+  });
+
+  it('maps HTTP 200 without audio_base64 to invalid_response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ audio_format: 'wav' }),
+    } as Response);
+    const output = await kokoroTtsProvider.synthesize({ text: 'hello', session_id: 's1', message_id: 'm1', voice_profile_id: null });
+    expect(output.unavailable_reason).toBe('invalid_response');
+  });
+
+  it('maps AbortError to request_cancelled', async () => {
+    const abortError = new Error('The operation was aborted.');
+    abortError.name = 'AbortError';
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(abortError);
+    const output = await kokoroTtsProvider.synthesize({ text: 'hello', session_id: 's1', message_id: 'm1', voice_profile_id: null });
+    expect(output.unavailable_reason).toBe('request_cancelled');
+  });
 });
