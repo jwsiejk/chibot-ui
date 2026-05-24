@@ -27,10 +27,20 @@ export const VoiceInput = ({ onStart, onStop, onTranscribe, onError, disabled, c
   const unavailable = disabled || status === 'checking_mic' || status === 'transcribing' || status === 'mic_unavailable' || status === 'permission_denied';
 
   if (compact) {
+    const isRecording = status === 'recording';
+    const label = isRecording ? 'Stop' : 'Mic';
+
     return (
       <div className="meeting-control meeting-mic" aria-label="voice input panel">
-        <button className="meeting-btn" type="button" onClick={status === 'recording' ? stopRecording : startRecording} disabled={unavailable} aria-label={`Mic ${status.replaceAll('_', ' ')}`}>
-          <span aria-hidden="true">🎙️</span> Mic
+        <button
+          className={`meeting-control-btn ${isRecording ? 'recording' : ''}`}
+          type="button"
+          onClick={isRecording ? stopRecording : startRecording}
+          disabled={unavailable}
+          aria-label={`Mic ${status.replaceAll('_', ' ')}`}
+        >
+          <span className="meeting-control-icon" aria-hidden="true">🎙️</span>
+          <span className="meeting-control-label">{label}</span>
         </button>
       </div>
     );

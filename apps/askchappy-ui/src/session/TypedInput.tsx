@@ -15,8 +15,17 @@ export const TypedInput = ({ onSubmitText, disabled, compact = false }: { onSubm
     return (
       <form className="meeting-composer" onSubmit={onSubmit} aria-label="typed input form">
         <label htmlFor="typed-input" className="sr-only">Type a message</label>
-        <input className="input" id="typed-input" placeholder="Message Chappy" value={text} onChange={(event) => setText(event.target.value)} disabled={disabled} />
-        <button className="meeting-btn" type="submit" disabled={disabled}>Send</button>
+        <input
+          className="meeting-message-input"
+          id="typed-input"
+          placeholder="Message Chappy"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          disabled={disabled}
+        />
+        <button className="meeting-send-btn" type="submit" disabled={disabled}>
+          Send
+        </button>
       </form>
     );
   }
