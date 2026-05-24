@@ -68,7 +68,6 @@ export const generateLocalAssistantMessage = async (sessionId: string) => {
     session_id: session.session_id,
     metadata: session.metadata,
     transcript: session.transcript,
-    latest_user_text: latestUser.text,
   });
 
   if (!result.ok) return result;
