@@ -35,10 +35,13 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm no OpenAI runtime, no hosted/cloud LLM SDK, and no cloud LLM API key configuration was introduced.
 - [ ] Confirm missing Ollama runtime or missing local model yields a clear local runtime not-configured state (no fake assistant intelligence).
 - [ ] Confirm no DDN document ingestion/upload workflow was introduced.
+- [ ] Confirm no file upload workflow for content grounding was introduced.
 - [ ] Confirm no content grounding, embeddings, vector database/search, or RAG runtime was introduced.
 - [ ] Confirm no proprietary DDN content bundle or knowledge-base management workflow was introduced.
 - [ ] Confirm standard voice remains active/default for synthesis.
 - [ ] Confirm cloned voice readiness gate does not claim active cloned synthesis without approved provider adapter + prerequisites.
+- [ ] Confirm standard local TTS direction is Kokoro/kokoro-onnx and remains default/available.
+- [ ] Confirm future STT direction is faster-whisper (no cloud STT provider introduced).
 - [ ] Confirm no cloud voice provider runtime was added.
 
 - [ ] Confirm Standard voice remains explicitly selected when cloned config is missing/incomplete, consent is false, publication is not `published`, `enabled` is false, adapter is missing, or readiness has errors.

@@ -44,3 +44,9 @@
 
 - Phase 15 keeps existing dependency boundaries: no cloned provider SDK added, no cloud voice SDK added, and standard voice remains the only active synthesis runtime.
 - Planned near-term runtime sequencing remains: Phase 17 uses local open-source LLM knowledge first via local Ollama runtime (`gemma3:4b` default); DDN content grounding and RAG dependencies are deferred to a later required phase.
+
+
+## Runtime direction exclusions (roadmap policy)
+- Phase 17 target runtime remains local Ollama with default `gemma3:4b` at `http://127.0.0.1:11434`.
+- Standard local TTS direction remains Kokoro/kokoro-onnx; future STT direction remains faster-whisper.
+- No OpenAI/cloud LLM runtime, hosted model SDK, cloud voice SDK, or cloud TTS dependency should be introduced without a future ADR change.
