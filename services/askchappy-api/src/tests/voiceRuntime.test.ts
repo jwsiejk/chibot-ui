@@ -10,6 +10,7 @@ import {
 } from '../voice/clonedVoiceConfig';
 import { evaluateClonedVoiceReadiness } from '../voice/clonedVoiceReadiness';
 import { fallbackTtsProvider } from '../voice/fallbackTtsProvider';
+import { getKokoroTtsConfig } from '../voice/kokoroTtsConfig';
 import { getVoiceProviderSelection } from '../voice/voiceProviderSelection';
 import {
   getPublishedVoiceProfile,
@@ -41,8 +42,8 @@ const baseConfig: ClonedVoiceConfig = {
 };
 
 describe('voice runtime', () => {
-  it('standard voice provider conforms to TTS provider fallback contract', () => {
-    const output = fallbackTtsProvider.synthesize({
+  it('standard voice provider returns unavailable when Kokoro is not configured', async () => {
+    const output = await fallbackTtsProvider.synthesize({
       text: 'Exact text, punctuation intact!',
       session_id: 'session_1',
       message_id: 'msg_1',
@@ -52,12 +53,12 @@ describe('voice runtime', () => {
     expect(output.provider_id).toBe('local_fallback_tts');
     expect(output.provider_label).toBe('Standard voice');
     expect(output.spoken_text).toBe('Exact text, punctuation intact!');
-    expect(output.audio_status).toBe('fallback_placeholder');
-    expect(output.audio_url).toBeNull();
+    expect(output.audio_status).toBe('tts_unavailable');
+    expect(output.audio_base64).toBeNull();
   });
 
-  it('assistant transcript text synthesis preserves spoken_text exactly', () => {
-    const output = synthesizeAssistantTranscriptMessage({
+  it('assistant transcript text synthesis preserves spoken_text exactly', async () => {
+    const output = await synthesizeAssistantTranscriptMessage({
       session_id: 'session_1',
       message: createAssistantMessage('session_1', 'Do not rewrite this sentence.'),
     });
@@ -65,48 +66,44 @@ describe('voice runtime', () => {
     expect(output.spoken_text).toBe('Do not rewrite this sentence.');
   });
 
-  it('non-assistant messages are rejected', () => {
-    expect(() =>
-      synthesizeAssistantTranscriptMessage({
+  it('non-assistant messages are rejected', async () => {
+    await expect(synthesizeAssistantTranscriptMessage({
         session_id: 'session_1',
         message: {
           ...createAssistantMessage('session_1', 'x'),
           role: 'user',
         },
       }),
-    ).toThrowError('TTS requires assistant transcript messages.');
+    ).rejects.toThrowError('TTS requires assistant transcript messages.');
   });
 
-  it('empty assistant text is rejected', () => {
-    expect(() =>
-      synthesizeAssistantTranscriptMessage({
+  it('empty assistant text is rejected', async () => {
+    await expect(synthesizeAssistantTranscriptMessage({
         session_id: 'session_1',
         message: createAssistantMessage('session_1', '   '),
       }),
-    ).toThrowError('TTS requires non-empty assistant transcript text.');
+    ).rejects.toThrowError('TTS requires non-empty assistant transcript text.');
   });
 
-  it('mismatched session_id is rejected', () => {
-    expect(() =>
-      synthesizeAssistantTranscriptMessage({
+  it('mismatched session_id is rejected', async () => {
+    await expect(synthesizeAssistantTranscriptMessage({
         session_id: 'session_1',
         message: createAssistantMessage('session_2', 'Valid content'),
       }),
-    ).toThrowError('TTS requires session_id to match transcript message session_id.');
+    ).rejects.toThrowError('TTS requires session_id to match transcript message session_id.');
   });
 
-  it('content field payload is rejected', () => {
+  it('content field payload is rejected', async () => {
     const message = {
       ...createAssistantMessage('session_1', 'no content field'),
       content: 'bad',
     } as unknown as TranscriptMessage;
 
-    expect(() =>
-      synthesizeAssistantTranscriptMessage({
+    await expect(synthesizeAssistantTranscriptMessage({
         session_id: 'session_1',
         message,
       }),
-    ).toThrowError(
+    ).rejects.toThrowError(
       'Invalid transcript message: content field is not allowed. Use text.',
     );
   });
@@ -262,5 +259,30 @@ describe('voice runtime', () => {
     );
     expect(content).not.toMatch(/avatar\/(samples|uploads|models|embeddings)/);
     expect(content).not.toContain('elevenlabs');
+  });
+});
+
+
+it('kokoro config defaults are local-first', () => {
+  const config = getKokoroTtsConfig({});
+  expect(config.baseUrl).toBe('http://127.0.0.1:8880');
+  expect(config.voice).toBe('af_sarah');
+  expect(config.format).toBe('wav');
+  expect(config.configured).toBe(false);
+});
+
+it('kokoro config supports overrides', () => {
+  const config = getKokoroTtsConfig({
+    KOKORO_TTS_BASE_URL: 'http://127.0.0.1:9999',
+    KOKORO_TTS_VOICE: 'af_bella',
+    KOKORO_TTS_FORMAT: 'mp3',
+    KOKORO_TTS_TIMEOUT_MS: '12000',
+  });
+  expect(config).toMatchObject({
+    baseUrl: 'http://127.0.0.1:9999',
+    voice: 'af_bella',
+    format: 'mp3',
+    timeoutMs: 12000,
+    configured: true,
   });
 });

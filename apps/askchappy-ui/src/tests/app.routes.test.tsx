@@ -224,7 +224,7 @@ describe('phase 5 chappy UI', () => {
     expect(screen.getByText('Chappy avatar stage placeholder')).toBeInTheDocument();
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Avatar asset status: placeholder')).toBeInTheDocument();
-    expect(screen.getByText('Speech provider status: Standard voice active.')).toBeInTheDocument();
+    expect(screen.getByText('Speech provider status: Local TTS not configured.')).toBeInTheDocument();
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();

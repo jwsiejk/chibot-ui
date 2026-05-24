@@ -1,6 +1,7 @@
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import type { VoiceProfileState } from '../../../../shared/contracts/voice';
-import { fallbackTtsProvider } from './fallbackTtsProvider';
+import { kokoroTtsProvider } from './kokoroTtsProvider';
+import { getKokoroTtsConfig } from './kokoroTtsConfig';
 import { getLocalClonedVoiceConfig } from './clonedVoiceConfig';
 import { getVoiceProviderSelection } from './voiceProviderSelection';
 import type { TtsSynthesisOutput } from './ttsProvider';
@@ -21,13 +22,13 @@ const assertAssistantTranscriptMessage = (message: TranscriptMessage, sessionId:
   if (!message.text.trim()) throw new Error('TTS requires non-empty assistant transcript text.');
 };
 
-export const synthesizeAssistantTranscriptMessage = (
+export const synthesizeAssistantTranscriptMessage = async (
   input: { session_id: string; message: TranscriptMessage; voice_profiles?: readonly VoiceProfileRuntime[] },
-): TtsSynthesisOutput => {
+): Promise<TtsSynthesisOutput> => {
   const profile = getPublishedVoiceProfile(input.voice_profiles ?? []);
   assertAssistantTranscriptMessage(input.message, input.session_id);
 
-  return fallbackTtsProvider.synthesize({
+  return kokoroTtsProvider.synthesize({
     text: input.message.text,
     session_id: input.session_id,
     message_id: input.message.id,
@@ -44,15 +45,17 @@ export const getLocalVoiceRuntimeStatus = (
   cloned_voice_ready: boolean;
   cloned_voice_reasons: string[];
   cloned_voice_status_label: string;
+  standard_tts_configured: boolean;
 } => {
   const published = getPublishedVoiceProfile(profiles);
   const selection = getVoiceProviderSelection({ clonedVoiceConfig: getLocalClonedVoiceConfig() });
   return {
-    active_provider_id: fallbackTtsProvider.provider_id,
-    active_provider_label: fallbackTtsProvider.provider_label,
+    active_provider_id: kokoroTtsProvider.provider_id,
+    active_provider_label: kokoroTtsProvider.provider_label,
     published_voice_profile_state: published?.state ?? 'none',
     cloned_voice_ready: selection.cloned_voice_ready,
     cloned_voice_reasons: selection.reasons,
     cloned_voice_status_label: selection.cloned_voice_status_label,
+    standard_tts_configured: getKokoroTtsConfig().configured,
   };
 };
