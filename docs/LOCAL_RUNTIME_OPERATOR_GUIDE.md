@@ -167,3 +167,37 @@ Actions:
 - `.\scripts\start-kokoro-tts.ps1` and `.\scripts\start-faster-whisper-stt.ps1` require local runner command variables in `.env.local` (`KOKORO_TTS_RUN_COMMAND`, `FASTER_WHISPER_RUN_COMMAND`).
 - `.\scripts\start-local-runtime.ps1` enforces startup sequence: Ollama -> Kokoro -> faster-whisper -> `npm run start`.
 - Use `nvidia-smi -l 1` manually for GPU monitoring; AskChappy has no native Windows GPU process helper yet.
+
+## Phase 21C local runtime venv/env handling
+- `.venv-local-runtime` is the dedicated local-only Python virtual environment for local Kokoro/faster-whisper GPU dependency setup and must not be committed.
+- `.env.local` remains machine-local and gitignored. `.env.example` stays committed and secret-free.
+- Keep runner commands machine-local in `.env.local`:
+  - `KOKORO_TTS_RUN_COMMAND=...`
+  - `FASTER_WHISPER_RUN_COMMAND=...`
+- Local model/audio assets remain outside git (example: `C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`, `C:\AskChipAssets\kokoro\voices-v1.0.bin`).
+
+Create/setup from repo root:
+```powershell
+py -m venv .venv-local-runtime
+.\.venv-local-runtime\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip uninstall -y onnxruntime onnxruntime-gpu
+pip install onnxruntime-gpu kokoro-onnx faster-whisper
+```
+
+Validation commands:
+```powershell
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+python -c "import kokoro_onnx; print('kokoro_onnx import OK')"
+python -c "from faster_whisper import WhisperModel; print('faster-whisper import OK')"
+```
+
+Expected ONNX providers include:
+```text
+CUDAExecutionProvider
+CPUExecutionProvider
+```
+
+Important: package installation alone does not start services. AskChappy still requires local HTTP runtimes:
+- Kokoro TTS: `http://127.0.0.1:8880`
+- faster-whisper STT: `http://127.0.0.1:8890`

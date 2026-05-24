@@ -96,3 +96,24 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm `.\scripts\start-faster-whisper-stt.ps1` validates local config and requires `FASTER_WHISPER_RUN_COMMAND`.
 - [ ] Confirm `.\scripts\start-local-runtime.ps1` acts as preflight orchestrator (not process manager), fails non-zero on missing services, and does not hide failures.
 - [ ] Confirm `nvidia-smi -l 1` manual guidance is documented; no native Windows GPU process helper is claimed.
+
+## Phase 21C local runtime venv/env checks
+- [ ] Confirm `.venv-local-runtime/` is gitignored and treated as local-only (never committed).
+- [ ] Confirm `.env.local` remains gitignored and `.env.example` remains committed template (not ignored).
+- [ ] Confirm `.env.example` includes `LOCAL_RUNTIME_PYTHON=.\.venv-local-runtime\Scripts\python.exe` and `LOCAL_RUNTIME_VENV=.venv-local-runtime`.
+- [ ] Confirm `.env.example` keeps `KOKORO_TTS_ASSET_DIR=C:\AskChipAssets\kokoro` and blank local runner command placeholders for `KOKORO_TTS_RUN_COMMAND` and `FASTER_WHISPER_RUN_COMMAND`.
+- [ ] Confirm no OpenAI/cloud/provider vars are added to `.env.example`.
+- [ ] Confirm local venv setup is documented from repo root:
+  ```powershell
+  py -m venv .venv-local-runtime
+  .\.venv-local-runtime\Scripts\activate
+  python -m pip install --upgrade pip setuptools wheel
+  pip uninstall -y onnxruntime onnxruntime-gpu
+  pip install onnxruntime-gpu kokoro-onnx faster-whisper
+  ```
+- [ ] Confirm ONNX Runtime provider validation references `CUDAExecutionProvider` and `CPUExecutionProvider`.
+- [ ] Confirm Kokoro/faster-whisper import checks are documented.
+- [ ] Confirm docs explicitly state package installation alone is insufficient and AskChappy still requires local HTTP services:
+  - Kokoro TTS: `http://127.0.0.1:8880`
+  - faster-whisper STT: `http://127.0.0.1:8890`
+- [ ] Confirm local model/audio assets remain out of git (example: `C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`, `C:\AskChipAssets\kokoro\voices-v1.0.bin`).

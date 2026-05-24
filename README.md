@@ -81,3 +81,34 @@ npm run smoke:local-runtime
   - In another window: `.\scripts\check-local-runtime.ps1`
   - Then launch AskChappy: `.\scripts\start-local-runtime.ps1`
 - Manual GPU validation: `nvidia-smi -l 1`. AskChappy cannot directly inspect Windows GPU process usage without a native helper/agent. Prioritize Ollama and faster-whisper GPU checks first; Kokoro GPU is optional unless TTS latency is poor.
+
+## Phase 21C local runtime venv/env cleanup
+- `.venv-local-runtime` is a local-only Python virtual environment for local GPU TTS/STT dependencies and must never be committed.
+- `.env.local` stays machine-local and gitignored; `.env.example` remains committed as a safe template.
+- Configure machine-local runner command values in `.env.local`:
+  - `KOKORO_TTS_RUN_COMMAND=...`
+  - `FASTER_WHISPER_RUN_COMMAND=...`
+- Installing Python packages alone is not sufficient: AskChappy still requires local HTTP services at `http://127.0.0.1:8880` (Kokoro TTS) and `http://127.0.0.1:8890` (faster-whisper STT).
+- Keep local model/audio assets out of git (for example `C:\AskChipAssets\kokoro\kokoro-v1.0.onnx` and `C:\AskChipAssets\kokoro\voices-v1.0.bin`).
+
+Create and prepare the venv from repo root:
+```powershell
+py -m venv .venv-local-runtime
+.\.venv-local-runtime\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip uninstall -y onnxruntime onnxruntime-gpu
+pip install onnxruntime-gpu kokoro-onnx faster-whisper
+```
+
+Validation commands:
+```powershell
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+python -c "import kokoro_onnx; print('kokoro_onnx import OK')"
+python -c "from faster_whisper import WhisperModel; print('faster-whisper import OK')"
+```
+
+Expected ONNX providers include:
+```text
+CUDAExecutionProvider
+CPUExecutionProvider
+```

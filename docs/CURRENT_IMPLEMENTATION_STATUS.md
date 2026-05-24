@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 20B)
+# AskChappy Current Implementation Status (After Phase 21C)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -22,6 +22,7 @@
 - Phase 19: local faster-whisper STT / browser microphone input
 - Phase 20A: local runtime readiness/hardening
 - Phase 20B: admin local GPU validation panel and operator guidance updates
+- Phase 21C: local runtime venv/env cleanup for `.venv-local-runtime` documentation/template/ignore guardrails
 
 ## What is implemented
 - Admin-only local GPU validation panel on `/admin` with typed status reporting for Ollama, faster-whisper STT, and Kokoro ONNX provider visibility (no fake GPU claims).
@@ -62,6 +63,17 @@
 - `npm run verify`: passing
 - `npm run build:local-runtime`: passing
 - `npm run smoke:local-runtime`: passing
+
+## Phase 21C local runtime venv/env notes
+- Added `.venv-local-runtime/` to gitignore so dedicated local Python runtime environments are never committed.
+- `.env.example` now includes safe local placeholders:
+  - `LOCAL_RUNTIME_PYTHON=.\.venv-local-runtime\Scripts\python.exe`
+  - `LOCAL_RUNTIME_VENV=.venv-local-runtime`
+- Runtime runner commands remain machine-local `.env.local` values:
+  - `KOKORO_TTS_RUN_COMMAND`
+  - `FASTER_WHISPER_RUN_COMMAND`
+- GPU dependency setup guidance is documented using `onnxruntime-gpu`, `kokoro-onnx`, and `faster-whisper`, with validation for `CUDAExecutionProvider` + `CPUExecutionProvider`.
+- Installing packages alone does not satisfy runtime requirements; AskChappy still depends on local HTTP services at `http://127.0.0.1:8880` (Kokoro TTS) and `http://127.0.0.1:8890` (faster-whisper STT).
 
 ## Active route map
 - `/`
