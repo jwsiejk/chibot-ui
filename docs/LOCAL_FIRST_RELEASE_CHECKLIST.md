@@ -64,3 +64,5 @@ Use this checklist before local production/local MVP handoff.
 - Readiness checks use local HTTP only and never append transcript messages.
 - Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
 - Content grounding/RAG remains deferred (Phase 20+).
+
+- [ ] Confirm Kokoro readiness prefers non-synthesis health probes (`/health` then `/v1/health`) and only falls back to fixed-text synthetic `/v1/tts` when health endpoints are unsupported (no synthetic output exposed).

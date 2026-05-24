@@ -98,3 +98,5 @@ Retired and inactive:
 - Readiness checks use local HTTP only and never append transcript messages.
 - Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
 - Content grounding/RAG remains deferred until after Phase 20A lock; target Phase 20B+ follow-on.
+
+- Kokoro readiness now prefers non-synthesis health probes (`/health`, then `/v1/health`) and uses fixed-text synthetic `/v1/tts` fallback only when health endpoints are unsupported; readiness never exposes synthetic audio/text artifacts.
