@@ -193,3 +193,14 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm text-ready timing is shown for transcript-only/muted paths.
 - [ ] Confirm failure stage visibility for STT, assistant generation, TTS, and playback failures in Admin Runtime Console.
 - [ ] Confirm turn latency remains local-only/in-memory and bounded to latest 5 turns.
+
+## Phase 23 voice-first conversational style checks
+- [ ] Confirm assistant system prompt states Chappy is speaking in a live Zoom-style working session.
+- [ ] Confirm assistant default response target is concise spoken output (2–4 short sentences, roughly 40–90 words).
+- [ ] Confirm assistant prompt enforces one concept at a time and at most one follow-up question.
+- [ ] Confirm long markdown/bullet dumps are discouraged unless user explicitly asks for a deep dive/list/checklist.
+- [ ] Confirm technical explanation guidance is concise-first (core architecture first, then offer next layer).
+- [ ] Confirm assistant prompt explicitly warns against overclaiming specific DDN internals without grounded docs.
+- [ ] Confirm transcript remains canonical (`text`, never `content`) and TTS consumes committed assistant transcript `text`.
+- [ ] Confirm no RAG/content grounding/document ingestion/file upload/embeddings/vector DB/search was added.
+- [ ] Confirm no OpenAI/cloud/hosted provider dependencies or runtime contracts were added.

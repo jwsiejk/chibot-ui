@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 21C)
+# AskChappy Current Implementation Status (After Phase 23)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -23,6 +23,7 @@
 - Phase 20A: local runtime readiness/hardening
 - Phase 20B: admin local GPU validation panel and operator guidance updates
 - Phase 21C: local runtime venv/env cleanup for `.venv-local-runtime` documentation/template/ignore guardrails
+- Phase 23: Chappy conversational voice-first response style policy
 
 ## What is implemented
 - Admin-only local GPU validation panel on `/admin` with typed status reporting for Ollama, faster-whisper STT, and Kokoro ONNX provider visibility (no fake GPU claims).
@@ -44,6 +45,12 @@
 - No OpenAI/cloud runtime integration.
 - No RAG/content grounding/document ingestion in the assistant runtime.
 - Local faster-whisper STT with browser microphone capture feeding canonical user transcript `text` with `source: voice`.
+
+- Chappy assistant system instruction now enforces voice-first conversational responses by default (2–4 short spoken sentences, ~40–90 words, one concept at a time, one follow-up question max).
+- Technical explanations remain concise-first: begin with the core architecture idea, then offer the next layer when asked.
+- Long markdown/bullet dumps are discouraged unless explicitly requested; deep dives are opt-in.
+- Transcript remains the source of truth and TTS still consumes committed assistant transcript `text`.
+- Content grounding / DDN document ingestion / RAG remains deferred; Chappy is instructed to avoid overclaiming ungrounded DDN product specifics.
 
 ## Intentionally not implemented
 - OpenAI runtime integration

@@ -410,7 +410,7 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByText('Chappy is ready')).toBeInTheDocument();
     expect(screen.getByText('Primary participant')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toHaveClass('meeting-chat-panel');
-    expect(screen.getByText('Ask Chappy anything by typing or using your mic.')).toBeInTheDocument();
+    expect(screen.getByText('Ask Chappy anything. He’ll keep it conversational and go deeper when you ask.')).toBeInTheDocument();
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('meeting side column')).toBeInTheDocument();
