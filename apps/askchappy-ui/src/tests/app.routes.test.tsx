@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
@@ -32,7 +32,9 @@ describe('route map', () => {
 });
 
 describe('phase 5 chappy UI', () => {
-
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('renders email login gate on /chappy', () => {
     render(
@@ -348,6 +350,50 @@ describe('phase 5 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(screen.queryByText('user:')).not.toBeInTheDocument();
+  });
+
+  it('shows no-speech notice, keeps session recoverable, and does not append transcript on STT no_speech', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+      configurable: true,
+    });
+
+    class MockMediaRecorder {
+      static isTypeSupported = vi.fn().mockReturnValue(true);
+      ondataavailable: ((event: { data: BlobPart }) => void) | null = null;
+      onstop: (() => void | Promise<void>) | null = null;
+      start = vi.fn();
+      stop = vi.fn(() => {
+        this.ondataavailable?.({ data: new Blob(['audio'], { type: 'audio/webm' }) });
+        void this.onstop?.();
+      });
+    }
+
+    vi.stubGlobal('MediaRecorder', MockMediaRecorder as unknown as typeof MediaRecorder);
+    process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
+    process.env.FASTER_WHISPER_MODEL = 'base.en';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ text: '   ' }) }));
+
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start Open Q&A' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start speaking' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop recording' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Voice input: No speech detected. Try again and speak clearly.')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Session status: Ready' })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('user:')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start speaking' })).toBeInTheDocument();
   });
 
   it('renders right rail in open_qa mode initially', () => {

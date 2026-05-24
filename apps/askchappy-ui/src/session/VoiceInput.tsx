@@ -6,8 +6,7 @@ export type VoiceInputStatus =
   | 'permission_denied'
   | 'ready_to_record'
   | 'recording'
-  | 'transcribing'
-  | 'no_speech_detected';
+  | 'transcribing';
 
 export const VoiceInput = ({
   onStart,
@@ -47,9 +46,7 @@ export const VoiceInput = ({
         setStatus('transcribing');
         const blob = new Blob(chunks.current, { type: mimeType || 'audio/webm' });
         await onTranscribe(blob);
-        if (status !== 'no_speech_detected') {
-          setStatus('ready_to_record');
-        }
+        setStatus('ready_to_record');
       };
       recorder.current.start();
       onStart();
@@ -74,7 +71,6 @@ export const VoiceInput = ({
       ) : (
         <button type="button" onClick={startRecording} disabled={disabled || status === 'checking_mic' || status === 'transcribing'}>Start speaking</button>
       )}
-      {status === 'no_speech_detected' ? <button type="button" onClick={() => setStatus('ready_to_record')}>Try again</button> : null}
     </section>
   );
 };
