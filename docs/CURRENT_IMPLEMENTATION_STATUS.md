@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 17)
+# AskChappy Current Implementation Status (After Phase 18)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -18,6 +18,7 @@
 - Phase 15: standard-vs-cloned voice mode selection guardrails
 - Phase 16: browser-local persistence adapter for sessions/transcripts/metadata/events (local runtime only; no backend/database/cloud persistence)
 - Phase 17: local Ollama typed assistant runtime
+- Phase 18: local Kokoro/kokoro-onnx standard TTS output
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -27,7 +28,7 @@
 - Local-first deterministic recap generation from transcript + metadata.
 - Admin-only Voice Studio and avatar control surfaces.
 - Avatar state placeholder aligned to session lifecycle states.
-- Local fallback TTS runtime consistent with transcript-first voice constraints.
+- Local Kokoro/kokoro-onnx standard TTS runtime (local HTTP only) consistent with transcript-first voice constraints.
 - Standard voice remains explicitly active/default.
 - Optional cloned voice is guarded and requires both readiness checks and explicit real provider adapter availability.
 - AskChappy runs normally without cloned voice assets.
@@ -85,8 +86,7 @@ Retired and inactive:
 - No real cloned voice provider adapter/runtime is implemented.
 - Avatar runtime: placeholder, state-aware UI only; no real likeness/media assets.
 
-## Next recommended work after Phase 17
-- Phase 18: local Kokoro/kokoro-onnx TTS output (standard local voice default path).
+## Next recommended work after Phase 18
 - Phase 19: local faster-whisper STT / browser microphone input.
 - Phase 20+: content grounding / document ingestion / RAG remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
 - Keep local browser persistence schema-versioned and add migrations only when needed.

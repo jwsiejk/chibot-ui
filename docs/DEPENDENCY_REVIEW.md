@@ -50,3 +50,9 @@
 - Phase 17 target runtime remains local Ollama with default `gemma3:4b` at `http://127.0.0.1:11434`.
 - Standard local TTS direction remains Kokoro/kokoro-onnx; future STT direction remains faster-whisper.
 - No OpenAI/cloud LLM runtime, hosted model SDK, cloud voice SDK, or cloud TTS dependency should be introduced without a future ADR change.
+
+
+## Phase 18 dependency check
+- Local Kokoro/kokoro-onnx TTS uses native `fetch` + local HTTP endpoint only.
+- No cloud voice SDK dependency was added.
+- No additional TTS npm dependency was added for Phase 18.
