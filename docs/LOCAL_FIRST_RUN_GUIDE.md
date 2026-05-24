@@ -49,6 +49,8 @@ npm run start
 
 Note: `.env.local` is intended for machine-local configuration and is gitignored.
 
+Env loading note: `vite.config.ts` uses `loadEnv` and maps only the local runtime keys (`OLLAMA_*`, `KOKORO_TTS_*`, `FASTER_WHISPER_*`) into `process.env.*` compile-time constants so existing runtime config helpers continue to read one canonical contract with `.env.local` overrides applied.
+
 ## Start/use local app scaffold
 Use the dedicated local-first runtime script:
 
