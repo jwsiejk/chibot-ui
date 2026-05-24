@@ -243,7 +243,6 @@ describe('phase 22 chappy UI', () => {
   });
 
   it('keeps transcript text visible in unmuted mode while assistant turn runs', async () => {
-    vi.spyOn(serverApi, 'generateLocalAssistantMessage').mockResolvedValue({ ok: true, text: 'assistant response', runtime: 'local_ollama' } as never);
 
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
@@ -259,8 +258,7 @@ describe('phase 22 chappy UI', () => {
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
   });
 
-  it('does not call TTS when muted', async () => {
-    vi.spyOn(serverApi, 'generateLocalAssistantMessage').mockResolvedValue({ ok: true, text: 'assistant muted response', runtime: 'local_ollama' } as never);
+  it('records muted typed turn latency and does not call TTS when muted', async () => {
     const synthSpy = vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({ audio_status: 'unavailable', audio_base64: null, audio_format: null });
 
     render(
@@ -268,7 +266,7 @@ describe('phase 22 chappy UI', () => {
         <App />
       </MemoryRouter>,
     );
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
     fireEvent.click(screen.getByRole('button', { name: 'Mute Chappy' }));
@@ -277,6 +275,9 @@ describe('phase 22 chappy UI', () => {
 
     await waitFor(() => expect(screen.getByText(/hello muted/)).toBeInTheDocument());
     expect(synthSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Turn Latency' })).toBeInTheDocument());
   });
 
 
@@ -288,10 +289,26 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     expect(screen.getByRole('heading', { name: 'Turn Latency' })).toBeInTheDocument();
+    expect(screen.queryByText(/^Total:/)).not.toBeInTheDocument();
 
     render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
   });
 
+
+  it('shows time to Chappy speaking for successful unmuted typed turn', async () => {
+    vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({ audio_status: 'ready', audio_base64: 'ZmFrZQ==', audio_format: 'wav' } as never);
+
+    render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+    await waitFor(() => expect(screen.getByText(/Time to Chappy speaking:/)).toBeInTheDocument());
+    expect(screen.queryByText(/^Total:/)).not.toBeInTheDocument();
+  });
   it('opens and closes Admin Runtime Console from toolbar for admin only', async () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>

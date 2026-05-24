@@ -185,3 +185,11 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Admin runtime console appears only for admin users.
 - [ ] Diagnostics are client-only, in-memory, bounded.
 - [ ] No OS/native log collection is claimed.
+
+
+## Phase 22E latency console checks
+- [ ] Confirm Turn Latency uses explicit semantics (`Time to Chappy speaking` = playback start only, not audio completion).
+- [ ] Confirm muted turns are still recorded with `TTS skipped: muted` and `Playback skipped: muted`.
+- [ ] Confirm text-ready timing is shown for transcript-only/muted paths.
+- [ ] Confirm failure stage visibility for STT, assistant generation, TTS, and playback failures in Admin Runtime Console.
+- [ ] Confirm turn latency remains local-only/in-memory and bounded to latest 5 turns.
