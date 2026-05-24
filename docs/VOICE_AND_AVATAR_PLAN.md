@@ -68,7 +68,9 @@ Boundary rule:
 
 ## Standard local voice and STT direction
 - Standard AskChappy voice must remain available/default and local-first.
-- Standard local TTS direction is Kokoro/kokoro-onnx.
-- Future voice input/STT direction is faster-whisper.
+- Standard local TTS runtime direction is Kokoro/kokoro-onnx.
+- Local voice input/STT runtime direction is faster-whisper.
+- Voice output must be generated from canonical assistant transcript text.
+- Voice input must become canonical user transcript text.
 - Cloned Chappy voice remains optional and must not block standard local voice behavior.
 - Do not add cloud voice/TTS providers unless a future ADR explicitly changes direction.
