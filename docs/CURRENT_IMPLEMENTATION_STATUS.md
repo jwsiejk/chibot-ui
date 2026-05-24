@@ -139,3 +139,14 @@ Retired and inactive:
   - `start-local-runtime.ps1`
 - Scripts are local-first only. `start-local-runtime.ps1` requires `.env.local` and acts as a preflight orchestrator (not a process manager). Focused Kokoro/faster-whisper scripts require explicit local runner commands instead of guessing or auto-installing.
 - Scripts do not create transcript messages and do not use cloud/OpenAI/hosted providers.
+
+## Phase 21D (current)
+- Added committed local HTTP runtime wrappers for local GPU-capable TTS/STT under `services/local-runtime/`.
+- Added `services/local-runtime/requirements.txt` for local Python runtime dependencies only (no cloud/OpenAI SDKs).
+- `.env.example` now includes wrapper-backed default runner commands for:
+  - `KOKORO_TTS_RUN_COMMAND`
+  - `FASTER_WHISPER_RUN_COMMAND`
+- Wrappers are local-host defaults (`127.0.0.1`) and expose expected AskChappy endpoints:
+  - Kokoro: `/health`, `/v1/health`, `/v1/tts`
+  - faster-whisper: `/health`, `/v1/transcribe`
+- CUDA/provider/device readiness is surfaced honestly from wrapper health payloads; no fake GPU claims are introduced.

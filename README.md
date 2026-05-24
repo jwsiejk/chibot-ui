@@ -112,3 +112,30 @@ Expected ONNX providers include:
 CUDAExecutionProvider
 CPUExecutionProvider
 ```
+
+## Phase 21D local HTTP wrappers (GPU-capable TTS/STT)
+- Committed local wrapper services:
+  - `services/local-runtime/kokoro_tts_server.py`
+  - `services/local-runtime/faster_whisper_stt_server.py`
+  - `services/local-runtime/requirements.txt`
+- Create/install local runtime venv from repo root:
+```powershell
+py -m venv .venv-local-runtime
+.\.venv-local-runtime\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r services/local-runtime/requirements.txt
+```
+- Validate CUDA ONNX provider:
+```powershell
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+Expect `CUDAExecutionProvider` when GPU runtime is correctly installed.
+- Start runtime services in separate PowerShell windows:
+  - `./scripts/start-kokoro-tts.ps1`
+  - `./scripts/start-faster-whisper-stt.ps1`
+- Check runtime: `./scripts/check-local-runtime.ps1`
+- Launch app preflight + runtime: `./scripts/start-local-runtime.ps1`
+- Keep model/audio assets outside git, for example:
+  - `C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`
+  - `C:\AskChipAssets\kokoro\voices-v1.0.bin`
+- Manual process-level GPU verification remains `nvidia-smi -l 1`.

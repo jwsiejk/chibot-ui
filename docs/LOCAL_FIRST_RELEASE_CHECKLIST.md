@@ -117,3 +117,17 @@ Use this checklist before local production/local MVP handoff.
   - Kokoro TTS: `http://127.0.0.1:8880`
   - faster-whisper STT: `http://127.0.0.1:8890`
 - [ ] Confirm local model/audio assets remain out of git (example: `C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`, `C:\AskChipAssets\kokoro\voices-v1.0.bin`).
+
+## Phase 21D wrapper checklist additions
+- [ ] Confirm `services/local-runtime/kokoro_tts_server.py` exists and is used by default `KOKORO_TTS_RUN_COMMAND` template.
+- [ ] Confirm `services/local-runtime/faster_whisper_stt_server.py` exists and is used by default `FASTER_WHISPER_RUN_COMMAND` template.
+- [ ] Confirm `services/local-runtime/requirements.txt` exists and includes only local runtime packages.
+- [ ] Confirm local wrapper setup instructions include:
+  - venv creation (`py -m venv .venv-local-runtime`)
+  - `pip install -r services/local-runtime/requirements.txt`
+  - ONNX provider check for `CUDAExecutionProvider`
+- [ ] Confirm documented startup/validation commands:
+  - `./scripts/start-kokoro-tts.ps1`
+  - `./scripts/start-faster-whisper-stt.ps1`
+  - `./scripts/check-local-runtime.ps1`
+  - `./scripts/start-local-runtime.ps1`

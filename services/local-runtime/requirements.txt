@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+python-multipart
+kokoro-onnx
+onnxruntime-gpu
+faster-whisper

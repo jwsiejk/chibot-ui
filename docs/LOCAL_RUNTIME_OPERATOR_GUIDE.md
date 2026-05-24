@@ -201,3 +201,26 @@ CPUExecutionProvider
 Important: package installation alone does not start services. AskChappy still requires local HTTP runtimes:
 - Kokoro TTS: `http://127.0.0.1:8880`
 - faster-whisper STT: `http://127.0.0.1:8890`
+
+## Phase 21D wrapper runtime details
+- Local HTTP wrapper services are committed under `services/local-runtime/`:
+  - `kokoro_tts_server.py` (`GET /health`, `GET /v1/health`, `POST /v1/tts`)
+  - `faster_whisper_stt_server.py` (`GET /health`, `POST /v1/transcribe`)
+- Create/install local-only Python runtime:
+```powershell
+py -m venv .venv-local-runtime
+.\.venv-local-runtime\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+pip install -r services/local-runtime/requirements.txt
+```
+- Validate CUDA provider visibility before startup:
+```powershell
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+- Start commands:
+  - `./scripts/start-kokoro-tts.ps1`
+  - `./scripts/start-faster-whisper-stt.ps1`
+  - `./scripts/check-local-runtime.ps1`
+  - `./scripts/start-local-runtime.ps1`
+- Model/voice assets stay outside repo (`C:\AskChipAssets\kokoro\kokoro-v1.0.onnx`, `C:\AskChipAssets\kokoro\voices-v1.0.bin`).
+- Admin GPU Validation panel reports what wrappers expose; it cannot replace `nvidia-smi -l 1` process checks.
