@@ -89,3 +89,10 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm voice turns remain canonical user transcript entries (`source: voice`, `text`) only on successful STT.
 - [ ] Confirm TTS unavailable state is clearly non-blocking and assistant text remains visible.
 - [ ] Confirm normal session keeps admin-only controls hidden (GPU validation, Voice Studio, avatar admin controls).
+
+## Phase 21B runtime script checks
+- [ ] Confirm `.\scripts\check-local-runtime.ps1` prints status table for Ollama runtime/model, Kokoro, faster-whisper, and AskChappy URL.
+- [ ] Confirm `.\scripts\start-kokoro-tts.ps1` validates local asset path and requires `KOKORO_TTS_RUN_COMMAND`.
+- [ ] Confirm `.\scripts\start-faster-whisper-stt.ps1` validates local config and requires `FASTER_WHISPER_RUN_COMMAND`.
+- [ ] Confirm `.\scripts\start-local-runtime.ps1` enforces local startup order and does not hide failures.
+- [ ] Confirm `nvidia-smi -l 1` manual guidance is documented; no native Windows GPU process helper is claimed.

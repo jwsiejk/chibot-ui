@@ -134,3 +134,16 @@ This includes:
 - Ollama and faster-whisper are the highest-priority GPU candidates.
 - Kokoro GPU is optional unless local TTS latency is poor.
 - AskChappy browser/Vite UI itself does not require GPU validation.
+
+## Windows PowerShell startup scripts
+- Copy `.env.example` to `.env.local` and configure only local values (no cloud/OpenAI providers):
+  - `KOKORO_TTS_ASSET_DIR=C:\\AskChipAssets\\kokoro`
+  - `KOKORO_TTS_RUN_COMMAND=` (required for scripted start)
+  - `FASTER_WHISPER_RUN_COMMAND=` (required for scripted start)
+- Committed scripts (run from repo root):
+  - `.\scripts\check-local-runtime.ps1`
+  - `.\scripts\start-kokoro-tts.ps1`
+  - `.\scripts\start-faster-whisper-stt.ps1`
+  - `.\scripts\start-local-runtime.ps1`
+- Assets remain outside git; do not commit model/audio files.
+- Manual GPU validation remains `nvidia-smi -l 1`. AskChappy cannot directly inspect Windows GPU process usage without a native helper/agent; prioritize Ollama and faster-whisper first, Kokoro optional unless TTS latency is poor.

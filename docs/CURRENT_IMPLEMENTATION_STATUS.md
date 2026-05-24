@@ -118,3 +118,12 @@ Retired and inactive:
 - Runtime readiness remains visible with status + reason text in a minimal details panel (non-diagnostic-heavy).
 - Voice flow clarifies recording/transcribing/no-speech and preserves canonical transcript behavior (no fake messages on STT failures/no-speech).
 - TTS unavailable behavior is explicit and non-blocking: assistant text remains visible and no fake transcript messages are created.
+
+## Phase 21B (Windows local runtime startup scripts)
+- Added committed PowerShell scripts under `scripts/` for local runtime startup/check workflows:
+  - `check-local-runtime.ps1`
+  - `start-kokoro-tts.ps1`
+  - `start-faster-whisper-stt.ps1`
+  - `start-local-runtime.ps1`
+- Scripts are local-first only, load `.env.local` with `.env.example` fallback, and require explicit local runner commands for Kokoro/faster-whisper instead of guessing or auto-installing.
+- Scripts do not create transcript messages and do not use cloud/OpenAI/hosted providers.
