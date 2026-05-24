@@ -87,3 +87,26 @@ This includes:
 - Runtime readiness checks are local-only and must never append transcript messages.
 - Kokoro readiness prefers non-synthesis health probes (`/health`, then `/v1/health`) and only falls back to fixed-text synthetic `/v1/tts` when health paths are unsupported.
 - For full readiness validation procedure and troubleshooting matrix, use `docs/LOCAL_RUNTIME_OPERATOR_GUIDE.md`.
+
+## Admin local GPU validation panel (Phase 20B)
+- Admins can open `/admin` and review the **Local GPU Validation** panel.
+- The panel reports typed statuses for local Ollama, faster-whisper, and Kokoro/kokoro-onnx: `gpu_confirmed`, `cpu_only`, `unknown`, `runtime_unreachable`, `not_configured`, `not_applicable`.
+- The panel only reads local service health/config responses; it does not run prompts, STT transcription, or TTS synthesis.
+- Browser/admin UI cannot directly inspect Windows GPU process usage or `nvidia-smi` output without a local helper/agent.
+- When service APIs do not expose GPU/provider fields, status is `unknown` with manual guidance.
+
+### Manual NVIDIA validation
+1. Run `nvidia-smi -l 1` in a separate terminal.
+2. Trigger Ollama, faster-whisper, and Kokoro workloads separately.
+3. Confirm the relevant local process appears with GPU memory/utilization.
+
+### Interpretation notes
+- `gpu_confirmed`: service API explicitly reports CUDA/GPU provider/device.
+- `cpu_only`: service API explicitly reports CPU execution/provider.
+- `unknown`: runtime reachable, but API does not expose device/provider evidence.
+- `runtime_unreachable`: configured local endpoint is not reachable.
+- `not_configured`: required runtime config/env is not set.
+- `not_applicable`: check intentionally not applicable to this target.
+- Ollama and faster-whisper are the highest-priority GPU candidates.
+- Kokoro GPU is optional unless local TTS latency is poor.
+- AskChappy browser/Vite UI itself does not require GPU validation.

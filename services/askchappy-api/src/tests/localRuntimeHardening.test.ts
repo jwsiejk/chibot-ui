@@ -4,6 +4,7 @@ import {
   createLocalSession,
   generateLocalAssistantMessage,
   getLocalRuntimeReadinessStatus,
+  getLocalGpuValidationReport,
   getLocalTranscript,
   synthesizeLocalAssistantMessage,
   transcribeLocalVoiceInput,
@@ -121,6 +122,42 @@ describe('phase 20A local runtime hardening and readiness', () => {
     expect(getLocalTranscript(session.session_id).length).toBe(2);
   });
 
+
+  it('gpu validation returns typed service statuses without transcript side effects', async () => {
+    process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
+    process.env.FASTER_WHISPER_MODEL = 'base.en';
+    process.env.KOKORO_TTS_BASE_URL = 'http://127.0.0.1:8880';
+
+    const session = createLocalSession();
+    const before = getLocalTranscript(session.session_id).length;
+
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ models: [{ name: 'gemma3:4b' }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ device: 'cuda' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ providers: ['CPUExecutionProvider'] }) }));
+
+    const report = await getLocalGpuValidationReport();
+    expect(report.services.map((entry) => entry.service)).toEqual(['ollama', 'faster_whisper', 'kokoro_onnx']);
+    expect(report.services[0]?.status).toBe('unknown');
+    expect(report.services[1]?.status).toBe('gpu_confirmed');
+    expect(report.services[2]?.status).toBe('cpu_only');
+    expect(getLocalTranscript(session.session_id)).toHaveLength(before);
+  });
+
+  it('gpu validation unknown status contains honest manual verification reason when API lacks device fields', async () => {
+    process.env.FASTER_WHISPER_BASE_URL = 'http://127.0.0.1:8890';
+    process.env.FASTER_WHISPER_MODEL = 'base.en';
+
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ models: [{ name: 'gemma3:4b' }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+      .mockRejectedValueOnce(new Error('kokoro offline')));
+
+    const report = await getLocalGpuValidationReport();
+    const faster = report.services.find((entry) => entry.service === 'faster_whisper');
+    expect(faster?.status).toBe('unknown');
+    expect(faster?.reason).toContain('GPU usage cannot be confirmed from this service API.');
+  });
   it('ollama/tts failures do not append fake assistant messages and typed input still works', async () => {
     const session = createLocalSession();
     appendLocalUserTextMessage(session.session_id, 'typed works');

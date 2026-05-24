@@ -21,9 +21,10 @@
 - Phase 18: local Kokoro/kokoro-onnx standard TTS output
 - Phase 19: local faster-whisper STT / browser microphone input
 - Phase 20A: local runtime readiness/hardening
-- Phase 20B: local runtime operator guide and validation pass documentation
+- Phase 20B: admin local GPU validation panel and operator guidance updates
 
 ## What is implemented
+- Admin-only local GPU validation panel on `/admin` with typed status reporting for Ollama, faster-whisper STT, and Kokoro ONNX provider visibility (no fake GPU claims).
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
 - Centralized shared contracts under `shared/contracts` for transcript, session, modes, auth, and voice lifecycle.
 - Canonical transcript model (`text`, `role`, `source`) shared across typed/voice pathways.

@@ -13,6 +13,7 @@ import { getLocalVoiceRuntimeStatus, synthesizeAssistantTranscriptMessage } from
 import { generateAssistantResponse } from '../assistant/ollamaAdapter';
 import { transcribeWithFasterWhisper } from '../voice/stt/fasterWhisperAdapter';
 import { getLocalRuntimeReadiness } from './localRuntimeReadiness';
+import { getLocalGpuValidationStatus } from './localGpuValidation';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
@@ -116,3 +117,6 @@ export const synthesizeLocalAssistantMessage = async (sessionId: string, message
 export const getLocalVoiceStatus = () => getLocalVoiceRuntimeStatus();
 
 export const getLocalRuntimeReadinessStatus = () => getLocalRuntimeReadiness();
+
+
+export const getLocalGpuValidationReport = () => getLocalGpuValidationStatus();

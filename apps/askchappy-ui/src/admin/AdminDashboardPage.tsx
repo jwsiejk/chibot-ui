@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '../../../../shared/contracts/askchappy';
+import { LocalGpuValidationPanel } from './LocalGpuValidationPanel';
 
 export const AdminDashboardPage = () => (
   <main>
@@ -26,5 +27,7 @@ export const AdminDashboardPage = () => (
         <Link to={ROUTES.adminAvatar}>Open Avatar review</Link>
       </article>
     </section>
+
+    <LocalGpuValidationPanel />
   </main>
 );

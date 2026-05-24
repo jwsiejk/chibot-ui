@@ -21,6 +21,12 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm mode changes are kept in metadata/session events (not fake transcript messages).
 - [ ] Confirm summary/recap remains grounded in canonical transcript + metadata.
 
+
+- [ ] Confirm admin-only `/admin` Local GPU Validation panel is visible for admin users.
+- [ ] Confirm standard users cannot access Local GPU Validation panel.
+- [ ] Confirm `/chappy/session/:sessionId` does not expose GPU validation controls.
+- [ ] Confirm unknown GPU statuses include honest manual `nvidia-smi -l 1` guidance when service APIs lack device/provider fields.
+
 ## Auth/admin checks
 - [ ] Confirm email-only local auth behavior is unchanged.
 - [ ] Confirm `jsiejk@ddn.com` resolves to `admin` and other emails to `standard_user`.
