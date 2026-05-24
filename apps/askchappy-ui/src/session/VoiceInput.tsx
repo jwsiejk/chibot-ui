@@ -20,17 +20,17 @@ export const VoiceInput = ({ onStart, onStop, onTranscribe, onError, disabled, c
     recorder.current.ondataavailable = (event) => chunks.current.push(event.data);
     recorder.current.onstop = async () => { setStatus('transcribing'); const blob = new Blob(chunks.current, { type: mimeType || 'audio/webm' }); await onTranscribe(blob); setStatus('ready_to_record'); };
     recorder.current.start(); onStart(); setStatus('recording');
-  } catch { setStatus('permission_denied'); onError('Microphone permission denied or unavailable.'); } };
+  } catch { setStatus('permission_denied'); onError('Permission denied'); } };
 
   const stopRecording = () => { onStop(); recorder.current?.stop(); stream.current?.getTracks().forEach((track) => track.stop()); };
 
-  const micCta = status === 'recording' ? 'Stop mic' : 'Mic';
+  const unavailable = disabled || status === 'checking_mic' || status === 'transcribing' || status === 'mic_unavailable' || status === 'permission_denied';
 
   if (compact) {
     return (
       <div className="meeting-control meeting-mic" aria-label="voice input panel">
-        <button className="meeting-btn" type="button" onClick={status === 'recording' ? stopRecording : startRecording} disabled={disabled || status === 'checking_mic' || status === 'transcribing' || status === 'mic_unavailable' || status === 'permission_denied'} aria-label={`microphone control ${status.replaceAll('_', ' ')}`}>
-          <span aria-hidden="true">🎙️</span> {micCta}
+        <button className="meeting-btn" type="button" onClick={status === 'recording' ? stopRecording : startRecording} disabled={unavailable} aria-label={`Mic ${status.replaceAll('_', ' ')}`}>
+          <span aria-hidden="true">🎙️</span> Mic
         </button>
       </div>
     );
@@ -40,11 +40,7 @@ export const VoiceInput = ({ onStart, onStop, onTranscribe, onError, disabled, c
     <section className="card panel" aria-label="voice input panel">
       <p>Microphone status: {status.replaceAll('_', ' ')}</p>
       <div className="voice-row">
-        {status === 'mic_unavailable' || status === 'permission_denied' ? null : status === 'recording' ? (
-          <button className="btn secondary" type="button" onClick={stopRecording} disabled={disabled}>Stop recording</button>
-        ) : (
-          <button className="btn secondary" type="button" onClick={startRecording} disabled={disabled || status === 'checking_mic' || status === 'transcribing'}>Start speaking</button>
-        )}
+        {status === 'recording' ? ( <button className="btn secondary" type="button" onClick={stopRecording} disabled={unavailable}>Stop speaking</button>) : (<button className="btn secondary" type="button" onClick={startRecording} disabled={unavailable}>Start speaking</button>)}
       </div>
     </section>
   );

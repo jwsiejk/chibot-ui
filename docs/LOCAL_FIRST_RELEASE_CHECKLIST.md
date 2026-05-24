@@ -139,3 +139,7 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm admin controls are hidden from normal user sessions.
 - [ ] Confirm runtime readiness UI is compact/non-dominant.
 - [ ] Confirm entry page/guided modes contain no stale scaffold wording.
+
+- [ ] Confirm mic is PTT/Mic based and avoids recorder terminology.
+- [ ] Confirm /chappy is a pre-call lobby, not landing-page scaffold wording.
+- [ ] Confirm session is a Zoom-like room with Chappy stage as focal participant.
