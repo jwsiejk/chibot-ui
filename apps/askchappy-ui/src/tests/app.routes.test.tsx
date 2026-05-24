@@ -437,7 +437,6 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByText('Primary participant')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toHaveClass('meeting-chat-panel');
     expect(screen.getByText('Ask Chappy anything. He’ll keep it conversational and go deeper when you ask.')).toBeInTheDocument();
-    expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('meeting side column')).toBeInTheDocument();
     const toolbar = screen.getByRole('region', { name: 'bottom meeting toolbar' });
@@ -461,8 +460,20 @@ describe('phase 22 chappy UI', () => {
     expect(screen.queryByText('Avatar asset status')).not.toBeInTheDocument();
     expect(screen.queryByText('Supports visemes')).not.toBeInTheDocument();
     expect(screen.queryByText('Supports speaking animation')).not.toBeInTheDocument();
-    const rightRail = screen.getByRole('complementary', { name: 'session right rail' });
-    expect(rightRail).toHaveClass('guided-modes-panel', 'compact');
+    expect(screen.queryByRole('complementary', { name: 'session right rail' })).not.toBeInTheDocument();
+  });
+
+  it('opens guided modes from toolbar without rendering a persistent right-rail mode panel', () => {
+    render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+
+    expect(screen.queryByText('Current mode')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+    expect(screen.getByRole('dialog', { name: 'guided modes overlay' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Current mode' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Guided modes' })).toBeInTheDocument();
   });
 
   it('shows local runtime readiness statuses with reason text', async () => {
@@ -588,7 +599,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mic recording' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Mic state: No speech detected')).toBeInTheDocument();
+      expect(screen.getByText('No speech detected')).toBeInTheDocument();
       expect(screen.getByLabelText('meeting stage')).toBeInTheDocument();
     });
 
@@ -628,11 +639,11 @@ describe('phase 22 chappy UI', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Mic recording' })).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Mic recording' }));
 
-    await waitFor(() => expect(screen.getByText(/Mic state: STT failed during transcription\./)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/STT failed during transcription\./)).toBeInTheDocument());
     expect(screen.queryByText('user:')).not.toBeInTheDocument();
   });
 
-  it('renders right rail in open_qa mode initially', () => {
+  it('renders mode controls in overlay in open_qa mode initially', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
         <App />
@@ -642,6 +653,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
     const rightRail = screen.getByRole('complementary', { name: 'session right rail' });
     expect(within(rightRail).getByRole('heading', { name: 'Current mode' })).toBeInTheDocument();
     expect(within(rightRail).getByRole('button', { name: 'Open Q&A' })).toHaveAttribute('aria-pressed', 'true');
@@ -663,15 +675,24 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'keep this transcript' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Learn DDN' }));
-    expect(screen.getByText('Build foundational DDN understanding from basics to field usage.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+    expect(screen.getByRole('button', { name: 'Learn DDN' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Meeting Prep' }));
-    expect(screen.getByText('Prepare meeting objectives, agenda, discovery questions, and talk tracks.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+    expect(screen.getByRole('button', { name: 'Meeting Prep' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByText(/keep this transcript/)).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open Q&A' }));
-    expect(screen.getByText('Ask Chappy anything about DDN positioning, use cases, or partner scenarios.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+    expect(screen.getByRole('button', { name: 'Open Q&A' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'still typing after mode switch' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));

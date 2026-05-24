@@ -196,23 +196,21 @@ export const ChappySession = () => {
         <section className="meeting-stage" aria-label="meeting stage"><ChappyStage state={state} /></section>
         <section className="meeting-side-column" aria-label="meeting side column">
           <TranscriptPanel messages={messages} />
-          <SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={onSelectMode} compact />
         </section>
       </div>
       {showModes ? <div className="modes-overlay card panel" role="dialog" aria-label="guided modes overlay"><button className="btn secondary" type="button" onClick={() => setShowModes(false)}>Close</button><SessionRightRail activeMode={session.metadata.askchappy.session_mode} onSelectMode={(mode) => { onSelectMode(mode); setShowModes(false); }} /></div> : null}
       <section className="meeting-toolbar" aria-label="bottom meeting toolbar">
-        <div className="toolbar-notice" role="status">Mic state: {voiceNotice} {runtimeNotice ? `• ${runtimeNotice}` : ''}</div>
+        <div className="toolbar-notice" role="status">{voiceNotice}{runtimeNotice ? ` • ${runtimeNotice}` : ''}</div>
         <div className="toolbar-controls">
           <VoiceInput compact onStart={() => { micCaptureStartRef.current = performance.now(); setState('listening'); setVoiceNotice('Listening…'); pushDiagnostic('mic listening started'); }} onStop={() => { pushDiagnostic('mic capture submitted'); setState('transcribing'); setVoiceNotice('Transcribing…'); }} onTranscribe={onTranscribeVoice} onError={(message) => { setState('error'); setVoiceNotice(message); }} />
           <TypedInput compact onSubmitText={onSubmitText} />
           <button className="meeting-btn" type="button" onClick={() => { setChappyMuted((m) => !m); setVoiceNotice(chappyMuted ? 'Chappy voice on' : 'Chappy voice muted. Transcript only.'); pushDiagnostic(chappyMuted ? 'Chappy unmuted' : 'Chappy muted'); }}>{chappyMuted ? 'Unmute Chappy' : 'Mute Chappy'}</button>
           <LocalRuntimeStatus compact />
-          <button className="meeting-btn" type="button" onClick={() => setShowModes(true)}>Modes</button>
-          {user?.role === 'admin' ? <button className="meeting-btn" type="button" onClick={() => { setShowAdminModal(true); pushDiagnostic('admin modal opened'); }}>Admin</button> : null}
+          <button className="meeting-btn utility-btn" type="button" onClick={() => setShowModes(true)}>Modes</button>
+          {user?.role === 'admin' ? <button className="meeting-btn utility-btn" type="button" onClick={() => { setShowAdminModal(true); pushDiagnostic('admin modal opened'); }}>Admin</button> : null}
         </div>
         <div className="toolbar-subnotice">
           {!voiceStatus.standard_tts_configured ? <span className="mini-badge">Chappy voice unavailable. Transcript response is still available.</span> : null}
-          <span>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured.' : `${voiceStatus.cloned_voice_status_label}.`}</span>
         </div>
       </section>
       <AdminRuntimeConsoleModal isOpen={showAdminModal && user?.role === 'admin'} onClose={() => setShowAdminModal(false)} browserMicStatus={voiceNotice.includes('Permission denied') ? 'permission_denied' : 'available_or_unknown'} diagnostics={diagnostics} turnLatency={turnLatency} />
