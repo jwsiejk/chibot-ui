@@ -426,7 +426,9 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     expect(screen.getByLabelText('askchappy session room')).toHaveClass('meeting-room', 'session-shell');
-    expect(screen.getByLabelText('top meeting bar')).toBeInTheDocument();
+    const topBar = screen.getByLabelText('top meeting bar');
+    expect(topBar).toBeInTheDocument();
+    expect(topBar).not.toHaveClass('card');
     expect(screen.getByLabelText('meeting body')).toHaveClass('meeting-content');
     expect(screen.getByLabelText('chappy stage')).toBeInTheDocument();
     expect(screen.getByLabelText('meeting stage')).toBeInTheDocument();
@@ -438,7 +440,13 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByText('Cloned voice status: Cloned voice not configured.')).toBeInTheDocument();
     expect(screen.getByLabelText('transcript panel')).toBeInTheDocument();
     expect(screen.getByLabelText('meeting side column')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'bottom meeting toolbar' })).toHaveClass('meeting-toolbar');
+    const toolbar = screen.getByRole('region', { name: 'bottom meeting toolbar' });
+    expect(toolbar).toHaveClass('meeting-toolbar');
+    expect(screen.getByRole('button', { name: /Mic/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Modes' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mute Chappy' })).toBeInTheDocument();
+    expect(screen.getByText(/Local runtime status: checking/)).toBeInTheDocument();
     expect(screen.getByLabelText('voice input panel')).toBeInTheDocument();
     expect(screen.getByLabelText('typed input form')).toBeInTheDocument();
     expect(screen.getByText(/Local runtime status: checking/)).toBeInTheDocument();
@@ -468,9 +476,10 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Runtime')).toBeInTheDocument();
+      expect(screen.getByText(/Local runtime status: checking/)).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByText('Runtime'));
+    const runtimeSummary = await screen.findByText('Runtime');
+    fireEvent.click(runtimeSummary);
     expect(screen.getByText(/Ollama: .* — /)).toBeInTheDocument();
     expect(screen.getByText(/Kokoro TTS: .* — /)).toBeInTheDocument();
     expect(screen.getByText(/faster-whisper STT: .* — /)).toBeInTheDocument();

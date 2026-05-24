@@ -25,7 +25,9 @@ a { color: inherit; text-decoration: none; }
 
 .session-shell { height: 100vh; overflow: hidden; }
 .meeting-room { height:100vh; display:grid; grid-template-rows:auto minmax(0,1fr) auto; background:#0a0f1d; overflow:hidden; }
-.top-meeting-bar { z-index: 30; margin: .8rem 1rem; padding:.65rem 1rem; display:flex; justify-content:space-between; min-height:64px; }
+.top-meeting-bar { z-index: 30; margin: .45rem 1rem .35rem; padding:.35rem .45rem; display:flex; justify-content:space-between; align-items:center; min-height:44px; background: linear-gradient(180deg, rgba(7,12,26,.78), rgba(7,12,26,.2)); border:none; border-radius:10px; box-shadow:none; backdrop-filter: blur(2px); }
+.top-meeting-bar h1 { margin:0; font-size:1.02rem; }
+.top-meeting-bar p { margin:0; font-size:.82rem; color:#bac9ef; }
 .meeting-content { min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:1rem; padding:0 1rem 1rem; overflow:hidden; }
 .meeting-stage { min-height:0; }
 .chappy-video-tile { height:100%; min-height: 0; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; background:linear-gradient(180deg,#111b34,#080d19); }
@@ -42,11 +44,15 @@ a { color: inherit; text-decoration: none; }
 .msg { padding:.6rem .75rem; border-radius:12px; background:#13264b; border:1px solid #30508b; }
 .msg.user { background:#21407f; }
 
-.meeting-toolbar { margin: 0 1rem 1rem; background: rgba(8, 14, 30, 0.96); border: 1px solid #2a3f75; border-radius: 16px; padding: .55rem .7rem; z-index: 50; min-height: 92px; }
+.meeting-toolbar { margin: 0 .8rem .7rem; background: linear-gradient(180deg, rgba(8,14,30,.08), rgba(8,14,30,.62)); border: none; border-radius: 0; padding: .35rem .5rem .5rem; z-index: 50; min-height: 86px; }
 .toolbar-controls { display:flex; align-items:center; gap:.5rem; justify-content:center; flex-wrap:wrap; }
-.meeting-btn { border-radius:999px; border:1px solid #4668ad; background:#1b2d56; color:#eef4ff; font: inherit; padding:.58rem .85rem; }
+.meeting-btn { border-radius:999px; border:1px solid rgba(124,156,228,.55); background:rgba(24,41,79,.82); color:#eef4ff; font: inherit; padding:.58rem .95rem; min-height:40px; min-width:40px; transition: background .18s ease, transform .15s ease, border-color .18s ease, box-shadow .18s ease; }
+.meeting-btn:hover { background:rgba(40,68,126,.88); border-color:#8db1ff; }
+.meeting-btn:active { transform: translateY(1px) scale(.99); }
+.meeting-btn:focus-visible { outline:2px solid #9ec0ff; outline-offset:2px; box-shadow:0 0 0 3px rgba(21,39,76,.7); }
+.meeting-composer .meeting-btn { padding:.58rem 1.1rem; }
 .meeting-composer { display:grid; grid-template-columns:1fr auto; gap:.4rem; min-width: clamp(220px, 34vw, 420px); }
-.toolbar-notice, .toolbar-subnotice { font-size:.82rem; text-align:center; margin:.2rem 0; }
+.toolbar-notice, .toolbar-subnotice { font-size:.76rem; text-align:center; margin:.15rem 0; color:#9eb2e0; }
 .toolbar-runtime { border:1px solid #4668ad; border-radius:999px; padding:.2rem .6rem; background:#1b2d56; margin:0; }
 .toolbar-runtime[open] { border-radius:14px; padding:.55rem .7rem; max-width:420px; }
 .modes-overlay { position: fixed; right: 1rem; bottom: 5.4rem; width:min(420px, calc(100vw - 2rem)); z-index:60; }
@@ -58,3 +64,8 @@ body.session-viewport-lock { overflow: hidden; }
 .admin-runtime-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 80; }
 .admin-runtime-modal { width:min(900px,95vw); max-height:85vh; overflow:auto; padding:1rem; }
 .admin-runtime-modal-header { display:flex; justify-content:space-between; align-items:center; }
+
+.meeting-composer .input { border-radius:999px; background: rgba(9,18,38,.9); border-color: rgba(92,122,194,.7); min-height:40px; }
+.toolbar-controls > * { display:flex; align-items:center; }
+.toolbar-runtime { background:rgba(24,41,79,.82); border-color: rgba(124,156,228,.55); }
+.toolbar-runtime summary { cursor:pointer; }

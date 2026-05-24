@@ -188,7 +188,7 @@ export const ChappySession = () => {
   return (
     <main className="meeting-room session-shell" aria-label="askchappy session room">
       {/* ... unchanged render ... */}
-      <header className="card status-bar top-meeting-bar" aria-label="top meeting bar">
+      <header className="status-bar top-meeting-bar" aria-label="top meeting bar">
         <h1>AskChappy</h1>
         <p>Open Q&amp;A • {STATE_COPY[state]} • session {sessionId}{user?.role === 'admin' ? ' • Admin' : ''}</p>
       </header>
