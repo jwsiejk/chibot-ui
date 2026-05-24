@@ -62,13 +62,17 @@ export const ChappySession = () => {
     setVersion((previous) => previous + 1);
   };
 
+  const latestAssistant = useMemo(() => [...messages].reverse().find((entry) => entry.role === 'assistant') ?? null, [messages]);
+
   const onSpeakLatestAssistant = async () => {
-    const latestAssistant = [...messages].reverse().find((entry) => entry.role === 'assistant');
-    if (!latestAssistant) return;
+    if (!latestAssistant) {
+      setVoiceNotice('No assistant response available yet.');
+      return;
+    }
     setVoiceNotice('Speaking');
     const tts = await synthesizeLocalAssistantMessage(sessionId, latestAssistant.id);
     if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) {
-      setVoiceNotice('Local TTS not configured');
+      setVoiceNotice('Standard local voice selected — Kokoro runtime not configured.');
       return;
     }
     const audio = new Audio(`data:audio/${tts.audio_format};base64,${tts.audio_base64}`);
@@ -81,10 +85,10 @@ export const ChappySession = () => {
       <h1>AskChappy session</h1>
       <p>Local production working session ID: {sessionId}</p>
       <p>Session state indicator: {state}</p>
-      <p>Speech provider status: {voiceStatus.standard_tts_configured ? 'Standard local voice active.' : 'Local TTS not configured.'}</p>
+      <p>Speech provider status: {voiceStatus.standard_tts_configured ? 'Standard local voice active.' : 'Standard local voice selected — Kokoro runtime not configured.'}</p>
       <p>Voice playback status: {voiceNotice}</p>
       <p>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured' : voiceStatus.cloned_voice_status_label}.</p>
-      <button type="button" onClick={onSpeakLatestAssistant}>Speak response</button>
+      <button type="button" onClick={onSpeakLatestAssistant} disabled={!latestAssistant}>Speak response</button>
       <ChappyStage state={state} />
       <TranscriptPanel messages={messages} />
       {runtimeNotice ? <p>{runtimeNotice}</p> : null}

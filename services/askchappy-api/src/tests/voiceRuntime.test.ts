@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import {
@@ -12,6 +12,7 @@ import { evaluateClonedVoiceReadiness } from '../voice/clonedVoiceReadiness';
 import { fallbackTtsProvider } from '../voice/fallbackTtsProvider';
 import { getKokoroTtsConfig } from '../voice/kokoroTtsConfig';
 import { getVoiceProviderSelection } from '../voice/voiceProviderSelection';
+import { kokoroTtsProvider } from '../voice/kokoroTtsProvider';
 import {
   getPublishedVoiceProfile,
   synthesizeAssistantTranscriptMessage,
@@ -284,5 +285,68 @@ it('kokoro config supports overrides', () => {
     format: 'mp3',
     timeoutMs: 12000,
     configured: true,
+  });
+});
+
+
+describe('kokoro tts provider success path', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env.KOKORO_TTS_BASE_URL = 'http://127.0.0.1:8880';
+    process.env.KOKORO_TTS_VOICE = 'af_sarah';
+    process.env.KOKORO_TTS_FORMAT = 'wav';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...originalEnv };
+  });
+
+  it('calls /v1/tts and returns ready audio using exact transcript text + configured voice/format', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ audio_base64: 'ZmFrZQ==' }),
+    } as Response);
+
+    const output = await kokoroTtsProvider.synthesize({
+      text: 'Exact transcript text to speak.',
+      session_id: 'session_1',
+      message_id: 'msg_assistant_1',
+      voice_profile_id: null,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:8880/v1/tts');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(String(options.body))).toEqual({
+      text: 'Exact transcript text to speak.',
+      voice: 'af_sarah',
+      format: 'wav',
+    });
+
+    expect(output.audio_status).toBe('ready');
+    expect(output.audio_base64).toBe('ZmFrZQ==');
+    expect(output.audio_format).toBe('wav');
+    expect(output.spoken_text).toBe('Exact transcript text to speak.');
+  });
+
+  it('tts synthesis does not create transcript messages', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ audio_base64: 'ZmFrZQ==' }),
+    } as Response);
+
+    const message = createAssistantMessage('session_kokoro', 'No transcript mutation.');
+    const output = await synthesizeAssistantTranscriptMessage({
+      session_id: 'session_kokoro',
+      message,
+    });
+
+    expect(output.audio_status).toBe('ready');
+    expect(output.spoken_text).toBe(message.text);
+    expect(Object.prototype.hasOwnProperty.call(output, 'transcript')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(output, 'message')).toBe(false);
   });
 });

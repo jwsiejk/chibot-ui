@@ -50,5 +50,10 @@ Use this checklist before local production/local MVP handoff.
 - [x] Phase 17 local Ollama typed assistant runtime wired (`gemma3:4b` default).
 - [x] No OpenAI/cloud LLM runtime added.
 - [x] No RAG/content grounding/document ingestion added.
-- [ ] Phase 18 local Kokoro/kokoro-onnx TTS.
+- [x] Phase 18 local Kokoro/kokoro-onnx TTS (standard local voice default path).
 - [ ] Phase 19 local faster-whisper STT.
+
+- [x] No STT/browser microphone runtime added in Phase 18.
+- [x] No cloud TTS/voice SDK added.
+- [x] No cloned voice provider adapter added.
+- [x] No RAG/document ingestion/content grounding added.

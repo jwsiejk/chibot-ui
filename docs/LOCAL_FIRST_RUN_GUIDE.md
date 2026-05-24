@@ -86,3 +86,13 @@ Set optional env vars for local Ollama runtime:
 - `OLLAMA_KEEP_ALIVE` (optional, e.g. `30m`)
 - `OLLAMA_NUM_CTX` (optional, e.g. `8192`)
 If Ollama is not reachable, AskChappy shows: "Local Ollama runtime is not configured or not reachable." No cloud fallback is used.
+
+
+## Standard local Kokoro TTS configuration
+- `KOKORO_TTS_BASE_URL`: local Kokoro/kokoro-onnx URL (default runtime target `http://127.0.0.1:8880`).
+- `KOKORO_TTS_VOICE`: local voice id (default `af_sarah`).
+- `KOKORO_TTS_FORMAT`: output format (default `wav`).
+- `KOKORO_TTS_TIMEOUT_MS`: request timeout in milliseconds.
+- If `KOKORO_TTS_BASE_URL` is not set, standard local voice remains selected/default but synthesis reports runtime not configured.
+- TTS always consumes committed assistant transcript `text` and returns matching `spoken_text`.
+- No STT/microphone input, cloud TTS SDK, or cloned voice provider adapter is added in Phase 18.
