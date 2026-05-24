@@ -2,7 +2,7 @@ import { getFasterWhisperConfig } from './fasterWhisperConfig';
 
 export type SttResult =
   | { ok: true; text: string; provider: Record<string, unknown> }
-  | { ok: false; code: 'not_configured' | 'runtime_unreachable' | 'no_speech' | 'invalid_response'; message: string };
+  | { ok: false; code: 'not_configured' | 'runtime_unreachable' | 'transcription_failed' | 'no_speech' | 'invalid_response'; message: string };
 
 export const transcribeWithFasterWhisper = async (audioBlob: Blob): Promise<SttResult> => {
   const config = getFasterWhisperConfig();
@@ -25,7 +25,29 @@ export const transcribeWithFasterWhisper = async (audioBlob: Blob): Promise<SttR
       signal: ctrl.signal,
     });
     if (!res.ok) {
-      return { ok: false, code: 'runtime_unreachable', message: 'Local STT runtime is not reachable.' };
+      let detail = '';
+      try {
+        const payload = (await res.json()) as { detail?: string | { detail?: string; error?: string } };
+        if (typeof payload.detail === 'string') detail = payload.detail;
+        else if (payload.detail && typeof payload.detail === 'object') {
+          const msg = payload.detail.detail ?? payload.detail.error;
+          if (msg) detail = msg;
+        }
+      } catch {
+        // ignore parse failures; handled by fallback message
+      }
+      if (res.status >= 500) {
+        return {
+          ok: false,
+          code: 'transcription_failed',
+          message: detail ? `STT failed during transcription. ${detail}` : 'STT failed during transcription. Check faster-whisper service logs.',
+        };
+      }
+      return {
+        ok: false,
+        code: 'invalid_response',
+        message: detail ? `Local STT request was rejected. ${detail}` : 'Local STT request was rejected by runtime.',
+      };
     }
     const payload = (await res.json()) as { text?: string };
     const text = payload.text?.trim() ?? '';

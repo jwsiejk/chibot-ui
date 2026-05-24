@@ -113,6 +113,21 @@ Actions:
 - Confirm `FASTER_WHISPER_BASE_URL` resolves locally.
 - Re-test microphone flow.
 
+### faster-whisper `/health` is 200 but `/v1/transcribe` is 500
+Symptoms:
+- `GET /health` reports ready.
+- Browser `POST /v1/transcribe` fails with HTTP 500.
+- AskChappy shows STT transcription failure messaging.
+
+Meaning:
+- Service is reachable, but transcription processing failed.
+
+Actions:
+- Check the faster-whisper service PowerShell/terminal window for traceback details.
+- Confirm browser-uploaded audio container/codec is supported by your local decoding stack.
+- Check for decode failures, malformed upload payloads, and CUDA/model load/runtime errors.
+- Retry with a short clear utterance and verify `FASTER_WHISPER_MODEL`/runtime dependencies.
+
 ### Microphone denied/unavailable
 Symptoms:
 - Browser reports denied permission or missing input device.

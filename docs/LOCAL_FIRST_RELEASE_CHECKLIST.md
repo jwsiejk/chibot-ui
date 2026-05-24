@@ -79,6 +79,8 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm required start order is documented and followed (Ollama -> model pull/check -> Kokoro -> faster-whisper -> `npm run start`).
 - [ ] Confirm operator validation pass is executable end-to-end (`/chappy`, start session, readiness panel, typed input, microphone input, canonical transcript checks, standard voice playback).
 - [ ] Confirm troubleshooting coverage includes Ollama runtime/model failures, Kokoro health/fallback behavior, faster-whisper failures, microphone denial, TTS/STT runtime issues, and localStorage malformed recovery.
+- [ ] Confirm STT diagnostics distinguish runtime reachability vs transcription failure (`/health` 200 with `/v1/transcribe` 500 means reachable runtime with processing failure).
+- [ ] Confirm STT HTTP 500 shows transcription-failed UX guidance and does not claim runtime unreachable.
 - [ ] Confirm runbook explicitly states out-of-scope items (no RAG/content grounding/DDN ingestion, no cloud fallback/providers, no cloned voice provider adapter, no real avatar/visemes, no database/cloud persistence).
 
 ## Phase 21 session UX checks
