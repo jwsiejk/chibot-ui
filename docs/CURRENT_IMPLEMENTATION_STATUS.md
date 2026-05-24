@@ -89,8 +89,9 @@ Cloned voice runtime integration remains blocked until provider selection, local
 - Phase 17 planned config: `OLLAMA_BASE_URL` default `http://127.0.0.1:11434`, `OLLAMA_MODEL` default `gemma3:4b`, optional `OLLAMA_KEEP_ALIVE=30m`, optional `OLLAMA_NUM_CTX=8192`.
 - Phase 17 excludes OpenAI runtime, hosted/cloud LLM SDKs, and cloud LLM API keys.
 - If Ollama/local model is unavailable, show a clear local runtime not-configured state (no fake assistant intelligence).
-- Phase 18: content grounding / document ingestion / RAG is deferred for now, but remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
-- Phase 19: STT / browser microphone input with faster-whisper, unless project direction changes.
+- Phase 18: local Kokoro/kokoro-onnx TTS output (standard local voice default path).
+- Phase 19: local faster-whisper STT / browser microphone input, unless project direction changes.
+- Phase 20 or later: content grounding / document ingestion / RAG remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
 - Standard local voice target remains Kokoro/kokoro-onnx and cloned voice remains optional/gated.
 - Keep local browser persistence schema-versioned and add migrations only when needed.
 - Do not block the first usable assistant conversation/runtime phase on content grounding.

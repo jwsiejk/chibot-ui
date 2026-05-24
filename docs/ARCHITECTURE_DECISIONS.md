@@ -85,14 +85,15 @@ Consequences:
 
 
 ## ADR-021: Local open-source runtime is required for assistant + standard voice
-Decision: AskChappy Phase 17 assistant runtime must use local Ollama with default model `gemma3:4b`, standard local voice output must use Kokoro/kokoro-onnx, and future STT direction is faster-whisper. Cloud hosted LLM/TTS providers remain excluded unless a future ADR explicitly changes this.
+Decision: AskChappy Phase 17 assistant runtime must use local Ollama with default model `gemma3:4b`; the first usable voice experience then requires standard local Kokoro/kokoro-onnx TTS (Phase 18) and local faster-whisper STT/browser microphone input (Phase 19) before content grounding/RAG work. Cloud hosted LLM/TTS providers remain excluded unless a future ADR explicitly changes this.
 
 Consequences:
 - Phase 17 assistant runtime baseline is local Ollama only (`OLLAMA_BASE_URL` default `http://127.0.0.1:11434`; `OLLAMA_MODEL` default `gemma3:4b`; optional `OLLAMA_KEEP_ALIVE=30m`; optional `OLLAMA_NUM_CTX=8192`).
 - Missing Ollama runtime or missing configured local model must show an explicit local-runtime-not-configured state; do not fake assistant output; do not silently fall back to any cloud runtime.
 - Standard voice path target is local Kokoro/kokoro-onnx TTS.
-- Future voice input/STT target is faster-whisper.
+- Future voice input/STT target is faster-whisper, mapped into canonical user transcript text.
 - Cloned Chappy voice remains an optional future provider/adapter path and must never block standard local voice runtime.
+- Content grounding/document ingestion/embeddings/vector retrieval/RAG remains required follow-on scope in Phase 20 or later and must not be represented as already implemented during Phases 17-19 local runtime work.
 - No OpenAI runtime, no hosted model SDK, no cloud voice SDK, and no cloud TTS path should be introduced without explicit ADR change.
 
 ## ADR-022: Phase 16 browser-local persistence boundary

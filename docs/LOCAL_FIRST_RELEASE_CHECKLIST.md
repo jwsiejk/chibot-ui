@@ -41,7 +41,8 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm standard voice remains active/default for synthesis.
 - [ ] Confirm cloned voice readiness gate does not claim active cloned synthesis without approved provider adapter + prerequisites.
 - [ ] Confirm standard local TTS direction is Kokoro/kokoro-onnx and remains default/available.
-- [ ] Confirm future STT direction is faster-whisper (no cloud STT provider introduced).
+- [ ] Confirm local STT implementation uses faster-whisper when introduced (no cloud STT provider introduced).
 - [ ] Confirm no cloud voice provider runtime was added.
+- [ ] Confirm local voice input/output does not create separate transcript models (voice input -> canonical user transcript text; voice output <- canonical assistant transcript text).
 
 - [ ] Confirm Standard voice remains explicitly selected when cloned config is missing/incomplete, consent is false, publication is not `published`, `enabled` is false, adapter is missing, or readiness has errors.
