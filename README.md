@@ -7,6 +7,7 @@ AskChappy is local-first production software for DDN partner enablement workflow
 - Implementation contracts: `docs/IMPLEMENTATION_CONTRACTS.md`
 - Build playbook: `docs/BUILD_PLAYBOOK.md`
 - Local-first run guide: `docs/LOCAL_FIRST_RUN_GUIDE.md`
+- Local runtime operator guide: `docs/LOCAL_RUNTIME_OPERATOR_GUIDE.md`
 - Current implementation status: `docs/CURRENT_IMPLEMENTATION_STATUS.md`
 - Local-first release checklist: `docs/LOCAL_FIRST_RELEASE_CHECKLIST.md`
 - Dependency review: `docs/DEPENDENCY_REVIEW.md`
