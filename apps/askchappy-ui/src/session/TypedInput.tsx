@@ -6,19 +6,18 @@ export const TypedInput = ({ onSubmitText, disabled }: { onSubmitText: (text: st
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmed = text.trim();
-    if (!trimmed || disabled) {
-      return;
-    }
-
+    if (!trimmed || disabled) return;
     onSubmitText(trimmed);
     setText('');
   };
 
   return (
-    <form onSubmit={onSubmit} aria-label="typed input form">
+    <form className="card panel" onSubmit={onSubmit} aria-label="typed input form">
       <label htmlFor="typed-input">Type a message</label>
-      <input id="typed-input" value={text} onChange={(event) => setText(event.target.value)} disabled={disabled} />
-      <button type="submit" disabled={disabled}>Send</button>
+      <div className="composer">
+        <input className="input" id="typed-input" value={text} onChange={(event) => setText(event.target.value)} disabled={disabled} />
+        <button className="btn" type="submit" disabled={disabled}>Send</button>
+      </div>
     </form>
   );
 };

@@ -31,10 +31,10 @@ export const LocalRuntimeStatus = () => {
     }).catch(() => setMic('available'));
   }, []);
 
-  if (!status) return <p>Local runtime status: checking…</p>;
+  if (!status) return <p className="card panel">Local runtime status: checking…</p>;
 
   return (
-    <details>
+    <details className="card panel runtime-details">
       <summary>Runtime readiness details</summary>
       <ul>
         <li>Ollama: {status.ollama.status} — {status.ollama.reason}</li>

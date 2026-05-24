@@ -131,3 +131,11 @@ Use this checklist before local production/local MVP handoff.
   - `./scripts/start-faster-whisper-stt.ps1`
   - `./scripts/check-local-runtime.ps1`
   - `./scripts/start-local-runtime.ps1`
+
+## Phase 22 visual UX checks
+- [ ] Confirm modern login modal is present on `/chappy`.
+- [ ] Confirm no raw browser-default scaffold appearance remains in main AskChappy flow.
+- [ ] Confirm Zoom-like room layout is present on `/chappy/session/:sessionId`.
+- [ ] Confirm admin controls are hidden from normal user sessions.
+- [ ] Confirm runtime readiness UI is compact/non-dominant.
+- [ ] Confirm entry page/guided modes contain no stale scaffold wording.
