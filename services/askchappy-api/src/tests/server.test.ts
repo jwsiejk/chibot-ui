@@ -136,7 +136,7 @@ describe('askchappy-api scaffold', () => {
   });
 
 
-  it('synthesizes assistant transcript text via standard voice provider without creating new transcript messages', () => {
+  it('synthesizes assistant transcript text via standard voice provider without creating new transcript messages', async () => {
     const session = createLocalSession();
     const assistantMessage = appendLocalTranscriptMessage(session.session_id, {
       id: 'msg_assistant_tts',
@@ -149,11 +149,11 @@ describe('askchappy-api scaffold', () => {
     });
 
     const beforeCount = getLocalTranscript(session.session_id).length;
-    const output = synthesizeLocalAssistantMessage(session.session_id, assistantMessage.id);
+    const output = await synthesizeLocalAssistantMessage(session.session_id, assistantMessage.id);
     const afterCount = getLocalTranscript(session.session_id).length;
 
     expect(output.spoken_text).toBe('Speak the canonical assistant transcript.');
-    expect(output.provider_id).toBe('local_fallback_tts');
+    expect(output.provider_id).toBe('local_kokoro_onnx_tts');
     expect(afterCount).toBe(beforeCount);
   });
 
@@ -161,7 +161,7 @@ describe('askchappy-api scaffold', () => {
   it('reports standard voice active by default with no cloned voice profile configured', () => {
     const status = getLocalVoiceStatus();
 
-    expect(status.active_provider_id).toBe('local_fallback_tts');
+    expect(status.active_provider_id).toBe('local_kokoro_onnx_tts');
     expect(status.active_provider_label).toBe('Standard voice');
     expect(status.published_voice_profile_state).toBe('none');
   });
@@ -294,7 +294,7 @@ describe('askchappy-api scaffold', () => {
     hydrateSessionStoreFromPersistence();
 
     const status = getLocalVoiceStatus();
-    expect(status.active_provider_id).toBe('local_fallback_tts');
+    expect(status.active_provider_id).toBe('local_kokoro_onnx_tts');
     expect(status.active_provider_label).toBe('Standard voice');
     expect(status.published_voice_profile_state).toBe('none');
     expect(status.cloned_voice_ready).toBe(false);

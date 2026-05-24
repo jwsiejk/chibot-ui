@@ -10,6 +10,7 @@ import {
   getLocalTranscript,
   setLocalSessionMode,
   getLocalVoiceStatus,
+  synthesizeLocalAssistantMessage,
 } from '../../../../services/askchappy-api/src/api/server';
 import { ChappyStage } from '../session/ChappyStage';
 import { TypedInput } from '../session/TypedInput';
@@ -21,6 +22,7 @@ export const ChappySession = () => {
   const [state, setState] = useState<SessionState>('ready');
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const [voiceNotice, setVoiceNotice] = useState('Ready');
 
   const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
   const voiceStatus = useMemo(() => getLocalVoiceStatus(), []);
@@ -60,13 +62,29 @@ export const ChappySession = () => {
     setVersion((previous) => previous + 1);
   };
 
+  const onSpeakLatestAssistant = async () => {
+    const latestAssistant = [...messages].reverse().find((entry) => entry.role === 'assistant');
+    if (!latestAssistant) return;
+    setVoiceNotice('Speaking');
+    const tts = await synthesizeLocalAssistantMessage(sessionId, latestAssistant.id);
+    if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) {
+      setVoiceNotice('Local TTS not configured');
+      return;
+    }
+    const audio = new Audio(`data:audio/${tts.audio_format};base64,${tts.audio_base64}`);
+    await audio.play();
+    setVoiceNotice('Ready');
+  };
+
   return (
     <main>
       <h1>AskChappy session</h1>
       <p>Local production working session ID: {sessionId}</p>
       <p>Session state indicator: {state}</p>
-      <p>Speech provider status: Standard voice active.</p>
+      <p>Speech provider status: {voiceStatus.standard_tts_configured ? 'Standard local voice active.' : 'Local TTS not configured.'}</p>
+      <p>Voice playback status: {voiceNotice}</p>
       <p>Cloned voice status: {voiceStatus.cloned_voice_status_label === 'Not configured' ? 'Cloned voice not configured' : voiceStatus.cloned_voice_status_label}.</p>
+      <button type="button" onClick={onSpeakLatestAssistant}>Speak response</button>
       <ChappyStage state={state} />
       <TranscriptPanel messages={messages} />
       {runtimeNotice ? <p>{runtimeNotice}</p> : null}

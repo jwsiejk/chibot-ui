@@ -85,7 +85,7 @@ export const generateLocalAssistantMessage = async (sessionId: string) => {
   appendTranscriptMessage(session, assistantMessage);
   return result;
 };
-export const synthesizeLocalAssistantMessage = (sessionId: string, messageId: string) => {
+export const synthesizeLocalAssistantMessage = async (sessionId: string, messageId: string) => {
   const session = getSession(sessionId);
   if (!session) throw new Error(`Session not found: ${sessionId}`);
   const message = session.transcript.find((entry) => entry.id === messageId);
