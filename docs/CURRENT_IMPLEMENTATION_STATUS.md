@@ -41,7 +41,7 @@
 - Browser-local persistence survives reloads for session records, canonical transcript messages, `metadata.askchappy`, and session events.
 - Local Ollama typed assistant runtime for AskChappy typed chat via local HTTP API only.
 - Ollama defaults: `OLLAMA_BASE_URL=http://127.0.0.1:11434` and `OLLAMA_MODEL=gemma3:4b`.
-- Optional Ollama config: `OLLAMA_KEEP_ALIVE`, `OLLAMA_NUM_CTX`.
+- Optional Ollama config: `OLLAMA_KEEP_ALIVE`, `OLLAMA_NUM_CTX`, `OLLAMA_NUM_PREDICT`, `OLLAMA_TEMPERATURE`, `OLLAMA_TOP_P`.
 - No OpenAI/cloud runtime integration.
 - No RAG/content grounding/document ingestion in the assistant runtime.
 - Local faster-whisper STT with browser microphone capture feeding canonical user transcript `text` with `source: voice`.

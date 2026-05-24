@@ -16,6 +16,8 @@ import { AdminRuntimeConsoleModal, type ClientDiagnosticEvent, type TurnLatencyE
 const STATE_COPY: Record<SessionState, string> = { ready: 'Ready', listening: 'Listening', transcribing: 'Transcribing', thinking: 'Thinking', speaking: 'Speaking', error: 'Needs attention' };
 const MAX_TURN_LATENCY = 5;
 
+const countWords = (text: string): number => text.trim().split(/\s+/).filter(Boolean).length;
+
 const msBetween = (start?: number, end?: number): number | null => {
   if (typeof start !== 'number' || typeof end !== 'number') return null;
   return Math.max(0, Math.round(end - start));
@@ -58,7 +60,11 @@ export const ChappySession = () => {
   const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : getLocalTranscript(sessionId)), [sessionId, session, version]);
   if (!sessionId || !session) return <main><h1>Session not found</h1><p>Start a local-first Open Q&amp;A session from /chappy.</p></main>;
 
-  const speakAssistant = async (messageId: string, inFlight: Omit<TurnLatencyEntry, 'id' | 'ts' | 'turn_type'> & { turnStartAt: number; turnType: 'typed' | 'voice'; submitAt: number }) => {
+  const speakAssistant = async (
+    messageId: string,
+    assistantText: string,
+    inFlight: Omit<TurnLatencyEntry, 'id' | 'ts' | 'turn_type'> & { turnStartAt: number; turnType: 'typed' | 'voice'; submitAt: number },
+  ) => {
     if (chappyMuted) {
       setVoiceNotice('Chappy voice muted. Transcript only.');
       pushTurnLatency({
@@ -69,6 +75,8 @@ export const ChappySession = () => {
         total_mic_start_to_text_ready_ms: inFlight.total_mic_start_to_text_ready_ms ?? msBetween(inFlight.turnStartAt, performance.now()),
         total_mic_start_to_chappy_speaking_ms: null,
         tts_skipped_reason: 'muted', playback_skipped_reason: 'muted', failure_stage: null, tts_failed: false,
+        assistant_text_chars: assistantText.length,
+        assistant_text_words: countWords(assistantText),
       });
       return;
     }
@@ -83,7 +91,7 @@ export const ChappySession = () => {
       if (tts.unavailable_reason === 'request_cancelled') pushDiagnostic('tts request cancelled');
       else if (tts.unavailable_reason === 'invalid_response') pushDiagnostic('tts invalid response');
       else pushDiagnostic('tts synthesis failed');
-      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, post_submit_to_chappy_speaking_ms: null, total_mic_start_to_chappy_speaking_ms: null, failure_stage: 'tts', tts_failed: true });
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, post_submit_to_chappy_speaking_ms: null, total_mic_start_to_chappy_speaking_ms: null, failure_stage: 'tts', tts_failed: true, assistant_text_chars: assistantText.length, assistant_text_words: countWords(assistantText) });
       setVoiceNotice(tts.unavailable_message ?? 'Chappy voice unavailable. Transcript response is still available.');
       setState('ready');
       return;
@@ -101,11 +109,11 @@ export const ChappySession = () => {
       await audio.play();
       const playSuccessAt = performance.now();
       pushDiagnostic('audio playback started');
-      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: msBetween(playStartAt, playSuccessAt), total_ms: msBetween(inFlight.turnStartAt, playSuccessAt), post_submit_to_chappy_speaking_ms: msBetween(inFlight.submitAt, playSuccessAt), total_mic_start_to_chappy_speaking_ms: msBetween(inFlight.turnStartAt, playSuccessAt), failure_stage: null, tts_failed: false });
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: msBetween(playStartAt, playSuccessAt), total_ms: msBetween(inFlight.turnStartAt, playSuccessAt), post_submit_to_chappy_speaking_ms: msBetween(inFlight.submitAt, playSuccessAt), total_mic_start_to_chappy_speaking_ms: msBetween(inFlight.turnStartAt, playSuccessAt), failure_stage: null, tts_failed: false, assistant_text_chars: assistantText.length, assistant_text_words: countWords(assistantText) });
     } catch (error) {
       const blocked = error instanceof DOMException && error.name === 'NotAllowedError';
       pushDiagnostic(blocked ? 'audio playback blocked' : 'audio playback failed');
-      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, post_submit_to_chappy_speaking_ms: null, total_mic_start_to_chappy_speaking_ms: null, failure_stage: 'playback', tts_failed: true });
+      pushTurnLatency({ id: crypto.randomUUID(), ts: new Date().toISOString(), turn_type: inFlight.turnType, ...nextInFlight, playback_start_ms: null, total_ms: null, post_submit_to_chappy_speaking_ms: null, total_mic_start_to_chappy_speaking_ms: null, failure_stage: 'playback', tts_failed: true, assistant_text_chars: assistantText.length, assistant_text_words: countWords(assistantText) });
       setVoiceNotice('Browser blocked or failed Chappy voice playback. Click in the room or unmute Chappy to enable audio.');
       setState('ready');
       return;
@@ -131,7 +139,7 @@ export const ChappySession = () => {
     const newestAssistant = [...refreshed].reverse().find((entry) => entry.role === 'assistant');
     setState('ready');
     if (newestAssistant) {
-      await speakAssistant(newestAssistant.id, {
+      await speakAssistant(newestAssistant.id, newestAssistant.text, {
         turnStartAt,
         turnType,
         mic_capture_ms: micCaptureMs,

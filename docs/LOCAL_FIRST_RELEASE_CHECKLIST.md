@@ -37,7 +37,7 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm local-first/local production/local MVP terminology is used.
 - [ ] Confirm no private voice/avatar assets were committed.
 - [ ] Confirm no model/cloud/db integrations were accidentally introduced.
-- [ ] Confirm Phase 17 assistant runtime target remains local Ollama (`OLLAMA_BASE_URL` default `http://127.0.0.1:11434`; `OLLAMA_MODEL` default `gemma3:4b`; optional `OLLAMA_KEEP_ALIVE=30m`; optional `OLLAMA_NUM_CTX=8192`).
+- [ ] Confirm Phase 17 assistant runtime target remains local Ollama (`OLLAMA_BASE_URL` default `http://127.0.0.1:11434`; `OLLAMA_MODEL` default `gemma3:4b`; optional `OLLAMA_KEEP_ALIVE=30m`; optional `OLLAMA_NUM_CTX=4096`; optional `OLLAMA_NUM_PREDICT=96`; optional `OLLAMA_TEMPERATURE=0.4`; optional `OLLAMA_TOP_P=0.9`).
 - [ ] Confirm no OpenAI runtime, no hosted/cloud LLM SDK, and no cloud LLM API key configuration was introduced.
 - [ ] Confirm missing Ollama runtime or missing local model yields a clear local runtime not-configured state (no fake assistant intelligence).
 - [ ] Confirm no DDN document ingestion/upload workflow was introduced.

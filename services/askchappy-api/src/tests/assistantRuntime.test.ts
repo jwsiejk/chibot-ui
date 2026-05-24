@@ -26,6 +26,9 @@ describe('phase 17 local ollama assistant runtime', () => {
       model: 'gemma3:4b',
       keepAlive: undefined,
       numCtx: undefined,
+      numPredict: undefined,
+      temperature: undefined,
+      topP: undefined,
     });
   });
 
@@ -36,12 +39,38 @@ describe('phase 17 local ollama assistant runtime', () => {
         OLLAMA_MODEL: 'gemma3:12b',
         OLLAMA_KEEP_ALIVE: '30m',
         OLLAMA_NUM_CTX: '8192',
+        OLLAMA_NUM_PREDICT: '96',
+        OLLAMA_TEMPERATURE: '0.4',
+        OLLAMA_TOP_P: '0.9',
       }),
     ).toEqual({
       baseUrl: 'http://localhost:11435',
       model: 'gemma3:12b',
       keepAlive: '30m',
       numCtx: 8192,
+      numPredict: 96,
+      temperature: 0.4,
+      topP: 0.9,
+    });
+  });
+
+
+  it('ignores invalid ollama numeric tuning values', () => {
+    expect(
+      getOllamaConfig({
+        OLLAMA_NUM_CTX: 'nope',
+        OLLAMA_NUM_PREDICT: '',
+        OLLAMA_TEMPERATURE: 'abc',
+        OLLAMA_TOP_P: 'NaN',
+      }),
+    ).toEqual({
+      baseUrl: 'http://127.0.0.1:11434',
+      model: 'gemma3:4b',
+      keepAlive: undefined,
+      numCtx: undefined,
+      numPredict: undefined,
+      temperature: undefined,
+      topP: undefined,
     });
   });
 
@@ -69,6 +98,45 @@ describe('phase 17 local ollama assistant runtime', () => {
     expect(userMessages.filter((message: { content: string }) => message.content === 'Latest request')).toHaveLength(
       1,
     );
+  });
+
+
+  it('includes valid ollama tuning options in request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message: { content: 'Configured' } }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const prior = { ...process.env };
+    process.env.OLLAMA_NUM_CTX = '4096';
+    process.env.OLLAMA_NUM_PREDICT = '96';
+    process.env.OLLAMA_TEMPERATURE = '0.4';
+    process.env.OLLAMA_TOP_P = '0.9';
+
+    const session = createLocalSession();
+    appendLocalUserTextMessage(session.session_id, 'hello');
+    await generateLocalAssistantMessage(session.session_id);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.options).toEqual({ num_ctx: 4096, num_predict: 96, temperature: 0.4, top_p: 0.9 });
+    process.env = prior;
+  });
+
+  it('omits absent or invalid ollama tuning options in request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message: { content: 'Default' } }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const prior = { ...process.env };
+    process.env.OLLAMA_NUM_CTX = 'bad';
+    delete process.env.OLLAMA_NUM_PREDICT;
+    process.env.OLLAMA_TEMPERATURE = 'nan';
+    process.env.OLLAMA_TOP_P = '';
+
+    const session = createLocalSession();
+    appendLocalUserTextMessage(session.session_id, 'hello');
+    await generateLocalAssistantMessage(session.session_id);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.options).toBeUndefined();
+    process.env = prior;
   });
 
   it('maps unreachable ollama to runtime_unavailable and does not append assistant transcript output', async () => {
@@ -171,7 +239,7 @@ describe('phase 17 local ollama assistant runtime', () => {
     const systemInstruction = body.messages[0].content as string;
 
     expect(systemInstruction).toContain('live Zoom-style working session');
-    expect(systemInstruction).toContain('2–4 short sentences, roughly 40–90 words');
+    expect(systemInstruction).toContain('normally 1–3 short spoken sentences');
     expect(systemInstruction).toContain('Ask at most one follow-up question');
     expect(systemInstruction).toContain('Do not dump long markdown explanations unless the user explicitly asks');
     expect(systemInstruction).toContain('Avoid large bullet lists unless explicitly requested');
