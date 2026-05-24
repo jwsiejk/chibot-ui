@@ -155,6 +155,32 @@ describe('phase 17 local ollama assistant runtime', () => {
     expect(body.messages[0].content).toContain('Meeting prep mode');
   });
 
+  it('includes voice-first conversational response policy in system instruction', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: { content: 'Response' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const session = createLocalSession();
+    appendLocalUserTextMessage(session.session_id, 'Explain ExaScaler');
+
+    await generateLocalAssistantMessage(session.session_id);
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const systemInstruction = body.messages[0].content as string;
+
+    expect(systemInstruction).toContain('live Zoom-style working session');
+    expect(systemInstruction).toContain('2–4 short sentences, roughly 40–90 words');
+    expect(systemInstruction).toContain('Ask at most one follow-up question');
+    expect(systemInstruction).toContain('Do not dump long markdown explanations unless the user explicitly asks');
+    expect(systemInstruction).toContain('Avoid large bullet lists unless explicitly requested');
+    expect(systemInstruction).toContain('avoid overclaiming exact internals');
+    expect(systemInstruction).toContain(
+      'If the user asks for a technical explanation, stay technical but concise. Start with the core architecture idea, then offer the next layer.',
+    );
+  });
+
   it('does not introduce openai/cloud/rag dependencies or config', () => {
     const packageJson = readFileSync(packageJsonPath, 'utf8').toLowerCase();
     const dependencyReview = readFileSync(dependencyReviewPath, 'utf8').toLowerCase();
