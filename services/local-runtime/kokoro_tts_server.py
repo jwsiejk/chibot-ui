@@ -1,5 +1,6 @@
 import argparse
 import base64
+import inspect
 import io
 import wave
 from pathlib import Path
@@ -26,13 +27,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def make_health(ready: bool, selected_provider: str, available: list[str], using: str | None, error: str | None) -> dict[str, Any]:
+def make_health(
+    ready: bool,
+    selected_provider: str,
+    available: list[str],
+    using: str | None,
+    error: str | None,
+    provider_argument_supported: bool,
+    provider_note: str | None,
+) -> dict[str, Any]:
     cuda_available = any("cuda" in p.lower() for p in available)
     return {
         "ready": ready,
         "selected_provider": selected_provider,
         "available_providers": available,
         "using_provider": using,
+        "provider_argument_supported": provider_argument_supported,
+        "provider_note": provider_note,
         "cuda_available": cuda_available,
         "error": error,
     }
@@ -76,15 +87,38 @@ def main() -> None:
 
     from kokoro_onnx import Kokoro
 
-    tts_engine = Kokoro(str(model_path), str(voices_path), providers=[provider_name])
-    using_provider = provider_name
+    try:
+        init_signature = inspect.signature(Kokoro.__init__)
+        provider_argument_supported = "providers" in init_signature.parameters
+    except (TypeError, ValueError):
+        provider_argument_supported = False
+
+    if provider_argument_supported:
+        tts_engine = Kokoro(str(model_path), str(voices_path), providers=[provider_name])
+        using_provider = provider_name
+        provider_note = None
+    else:
+        tts_engine = Kokoro(str(model_path), str(voices_path))
+        using_provider = "unknown"
+        provider_note = (
+            "kokoro-onnx constructor does not expose provider selection; CUDA availability is reported "
+            "but active execution provider cannot be confirmed from this API."
+        )
 
     app = FastAPI(title="AskChappy Kokoro Local Runtime")
 
     @app.get("/health")
     @app.get("/v1/health")
     def health() -> dict[str, Any]:
-        return make_health(True, args.provider, available_providers, using_provider, None)
+        return make_health(
+            True,
+            args.provider,
+            available_providers,
+            using_provider,
+            None,
+            provider_argument_supported,
+            provider_note,
+        )
 
     @app.post("/v1/tts")
     def tts(payload: TtsRequest) -> dict[str, str]:
