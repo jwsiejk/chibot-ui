@@ -105,3 +105,10 @@ If Ollama is not reachable, AskChappy shows: "Local Ollama runtime is not config
 - Missing runtime/config behavior: if STT runtime is missing or unreachable, AskChappy returns clear local errors (`not_configured` or `runtime_unreachable`) and does not append fake transcript messages.
 - Voice input is committed as canonical user transcript `text` with `source: voice`; no separate voice transcript model exists.
 - No cloud STT/speech SDK or fallback is used.
+
+
+## Phase 20A local runtime hardening
+- Added local runtime readiness checks for Ollama runtime/model, Kokoro TTS, faster-whisper STT, browser microphone availability, standard voice default, and cloned voice optional/gated status.
+- Readiness checks use local HTTP only and never append transcript messages.
+- Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
+- Content grounding/RAG remains deferred (Phase 20+).

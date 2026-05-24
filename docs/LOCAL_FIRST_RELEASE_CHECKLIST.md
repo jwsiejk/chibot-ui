@@ -57,3 +57,10 @@ Use this checklist before local production/local MVP handoff.
 - [x] No cloud TTS/voice SDK added.
 - [x] No cloned voice provider adapter added.
 - [x] No RAG/document ingestion/content grounding added.
+
+
+## Phase 20A local runtime hardening
+- Added local runtime readiness checks for Ollama runtime/model, Kokoro TTS, faster-whisper STT, browser microphone availability, standard voice default, and cloned voice optional/gated status.
+- Readiness checks use local HTTP only and never append transcript messages.
+- Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
+- Content grounding/RAG remains deferred (Phase 20+).

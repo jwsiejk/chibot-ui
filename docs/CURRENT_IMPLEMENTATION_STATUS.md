@@ -91,3 +91,10 @@ Retired and inactive:
 - Phase 20+: content grounding / document ingestion / RAG remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
 - Keep local browser persistence schema-versioned and add migrations only when needed.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.
+
+
+## Phase 20A local runtime hardening
+- Added local runtime readiness checks for Ollama runtime/model, Kokoro TTS, faster-whisper STT, browser microphone availability, standard voice default, and cloned voice optional/gated status.
+- Readiness checks use local HTTP only and never append transcript messages.
+- Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
+- Content grounding/RAG remains deferred (Phase 20+).

@@ -44,3 +44,10 @@ npm run smoke:local-runtime
 - No cloud STT/speech SDK was added; no cloud fallback exists.
 - No RAG/document ingestion/content grounding added; Phase 20+ remains RAG/content grounding.
 - No cloned voice provider adapter was added.
+
+
+## Phase 20A local runtime hardening
+- Added local runtime readiness checks for Ollama runtime/model, Kokoro TTS, faster-whisper STT, browser microphone availability, standard voice default, and cloned voice optional/gated status.
+- Readiness checks use local HTTP only and never append transcript messages.
+- Session state transitions are hardened to recover to ready after STT/Ollama/TTS failures without fake transcript events.
+- Content grounding/RAG remains deferred (Phase 20+).

@@ -12,6 +12,7 @@ import type { TranscriptMessage } from '../../../../shared/contracts/transcript'
 import { getLocalVoiceRuntimeStatus, synthesizeAssistantTranscriptMessage } from '../voice/voiceRuntime';
 import { generateAssistantResponse } from '../assistant/ollamaAdapter';
 import { transcribeWithFasterWhisper } from '../voice/stt/fasterWhisperAdapter';
+import { getLocalRuntimeReadiness } from './localRuntimeReadiness';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
@@ -113,3 +114,5 @@ export const synthesizeLocalAssistantMessage = async (sessionId: string, message
 };
 
 export const getLocalVoiceStatus = () => getLocalVoiceRuntimeStatus();
+
+export const getLocalRuntimeReadinessStatus = () => getLocalRuntimeReadiness();
