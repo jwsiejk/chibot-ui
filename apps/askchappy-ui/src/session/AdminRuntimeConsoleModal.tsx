@@ -25,6 +25,8 @@ export type TurnLatencyEntry = {
   assistant_failed?: boolean;
   stt_failed?: boolean;
   tts_failed?: boolean;
+  assistant_text_chars?: number | null;
+  assistant_text_words?: number | null;
 };
 
 const STATUS_LABELS: Record<LocalGpuValidationStatus, string> = {
@@ -133,6 +135,8 @@ export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, di
                 <li>Processing to Chappy speaking: {turnLatency[0].post_submit_to_chappy_speaking_ms ?? 'n/a'} ms</li>
                 {turnLatency[0].turn_type === 'voice' ? <li>Total from Mic start to assistant text: {turnLatency[0].total_mic_start_to_text_ready_ms ?? 'n/a'} ms</li> : null}
                 {turnLatency[0].turn_type === 'voice' ? <li>Total from Mic start to Chappy speaking: {turnLatency[0].total_mic_start_to_chappy_speaking_ms ?? 'n/a'} ms</li> : null}
+                <li>Assistant text chars: {turnLatency[0].assistant_text_chars ?? 'n/a'}</li>
+                <li>Assistant text words: {turnLatency[0].assistant_text_words ?? 'n/a'}</li>
                 {turnLatency[0].tts_skipped_reason ? <li>TTS skipped: {turnLatency[0].tts_skipped_reason}</li> : null}
                 {turnLatency[0].playback_skipped_reason ? <li>Playback skipped: {turnLatency[0].playback_skipped_reason}</li> : null}
                 {turnLatency[0].stt_failed ? <li>STT failed</li> : null}
@@ -142,7 +146,7 @@ export const AdminRuntimeConsoleModal = ({ isOpen, onClose, browserMicStatus, di
               </ul>
               <h4>Last 5 turns</h4>
               <ul>
-                {turnLatency.slice(0, 5).map((entry) => <li key={entry.id}>{entry.ts} — {entry.turn_type} — Failure {entry.failure_stage ?? 'none'} — Mic capture {entry.mic_capture_ms ?? 'n/a'}ms — STT {entry.stt_ms ?? 'n/a'}ms — Assistant {entry.generation_ms ?? 'n/a'}ms — TTS {entry.tts_ms ?? 'n/a'}ms — Processing to text {entry.post_submit_to_text_ready_ms ?? 'n/a'}ms — Processing to Chappy speaking {entry.post_submit_to_chappy_speaking_ms ?? 'n/a'}ms{entry.turn_type === 'voice' ? ` — Total mic start to text ${entry.total_mic_start_to_text_ready_ms ?? 'n/a'}ms` : ''}{entry.turn_type === 'voice' ? ` — Total mic start to Chappy speaking ${entry.total_mic_start_to_chappy_speaking_ms ?? 'n/a'}ms` : ''}{entry.tts_skipped_reason ? ` — TTS skipped: ${entry.tts_skipped_reason}` : ''}{entry.playback_skipped_reason ? ` — Playback skipped: ${entry.playback_skipped_reason}` : ''}{entry.stt_failed ? ' — STT failed' : ''}{entry.assistant_failed ? ' — Assistant failed' : ''}{entry.tts_failed && entry.failure_stage === 'tts' ? ' — TTS failed' : ''}{entry.tts_failed && entry.failure_stage === 'playback' ? ' — Playback failed' : ''}</li>)}
+                {turnLatency.slice(0, 5).map((entry) => <li key={entry.id}>{entry.ts} — {entry.turn_type} — Failure {entry.failure_stage ?? 'none'} — Mic capture {entry.mic_capture_ms ?? 'n/a'}ms — STT {entry.stt_ms ?? 'n/a'}ms — Assistant {entry.generation_ms ?? 'n/a'}ms — TTS {entry.tts_ms ?? 'n/a'}ms — Processing to text {entry.post_submit_to_text_ready_ms ?? 'n/a'}ms — Processing to Chappy speaking {entry.post_submit_to_chappy_speaking_ms ?? 'n/a'}ms{entry.turn_type === 'voice' ? ` — Total mic start to text ${entry.total_mic_start_to_text_ready_ms ?? 'n/a'}ms` : ''}{entry.turn_type === 'voice' ? ` — Total mic start to Chappy speaking ${entry.total_mic_start_to_chappy_speaking_ms ?? 'n/a'}ms` : ''}{entry.tts_skipped_reason ? ` — TTS skipped: ${entry.tts_skipped_reason}` : ''}{entry.playback_skipped_reason ? ` — Playback skipped: ${entry.playback_skipped_reason}` : ''}{entry.stt_failed ? ' — STT failed' : ''}{entry.assistant_failed ? ' — Assistant failed' : ''}{entry.tts_failed && entry.failure_stage === 'tts' ? ' — TTS failed' : ''}{entry.tts_failed && entry.failure_stage === 'playback' ? ' — Playback failed' : ''} — Assistant text chars {entry.assistant_text_chars ?? 'n/a'} — Assistant text words {entry.assistant_text_words ?? 'n/a'}</li>)}
               </ul>
             </>
           )}

@@ -26,7 +26,7 @@ Use these defaults unless intentionally overridden:
 - `FASTER_WHISPER_MODEL=base.en`
 - `FASTER_WHISPER_LANGUAGE=en`
 
-Optional runtime knobs may also be used where supported (for example timeout/context settings), but defaults above define the baseline operator validation loop.
+Optional runtime knobs are supported for local latency tuning: `OLLAMA_NUM_CTX`, `OLLAMA_NUM_PREDICT`, `OLLAMA_TEMPERATURE`, `OLLAMA_TOP_P`, and `KOKORO_TTS_TIMEOUT_MS`. Defaults above define the baseline operator validation loop.
 
 Env-file behavior: `.env.local` values are loaded by Vite (`loadEnv`) and only these local runtime keys are surfaced to runtime config helpers through `process.env.*` constants. This keeps config local-first and avoids introducing cloud/provider secret paths.
 

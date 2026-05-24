@@ -12,6 +12,13 @@ export const generateAssistantResponse = async (
     base_url: config.baseUrl,
   };
 
+  const options = {
+    ...(typeof config.numCtx === 'number' ? { num_ctx: config.numCtx } : {}),
+    ...(typeof config.numPredict === 'number' ? { num_predict: config.numPredict } : {}),
+    ...(typeof config.temperature === 'number' ? { temperature: config.temperature } : {}),
+    ...(typeof config.topP === 'number' ? { top_p: config.topP } : {}),
+  };
+
   const messages = [
     {
       role: 'system',
@@ -31,7 +38,7 @@ export const generateAssistantResponse = async (
         model: config.model,
         stream: false,
         keep_alive: config.keepAlive,
-        options: config.numCtx ? { num_ctx: config.numCtx } : undefined,
+        options: Object.keys(options).length > 0 ? options : undefined,
         messages,
       }),
     });

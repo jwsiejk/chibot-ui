@@ -312,6 +312,27 @@ describe('phase 22 chappy UI', () => {
     expect(screen.queryByText(/Time to assistant text ready:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Time to Chappy speaking:/)).not.toBeInTheDocument();
   });
+
+  it('renders assistant text length metrics and keeps diagnostics free of transcript text', async () => {
+    vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({ audio_status: 'ready', audio_base64: 'ZmFrZQ==', audio_format: 'wav' } as never);
+
+    render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+    await waitFor(() => expect(screen.getByText(/Assistant text chars:/)).toBeInTheDocument());
+    expect(screen.getByText(/Assistant text words:/)).toBeInTheDocument();
+
+    const diagnosticsSection = screen.getByRole('heading', { name: 'Diagnostics' }).closest('section');
+    expect(diagnosticsSection).toBeTruthy();
+    expect(within(diagnosticsSection as HTMLElement).queryByText(/Hi from local ollama|hello/)).not.toBeInTheDocument();
+  });
+
   it('opens and closes Admin Runtime Console from toolbar for admin only', async () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
