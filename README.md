@@ -25,6 +25,19 @@ npm run verify
 npm run start
 ```
 
+## Local environment configuration
+1. Copy `.env.example` to `.env.local`.
+2. Edit `.env.local` for your machine-local runtime endpoints/models as needed.
+3. Run `npm run start`.
+
+Windows PowerShell startup:
+```powershell
+copy .env.example .env.local
+# edit .env.local
+npm run start
+```
+
+
 Default local runtime URL: `http://127.0.0.1:4173/chappy`.
 
 Additional local runtime commands:

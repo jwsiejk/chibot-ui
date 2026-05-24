@@ -27,6 +27,28 @@ Notes:
 - `npm run build:local-runtime` builds the AskChappy React/router app with Vite into `dist/`.
 - `npm run smoke:local-runtime` runs a noninteractive build + app-shell wiring check against `dist/index.html`.
 
+## Local `.env.local` setup
+Create local machine overrides by copying `.env.example` to `.env.local`:
+
+```bash
+cp .env.example .env.local
+```
+
+Then edit `.env.local` to match your local runtime setup, and start the app:
+
+```bash
+npm run start
+```
+
+Windows PowerShell startup:
+```powershell
+copy .env.example .env.local
+# edit .env.local
+npm run start
+```
+
+Note: `.env.local` is intended for machine-local configuration and is gitignored.
+
 ## Start/use local app scaffold
 Use the dedicated local-first runtime script:
 
