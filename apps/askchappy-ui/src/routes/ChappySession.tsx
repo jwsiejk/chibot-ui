@@ -89,7 +89,7 @@ export const ChappySession = () => {
     const stt = await transcribeLocalVoiceInput(sessionId, blob);
     if (!stt.ok) {
       setState('ready');
-      if (stt.code === 'no_speech_detected') {
+      if (stt.code === 'no_speech') {
         setVoiceNotice('No speech detected. Try again and speak clearly.');
       } else {
         setVoiceNotice(stt.code === 'not_configured' ? 'Local STT not configured.' : stt.message);
