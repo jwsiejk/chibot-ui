@@ -34,8 +34,8 @@ export const LocalRuntimeStatus = () => {
   if (!status) return <p>Local runtime status: checking…</p>;
 
   return (
-    <section>
-      <h2>Local runtime readiness</h2>
+    <details>
+      <summary>Runtime readiness details</summary>
       <ul>
         <li>Ollama: {status.ollama.status} — {status.ollama.reason}</li>
         <li>Kokoro TTS: {status.kokoro_tts.status} — {status.kokoro_tts.reason}</li>
@@ -44,6 +44,6 @@ export const LocalRuntimeStatus = () => {
         <li>Standard voice: {status.standard_voice.status} — {status.standard_voice.reason}</li>
         <li>Cloned voice: {status.cloned_voice.status} — {status.cloned_voice.reason}</li>
       </ul>
-    </section>
+    </details>
   );
 };

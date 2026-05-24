@@ -80,3 +80,12 @@ Use this checklist before local production/local MVP handoff.
 - [ ] Confirm operator validation pass is executable end-to-end (`/chappy`, start session, readiness panel, typed input, microphone input, canonical transcript checks, standard voice playback).
 - [ ] Confirm troubleshooting coverage includes Ollama runtime/model failures, Kokoro health/fallback behavior, faster-whisper failures, microphone denial, TTS/STT runtime issues, and localStorage malformed recovery.
 - [ ] Confirm runbook explicitly states out-of-scope items (no RAG/content grounding/DDN ingestion, no cloud fallback/providers, no cloned voice provider adapter, no real avatar/visemes, no database/cloud persistence).
+
+## Phase 21 session UX checks
+- [ ] Confirm `/chappy/session/:sessionId` visibly shows ready/listening/transcribing/thinking/speaking/error session states with user-friendly messaging.
+- [ ] Confirm voice and typed empty-session prompt invites “Ask Chappy anything” behavior (not diagnostics-first framing).
+- [ ] Confirm failed/no-speech STT, failed Ollama, and failed TTS recover without fake transcript messages.
+- [ ] Confirm typed turns remain canonical user transcript entries (`source: typed`, `text`).
+- [ ] Confirm voice turns remain canonical user transcript entries (`source: voice`, `text`) only on successful STT.
+- [ ] Confirm TTS unavailable state is clearly non-blocking and assistant text remains visible.
+- [ ] Confirm normal session keeps admin-only controls hidden (GPU validation, Voice Studio, avatar admin controls).

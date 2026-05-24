@@ -1,4 +1,13 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+
+export type VoiceInputStatus =
+  | 'checking_mic'
+  | 'mic_unavailable'
+  | 'permission_denied'
+  | 'ready_to_record'
+  | 'recording'
+  | 'transcribing'
+  | 'no_speech_detected';
 
 export const VoiceInput = ({
   onStart,
@@ -16,7 +25,15 @@ export const VoiceInput = ({
   const recorder = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const chunks = useRef<BlobPart[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
+  const [status, setStatus] = useState<VoiceInputStatus>('checking_mic');
+
+  useEffect(() => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setStatus('mic_unavailable');
+      return;
+    }
+    setStatus('ready_to_record');
+  }, []);
 
   const startRecording = async () => {
     try {
@@ -27,13 +44,18 @@ export const VoiceInput = ({
       chunks.current = [];
       recorder.current.ondataavailable = (event) => chunks.current.push(event.data);
       recorder.current.onstop = async () => {
+        setStatus('transcribing');
         const blob = new Blob(chunks.current, { type: mimeType || 'audio/webm' });
         await onTranscribe(blob);
+        if (status !== 'no_speech_detected') {
+          setStatus('ready_to_record');
+        }
       };
       recorder.current.start();
       onStart();
-      setIsRecording(true);
+      setStatus('recording');
     } catch {
+      setStatus('permission_denied');
       onError('Microphone permission denied or unavailable.');
     }
   };
@@ -42,12 +64,17 @@ export const VoiceInput = ({
     onStop();
     recorder.current?.stop();
     stream.current?.getTracks().forEach((track) => track.stop());
-    setIsRecording(false);
   };
 
-  return isRecording ? (
-    <button type="button" onClick={stopRecording} disabled={disabled}>Stop recording</button>
-  ) : (
-    <button type="button" onClick={startRecording} disabled={disabled}>Start speaking</button>
+  return (
+    <section aria-label="voice input panel">
+      <p>Microphone status: {status.replaceAll('_', ' ')}</p>
+      {status === 'mic_unavailable' || status === 'permission_denied' ? null : status === 'recording' ? (
+        <button type="button" onClick={stopRecording} disabled={disabled}>Stop recording</button>
+      ) : (
+        <button type="button" onClick={startRecording} disabled={disabled || status === 'checking_mic' || status === 'transcribing'}>Start speaking</button>
+      )}
+      {status === 'no_speech_detected' ? <button type="button" onClick={() => setStatus('ready_to_record')}>Try again</button> : null}
+    </section>
   );
 };
