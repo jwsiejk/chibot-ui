@@ -1,4 +1,4 @@
-# AskChappy Current Implementation Status (After Phase 16)
+# AskChappy Current Implementation Status (After Phase 17)
 
 ## Completed phases
 - Phase 1: app skeleton and canonical route scaffold
@@ -17,6 +17,7 @@
 - Phase 14: local-first start/dev runtime workflow
 - Phase 15: standard-vs-cloned voice mode selection guardrails
 - Phase 16: browser-local persistence adapter for sessions/transcripts/metadata/events (local runtime only; no backend/database/cloud persistence)
+- Phase 17: local Ollama typed assistant runtime
 
 ## What is implemented
 - Canonical route surface for `/chappy`, `/chappy/session/:sessionId`, `/chappy/summary/:sessionId`, admin pages, and `/dev` diagnostics path.
@@ -30,13 +31,16 @@
 - Standard voice remains explicitly active/default.
 - Optional cloned voice is guarded and requires both readiness checks and explicit real provider adapter availability.
 - AskChappy runs normally without cloned voice assets.
-- Verification scripts for test/lint (`npm run verify`).
 - Browser-local persistence survives reloads for session records, canonical transcript messages, `metadata.askchappy`, and session events.
+- Local Ollama typed assistant runtime for AskChappy typed chat via local HTTP API only.
+- Ollama defaults: `OLLAMA_BASE_URL=http://127.0.0.1:11434` and `OLLAMA_MODEL=gemma3:4b`.
+- Optional Ollama config: `OLLAMA_KEEP_ALIVE`, `OLLAMA_NUM_CTX`.
+- No OpenAI/cloud runtime integration.
+- No RAG/content grounding/document ingestion in the assistant runtime.
 
 ## Intentionally not implemented
 - OpenAI runtime integration
 - Hosted/cloud LLM SDK integration
-- Real-time or batch model inference runtime
 - DDN-specific uploaded document ingestion
 - Content grounding, embeddings, vector search, or RAG pipeline
 - Proprietary DDN content bundle / knowledge-base management workflows
@@ -81,30 +85,9 @@ Retired and inactive:
 - No real cloned voice provider adapter/runtime is implemented.
 - Avatar runtime: placeholder, state-aware UI only; no real likeness/media assets.
 
-## Phase 10 blocker summary
-Cloned voice runtime integration remains blocked until provider selection, local config shape, published profile configuration, and admin publication gating details are approved for local production use.
-
-## Next recommended work after Phase 16
-- Phase 17: assistant/model runtime scaffold using local open-source LLM knowledge via a local Ollama runtime (default model: `gemma3:4b`) (local-first production path; no DDN document ingestion dependency).
-- Phase 17 planned config: `OLLAMA_BASE_URL` default `http://127.0.0.1:11434`, `OLLAMA_MODEL` default `gemma3:4b`, optional `OLLAMA_KEEP_ALIVE=30m`, optional `OLLAMA_NUM_CTX=8192`.
-- Phase 17 excludes OpenAI runtime, hosted/cloud LLM SDKs, and cloud LLM API keys.
-- If Ollama/local model is unavailable, show a clear local runtime not-configured state (no fake assistant intelligence).
+## Next recommended work after Phase 17
 - Phase 18: local Kokoro/kokoro-onnx TTS output (standard local voice default path).
-- Phase 19: local faster-whisper STT / browser microphone input, unless project direction changes.
-- Phase 20 or later: content grounding / document ingestion / RAG remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
-- Standard local voice target remains Kokoro/kokoro-onnx and cloned voice remains optional/gated.
+- Phase 19: local faster-whisper STT / browser microphone input.
+- Phase 20+: content grounding / document ingestion / RAG remains required follow-on work (DDN document upload, proprietary bundles, embeddings, vector search, and knowledge-base workflows).
 - Keep local browser persistence schema-versioned and add migrations only when needed.
-- Do not block the first usable assistant conversation/runtime phase on content grounding.
 - Cloned voice adapter implementation remains explicitly deferred until provider/config/audio/consent prerequisites are available and approved.
-
-
-- Implementation boundary: `services/askchappy-api/src/sessions/browserLocalSessionPersistenceAdapter.ts` is the explicit browser-local persistence adapter used by the local-first runtime scaffold.
-
-## Phase 17 update
-- Local Ollama typed assistant runtime is implemented for AskChappy typed chat.
-- Default local model is `gemma3:4b` and default base URL is `http://127.0.0.1:11434`.
-- No OpenAI/cloud runtime was added.
-- No RAG/content grounding/document ingestion was added.
-- Phase 18 remains local Kokoro/kokoro-onnx TTS.
-- Phase 19 remains local faster-whisper STT.
-- Content grounding/RAG remains Phase 20+.
