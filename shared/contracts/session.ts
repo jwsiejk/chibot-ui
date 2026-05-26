@@ -1,5 +1,7 @@
 import {
+  CREATE_PRESENTATIONS_OPTIONAL_FIELDS,
   CREATE_PRESENTATIONS_STEPS,
+  type CreatePresentationsOptionalField,
   type CreatePresentationsDeckBrief,
   type CreatePresentationsModeEvent,
 } from './createPresentationsMode';
@@ -22,6 +24,7 @@ export type AskChappyMetadata = {
       step: (typeof CREATE_PRESENTATIONS_STEPS)[number];
       deckBrief: CreatePresentationsDeckBrief;
       events: CreatePresentationsModeEvent[];
+      skippedFields: CreatePresentationsOptionalField[];
       awaitingUserInput: boolean;
     } | null;
     context: {
@@ -71,6 +74,12 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
   const context = askchappy.context;
 
   const cps = askchappy.create_presentations_state;
+  const validEvent = (event: unknown) => isRecord(event)
+    && typeof event.id === 'string'
+    && typeof event.ts === 'string'
+    && ['user', 'assistant', 'system'].includes(event.actor as string)
+    && CREATE_PRESENTATIONS_STEPS.includes(event.step as never)
+    && typeof event.kind === 'string';
   const validCreatePresentationsState = cps === null || (
     isRecord(cps) &&
     cps.active === true &&
@@ -81,7 +90,15 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     cps.deckBrief.mode === 'create_presentations' &&
     typeof cps.deckBrief.status === 'string' &&
     ['draft', 'brief_review', 'brief_approved', 'error'].includes(cps.deckBrief.status as string) &&
+    isRecord(cps.deckBrief.source_requirements) &&
+    cps.deckBrief.source_requirements.source_policy === 'user_provided_only' &&
+    cps.deckBrief.source_requirements.citations_required === false &&
+    isRecord(cps.deckBrief.output) &&
+    cps.deckBrief.output.format === 'pptx' &&
     Array.isArray(cps.events) &&
+    cps.events.every(validEvent) &&
+    Array.isArray(cps.skippedFields) &&
+    cps.skippedFields.every((field) => CREATE_PRESENTATIONS_OPTIONAL_FIELDS.includes(field as never)) &&
     typeof cps.awaitingUserInput === 'boolean'
   );
 
