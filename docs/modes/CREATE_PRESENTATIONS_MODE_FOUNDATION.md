@@ -258,6 +258,7 @@ Architecture rule:
 
 Implementation note: Phase 4 must use a real PPTX library runtime path (for example, `pptxgenjs`) and must not hand-build Open XML parts or shell out to system archiving tools.
 If speaker notes are not proven reliable in the selected runtime path, they remain deferred rather than faked.
+Current implementation note: generated PPTX downloads are exposed through local API helper/service wiring for `/api/presentations/:fileName`, with strict filename validation and generated-directory-only resolution.
 
 ### Phase 5 — Template/theme/speaker-notes/export polish
 - Add visual/theme/template controls.

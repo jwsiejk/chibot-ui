@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import { appendLocalUserTextMessage, createLocalSession, generateLocalAssistantMessage, getGeneratedPresentationDownload, getLocalSession, setLocalSessionMode } from '../api/server';
+import { inspectPptxZip } from './pptxZipInspection';
 
 const say = async (id: string, text: string) => { appendLocalUserTextMessage(id, text); await generateLocalAssistantMessage(id); return getLocalSession(id)?.transcript.at(-1)?.text ?? ''; };
 
@@ -35,7 +36,21 @@ describe('create presentations phase 4 pptx generation', () => {
     const st = await fs.stat(p);
     expect(st.size).toBeGreaterThan(0);
     const raw = await fs.readFile(p);
-    expect(raw.subarray(0, 2).toString('utf8')).toBe('PK');
+    const zipped = inspectPptxZip(raw);
+    const slideEntries = zipped.entries.filter((entry) => /^ppt\/slides\/slide\d+\.xml$/.test(entry.name));
+    expect(slideEntries).toHaveLength(cps?.outline.slides.length ?? 0);
+    for (let i = 1; i <= (cps?.outline.slides.length ?? 0); i += 1) {
+      expect(zipped.getEntryText(`ppt/slides/slide${i}.xml`)).toBeTruthy();
+    }
+
+    const allXml = zipped.entries
+      .filter((entry) => entry.name.endsWith('.xml'))
+      .map((entry) => entry.data.toString('utf8'))
+      .join('\n');
+    const firstTitle = cps?.outline.slides[0]?.title ?? '';
+    const firstKeyPoint = cps?.outline.slides[0]?.key_points[0] ?? '';
+    expect(allXml).toContain(firstTitle);
+    expect(allXml).toContain(firstKeyPoint);
     const dl = await getGeneratedPresentationDownload(cps?.generatedPresentation.file_name as string);
     expect(dl.ok).toBe(true);
     const miss = await getGeneratedPresentationDownload('missing-file.pptx');
