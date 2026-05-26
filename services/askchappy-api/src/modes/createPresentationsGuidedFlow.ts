@@ -188,8 +188,8 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
     if (!isPptxGenerationRequest(userText)) {
       return ask("Your outline is approved. Say 'generate presentation' when you’re ready, and I’ll create the editable PowerPoint.");
     }
-    if (!(state.outline.status === 'outline_approved' && brief.status === 'outline_approved' && state.step === 'outline_approved')) {
-      return ask('PPTX generation is only available immediately after outline approval.');
+    if (!(state.outline.status === 'outline_approved' && brief.status === 'outline_approved')) {
+      return ask('PPTX generation is only available after outline approval.');
     }
 
     state.generatedPresentation = { status: 'generating', format: 'pptx' };

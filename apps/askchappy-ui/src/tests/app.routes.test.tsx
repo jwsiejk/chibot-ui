@@ -315,6 +315,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('Chappy')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Chappy voice on|Chappy speaking…/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     await waitFor(() => expect(screen.getByText(/Processing to Chappy speaking:/)).toBeInTheDocument());
     expect(screen.getByText(/Processing to assistant text:/)).toBeInTheDocument();
@@ -334,6 +335,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('Chappy')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Chappy voice on|Chappy speaking…/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     await waitFor(() => expect(screen.getByText(/Assistant text chars:/)).toBeInTheDocument());
@@ -816,8 +818,6 @@ describe('phase 22 chappy UI', () => {
     for (const msg of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', '5', 'technical', 'medium', 'architecture, roadmap', 'keep concise', 'risk reduction', 'skip', 'yes', 'approve', 'generate outline', 'approve outline', 'generate presentation']) {
       say(msg);
     }
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
     await waitFor(() => expect(screen.getByRole('link', { name: 'Download' })).toBeInTheDocument());
     const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
