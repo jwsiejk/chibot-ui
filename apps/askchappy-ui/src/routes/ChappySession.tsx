@@ -203,7 +203,7 @@ export const ChappySession = () => {
         </section>
       </div>
       <GeneratedPresentationDownloadPill generatedPresentation={session.metadata.askchappy.create_presentations_state?.generatedPresentation} />
-      {showModes ? <div className="modes-overlay card panel" role="dialog" aria-label="guided modes overlay"><button className="btn secondary" type="button" onClick={() => setShowModes(false)}>Close</button><SessionRightRail activeMode={session.metadata.askchappy.session_mode} generatedPresentation={session.metadata.askchappy.create_presentations_state?.generatedPresentation} onSelectMode={(mode) => { onSelectMode(mode); setShowModes(false); }} /></div> : null}
+      {showModes ? <div className="modes-overlay card panel" role="dialog" aria-label="guided modes overlay"><button className="btn secondary" type="button" onClick={() => setShowModes(false)}>Close</button><SessionRightRail activeMode={session.metadata.askchappy.session_mode} generatedPresentation={session.metadata.askchappy.create_presentations_state?.generatedPresentation} generatedDeckHistory={session.metadata.askchappy.create_presentations_state?.generatedDeckHistory} onSelectMode={(mode) => { onSelectMode(mode); setShowModes(false); }} /></div> : null}
       <section className="meeting-toolbar" aria-label="bottom meeting toolbar">
         <div className="toolbar-notice" role="status">{voiceNotice}{runtimeNotice ? ` • ${runtimeNotice}` : ''}</div>
         <div className="toolbar-controls">

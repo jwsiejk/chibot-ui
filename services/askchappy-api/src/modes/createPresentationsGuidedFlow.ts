@@ -16,6 +16,7 @@ import {
   validateOutlineForApproval,
 } from './createPresentationsOutlineFlow';
 import { generatePptxFromApprovedOutline } from './createPresentationsPptxGenerator';
+import { appendGeneratedDeckHistory, toGeneratedDeckHistoryItem } from './createPresentationsDeckHistory';
 
 const nextEvent = (
   event: Omit<CreatePresentationsModeEvent, 'id' | 'ts'>,
@@ -112,6 +113,8 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
 
   const brief = state.deckBrief;
 
+  state.generatedDeckHistory ??= [];
+
   const ask = (text: string) => {
     state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'question_asked', text }));
     return text;
@@ -203,6 +206,10 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
         generated_at: result.generatedAt,
         theme_id: result.themeId,
       };
+      const historyEntry = toGeneratedDeckHistoryItem(state.generatedPresentation, brief, state.outline);
+      if (historyEntry) {
+        state.generatedDeckHistory = appendGeneratedDeckHistory(state.generatedDeckHistory, historyEntry);
+      }
       state.step = 'presentation_generated';
       state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generated', text: result.downloadUrl }));
       return `Your PowerPoint is ready: ${result.downloadUrl}`;

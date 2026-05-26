@@ -19,6 +19,23 @@ describe('SessionRightRail presentation export state', () => {
     expect(screen.queryByText('/tmp/internal/deck.pptx')).not.toBeInTheDocument();
   });
 
+
+  it('shows generated deck history list when available', () => {
+    render(
+      <SessionRightRail
+        activeMode="create_presentations"
+        onSelectMode={noop}
+        generatedPresentation={{ status: 'generated', format: 'pptx', file_name: 'deck-latest.pptx', download_url: '/api/presentations/deck-latest.pptx' }}
+        generatedDeckHistory={[
+          { id: 'new', file_name: 'deck-latest.pptx', download_url: '/api/presentations/deck-latest.pptx', format: 'pptx', title: 'Latest deck' },
+          { id: 'old', file_name: 'deck-old.pptx', download_url: '/api/presentations/deck-old.pptx', format: 'pptx' },
+        ]}
+      />,
+    );
+    expect(screen.getByText('Generated decks')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Download' })[0]).toHaveAttribute('href', '/api/presentations/deck-latest.pptx');
+  });
+
   it('shows generating and error states', () => {
     const { rerender } = render(<SessionRightRail activeMode="create_presentations" onSelectMode={noop} generatedPresentation={{ status: 'generating', format: 'pptx' }} />);
     expect(screen.getByText('Status: Generating PPTX…')).toBeInTheDocument();
