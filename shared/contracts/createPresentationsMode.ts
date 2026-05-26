@@ -30,26 +30,29 @@ export const CREATE_PRESENTATIONS_STEPS = ['intro', 'collecting_brief', 'brief_r
 
 export type CreatePresentationsStep = (typeof CREATE_PRESENTATIONS_STEPS)[number];
 
+export const CREATE_PRESENTATIONS_EVENT_KINDS = [
+  'mode_entered',
+  'question_asked',
+  'answer_recorded',
+  'validation_error',
+  'brief_updated',
+  'brief_review_presented',
+  'brief_approved',
+  'outline_generation_requested',
+  'outline_generated',
+  'outline_review_presented',
+  'outline_revision_requested',
+  'outline_updated',
+  'outline_approved',
+  'mode_exited',
+] as const;
+
 export type CreatePresentationsModeEvent = {
   id: string;
   ts: string;
   actor: 'user' | 'assistant' | 'system';
   step: CreatePresentationsStep;
-  kind:
-  | 'mode_entered'
-  | 'question_asked'
-  | 'answer_recorded'
-  | 'validation_error'
-  | 'brief_updated'
-  | 'brief_review_presented'
-  | 'brief_approved'
-  | 'outline_generation_requested'
-  | 'outline_generated'
-  | 'outline_review_presented'
-  | 'outline_revision_requested'
-  | 'outline_updated'
-  | 'outline_approved'
-  | 'mode_exited';
+  kind: (typeof CREATE_PRESENTATIONS_EVENT_KINDS)[number];
   text?: string;
   field?: string;
   value?: unknown;

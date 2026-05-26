@@ -3,6 +3,7 @@ import { RETIRED_ROUTES, ROUTES } from '../../../../shared/contracts/askchappy';
 import { AUTH_ROLES, getRoleForEmail, isAuthRole, MVP_ADMIN_EMAIL } from '../../../../shared/contracts/auth';
 import { DEFAULT_SESSION_MODE, isSessionMode, SESSION_MODES } from '../../../../shared/contracts/modes';
 import { DEFAULT_METADATA, isAskChappyMetadata, isSessionState, SESSION_STATES } from '../../../../shared/contracts/session';
+import { CREATE_PRESENTATIONS_EVENT_KINDS } from '../../../../shared/contracts/createPresentationsMode';
 import {
   isTranscriptMessage,
   isTranscriptRole,
@@ -95,6 +96,43 @@ describe('session contracts', () => {
         expert_desk: {},
       }),
     ).toBe(false);
+  });
+
+
+
+  it('validates create presentations event kinds strictly', () => {
+    const valid = structuredClone(DEFAULT_METADATA);
+    valid.askchappy.session_mode = 'create_presentations';
+    valid.askchappy.create_presentations_state = {
+      active: true,
+      mode: 'create_presentations',
+      step: 'intro',
+      deckBrief: {
+        schema_version: '1.0',
+        mode: 'create_presentations',
+        source_requirements: { source_policy: 'user_provided_only', citations_required: false, allowed_source_types: ['manual_notes'] },
+        output: { format: 'pptx' },
+        status: 'draft',
+      },
+      outline: { status: 'not_started', slides: [] },
+      skippedFields: [],
+      awaitingUserInput: true,
+      events: CREATE_PRESENTATIONS_EVENT_KINDS.map((kind, idx) => ({
+        id: `evt_${idx}`,
+        ts: new Date().toISOString(),
+        actor: 'assistant' as const,
+        step: 'intro' as const,
+        kind,
+        text: 'ok',
+      })),
+    };
+    expect(isAskChappyMetadata(valid)).toBe(true);
+
+    const invalid = structuredClone(valid);
+    if (invalid.askchappy.create_presentations_state) {
+      invalid.askchappy.create_presentations_state.events[0].kind = 'bad_kind' as never;
+    }
+    expect(isAskChappyMetadata(invalid)).toBe(false);
   });
 
   it('safely rejects malformed metadata inputs without throwing', () => {
