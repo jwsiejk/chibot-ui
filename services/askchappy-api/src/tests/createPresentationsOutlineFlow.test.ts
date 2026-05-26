@@ -18,6 +18,10 @@ describe('create presentations phase 3 outline flow', () => {
     expect(readyMsg).toContain('Deck Outline Review');
     expect(readyMsg).toContain('Approve this outline, or tell me what to revise.');
 
+    const reviewState = getLocalSession(session.session_id)?.metadata.askchappy.create_presentations_state;
+    expect(reviewState?.step).toBe('outline_review');
+    expect(reviewState?.outline.status).toBe('outline_review');
+
     expect(await say('change slide 3 title to Implementation Roadmap')).toContain('Implementation Roadmap');
     expect(await say('change slide 4 objective to Explain operational impact')).toContain('Explain operational impact');
     expect(await say('change slide 5 key points to performance, simplicity, resilience')).toContain('- performance');
@@ -26,9 +30,13 @@ describe('create presentations phase 3 outline flow', () => {
     expect(await say('change slide 12 title to x')).toContain('out of range');
     expect(await say('please improve')).toContain('Please clarify the outline revision');
 
+    const reviewTurn = await say('what sources did you use?');
+    expect(reviewTurn).not.toMatch(/RAG|Glean|DDN|retrieval|citation/i);
+
     expect(await say('regenerate outline')).toContain('Deck Outline Review');
     const approved = await say('approve outline');
     expect(approved).toContain('Phase 3 is complete');
+    expect(approved).toContain('No PPTX generation happens in this phase');
 
     const cps = getLocalSession(session.session_id)?.metadata.askchappy.create_presentations_state;
     expect(cps?.outline.status).toBe('outline_approved');

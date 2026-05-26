@@ -1,4 +1,5 @@
 import {
+  CREATE_PRESENTATIONS_EVENT_KINDS,
   CREATE_PRESENTATIONS_OPTIONAL_FIELDS,
   CREATE_PRESENTATIONS_STEPS,
   type CreatePresentationsOptionalField,
@@ -81,7 +82,9 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     && typeof event.ts === 'string'
     && ['user', 'assistant', 'system'].includes(event.actor as string)
     && CREATE_PRESENTATIONS_STEPS.includes(event.step as never)
-    && typeof event.kind === 'string';
+    && CREATE_PRESENTATIONS_EVENT_KINDS.includes(event.kind as never)
+    && (event.text === undefined || typeof event.text === 'string')
+    && (event.field === undefined || typeof event.field === 'string');
   const validCreatePresentationsState = cps === null || (
     isRecord(cps) &&
     cps.active === true &&

@@ -313,3 +313,13 @@ Potential future directions (not vendor-locked commitments):
 - Shared retrieval layer later for DDN/Glean content across modes.
 
 These are directional options only and require explicit approval at implementation time.
+
+
+### 6.6 Phase 3 implementation clarification (hardening)
+
+- Phase 3 may synchronously generate and immediately present an outline after brief approval.
+- In that synchronous path, `outline_draft` is a lifecycle concept but is not persisted as a long-lived user-visible state.
+- `outline_review` is the persisted review state after generation and before approval.
+- Phase 3 scope still stops at `outline_approved` (no PPTX generation/export behavior in Phase 3).
+- Phase 4 remains the first phase for PPTX generation work.
+- Shared retrieval/RAG/Glean/DDN content integration remains deferred to later phases.
