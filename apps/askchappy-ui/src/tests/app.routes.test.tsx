@@ -784,9 +784,6 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(screen.getByText(/still typing after mode switch/)).toBeInTheDocument();
 
-    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
-    const sessionId = sessionText.match(/session_[a-z0-9-]+/i)?.[0] ?? '';
-
     const session = getLocalSession(sessionId);
     expect(session?.session_id).toBe(sessionId);
     expect(session?.metadata.askchappy.session_mode).toBe('open_qa');
