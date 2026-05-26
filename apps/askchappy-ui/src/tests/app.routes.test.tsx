@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { App } from '../app/App';
+import { chappySessionRuntime } from '../session/chappySessionRuntime';
 import * as serverApi from '../../../../services/askchappy-api/src/api/server';
 import { getLocalSession } from '../../../../services/askchappy-api/src/api/server';
 import { RETIRED_ROUTES, ROUTES } from '../../../../shared/contracts/askchappy';
@@ -34,7 +35,7 @@ describe('route map', () => {
 
 
 const mockSuccessfulAssistantAndTts = () => {
-  vi.spyOn(serverApi, 'generateLocalAssistantMessage').mockImplementation(async (sessionId: string) => {
+  vi.spyOn(chappySessionRuntime, 'generateLocalAssistantMessage').mockImplementation(async (sessionId: string) => {
     const text = 'Hi from local ollama';
     serverApi.appendLocalTranscriptMessage(sessionId, {
       id: `msg_test_${crypto.randomUUID()}`,
@@ -63,7 +64,7 @@ const mockSuccessfulAssistantAndTts = () => {
     } as never;
   });
 
-  vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({
+  vi.spyOn(chappySessionRuntime, 'synthesizeLocalAssistantMessage').mockResolvedValue({
     audio_status: 'ready',
     audio_base64: 'ZmFrZQ==',
     audio_format: 'wav',
