@@ -202,7 +202,6 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
         download_url: result.downloadUrl,
         generated_at: result.generatedAt,
       };
-      brief.status = 'generated';
       state.step = 'presentation_generated';
       state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generated', text: result.downloadUrl }));
       return `Your PowerPoint is ready: ${result.downloadUrl}`;
