@@ -15,6 +15,18 @@ describe('create presentations phase 4 pptx generation', () => {
     expect(source).not.toContain('_rels/.rels');
   });
 
+
+
+  it('keeps node-only pptx code behind dynamic imports in server entrypoints', async () => {
+    const serverSource = await fs.readFile('services/askchappy-api/src/api/server.ts', 'utf8');
+    const guidedSource = await fs.readFile('services/askchappy-api/src/modes/createPresentationsGuidedFlow.ts', 'utf8');
+    expect(serverSource).not.toContain("from '../modes/createPresentationsGuidedFlow'");
+    expect(serverSource).not.toContain("from '../modes/createPresentationsPptxGenerator'");
+    expect(serverSource).toContain("await import('../modes/createPresentationsGuidedFlow')");
+    expect(serverSource).toContain("await import('../modes/createPresentationsPptxGenerator')");
+    expect(guidedSource).not.toContain("from './createPresentationsPptxGenerator'");
+    expect(guidedSource).toContain("await import('./createPresentationsPptxGenerator')");
+  });
   it('generates pptx from approved outline and supports safe download access', async () => {
     const s = createLocalSession();
     setLocalSessionMode(s.session_id, 'create_presentations', 'user');

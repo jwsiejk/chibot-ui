@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import { appendUserTextMessage, appendUserVoiceMessage } from '../transcript/transcriptEngine';
 import {
   appendTranscriptMessage,
@@ -14,9 +13,7 @@ import { getLocalVoiceRuntimeStatus, synthesizeAssistantTranscriptMessage } from
 import { generateAssistantResponse } from '../assistant/ollamaAdapter';
 import { transcribeWithFasterWhisper } from '../voice/stt/fasterWhisperAdapter';
 import { getLocalRuntimeReadiness } from './localRuntimeReadiness';
-import { handleCreatePresentationsTurn } from '../modes/createPresentationsGuidedFlow';
 import { getLocalGpuValidationStatus } from './localGpuValidation';
-import { resolvePresentationPathFromFileName } from '../modes/createPresentationsPptxGenerator';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
@@ -89,6 +86,7 @@ export const generateLocalAssistantMessage = async (sessionId: string) => {
   if (!latestUser) throw new Error('Cannot generate assistant response without a user transcript message.');
 
   if (session.metadata.askchappy.session_mode === 'create_presentations') {
+    const { handleCreatePresentationsTurn } = await import('../modes/createPresentationsGuidedFlow');
     const text = await handleCreatePresentationsTurn(session);
     const assistantMessage: TranscriptMessage = { id: `msg_${crypto.randomUUID()}`, ts: new Date().toISOString(), role: 'assistant', text, source: 'assistant_stream', session_id: session.session_id, meta: { mode: 'create_presentations' } };
     appendTranscriptMessage(session, assistantMessage);
@@ -131,9 +129,11 @@ export const getLocalRuntimeReadinessStatus = () => getLocalRuntimeReadiness();
 
 export const getLocalGpuValidationReport = () => getLocalGpuValidationStatus();
 export const getGeneratedPresentationDownload = async (fileName: string) => {
+  const { resolvePresentationPathFromFileName } = await import('../modes/createPresentationsPptxGenerator');
+  const { readFile } = await import('node:fs/promises');
   const filePath = resolvePresentationPathFromFileName(fileName);
   try {
-    const file = await fs.readFile(filePath);
+    const file = await readFile(filePath);
     return { ok: true as const, fileName, file, contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
   } catch {
     return { ok: false as const, error: 'Generated presentation file not found.' };

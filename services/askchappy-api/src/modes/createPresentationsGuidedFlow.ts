@@ -15,7 +15,6 @@ import {
   renderOutlineReview,
   validateOutlineForApproval,
 } from './createPresentationsOutlineFlow';
-import { generatePptxFromApprovedOutline } from './createPresentationsPptxGenerator';
 import { appendGeneratedDeckHistory, toGeneratedDeckHistoryItem } from './createPresentationsDeckHistory';
 
 const nextEvent = (
@@ -196,6 +195,7 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
     state.events.push(nextEvent({ actor: 'user', step: state.step, kind: 'pptx_generation_requested', text: userText }));
 
     try {
+      const { generatePptxFromApprovedOutline } = await import('./createPresentationsPptxGenerator');
       const result = await generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
       state.generatedPresentation = {
         status: 'generated',
