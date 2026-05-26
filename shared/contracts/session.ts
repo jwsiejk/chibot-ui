@@ -1,3 +1,8 @@
+import {
+  CREATE_PRESENTATIONS_STEPS,
+  type CreatePresentationsDeckBrief,
+  type CreatePresentationsModeEvent,
+} from './createPresentationsMode';
 import { DEFAULT_SESSION_MODE, isSessionMode, type SessionMode } from './modes';
 
 export const SESSION_STATES = ['ready', 'listening', 'transcribing', 'thinking', 'speaking', 'error'] as const;
@@ -14,13 +19,9 @@ export type AskChappyMetadata = {
     create_presentations_state: {
       active: boolean;
       mode: 'create_presentations';
-      step: 'intro';
-      deckBrief: {
-        schema_version: '1.0';
-        mode: 'create_presentations';
-        status: 'draft';
-      };
-      messages: string[];
+      step: (typeof CREATE_PRESENTATIONS_STEPS)[number];
+      deckBrief: CreatePresentationsDeckBrief;
+      events: CreatePresentationsModeEvent[];
       awaitingUserInput: boolean;
     } | null;
     context: {
@@ -69,6 +70,21 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
   if (!isRecord(askchappy.context)) return false;
   const context = askchappy.context;
 
+  const cps = askchappy.create_presentations_state;
+  const validCreatePresentationsState = cps === null || (
+    isRecord(cps) &&
+    cps.active === true &&
+    cps.mode === 'create_presentations' &&
+    typeof cps.step === 'string' && CREATE_PRESENTATIONS_STEPS.includes(cps.step as never) &&
+    isRecord(cps.deckBrief) &&
+    cps.deckBrief.schema_version === '1.0' &&
+    cps.deckBrief.mode === 'create_presentations' &&
+    typeof cps.deckBrief.status === 'string' &&
+    ['draft', 'brief_review', 'brief_approved', 'error'].includes(cps.deckBrief.status as string) &&
+    Array.isArray(cps.events) &&
+    typeof cps.awaitingUserInput === 'boolean'
+  );
+
   return (
     askchappy.persona_id === 'ddn_chappy_vptm' &&
     askchappy.persona_label === 'Chappy' &&
@@ -76,21 +92,7 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     askchappy.audience === 'partner_seller_or_se' &&
     (typeof askchappy.topic === 'string' || askchappy.topic === null) &&
     askchappy.desired_output === 'answer_questions_and_offer_guidance' &&
-    (askchappy.create_presentations_state === null || (
-      isRecord(askchappy.create_presentations_state) &&
-      askchappy.create_presentations_state.active === true &&
-      askchappy.create_presentations_state.mode === 'create_presentations' &&
-      askchappy.create_presentations_state.step === 'intro' &&
-      isRecord(askchappy.create_presentations_state.deckBrief) &&
-      askchappy.create_presentations_state.deckBrief.schema_version === '1.0' &&
-      askchappy.create_presentations_state.deckBrief.mode === 'create_presentations' &&
-      askchappy.create_presentations_state.deckBrief.status === 'draft' &&
-      Array.isArray(askchappy.create_presentations_state.messages) &&
-      askchappy.create_presentations_state.messages.every((item) => typeof item === 'string') &&
-      typeof askchappy.create_presentations_state.awaitingUserInput === 'boolean'
-    )) &&
-    context !== null &&
-    typeof context === 'object' &&
+    validCreatePresentationsState &&
     ['customer_name', 'partner_name', 'industry', 'use_case', 'competitor', 'meeting_goal'].every(
       (field) => field in context && (typeof context[field] === 'string' || context[field] === null),
     )
