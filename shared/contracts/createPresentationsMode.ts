@@ -77,6 +77,18 @@ export type CreatePresentationsDeckBrief = {
   status: 'draft' | 'brief_review' | 'brief_approved' | 'error';
 };
 
+export const CREATE_PRESENTATIONS_OPTIONAL_FIELDS = [
+  'customer_context',
+  'industry',
+  'use_case',
+  'must_include',
+  'constraints',
+  'required_messaging',
+  'user_notes',
+] as const;
+
+export type CreatePresentationsOptionalField = (typeof CREATE_PRESENTATIONS_OPTIONAL_FIELDS)[number];
+
 export const createPresentationsModeState = () => ({
   active: true as const,
   mode: 'create_presentations' as const,
@@ -102,5 +114,6 @@ export const createPresentationsModeState = () => ({
       text: CREATE_PRESENTATIONS_INTRO_MESSAGE,
     },
   ],
+  skippedFields: [] as CreatePresentationsOptionalField[],
   awaitingUserInput: true,
 });

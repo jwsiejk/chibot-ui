@@ -211,6 +211,15 @@ Failure behavior:
 - Do not hardcode future RAG assumptions into the schema.
 - Future retrieval fields should be added by schema versioning only after approval.
 
+
+
+### 6.5 Phase 2B hardening notes
+
+- Optional Deck Brief fields may be intentionally skipped by the user using natural skip language (for example: `skip`, `none`, `n/a`, `leave blank`).
+- Implementations may track skipped optional fields in presentation-mode state so review rendering can show `Skipped` without persisting placeholder text.
+- Enum prompts should present friendly labels and accept natural-language equivalents, while still normalizing to the schema enum values.
+- In `brief_review`, users may request direct field revisions (for supported fields) and the system should re-render the full Deck Brief review until approval.
+
 ## 7) Intended architecture (modular)
 
 Create Presentations mode should be added as modular components that remain separated from normal chat logic:
