@@ -9,14 +9,14 @@ describe('create presentations phase 3 outline flow', () => {
     setLocalSessionMode(session.session_id, 'create_presentations', 'user');
     const say = async (text: string) => { appendLocalUserTextMessage(session.session_id, text); await generateLocalAssistantMessage(session.session_id); return getLocalTranscript(session.session_id).at(-1)?.text ?? ''; };
 
-    expect(await say('generate outline')).toContain('Choose one: executive briefing');
-    const answers = ['executive briefing','Topic A','Audience A','skip','skip','skip','6','technical','medium','architecture, roadmap','keep concise','risk reduction','skip','yes'];
+    const start = await say('generate presentation');
+    expect(start).toContain('Choose one of the options below:');
+    expect(start).toContain('1. Executive briefing');
+    const answers = ['executive briefing','Topic A','Audience A','skip','skip','skip','6','4','4','architecture, roadmap','keep concise','risk reduction','skip','2'];
     for (const a of answers) await say(a);
-    expect((await say('approve'))).toContain('Deck Brief is approved');
-
-    const readyMsg = await say('continue');
+    const readyMsg = await say('Approve this brief');
     expect(readyMsg).toContain('Deck Outline Review');
-    expect(readyMsg).toContain('Approve this outline, or tell me what to revise.');
+    expect(readyMsg).toContain('Great — I approved the brief and generated the outline');
 
     const reviewState = getLocalSession(session.session_id)?.metadata.askchappy.create_presentations_state;
     expect(reviewState?.step).toBe('outline_review');

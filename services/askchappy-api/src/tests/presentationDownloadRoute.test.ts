@@ -31,7 +31,7 @@ describe('presentation download route', () => {
   it('serves generated pptx bytes at /api/presentations/:fileName', async () => {
     const s = createLocalSession();
     setLocalSessionMode(s.session_id, 'create_presentations', 'user');
-    for (const a of ['generate presentation','executive briefing','Topic A','Audience A','skip','skip','skip','5','technical','medium','architecture, roadmap','keep concise','risk reduction','skip','yes','approve','generate outline','approve outline','generate presentation']) await say(s.session_id, a);
+    for (const a of ['generate presentation','executive briefing','Topic A','Audience A','skip','skip','skip','5','4','4','architecture, roadmap','keep concise','risk reduction','skip','2','Approve this brief','approve outline','1']) await say(s.session_id, a);
 
     const state = getLocalSession(s.session_id)?.metadata.askchappy.create_presentations_state;
     expect(state?.generatedPresentation.status).toBe('generated');
