@@ -13,6 +13,7 @@ import { getLocalVoiceRuntimeStatus, synthesizeAssistantTranscriptMessage } from
 import { generateAssistantResponse } from '../assistant/ollamaAdapter';
 import { transcribeWithFasterWhisper } from '../voice/stt/fasterWhisperAdapter';
 import { getLocalRuntimeReadiness } from './localRuntimeReadiness';
+import { handleCreatePresentationsTurn } from '../modes/createPresentationsGuidedFlow';
 import { getLocalGpuValidationStatus } from './localGpuValidation';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
@@ -84,6 +85,13 @@ export const generateLocalAssistantMessage = async (sessionId: string) => {
 
   const latestUser = [...session.transcript].reverse().find((entry) => entry.role === 'user');
   if (!latestUser) throw new Error('Cannot generate assistant response without a user transcript message.');
+
+  if (session.metadata.askchappy.session_mode === 'create_presentations') {
+    const text = handleCreatePresentationsTurn(session);
+    const assistantMessage: TranscriptMessage = { id: `msg_${crypto.randomUUID()}`, ts: new Date().toISOString(), role: 'assistant', text, source: 'assistant_stream', session_id: session.session_id, meta: { mode: 'create_presentations' } };
+    appendTranscriptMessage(session, assistantMessage);
+    return { ok: true as const, text, runtime: { provider: 'ollama_local', model: 'create_presentations_guided', base_url: 'local_mode' } };
+  }
 
   const result = await generateAssistantResponse({
     session_id: session.session_id,

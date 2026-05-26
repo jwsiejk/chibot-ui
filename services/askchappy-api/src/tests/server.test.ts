@@ -3,6 +3,7 @@ import {
   appendLocalTranscriptMessage,
   appendLocalUserTextMessage,
   createLocalSession,
+  generateLocalAssistantMessage,
   getHealth,
   getLocalSession,
   getLocalTranscript,
@@ -145,13 +146,19 @@ describe('askchappy-api scaffold', () => {
       active: true,
       mode: 'create_presentations',
       step: 'intro',
-      deckBrief: {
+      deckBrief: expect.objectContaining({
         schema_version: '1.0',
         mode: 'create_presentations',
         status: 'draft',
-      },
-      messages: [],
+        output: { format: 'pptx' },
+        source_requirements: {
+          source_policy: 'user_provided_only',
+          citations_required: false,
+          allowed_source_types: ['manual_notes'],
+        },
+      }),
       awaitingUserInput: true,
+      events: expect.arrayContaining([expect.objectContaining({ kind: 'mode_entered', actor: 'system' })]),
     });
     expect(updated.transcript.at(-1)?.role).toBe('assistant');
     expect(updated.transcript.at(-1)?.text).toBe(CREATE_PRESENTATIONS_INTRO_MESSAGE);
@@ -322,4 +329,21 @@ describe('askchappy-api scaffold', () => {
     expect(status.cloned_voice_ready).toBe(false);
   });
 
+
+
+  it('routes create_presentations user turns through guided interview and supports approval', async () => {
+    const session = createLocalSession();
+    setLocalSessionMode(session.session_id, 'create_presentations', 'user');
+    const answers = [
+      'customer_executive_briefing','Q3 modernization', 'CIO team', 'Healthcare account', 'healthcare', 'cyber resilience',
+      '10', 'executive', 'medium', 'business drivers, architecture', 'keep concise', 'risk reduction', 'focus on outcomes', 'yes',
+    ];
+    for (const a of answers) { appendLocalUserTextMessage(session.session_id, a); await generateLocalAssistantMessage(session.session_id); }
+    const reviewMsg = getLocalTranscript(session.session_id).at(-1);
+    expect(reviewMsg?.text).toContain('Approve this brief, or tell me what to revise.');
+    appendLocalUserTextMessage(session.session_id, 'approve');
+    await generateLocalAssistantMessage(session.session_id);
+    const updated = getLocalSession(session.session_id);
+    expect(updated?.metadata.askchappy.create_presentations_state?.deckBrief.status).toBe('brief_approved');
+  });
 });

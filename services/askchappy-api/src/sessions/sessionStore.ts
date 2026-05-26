@@ -4,7 +4,7 @@ import { createSessionEvent, type SessionEvent } from '../events/sessionEvents';
 import { appendTranscriptMessageToSession } from '../transcript/transcriptEngine';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
 import { loadPersistedSessions, persistSessions, clearPersistedSessions } from './browserLocalSessionPersistenceAdapter';
-import { CREATE_PRESENTATIONS_INTRO_MESSAGE, createPresentationModeState } from '../../../../shared/contracts/createPresentationsMode';
+import { CREATE_PRESENTATIONS_INTRO_MESSAGE, createPresentationsModeState } from '../../../../shared/contracts/createPresentationsMode';
 
 export type AskChappySession = {
   session_id: string;
@@ -82,7 +82,7 @@ export const updateSessionMode = (
   const ts = new Date().toISOString();
   session.metadata.askchappy.session_mode = toMode;
   if (toMode === 'create_presentations') {
-    session.metadata.askchappy.create_presentations_state = createPresentationModeState();
+    session.metadata.askchappy.create_presentations_state = createPresentationsModeState();
     const assistantMessage: TranscriptMessage = {
       id: `msg_${crypto.randomUUID()}`,
       ts,
