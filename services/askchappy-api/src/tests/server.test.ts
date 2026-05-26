@@ -339,23 +339,35 @@ describe('askchappy-api scaffold', () => {
     const session = createLocalSession();
     setLocalSessionMode(session.session_id, 'create_presentations', 'user');
     const answers = [
-      'generate presentation', '1', 'Q3 modernization', 'CIO team', 'Healthcare account', 'healthcare', 'cyber resilience',
-      '10', '4', '4', 'business drivers, architecture', 'keep concise', 'risk reduction', 'focus on outcomes', '2',
+      'executive briefing',
+      'Q3 modernization',
+      'CIO team',
+      'Healthcare account',
+      'healthcare',
+      'cyber resilience',
+      '10',
+      'executive',
+      'medium',
+      'business drivers, architecture',
+      'keep concise',
+      'risk reduction',
+      'focus on outcomes',
+      'yes',
     ];
     for (const a of answers) { appendLocalUserTextMessage(session.session_id, a); await generateLocalAssistantMessage(session.session_id); }
     const reviewMsg = getLocalTranscript(session.session_id).at(-1);
     expect(reviewMsg?.text).toContain('Here’s the brief I heard:');
     expect(reviewMsg?.text).toContain('Next:');
-    expect(reviewMsg?.text).toContain('1. Approve and generate outline');
-    appendLocalUserTextMessage(session.session_id, 'approve');
+    expect(reviewMsg?.text).toContain('1. This is correct — generate the outline');
+    expect(reviewMsg?.text).toContain('2. Edit the brief');
+    appendLocalUserTextMessage(session.session_id, '1');
     await generateLocalAssistantMessage(session.session_id);
+    const outlineMsg = getLocalTranscript(session.session_id).at(-1);
+    expect(outlineMsg?.text).toContain('Great — I approved the brief and generated the outline');
+    expect(outlineMsg?.text).toContain('Deck Outline Review');
     const updated = getLocalSession(session.session_id);
-    const cps = updated?.metadata.askchappy.create_presentations_state;
-    const approveMsg = getLocalTranscript(session.session_id).at(-1)?.text ?? '';
-    expect(approveMsg).toContain('Great — I approved the brief and generated the outline');
-    expect(approveMsg).toContain('Deck Outline Review');
-    expect(cps?.step).toBe('outline_review');
-    expect(cps?.deckBrief.status).toBe('outline_review');
-    expect(cps?.outline.status).toBe('outline_review');
+    expect(updated?.metadata.askchappy.create_presentations_state?.step).toBe('outline_review');
+    expect(updated?.metadata.askchappy.create_presentations_state?.deckBrief.status).toBe('outline_review');
+    expect(updated?.metadata.askchappy.create_presentations_state?.outline.status).toBe('outline_review');
   });
 });
