@@ -807,6 +807,47 @@ describe('phase 22 chappy UI', () => {
     expect(session?.transcript.every((message) => message.text !== 'mode_change')).toBe(true);
     expect(screen.queryByText('mode_change')).not.toBeInTheDocument();
   });
+
+  it('keeps numbered menu visible while sending concise tts text in create presentations', async () => {
+    const synthSpy = vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({
+      audio_status: 'ready',
+      audio_base64: 'ZmFrZQ==',
+      audio_format: 'wav',
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Presentations' }));
+
+    fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'generate presentation' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/1\. Executive briefing/)).toBeInTheDocument();
+    });
+
+    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
+    const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
+    const newestAssistant = getLocalSession(sessionId)?.transcript.filter((entry) => entry.role === 'assistant').at(-1);
+    expect(newestAssistant?.text).toContain('1. Executive briefing');
+    expect(newestAssistant?.meta?.tts_text).toBe('Choose one of the options below.');
+
+    await waitFor(() => {
+      expect(synthSpy).toHaveBeenCalledWith(
+        sessionId,
+        newestAssistant?.id,
+      );
+    });
+  });
+
   it('supports entering and exiting Create Presentations mode with clear active-mode UI', () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>

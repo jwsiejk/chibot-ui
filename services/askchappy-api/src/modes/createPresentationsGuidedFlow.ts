@@ -14,7 +14,38 @@ const answer = (text: string, spokenText?: string): GuidedAssistantResponse => (
 const now = () => new Date().toISOString();
 const nextEvent = (event: Omit<CreatePresentationsModeEvent, 'id' | 'ts'>): CreatePresentationsModeEvent => ({ id: `evt_${crypto.randomUUID()}`, ts: now(), ...event });
 const normalizeAnswer = (input: string) => input.trim().toLowerCase().replace(/[.!?]+$/g, '').replace(/\s+/g, ' ');
-const NUMBER_WORDS: Record<string, number> = { one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,twentyone:21,twentytwo:22,twentythree:23,twentyfour:24,twentyfive:25,twentysix:26,twentyseven:27,twentyeight:28,twentynine:29,thirty:30 };
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  twentyone: 21,
+  twentytwo: 22,
+  twentythree: 23,
+  twentyfour: 24,
+  twentyfive: 25,
+  twentysix: 26,
+  twentyseven: 27,
+  twentyeight: 28,
+  twentynine: 29,
+  thirty: 30,
+};
 const parseNumberChoice = (input: string): number | undefined => {
   const n = normalizeAnswer(input);
   const d = n.match(/(?:option|choice|number)?\s*(\d{1,2})$/)?.[1];
@@ -42,7 +73,28 @@ const deckTypeFrom = (input: string): CreatePresentationsDeckBrief['deck_type'] 
 const toneFrom = (input: string): (typeof CREATE_PRESENTATIONS_TONES)[number] | undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||x==='executive')return'executive'; if(n===2||x==='consultative')return'consultative'; if(n===3||x==='technical')return'technical'; if(n===4||x.includes('technical')&&x.includes('executive'))return'technical_but_executive_readable'; if(n===5||x==='sales')return'sales'; if(n===6||x==='training')return'training'; if(n===7||x==='concise')return'concise'; if(n===8||x==='custom')return'custom'; };
 const depthFrom = (input: string): (typeof CREATE_PRESENTATIONS_TECHNICAL_DEPTH)[number] | undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||/low|light/.test(x))return'low'; if(n===2||/medium|moderate/.test(x))return'medium'; if(n===3||/high|deep/.test(x))return'high'; if(n===4||x==='mixed')return'mixed'; };
 const speakerNotesFrom = (input:string): boolean|undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||x==='yes'||x==='y') return true; if(n===2||x==='no'||x==='n') return false; };
-const labels: Record<string,string>={customer_executive_briefing:'Executive briefing',customer_technical_deep_dive:'Technical deep dive',partner_enablement:'Partner enablement',internal_training:'Internal training',architecture_review:'Architecture review',workshop:'Workshop',roadmap:'Roadmap',proposal:'Proposal',custom:'Custom',technical_but_executive_readable:'Technical but executive readable',executive:'Executive',consultative:'Consultative',technical:'Technical',sales:'Sales',training:'Training',concise:'Concise',low:'Low',medium:'Medium',high:'High',mixed:'Mixed'};
+const labels: Record<string, string> = {
+  customer_executive_briefing: 'Executive briefing',
+  customer_technical_deep_dive: 'Technical deep dive',
+  partner_enablement: 'Partner enablement',
+  internal_training: 'Internal training',
+  architecture_review: 'Architecture review',
+  workshop: 'Workshop',
+  roadmap: 'Roadmap',
+  proposal: 'Proposal',
+  custom: 'Custom',
+  technical_but_executive_readable: 'Technical but executive readable',
+  executive: 'Executive',
+  consultative: 'Consultative',
+  technical: 'Technical',
+  sales: 'Sales',
+  training: 'Training',
+  concise: 'Concise',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  mixed: 'Mixed',
+};
 
 export const handleCreatePresentationsTurn = async (session: AskChappySession): Promise<GuidedAssistantResponse> => { /* shortened */
   const state = session.metadata.askchappy.create_presentations_state!; const brief=state.deckBrief; state.generatedDeckHistory ??= [];

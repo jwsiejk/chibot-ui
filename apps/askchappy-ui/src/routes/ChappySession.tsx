@@ -20,6 +20,19 @@ const MAX_TURN_LATENCY = 5;
 
 const countWords = (text: string): number => text.trim().split(/\s+/).filter(Boolean).length;
 
+
+const getAssistantTtsText = (message: TranscriptMessage): string => {
+  const meta = message.meta as Record<string, unknown>;
+  const ttsText = typeof meta?.tts_text === 'string' ? meta.tts_text.trim() : '';
+  if (ttsText) return ttsText;
+
+  const spokenText = typeof meta?.spoken_text === 'string' ? meta.spoken_text.trim() : '';
+  if (spokenText) return spokenText;
+
+  return message.text;
+};
+
+
 const msBetween = (start?: number, end?: number): number | null => {
   if (typeof start !== 'number' || typeof end !== 'number') return null;
   return Math.max(0, Math.round(end - start));
@@ -143,7 +156,8 @@ export const ChappySession = () => {
     const newestAssistant = [...refreshed].reverse().find((entry) => entry.role === 'assistant');
     setState('ready');
     if (newestAssistant) {
-      await speakAssistant(newestAssistant.id, newestAssistant.text, {
+      const ttsText = getAssistantTtsText(newestAssistant);
+      await speakAssistant(newestAssistant.id, ttsText, {
         turnStartAt,
         turnType,
         mic_capture_ms: micCaptureMs,
