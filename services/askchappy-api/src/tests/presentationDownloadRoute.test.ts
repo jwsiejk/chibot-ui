@@ -43,14 +43,32 @@ describe('presentation download route', () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.presentationml.presentation');
     expect(response.headers.get('content-disposition')).toBe(`attachment; filename="${fileName}"`);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.body().byteLength).toBeGreaterThan(0);
+
+    const headResponse = createMockResponse();
+    const handledHead = await tryHandlePresentationDownloadRoute(createMockRequest('HEAD', `/api/presentations/${fileName}`), headResponse.res);
+    expect(handledHead).toBe(true);
+    expect(headResponse.statusCode).toBe(200);
+    expect(headResponse.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    expect(headResponse.headers.get('content-disposition')).toBe(`attachment; filename="${fileName}"`);
+    expect(headResponse.headers.get('cache-control')).toBe('no-store');
+    expect(headResponse.body().byteLength).toBe(0);
+
+    const queryResponse = createMockResponse();
+    const handledQuery = await tryHandlePresentationDownloadRoute(createMockRequest('GET', `/api/presentations/${fileName}?v=1`), queryResponse.res);
+    expect(handledQuery).toBe(true);
+    expect(queryResponse.statusCode).toBe(200);
+    expect(queryResponse.body().byteLength).toBeGreaterThan(0);
   });
 
   it('rejects traversal, invalid names, absolute paths, and returns not found for missing files', async () => {
     const badUrls = [
       '/api/presentations/../evil.pptx',
       '/api/presentations/%2e%2e%2Fevil.pptx',
+      '/api/presentations/..%2Fevil.pptx',
       '/api/presentations/%2Fetc%2Fpasswd',
+      '/api/presentations/%5Cevil.pptx',
       '/api/presentations/not-a-ppt.txt',
       '/api/presentations/C:%5Cevil.pptx',
     ];
@@ -60,11 +78,13 @@ describe('presentation download route', () => {
       const handled = await tryHandlePresentationDownloadRoute(createMockRequest('GET', url), response.res);
       expect(handled).toBe(true);
       expect(response.statusCode).toBe(400);
+      expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
     }
 
     const missing = createMockResponse();
     const handledMissing = await tryHandlePresentationDownloadRoute(createMockRequest('GET', '/api/presentations/missing-file.pptx'), missing.res);
     expect(handledMissing).toBe(true);
     expect(missing.statusCode).toBe(404);
+    expect(missing.headers.get('content-type')).toBe('application/json; charset=utf-8');
   });
 });
