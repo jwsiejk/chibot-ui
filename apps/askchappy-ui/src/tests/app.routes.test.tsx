@@ -32,6 +32,44 @@ describe('route map', () => {
   });
 });
 
+
+const mockSuccessfulAssistantAndTts = () => {
+  vi.spyOn(serverApi, 'generateLocalAssistantMessage').mockImplementation(async (sessionId: string) => {
+    const text = 'Hi from local ollama';
+    serverApi.appendLocalTranscriptMessage(sessionId, {
+      id: `msg_test_${crypto.randomUUID()}`,
+      ts: new Date().toISOString(),
+      role: 'assistant',
+      text,
+      source: 'assistant_stream',
+      session_id: sessionId,
+      meta: {
+        runtime: {
+          provider: 'ollama_local',
+          model: 'test-model',
+          base_url: 'test-runtime',
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      text,
+      runtime: {
+        provider: 'ollama_local',
+        model: 'test-model',
+        base_url: 'test-runtime',
+      },
+    } as never;
+  });
+
+  vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({
+    audio_status: 'ready',
+    audio_base64: 'ZmFrZQ==',
+    audio_format: 'wav',
+  } as never);
+};
+
 describe('phase 22 chappy UI', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -305,7 +343,7 @@ describe('phase 22 chappy UI', () => {
 
 
   it('shows processing-to-speaking latency for successful unmuted typed turn', async () => {
-    vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({ audio_status: 'ready', audio_base64: 'ZmFrZQ==', audio_format: 'wav' } as never);
+    mockSuccessfulAssistantAndTts();
 
     render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
@@ -314,6 +352,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Hi from local ollama')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/Chappy voice on|Chappy speaking…/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     await waitFor(() => expect(screen.getByText(/Processing to Chappy speaking:/)).toBeInTheDocument());
@@ -324,7 +363,7 @@ describe('phase 22 chappy UI', () => {
   });
 
   it('renders assistant text length metrics and keeps diagnostics free of transcript text', async () => {
-    vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({ audio_status: 'ready', audio_base64: 'ZmFrZQ==', audio_format: 'wav' } as never);
+    mockSuccessfulAssistantAndTts();
 
     render(<MemoryRouter initialEntries={[ROUTES.chappy]}><App /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: MVP_ADMIN_EMAIL } });
@@ -333,6 +372,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Hi from local ollama')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/Chappy voice on|Chappy speaking…/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
@@ -743,6 +783,9 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(screen.getByText(/still typing after mode switch/)).toBeInTheDocument();
 
+    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
+    const sessionId = sessionText.match(/session_[a-z0-9-]+/i)?.[0] ?? '';
+
     const session = getLocalSession(sessionId);
     expect(session?.session_id).toBe(sessionId);
     expect(session?.metadata.askchappy.session_mode).toBe('open_qa');
@@ -783,6 +826,9 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByText(/Create Presentations Mode is ready\./)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Exit Create Presentations' })).toBeInTheDocument();
 
+    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
+    const sessionId = sessionText.match(/session_[a-z0-9-]+/i)?.[0] ?? '';
+
     const session = getLocalSession(sessionId);
     expect(session?.metadata.askchappy.create_presentations_state?.mode).toBe('create_presentations');
     expect(session?.metadata.askchappy.create_presentations_state?.deckBrief.schema_version).toBe('1.0');
@@ -810,12 +856,15 @@ describe('phase 22 chappy UI', () => {
     const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
 
     const say = async (text: string) => {
+      const beforeLength = getLocalSession(sessionId)?.transcript.length ?? 0;
+
       fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: text } });
       fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
       await waitFor(() => {
-        const state = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state;
-        expect(state?.lastUserInput).toBe(text);
-        expect(state?.isGenerating).toBe(false);
+        const transcript = getLocalSession(sessionId)?.transcript ?? [];
+        expect(transcript.length).toBeGreaterThanOrEqual(beforeLength + 2);
+        expect(transcript.at(-1)?.role).toBe('assistant');
       });
     };
 
