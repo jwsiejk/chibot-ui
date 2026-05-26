@@ -62,30 +62,60 @@ const parseSlideCount = (input: string): number | undefined => {
 const isSkipInput = (input: string) => new Set(['1','skip','none','no','n/a','not applicable','leave blank','blank','no thanks']).has(normalizeAnswer(input));
 const isApprovalInput = (input: string) => /^(approve|approved|approve this brief|looks good|looks good to me|go ahead|yes|yes approve|no changes|no changes needed|good|continue)$/.test(normalizeAnswer(input));
 const isRevisionInput = (input: string) => /(revise|change|edit|update|fix|change something)/.test(normalizeAnswer(input));
-const deckTypeMenu = 'Choose one of the options below:\n1. Executive briefing\n2. Technical deep dive\n3. Partner enablement\n4. Internal training\n5. Architecture review\n6. Workshop\n7. Roadmap\n8. Proposal\n9. Custom';
-const toneMenu = 'Choose a tone:\n1. Executive\n2. Consultative\n3. Technical\n4. Technical but executive readable\n5. Sales\n6. Training\n7. Concise\n8. Custom';
-const depthMenu = 'Choose technical depth:\n1. Low\n2. Medium\n3. High\n4. Mixed';
-const speakerNotesMenu = 'Include speaker notes?\n1. Yes\n2. No';
-const deckTypeFrom = (input: string): CreatePresentationsDeckBrief['deck_type'] | undefined => {
-  const n = parseNumberChoice(input); const x = normalizeAnswer(input);
-  if (n===1 || /executive/.test(x)) return 'customer_executive_briefing'; if (n===2 || /technical/.test(x)) return 'customer_technical_deep_dive'; if (n===3 || /partner/.test(x)) return 'partner_enablement'; if (n===4 || /training/.test(x)) return 'internal_training'; if (n===5 || /architecture/.test(x)) return 'architecture_review'; if (n===6 || /workshop/.test(x)) return 'workshop'; if (n===7 || /roadmap/.test(x)) return 'roadmap'; if (n===8 || /proposal/.test(x)) return 'proposal'; if (n===9 || /custom/.test(x)) return 'custom';
-};
-const toneFrom = (input: string): (typeof CREATE_PRESENTATIONS_TONES)[number] | undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||x==='executive')return'executive'; if(n===2||x==='consultative')return'consultative'; if(n===3||x==='technical')return'technical'; if(n===4||x.includes('technical')&&x.includes('executive'))return'technical_but_executive_readable'; if(n===5||x==='sales')return'sales'; if(n===6||x==='training')return'training'; if(n===7||x==='concise')return'concise'; if(n===8||x==='custom')return'custom'; };
-const depthFrom = (input: string): (typeof CREATE_PRESENTATIONS_TECHNICAL_DEPTH)[number] | undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||/low|light/.test(x))return'low'; if(n===2||/medium|moderate/.test(x))return'medium'; if(n===3||/high|deep/.test(x))return'high'; if(n===4||x==='mixed')return'mixed'; };
-const speakerNotesFrom = (input:string): boolean|undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||x==='yes'||x==='y') return true; if(n===2||x==='no'||x==='n') return false; };
+const deckTypeMenu = [
+  'Choose one of the options below:',
+  '1. Executive briefing',
+  '2. Technical deep dive',
+  '3. Partner enablement',
+  '4. Internal training',
+  '5. Architecture review',
+  '6. Workshop',
+  '7. Roadmap',
+  '8. Proposal',
+  '9. Custom',
+].join('\n');
 
-const revisionMenuText = 'What do you want to revise?
-1. Deck type
-2. Topic
-3. Audience
-4. Slide count
-5. Tone
-6. Technical depth
-7. Must-include sections
-8. Constraints
-9. Required messaging
-10. User notes
-11. Speaker notes';
+const toneMenu = [
+  'Choose a tone:',
+  '1. Executive',
+  '2. Consultative',
+  '3. Technical',
+  '4. Technical but executive readable',
+  '5. Sales',
+  '6. Training',
+  '7. Concise',
+  '8. Custom',
+].join('\n');
+
+const depthMenu = [
+  'Choose technical depth:',
+  '1. Low',
+  '2. Medium',
+  '3. High',
+  '4. Mixed',
+].join('\n');
+
+const speakerNotesMenu = [
+  'Include speaker notes?',
+  '1. Yes',
+  '2. No',
+].join('\n');
+
+const revisionMenuText = [
+  'What do you want to revise?',
+  '1. Deck type',
+  '2. Topic',
+  '3. Audience',
+  '4. Slide count',
+  '5. Tone',
+  '6. Technical depth',
+  '7. Must-include sections',
+  '8. Constraints',
+  '9. Required messaging',
+  '10. User notes',
+  '11. Speaker notes',
+].join('\n');
+
 const revisionFieldByChoice: Record<number, string> = { 1:'deck_type',2:'topic',3:'audience',4:'slide_count',5:'tone',6:'technical_depth',7:'must_include',8:'constraints',9:'required_messaging',10:'user_notes',11:'speaker_notes' };
 const applyBriefRevisionFromText = (brief: CreatePresentationsDeckBrief, input: string): string | undefined => {
   const n = normalizeAnswer(input);
@@ -149,6 +179,7 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
       (state as any).pendingBriefRevisionField = undefined;
       return ask(renderBriefReview(),'Here’s the updated brief.');
     }
+    if (/approve with changes/.test(n)) return ask(revisionMenuText,'Choose what you want to revise.');
     const revised = applyBriefRevisionFromText(brief, userText);
     if (revised) { state.events.push(nextEvent({ actor:'assistant', step:state.step, kind:'brief_updated', field: revised as any } as any)); (state as any).pendingBriefRevisionField = undefined; return ask(renderBriefReview(),'Here’s the updated brief.'); }
     const choice = parseNumberChoice(userText);
