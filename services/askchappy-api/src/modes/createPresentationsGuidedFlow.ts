@@ -140,8 +140,6 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
   if (state.step==='intro') state.step='collecting_brief';
   if (state.step==='brief_review') {
     if (isApprovalInput(userText)) { brief.status='brief_approved'; state.step='brief_approved'; state.outline=generateOutlineFromBrief(brief, now()); brief.status='outline_review'; state.step='outline_review'; return ask(`Great — I approved the brief and generated the outline. Review it below.\n\n${renderOutlineReview(state.outline)}`,'Great — I generated the outline. Review it below.'); }
-    const revised = applyBriefRevisionFromText(brief, userText);
-    if (revised) { state.events.push(nextEvent({ actor:'assistant', step:state.step, kind:'brief_updated', field: revised as any } as any)); (state as any).pendingBriefRevisionField = undefined; return ask(renderBriefReview(),'Here’s the updated brief.'); }
     if ((state as any).pendingBriefRevisionField) {
       const field = (state as any).pendingBriefRevisionField as string;
       const mapping: Record<string, string> = { deck_type:'Deck type', topic:'Topic', audience:'Audience', slide_count:'Slide count', tone:'Tone', technical_depth:'Technical depth', must_include:'Must-include sections', constraints:'Constraints', required_messaging:'Required messaging', user_notes:'User notes', speaker_notes:'Speaker notes' };
@@ -151,6 +149,8 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
       (state as any).pendingBriefRevisionField = undefined;
       return ask(renderBriefReview(),'Here’s the updated brief.');
     }
+    const revised = applyBriefRevisionFromText(brief, userText);
+    if (revised) { state.events.push(nextEvent({ actor:'assistant', step:state.step, kind:'brief_updated', field: revised as any } as any)); (state as any).pendingBriefRevisionField = undefined; return ask(renderBriefReview(),'Here’s the updated brief.'); }
     const choice = parseNumberChoice(userText);
     if (choice && revisionFieldByChoice[choice]) {
       (state as any).pendingBriefRevisionField = revisionFieldByChoice[choice];
