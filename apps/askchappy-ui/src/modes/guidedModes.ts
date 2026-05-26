@@ -13,6 +13,11 @@ export const MODE_DEFINITIONS: ModeDefinition[] = [
     guidance: 'Ask Chappy anything about DDN positioning, use cases, or partner scenarios.',
   },
   {
+    mode: 'create_presentations',
+    title: 'Create Presentations',
+    guidance: 'Guided deck-building mode for creating a professional presentation brief.',
+  },
+  {
     mode: 'learn_ddn',
     title: 'Learn DDN',
     guidance: 'Build foundational DDN understanding from basics to field usage.',

@@ -16,6 +16,7 @@ import {
   BROWSER_LOCAL_SESSION_STORAGE_KEY,
 } from '../sessions/browserLocalSessionPersistenceAdapter';
 import { DEFAULT_SESSION_MODE } from '../../../../shared/contracts/modes';
+import { CREATE_PRESENTATIONS_INTRO_MESSAGE } from '../../../../shared/contracts/createPresentationsMode';
 
 describe('askchappy-api scaffold', () => {
   beforeEach(() => {
@@ -133,6 +134,27 @@ describe('askchappy-api scaffold', () => {
     const modeEvent = updated.events.at(-1);
     expect(modeEvent?.event_type).toBe('mode_change');
     expect(modeEvent?.meta).toMatchObject({ from_mode: 'open_qa', to_mode: 'meeting_prep', actor: 'user' });
+  });
+
+  it('initializes create_presentations mode state and intro assistant prompt on mode entry', () => {
+    const session = createLocalSession();
+    const updated = setLocalSessionMode(session.session_id, 'create_presentations', 'user');
+
+    expect(updated.metadata.askchappy.session_mode).toBe('create_presentations');
+    expect(updated.metadata.askchappy.create_presentations_state).toEqual({
+      active: true,
+      mode: 'create_presentations',
+      step: 'intro',
+      deckBrief: {
+        schema_version: '1.0',
+        mode: 'create_presentations',
+        status: 'draft',
+      },
+      messages: [],
+      awaitingUserInput: true,
+    });
+    expect(updated.transcript.at(-1)?.role).toBe('assistant');
+    expect(updated.transcript.at(-1)?.text).toBe(CREATE_PRESENTATIONS_INTRO_MESSAGE);
   });
 
 

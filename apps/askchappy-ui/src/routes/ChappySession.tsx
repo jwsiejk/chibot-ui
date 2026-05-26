@@ -12,6 +12,7 @@ import { SessionRightRail } from '../session/SessionRightRail';
 import { VoiceInput } from '../session/VoiceInput';
 import { LocalRuntimeStatus } from '../session/LocalRuntimeStatus';
 import { AdminRuntimeConsoleModal, type ClientDiagnosticEvent, type TurnLatencyEntry } from '../session/AdminRuntimeConsoleModal';
+import { MODE_LOOKUP } from '../modes/guidedModes';
 
 const STATE_COPY: Record<SessionState, string> = { ready: 'Ready', listening: 'Listening', transcribing: 'Transcribing', thinking: 'Thinking', speaking: 'Speaking', error: 'Needs attention' };
 const MAX_TURN_LATENCY = 5;
@@ -59,6 +60,8 @@ export const ChappySession = () => {
   const voiceStatus = useMemo(() => getLocalVoiceStatus(), []);
   const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : getLocalTranscript(sessionId)), [sessionId, session, version]);
   if (!sessionId || !session) return <main><h1>Session not found</h1><p>Start a local-first Open Q&amp;A session from /chappy.</p></main>;
+  const activeMode = session.metadata.askchappy.session_mode;
+  const isCreatePresentationsMode = activeMode === 'create_presentations';
 
   const speakAssistant = async (
     messageId: string,
@@ -190,7 +193,7 @@ export const ChappySession = () => {
       {/* ... unchanged render ... */}
       <header className="status-bar top-meeting-bar" aria-label="top meeting bar">
         <h1>AskChappy</h1>
-        <p>Open Q&amp;A • {STATE_COPY[state]} • session {sessionId}{user?.role === 'admin' ? ' • Admin' : ''}</p>
+        <p>{MODE_LOOKUP[activeMode].title} • {STATE_COPY[state]} • session {sessionId}{user?.role === 'admin' ? ' • Admin' : ''}</p>
       </header>
       <div className="meeting-content" aria-label="meeting body">
         <section className="meeting-stage" aria-label="meeting stage"><ChappyStage state={state} /></section>
@@ -221,6 +224,12 @@ export const ChappySession = () => {
             <span className="meeting-control-icon" aria-hidden="true">▦</span>
             <span className="meeting-control-label">Modes</span>
           </button>
+          {isCreatePresentationsMode ? (
+            <button className="meeting-control-btn utility-control" type="button" onClick={() => onSelectMode('open_qa')}>
+              <span className="meeting-control-icon" aria-hidden="true">↩</span>
+              <span className="meeting-control-label">Exit Create Presentations</span>
+            </button>
+          ) : null}
           {user?.role === 'admin' ? (
             <button
               className="meeting-control-btn utility-control"
