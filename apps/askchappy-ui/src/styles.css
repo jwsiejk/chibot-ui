@@ -451,3 +451,31 @@ body.session-viewport-lock { overflow: hidden; }
 .admin-runtime-modal { width:min(900px,95vw); max-height:85vh; overflow:auto; padding:1rem; }
 .admin-runtime-modal-header { display:flex; justify-content:space-between; align-items:center; }
 
+
+.generated-presentation-pill {
+  position: fixed;
+  right: 1rem;
+  bottom: 5.6rem;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  border-radius: 999px;
+  padding: .42rem .56rem .42rem .72rem;
+  border: 1px solid rgba(141, 178, 255, .36);
+  background: rgba(22, 31, 49, .92);
+  box-shadow: 0 6px 18px rgba(5, 10, 20, .35);
+}
+
+.generated-presentation-pill-copy {
+  margin: 0;
+  font-size: .72rem;
+  color: #d7e5ff;
+}
+
+@media (max-width: 980px) {
+  .generated-presentation-pill {
+    right: .55rem;
+    bottom: 6.5rem;
+  }
+}

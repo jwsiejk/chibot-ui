@@ -9,6 +9,7 @@ import { ChappyStage } from '../session/ChappyStage';
 import { TypedInput } from '../session/TypedInput';
 import { TranscriptPanel } from '../transcript/TranscriptPanel';
 import { SessionRightRail } from '../session/SessionRightRail';
+import { GeneratedPresentationDownloadPill } from '../session/GeneratedPresentationDownloadPill';
 import { VoiceInput } from '../session/VoiceInput';
 import { LocalRuntimeStatus } from '../session/LocalRuntimeStatus';
 import { AdminRuntimeConsoleModal, type ClientDiagnosticEvent, type TurnLatencyEntry } from '../session/AdminRuntimeConsoleModal';
@@ -201,6 +202,7 @@ export const ChappySession = () => {
           <TranscriptPanel messages={messages} />
         </section>
       </div>
+      <GeneratedPresentationDownloadPill generatedPresentation={session.metadata.askchappy.create_presentations_state?.generatedPresentation} />
       {showModes ? <div className="modes-overlay card panel" role="dialog" aria-label="guided modes overlay"><button className="btn secondary" type="button" onClick={() => setShowModes(false)}>Close</button><SessionRightRail activeMode={session.metadata.askchappy.session_mode} generatedPresentation={session.metadata.askchappy.create_presentations_state?.generatedPresentation} onSelectMode={(mode) => { onSelectMode(mode); setShowModes(false); }} /></div> : null}
       <section className="meeting-toolbar" aria-label="bottom meeting toolbar">
         <div className="toolbar-notice" role="status">{voiceNotice}{runtimeNotice ? ` • ${runtimeNotice}` : ''}</div>
