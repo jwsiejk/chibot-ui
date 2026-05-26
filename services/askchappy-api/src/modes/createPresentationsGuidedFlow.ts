@@ -86,7 +86,7 @@ const parseSlideCount = (input: string): number | undefined => {
 };
 
 const isSkipInput = (input: string) => new Set(['1', 'skip', 'none', 'no', 'n/a', 'not applicable', 'leave blank', 'blank', 'no thanks']).has(normalizeAnswer(input));
-const isApprovalInput = (input: string) => /^(approve|approved|approve this brief|looks good|looks good to me|go ahead|yes|yes approve|no changes|no changes needed|good|continue)$/.test(normalizeAnswer(input));
+const isApprovalInput = (input: string) => /^(1|approve|approved|approve this brief|looks good|looks good to me|go ahead|yes|yes approve|no changes|no changes needed|good|continue)$/.test(normalizeAnswer(input));
 const isRevisionInput = (input: string) => /^(approve with changes|revise|change|edit|update|fix|change something)$/i.test(normalizeAnswer(input));
 
 const DECK_TYPE_CHOICES: Choice<DeckType>[] = [
@@ -360,11 +360,11 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
     `14. Speaker notes: ${brief.output.speaker_notes ? 'Yes' : 'No'}`,
     '',
     'Next:',
-    '1. Approve and generate outline',
-    '2. Revise brief',
+    '1. This is correct — generate the outline',
+    '2. Edit the brief',
   ].join('\n');
 
-  const presentBriefReview = (spoken = 'Here’s the brief I heard. Choose approve or revise below.') => {
+  const presentBriefReview = (spoken = 'If this looks correct, choose 1. To edit, choose 2.') => {
     brief.status = 'brief_review';
     state.step = 'brief_review';
     const review = renderBriefReview();
@@ -410,6 +410,7 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
       return ask(promptByRevisionField[revisionFieldByChoice[choice]], 'Tell me the updated value.');
     }
 
+    if (normalized === '2') return ask(revisionMenuText, 'Choose what you want to revise.');
     if (normalized === 'user_notes') return ask('What should user notes be? Type the new value, or choose 1 to skip.');
     if (isRevisionInput(userText)) return ask(revisionMenuText, 'Choose what you want to revise.');
 
@@ -430,13 +431,13 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
       brief.status = 'outline_approved';
       state.step = 'outline_approved';
       state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'outline_approved', text: 'Outline approved.' }));
-      return ask('Outline approved. Next:\n1. Create PowerPoint\n2. Revise outline', 'Outline approved. Choose the next step below.');
+      return ask('Outline approved. Next:\n1. This is correct — create the PowerPoint\n2. Edit the outline', 'If this outline looks correct, choose 1 to create the PowerPoint. To edit, choose 2.');
     }
   }
 
   if (state.step === 'outline_approved' || state.step === 'presentation_generated') {
     if (!(parseNumberChoice(userText) === 1 || /(create powerpoint|generate presentation|generate pptx|export pptx)/i.test(userText))) {
-      return ask('Outline approved. Next:\n1. Create PowerPoint\n2. Revise outline', 'Outline approved. Choose the next step below.');
+      return ask('Outline approved. Next:\n1. This is correct — create the PowerPoint\n2. Edit the outline', 'If this outline looks correct, choose 1 to create the PowerPoint. To edit, choose 2.');
     }
     state.generatedPresentation = { status: 'generating', format: 'pptx' };
     state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generation_requested', text: userText }));

@@ -15,8 +15,9 @@ describe('create presentations phase 3 outline flow', () => {
     const answers = ['executive briefing','Topic A','Audience A','skip','skip','skip','6','4','4','architecture, roadmap','keep concise','risk reduction','skip','2'];
     for (const a of answers) await say(a);
     const readyMsg = await say('Approve this brief');
-    expect(readyMsg).toContain('Deck Outline Review');
     expect(readyMsg).toContain('Great — I approved the brief and generated the outline');
+    expect(readyMsg).toContain('Deck Outline Review');
+    expect(readyMsg).toContain('Approve this outline, or tell me what to revise.');
 
     const reviewState = getLocalSession(session.session_id)?.metadata.askchappy.create_presentations_state;
     expect(reviewState?.step).toBe('outline_review');
@@ -35,8 +36,8 @@ describe('create presentations phase 3 outline flow', () => {
 
     expect(await say('regenerate outline')).toContain('Deck Outline Review');
     const approved = await say('approve outline');
-    expect(approved).toContain('Phase 3 is complete');
-    expect(approved).toContain('No PPTX generation happens in this phase');
+    expect(approved).toContain('Outline approved. Next:');
+    expect(approved).toContain('1. This is correct — create the PowerPoint');
 
     const cps = getLocalSession(session.session_id)?.metadata.askchappy.create_presentations_state;
     expect(cps?.outline.status).toBe('outline_approved');

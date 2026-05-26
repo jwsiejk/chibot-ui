@@ -33,7 +33,7 @@ describe('create presentations phase 4 pptx generation', () => {
     const start = await say(s.session_id, 'generate presentation');
     expect(start).toContain('Choose one of the options below:');
     expect(start).toContain('1. Executive briefing');
-    for (const a of ['executive briefing','Topic A','Audience A','skip','skip','skip','5','4','4','architecture, roadmap','keep concise','risk reduction','skip','2','Approve this brief','approve outline']) await say(s.session_id, a);
+    for (const a of ['executive briefing','Topic A','Audience A','skip','skip','skip','5','technical','medium','architecture, roadmap','keep concise','risk reduction','skip','no','Approve this brief','approve outline']) await say(s.session_id, a);
     const before = structuredClone(getLocalSession(s.session_id)?.metadata.askchappy.create_presentations_state?.outline);
     const result = await say(s.session_id, '1');
     expect(result).toContain('Your PowerPoint is ready: /api/presentations/');
@@ -75,7 +75,7 @@ describe('create presentations phase 4 pptx generation', () => {
     expect(allXml).toContain('Objective:');
 
     const firstGeneratedName = cps?.generatedPresentation.file_name as string;
-    const second = await say(s.session_id, 'generate presentation');
+    const second = await say(s.session_id, '1');
     expect(second).toContain('Your PowerPoint is ready: /api/presentations/');
     const cpsAfterSecond = getLocalSession(s.session_id)?.metadata.askchappy.create_presentations_state;
     expect(cpsAfterSecond?.generatedDeckHistory?.length).toBeGreaterThanOrEqual(2);
