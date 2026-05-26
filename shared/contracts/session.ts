@@ -11,6 +11,18 @@ export type AskChappyMetadata = {
     audience: 'partner_seller_or_se';
     topic: string | null;
     desired_output: 'answer_questions_and_offer_guidance';
+    create_presentations_state: {
+      active: boolean;
+      mode: 'create_presentations';
+      step: 'intro';
+      deckBrief: {
+        schema_version: '1.0';
+        mode: 'create_presentations';
+        status: 'draft';
+      };
+      messages: string[];
+      awaitingUserInput: boolean;
+    } | null;
     context: {
       customer_name: string | null;
       partner_name: string | null;
@@ -30,6 +42,7 @@ export const DEFAULT_METADATA: AskChappyMetadata = {
     audience: 'partner_seller_or_se',
     topic: null,
     desired_output: 'answer_questions_and_offer_guidance',
+    create_presentations_state: null,
     context: {
       customer_name: null,
       partner_name: null,
@@ -63,6 +76,19 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     askchappy.audience === 'partner_seller_or_se' &&
     (typeof askchappy.topic === 'string' || askchappy.topic === null) &&
     askchappy.desired_output === 'answer_questions_and_offer_guidance' &&
+    (askchappy.create_presentations_state === null || (
+      isRecord(askchappy.create_presentations_state) &&
+      askchappy.create_presentations_state.active === true &&
+      askchappy.create_presentations_state.mode === 'create_presentations' &&
+      askchappy.create_presentations_state.step === 'intro' &&
+      isRecord(askchappy.create_presentations_state.deckBrief) &&
+      askchappy.create_presentations_state.deckBrief.schema_version === '1.0' &&
+      askchappy.create_presentations_state.deckBrief.mode === 'create_presentations' &&
+      askchappy.create_presentations_state.deckBrief.status === 'draft' &&
+      Array.isArray(askchappy.create_presentations_state.messages) &&
+      askchappy.create_presentations_state.messages.every((item) => typeof item === 'string') &&
+      typeof askchappy.create_presentations_state.awaitingUserInput === 'boolean'
+    )) &&
     context !== null &&
     typeof context === 'object' &&
     ['customer_name', 'partner_name', 'industry', 'use_case', 'competitor', 'meeting_goal'].every(

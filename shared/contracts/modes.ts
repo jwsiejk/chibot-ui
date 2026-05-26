@@ -1,5 +1,6 @@
 export const SESSION_MODES = [
   'open_qa',
+  'create_presentations',
   'learn_ddn',
   'meeting_prep',
   'pitch_practice',

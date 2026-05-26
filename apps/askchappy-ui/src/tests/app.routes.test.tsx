@@ -764,6 +764,35 @@ describe('phase 22 chappy UI', () => {
     expect(session?.transcript.every((message) => message.text !== 'mode_change')).toBe(true);
     expect(screen.queryByText('mode_change')).not.toBeInTheDocument();
   });
+  it('supports entering and exiting Create Presentations mode with clear active-mode UI', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Presentations' }));
+
+    expect(screen.getByLabelText('top meeting bar')).toHaveTextContent('Create Presentations');
+    expect(screen.getByText(/Create Presentations Mode is ready\./)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Exit Create Presentations' })).toBeInTheDocument();
+
+    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
+    const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
+    const session = getLocalSession(sessionId);
+    expect(session?.metadata.askchappy.create_presentations_state?.mode).toBe('create_presentations');
+    expect(session?.metadata.askchappy.create_presentations_state?.deckBrief.schema_version).toBe('1.0');
+    expect(session?.metadata.askchappy.create_presentations_state?.deckBrief.mode).toBe('create_presentations');
+    expect(session?.metadata.askchappy.create_presentations_state?.deckBrief.status).toBe('draft');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Exit Create Presentations' }));
+    expect(screen.getByLabelText('top meeting bar')).toHaveTextContent('Open Q&A');
+    expect(screen.getByLabelText('Type a message')).toBeInTheDocument();
+  });
   it('keeps voice studio controls absent in normal /chappy/session route', () => {
     render(
       <MemoryRouter initialEntries={['/chappy/session/session_123']}>
