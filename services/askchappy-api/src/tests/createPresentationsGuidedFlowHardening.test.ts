@@ -10,6 +10,50 @@ import {
 import { resetSessionStore } from '../sessions/sessionStore';
 
 describe('create presentations phase 2b hardening', () => {
+  it('advances DDN guided flow exactly one stage per user turn', async () => {
+    resetSessionStore();
+    const session = createLocalSession();
+    setLocalSessionMode(session.session_id, 'create_presentations', 'user');
+    const answer = async (text: string) => {
+      appendLocalUserTextMessage(session.session_id, text);
+      await generateLocalAssistantMessage(session.session_id);
+      return getLocalTranscript(session.session_id).at(-1)?.text ?? '';
+    };
+
+    expect(await answer('create presentation')).toContain('How do you want to build this DDN deck?');
+    expect(await answer('1')).toContain('Choose a customer use case');
+    expect(await answer('2')).toContain('Who is the audience?');
+    expect(await answer('1')).toContain('Customer or account name?');
+    expect(await answer('Acme Life Sciences')).toContain('How deep should this deck go?');
+    expect(await answer('2')).toContain('Anything specific to include?');
+    const review = await answer('1');
+    expect(review).toContain('Here’s the DDN deck I’ll create:');
+    expect(review).toContain('Use case: Life sciences research and genomics');
+    expect(review).toContain('Recommended DDN focus: Infinia + Data Intelligence Platform');
+    expect(review).toContain('Estimated length: 7 slides');
+    expect(review).toContain('1. Why Life Sciences Data Infrastructure Matters Now');
+    expect(review).toContain('7. Recommended Next Steps');
+    const generated = await answer('1');
+    expect(generated).toContain('Your PowerPoint is ready: /api/presentations/');
+  });
+
+  it('does not generate pptx immediately when selecting 1 at DDN starting point', async () => {
+    resetSessionStore();
+    const session = createLocalSession();
+    setLocalSessionMode(session.session_id, 'create_presentations', 'user');
+    const answer = async (text: string) => {
+      appendLocalUserTextMessage(session.session_id, text);
+      await generateLocalAssistantMessage(session.session_id);
+      return getLocalTranscript(session.session_id).at(-1)?.text ?? '';
+    };
+
+    await answer('create presentation');
+    const response = await answer('1');
+    expect(response).toContain('Choose a customer use case');
+    expect(response).not.toContain('Your PowerPoint is ready');
+    const state = getLocalSession(session.session_id)?.metadata.askchappy.create_presentations_state;
+    expect(state?.generatedPresentation.status).toBe('not_started');
+  });
   it('supports optional skip flow, enum mapping, validations, revisions, and approval gating', async () => {
     resetSessionStore();
     const session = createLocalSession();

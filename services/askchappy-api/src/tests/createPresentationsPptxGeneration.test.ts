@@ -25,6 +25,8 @@ describe('create presentations phase 4 pptx generation', () => {
     expect(serverSource).toContain("await import('../modes/createPresentationsGuidedFlow')");
     expect(serverSource).toContain("await import('../modes/createPresentationsPptxGenerator')");
     expect(guidedSource).not.toContain("from './createPresentationsPptxGenerator'");
+    expect(guidedSource).toContain("typeof window !== 'undefined'");
+    expect(guidedSource).toContain("fetch('/api/presentations/generate'");
     expect(guidedSource).toContain("await import('./createPresentationsPptxGenerator')");
   });
   it('generates pptx from approved outline and supports safe download access', async () => {
