@@ -8,15 +8,16 @@ const formatGeneratedAt = (value?: string) => {
   return parsed.toLocaleString();
 };
 
+const toDownloadAriaLabel = (deck: CreatePresentationsGeneratedDeckHistoryItem): string => {
+  const preferredLabel = deck.title?.trim() || deck.file_name;
+  return `Download ${preferredLabel}`;
+};
+
 export const GeneratedDeckHistoryList = ({
   generatedDeckHistory,
 }: {
   generatedDeckHistory?: CreatePresentationsGeneratedDeckHistoryItem[];
 }) => {
-  const toDownloadAriaLabel = (deck: CreatePresentationsGeneratedDeckHistoryItem): string => {
-    const preferredLabel = deck.title?.trim() || deck.file_name;
-    return `Download ${preferredLabel}`;
-  };
 
   if (!generatedDeckHistory?.length) {
     return null;
