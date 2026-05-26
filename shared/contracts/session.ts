@@ -4,6 +4,7 @@ import {
   type CreatePresentationsOptionalField,
   type CreatePresentationsDeckBrief,
   type CreatePresentationsModeEvent,
+  type CreatePresentationsOutlineState,
 } from './createPresentationsMode';
 import { DEFAULT_SESSION_MODE, isSessionMode, type SessionMode } from './modes';
 
@@ -23,6 +24,7 @@ export type AskChappyMetadata = {
       mode: 'create_presentations';
       step: (typeof CREATE_PRESENTATIONS_STEPS)[number];
       deckBrief: CreatePresentationsDeckBrief;
+      outline: CreatePresentationsOutlineState;
       events: CreatePresentationsModeEvent[];
       skippedFields: CreatePresentationsOptionalField[];
       awaitingUserInput: boolean;
@@ -89,12 +91,22 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     cps.deckBrief.schema_version === '1.0' &&
     cps.deckBrief.mode === 'create_presentations' &&
     typeof cps.deckBrief.status === 'string' &&
-    ['draft', 'brief_review', 'brief_approved', 'error'].includes(cps.deckBrief.status as string) &&
+    ['draft', 'brief_review', 'brief_approved', 'outline_draft', 'outline_review', 'outline_approved', 'error'].includes(cps.deckBrief.status as string) &&
     isRecord(cps.deckBrief.source_requirements) &&
     cps.deckBrief.source_requirements.source_policy === 'user_provided_only' &&
     cps.deckBrief.source_requirements.citations_required === false &&
     isRecord(cps.deckBrief.output) &&
     cps.deckBrief.output.format === 'pptx' &&
+    isRecord(cps.outline) &&
+    ['not_started', 'outline_draft', 'outline_review', 'outline_approved', 'error'].includes(cps.outline.status as string) &&
+    Array.isArray(cps.outline.slides) &&
+    cps.outline.slides.every((slide) => isRecord(slide)
+      && typeof slide.slide_number === 'number'
+      && typeof slide.title === 'string'
+      && typeof slide.objective === 'string'
+      && Array.isArray(slide.key_points)
+      && slide.key_points.every((point) => typeof point === 'string')
+      && (slide.speaker_notes_prompt === undefined || typeof slide.speaker_notes_prompt === 'string')) &&
     Array.isArray(cps.events) &&
     cps.events.every(validEvent) &&
     Array.isArray(cps.skippedFields) &&
