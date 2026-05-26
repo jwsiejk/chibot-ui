@@ -153,3 +153,8 @@ disabled
 - Chapman should approve usage of his voice for AskChappy.
 - For MVP, lightweight admin confirmation is sufficient (example: “I confirm Chapman approved using this voice for AskChappy.”).
 - Do not over-engineer legal/security workflow for this docs-only MVP scope.
+
+## 20) Future mode foundation references
+- Future dedicated mode foundation docs live under `docs/modes/`.
+- Create Presentations foundation: `docs/modes/CREATE_PRESENTATIONS_MODE_FOUNDATION.md`.
+- Until implementation phases begin, this remains documentation-only direction and does not change active V1 runtime behavior.
