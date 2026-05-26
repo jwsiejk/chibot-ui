@@ -31,6 +31,7 @@ describe('create presentations phase 4 pptx generation', () => {
     expect(cps?.outline).toEqual(before);
     expect(cps?.generatedPresentation.file_name?.endsWith('.pptx')).toBe(true);
     expect(cps?.generatedPresentation.download_url).toBe(`/api/presentations/${cps?.generatedPresentation.file_name}`);
+    expect(cps?.generatedPresentation.theme_id).toBe('professional_light');
     expect(result).toContain(cps?.generatedPresentation.download_url as string);
     expect(result).not.toContain(cps?.generatedPresentation.file_path as string);
     expect(cps?.events.some((e) => e.kind === 'pptx_generated')).toBe(true);
@@ -54,6 +55,7 @@ describe('create presentations phase 4 pptx generation', () => {
     const firstKeyPoint = cps?.outline.slides[0]?.key_points[0] ?? '';
     expect(allXml).toContain(firstTitle);
     expect(allXml).toContain(firstKeyPoint);
+    expect(allXml).toContain('Objective:');
     const dl = await getGeneratedPresentationDownload(cps?.generatedPresentation.file_name as string);
     expect(dl.ok).toBe(true);
     const miss = await getGeneratedPresentationDownload('missing-file.pptx');

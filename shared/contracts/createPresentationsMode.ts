@@ -50,9 +50,12 @@ export const CREATE_PRESENTATIONS_EVENT_KINDS = [
   'mode_exited',
 ] as const;
 
+export type CreatePresentationsPptxThemeId = 'professional_light' | 'executive_dark' | 'technical_clean';
+
 export type CreatePresentationsGeneratedPresentationState = {
   status: 'not_started' | 'generating' | 'generated' | 'error';
   format: 'pptx';
+  theme_id?: CreatePresentationsPptxThemeId;
   file_name?: string;
   file_path?: string;
   download_url?: string;

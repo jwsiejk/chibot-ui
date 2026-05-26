@@ -26,8 +26,8 @@ export const tryHandlePresentationDownloadRoute = async (req: IncomingMessage, r
   if (method !== 'GET' && method !== 'HEAD') return false;
   if (!req.url) return false;
 
-  const requestUrl = new URL(req.url, 'http://localhost');
-  const fileName = getDownloadFileNameFromPath(requestUrl.pathname);
+  const pathname = req.url.split('?')[0];
+  const fileName = getDownloadFileNameFromPath(pathname);
   if (fileName === null) return false;
   if (!fileName) {
     writeJson(res, 400, { error: 'Invalid presentation file name.' });
