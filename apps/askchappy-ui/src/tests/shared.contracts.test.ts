@@ -115,6 +115,7 @@ describe('session contracts', () => {
         status: 'draft',
       },
       outline: { status: 'not_started', slides: [] },
+      generatedPresentation: { status: 'not_started', format: 'pptx' },
       skippedFields: [],
       awaitingUserInput: true,
       events: CREATE_PRESENTATIONS_EVENT_KINDS.map((kind, idx) => ({

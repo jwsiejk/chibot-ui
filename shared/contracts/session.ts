@@ -3,6 +3,7 @@ import {
   CREATE_PRESENTATIONS_OPTIONAL_FIELDS,
   CREATE_PRESENTATIONS_STEPS,
   type CreatePresentationsOptionalField,
+  type CreatePresentationsGeneratedPresentationState,
   type CreatePresentationsDeckBrief,
   type CreatePresentationsModeEvent,
   type CreatePresentationsOutlineState,
@@ -26,6 +27,7 @@ export type AskChappyMetadata = {
       step: (typeof CREATE_PRESENTATIONS_STEPS)[number];
       deckBrief: CreatePresentationsDeckBrief;
       outline: CreatePresentationsOutlineState;
+      generatedPresentation: CreatePresentationsGeneratedPresentationState;
       events: CreatePresentationsModeEvent[];
       skippedFields: CreatePresentationsOptionalField[];
       awaitingUserInput: boolean;
@@ -94,7 +96,7 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     cps.deckBrief.schema_version === '1.0' &&
     cps.deckBrief.mode === 'create_presentations' &&
     typeof cps.deckBrief.status === 'string' &&
-    ['draft', 'brief_review', 'brief_approved', 'outline_draft', 'outline_review', 'outline_approved', 'error'].includes(cps.deckBrief.status as string) &&
+    ['draft', 'brief_review', 'brief_approved', 'outline_draft', 'outline_review', 'outline_approved', 'generated', 'error'].includes(cps.deckBrief.status as string) &&
     isRecord(cps.deckBrief.source_requirements) &&
     cps.deckBrief.source_requirements.source_policy === 'user_provided_only' &&
     cps.deckBrief.source_requirements.citations_required === false &&
@@ -110,6 +112,9 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
       && Array.isArray(slide.key_points)
       && slide.key_points.every((point) => typeof point === 'string')
       && (slide.speaker_notes_prompt === undefined || typeof slide.speaker_notes_prompt === 'string')) &&
+    isRecord(cps.generatedPresentation) &&
+    ['not_started', 'generating', 'generated', 'error'].includes(cps.generatedPresentation.status as string) &&
+    cps.generatedPresentation.format === 'pptx' &&
     Array.isArray(cps.events) &&
     cps.events.every(validEvent) &&
     Array.isArray(cps.skippedFields) &&
