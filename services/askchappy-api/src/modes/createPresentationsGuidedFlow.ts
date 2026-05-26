@@ -1,5 +1,4 @@
 import {
-  CREATE_PRESENTATIONS_DECK_TYPES,
   CREATE_PRESENTATIONS_TECHNICAL_DEPTH,
   CREATE_PRESENTATIONS_TONES,
   type CreatePresentationsDeckBrief,
@@ -7,544 +6,84 @@ import {
   type CreatePresentationsOptionalField,
 } from '../../../../shared/contracts/createPresentationsMode';
 import type { AskChappySession } from '../sessions/sessionStore';
-import {
-  generateOutlineFromBrief,
-  isOutlineApproval,
-  isOutlineGenerationRequest,
-  isOutlineRegenerateRequest,
-  renderOutlineReview,
-  validateOutlineForApproval,
-} from './createPresentationsOutlineFlow';
 import { appendGeneratedDeckHistory, toGeneratedDeckHistoryItem } from './createPresentationsDeckHistory';
+import { generateOutlineFromBrief, renderOutlineReview, validateOutlineForApproval } from './createPresentationsOutlineFlow';
 
-const nextEvent = (
-  event: Omit<CreatePresentationsModeEvent, 'id' | 'ts'>,
-): CreatePresentationsModeEvent => ({
-  id: `evt_${crypto.randomUUID()}`,
-  ts: new Date().toISOString(),
-  ...event,
-});
-
-const toList = (input: string) =>
-  input
-    .split(',')
-    .map((i) => i.trim())
-    .filter(Boolean);
-
-const normalize = (value: string) => value.trim().toLowerCase();
-const yes = (t: string) => /^(yes|y|true)$/i.test(t.trim());
-const no = (t: string) => /^(no|n|false)$/i.test(t.trim());
-const isPptxGenerationRequest = (t: string) => /(generate|create|build|export)\s+(presentation|pptx)/i.test(t.trim());
-const approveBrief = (t: string) => /^(approve|approved|looks good|go ahead|yes,? approve)$/i.test(t.trim());
+export type GuidedAssistantResponse = { text: string; spokenText?: string };
+const answer = (text: string, spokenText?: string): GuidedAssistantResponse => ({ text, spokenText });
 const now = () => new Date().toISOString();
-
-const SKIP_INPUTS = new Set(['skip', 'none', 'no', 'n/a', 'not applicable', 'leave blank', 'blank']);
-const isSkipInput = (input: string) => SKIP_INPUTS.has(normalize(input));
-
-const deckTypeMap: Record<string, (typeof CREATE_PRESENTATIONS_DECK_TYPES)[number]> = {
-  'executive briefing': 'customer_executive_briefing',
-  'customer executive briefing': 'customer_executive_briefing',
-  'exec briefing': 'customer_executive_briefing',
-  'technical deep dive': 'customer_technical_deep_dive',
-  'customer technical deep dive': 'customer_technical_deep_dive',
-  'partner enablement': 'partner_enablement',
-  training: 'internal_training',
-  'internal training': 'internal_training',
-  'architecture review': 'architecture_review',
-  workshop: 'workshop',
-  roadmap: 'roadmap',
-  proposal: 'proposal',
-  custom: 'custom',
+const nextEvent = (event: Omit<CreatePresentationsModeEvent, 'id' | 'ts'>): CreatePresentationsModeEvent => ({ id: `evt_${crypto.randomUUID()}`, ts: now(), ...event });
+const normalizeAnswer = (input: string) => input.trim().toLowerCase().replace(/[.!?]+$/g, '').replace(/\s+/g, ' ');
+const NUMBER_WORDS: Record<string, number> = { one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,twentyone:21,twentytwo:22,twentythree:23,twentyfour:24,twentyfive:25,twentysix:26,twentyseven:27,twentyeight:28,twentynine:29,thirty:30 };
+const parseNumberChoice = (input: string): number | undefined => {
+  const n = normalizeAnswer(input);
+  const d = n.match(/(?:option|choice|number)?\s*(\d{1,2})$/)?.[1];
+  if (d) return Number.parseInt(d,10);
+  const compact = n.replace(/[-\s]/g, '');
+  if (NUMBER_WORDS[compact]) return NUMBER_WORDS[compact];
+  const wm = n.match(/(?:option|choice|number)\s+([a-z\s-]+)/)?.[1]?.replace(/[-\s]/g,'');
+  return wm ? NUMBER_WORDS[wm] : undefined;
 };
-
-const toneMap: Record<string, (typeof CREATE_PRESENTATIONS_TONES)[number]> = {
-  exec: 'executive',
-  executive: 'executive',
-  consultative: 'consultative',
-  technical: 'technical',
-  'technical but executive readable': 'technical_but_executive_readable',
-  'technical executive readable': 'technical_but_executive_readable',
-  sales: 'sales',
-  training: 'training',
-  concise: 'concise',
-  custom: 'custom',
+const parseSlideCount = (input: string): number | undefined => {
+  const n = parseNumberChoice(input) ?? Number.parseInt(normalizeAnswer(input).match(/\d+/)?.[0] ?? '', 10);
+  return Number.isInteger(n) && n >= 3 && n <= 30 ? n : undefined;
 };
-
-const depthMap: Record<string, (typeof CREATE_PRESENTATIONS_TECHNICAL_DEPTH)[number]> = {
-  low: 'low',
-  light: 'low',
-  medium: 'medium',
-  moderate: 'medium',
-  high: 'high',
-  deep: 'high',
-  mixed: 'mixed',
+const isSkipInput = (input: string) => new Set(['1','skip','none','no','n/a','not applicable','leave blank','blank','no thanks']).has(normalizeAnswer(input));
+const isApprovalInput = (input: string) => /^(approve|approved|approve this brief|looks good|looks good to me|go ahead|yes|yes approve|no changes|no changes needed|good|continue)$/.test(normalizeAnswer(input));
+const isRevisionInput = (input: string) => /(revise|change|edit|update|fix|change something)/.test(normalizeAnswer(input));
+const deckTypeMenu = 'Choose one of the options below:\n1. Executive briefing\n2. Technical deep dive\n3. Partner enablement\n4. Internal training\n5. Architecture review\n6. Workshop\n7. Roadmap\n8. Proposal\n9. Custom';
+const toneMenu = 'Choose a tone:\n1. Executive\n2. Consultative\n3. Technical\n4. Technical but executive readable\n5. Sales\n6. Training\n7. Concise\n8. Custom';
+const depthMenu = 'Choose technical depth:\n1. Low\n2. Medium\n3. High\n4. Mixed';
+const speakerNotesMenu = 'Include speaker notes?\n1. Yes\n2. No';
+const deckTypeFrom = (input: string): CreatePresentationsDeckBrief['deck_type'] | undefined => {
+  const n = parseNumberChoice(input); const x = normalizeAnswer(input);
+  if (n===1 || /executive/.test(x)) return 'customer_executive_briefing'; if (n===2 || /technical/.test(x)) return 'customer_technical_deep_dive'; if (n===3 || /partner/.test(x)) return 'partner_enablement'; if (n===4 || /training/.test(x)) return 'internal_training'; if (n===5 || /architecture/.test(x)) return 'architecture_review'; if (n===6 || /workshop/.test(x)) return 'workshop'; if (n===7 || /roadmap/.test(x)) return 'roadmap'; if (n===8 || /proposal/.test(x)) return 'proposal'; if (n===9 || /custom/.test(x)) return 'custom';
 };
+const toneFrom = (input: string): (typeof CREATE_PRESENTATIONS_TONES)[number] | undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||x==='executive')return'executive'; if(n===2||x==='consultative')return'consultative'; if(n===3||x==='technical')return'technical'; if(n===4||x.includes('technical')&&x.includes('executive'))return'technical_but_executive_readable'; if(n===5||x==='sales')return'sales'; if(n===6||x==='training')return'training'; if(n===7||x==='concise')return'concise'; if(n===8||x==='custom')return'custom'; };
+const depthFrom = (input: string): (typeof CREATE_PRESENTATIONS_TECHNICAL_DEPTH)[number] | undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||/low|light/.test(x))return'low'; if(n===2||/medium|moderate/.test(x))return'medium'; if(n===3||/high|deep/.test(x))return'high'; if(n===4||x==='mixed')return'mixed'; };
+const speakerNotesFrom = (input:string): boolean|undefined => { const n=parseNumberChoice(input); const x=normalizeAnswer(input); if(n===1||x==='yes'||x==='y') return true; if(n===2||x==='no'||x==='n') return false; };
+const labels: Record<string,string>={customer_executive_briefing:'Executive briefing',customer_technical_deep_dive:'Technical deep dive',partner_enablement:'Partner enablement',internal_training:'Internal training',architecture_review:'Architecture review',workshop:'Workshop',roadmap:'Roadmap',proposal:'Proposal',custom:'Custom',technical_but_executive_readable:'Technical but executive readable',executive:'Executive',consultative:'Consultative',technical:'Technical',sales:'Sales',training:'Training',concise:'Concise',low:'Low',medium:'Medium',high:'High',mixed:'Mixed'};
 
-const findMissingRequired = (brief: CreatePresentationsDeckBrief) => {
-  const missing: string[] = [];
-
-  if (!brief.deck_type) missing.push('deck_type');
-  if (!brief.topic) missing.push('topic');
-  if (!brief.audience) missing.push('audience');
-  if (
-    typeof brief.slide_count !== 'number'
-    || !Number.isInteger(brief.slide_count)
-    || brief.slide_count < 3
-    || brief.slide_count > 30
-  ) {
-    missing.push('slide_count');
+export const handleCreatePresentationsTurn = async (session: AskChappySession): Promise<GuidedAssistantResponse> => { /* shortened */
+  const state = session.metadata.askchappy.create_presentations_state!; const brief=state.deckBrief; state.generatedDeckHistory ??= [];
+  const userText=[...session.transcript].reverse().find((m)=>m.role==='user')?.text?.trim()??''; const n=normalizeAnswer(userText);
+  const ask=(text:string,spoken?:string)=>{ state.events.push(nextEvent({actor:'assistant',step:state.step,kind:'question_asked',text})); return answer(text,spoken); };
+  const markSkipped=(f:CreatePresentationsOptionalField)=>{ if(!state.skippedFields.includes(f)) state.skippedFields.push(f); };
+  if (state.step==='intro') state.step='collecting_brief';
+  if (state.step==='brief_review') {
+    if (isApprovalInput(userText)) { brief.status='brief_approved'; state.step='brief_approved'; state.outline=generateOutlineFromBrief(brief, now()); brief.status='outline_review'; state.step='outline_review'; return ask(`Great — I approved the brief and generated the outline. Review it below.\n\n${renderOutlineReview(state.outline)}`,'Great — I generated the outline. Review it below.'); }
+    if (n==='user_notes') return ask('What should user notes be? Type the new value, or choose 1 to skip.');
+    if (isRevisionInput(userText)) return ask('What do you want to revise?\n1. Deck type\n2. Topic\n3. Audience\n4. Slide count\n5. Tone\n6. Technical depth\n7. Must-include sections\n8. Constraints\n9. Required messaging\n10. User notes\n11. Speaker notes','Choose what you want to revise.');
   }
-  if (!brief.tone) missing.push('tone');
-  if (!brief.technical_depth) missing.push('technical_depth');
-  if (typeof brief.output.speaker_notes !== 'boolean') missing.push('output.speaker_notes');
-
-  return missing;
-};
-
-export const handleCreatePresentationsTurn = async (session: AskChappySession): Promise<string> => {
-  const state = session.metadata.askchappy.create_presentations_state;
-  if (!state) {
-    throw new Error('create_presentations_state missing while in create_presentations mode.');
+  if (state.step==='outline_review') {
+    if (/(approve and create|approve.*powerpoint|approve.*pptx)/i.test(userText)) { state.outline.status='outline_approved'; brief.status='outline_approved'; state.step='outline_approved'; }
+    else if (/(approve|approve outline|yes|looks good|no changes|continue)/i.test(n)) { state.outline.status='outline_approved'; brief.status='outline_approved'; state.step='outline_approved'; return ask('Outline approved. Next:\n1. Create PowerPoint\n2. Revise outline','Outline approved. Choose the next step below.'); }
   }
-
-  const userText = [...session.transcript].reverse().find((m) => m.role === 'user')?.text?.trim() ?? '';
-  state.events.push(nextEvent({ actor: 'user', step: state.step, kind: 'answer_recorded', text: userText }));
-
-  const brief = state.deckBrief;
-
-  state.generatedDeckHistory ??= [];
-
-  const ask = (text: string) => {
-    state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'question_asked', text }));
-    return text;
-  };
-
-  const mapEnum = <T extends string>(value: string, map: Record<string, T>, field: string): T | undefined => {
-    const raw = normalize(value);
-
-    if (map[raw]) {
-      return map[raw];
-    }
-
-    if ((Object.values(map) as string[]).includes(raw)) {
-      return raw as T;
-    }
-
-    state.events.push(
-      nextEvent({
-        actor: 'assistant',
-        step: state.step,
-        kind: 'validation_error',
-        field,
-        text: `Unmapped ${field} value.`,
-      }),
-    );
-    return undefined;
-  };
-
-  const presentOutlineReview = () => {
-    const review = renderOutlineReview(state.outline);
-    state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'outline_review_presented', text: review }));
-    return review;
-  };
-
-  const generateOutline = () => {
-    if (!(brief.status === 'brief_approved' || state.step === 'outline_review')) {
-      return ask('Outline generation is only available after Deck Brief approval.');
-    }
-
-    state.events.push(
-      nextEvent({
-        actor: 'user',
-        step: state.step,
-        kind: 'outline_generation_requested',
-        text: userText,
-      }),
-    );
-
-    state.outline = generateOutlineFromBrief(brief, now());
-    // outline_draft remains a documented lifecycle concept, but Phase 3 generation + presentation is synchronous.
-    brief.status = 'outline_review';
-    state.step = 'outline_review';
-
-    state.events.push(
-      nextEvent({
-        actor: 'assistant',
-        step: state.step,
-        kind: 'outline_generated',
-        text: 'Outline generated from approved Deck Brief.',
-      }),
-    );
-
-    return presentOutlineReview();
-  };
-
-  if (state.step === 'intro') {
-    state.step = 'collecting_brief';
+  if (state.step==='outline_approved' || state.step==='presentation_generated') {
+    if (!(parseNumberChoice(userText)===1 || /(create powerpoint|generate presentation|generate pptx|export pptx)/i.test(userText))) return ask('Outline approved. Next:\n1. Create PowerPoint\n2. Revise outline','Outline approved. Choose the next step below.');
+    const { generatePptxFromApprovedOutline } = await import('./createPresentationsPptxGenerator'); const result = await generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
+    state.generatedPresentation={status:'generated',format:'pptx',file_name:result.fileName,file_path:result.filePath,download_url:result.downloadUrl,generated_at:result.generatedAt,theme_id:result.themeId};
+    const h=toGeneratedDeckHistoryItem(state.generatedPresentation,brief,state.outline); if(h) state.generatedDeckHistory=appendGeneratedDeckHistory(state.generatedDeckHistory,h); state.step='presentation_generated';
+    return ask(`Your PowerPoint is ready: ${result.downloadUrl}`);
   }
+  if (!brief.deck_type) { const m=deckTypeFrom(userText); if(!m) return ask(deckTypeMenu,'Choose one of the options below.'); brief.deck_type=m; }
+  else if (!brief.topic) brief.topic=userText;
+  else if (!brief.audience) brief.audience=userText;
+  else if (!brief.customer_context && !state.skippedFields.includes('customer_context')) { if(isSkipInput(userText)) markSkipped('customer_context'); else if (n==='yes') return ask('What should I include? Type it, or choose 1 to skip.'); else brief.customer_context=userText; }
+  else if (!brief.industry && !state.skippedFields.includes('industry')) { if(isSkipInput(userText)) markSkipped('industry'); else brief.industry=userText; }
+  else if (!brief.use_case && !state.skippedFields.includes('use_case')) { if(isSkipInput(userText)) markSkipped('use_case'); else brief.use_case=userText; }
+  else if (typeof brief.slide_count !=='number') { const sc=parseSlideCount(userText); if(!sc) return ask('Slide count must be an integer between 3 and 30.'); brief.slide_count=sc; }
+  else if (!brief.tone) { const t=toneFrom(userText); if(!t) return ask(toneMenu,'Choose a tone from the list below.'); brief.tone=t; }
+  else if (!brief.technical_depth) { const d=depthFrom(userText); if(!d) return ask(depthMenu,'Choose the technical depth below.'); brief.technical_depth=d; }
+  else if (!brief.must_include && !state.skippedFields.includes('must_include')) { if(isSkipInput(userText)) markSkipped('must_include'); else if(/scared|afraid|nervous/i.test(userText)) return ask('No problem — we can keep this simple. Type a comma-separated list, or choose 1 to skip.'); else brief.must_include=userText.split(',').map(i=>i.trim()).filter(Boolean); }
+  else if (!brief.constraints && !state.skippedFields.includes('constraints')) { if(isSkipInput(userText)) markSkipped('constraints'); else brief.constraints=userText.split(',').map(i=>i.trim()).filter(Boolean); }
+  else if (!brief.required_messaging && !state.skippedFields.includes('required_messaging')) { if(isSkipInput(userText)) markSkipped('required_messaging'); else brief.required_messaging=userText.split(',').map(i=>i.trim()).filter(Boolean); }
+  else if (!brief.user_notes && !state.skippedFields.includes('user_notes')) { if(isSkipInput(userText)) markSkipped('user_notes'); else brief.user_notes=userText; }
+  else if (typeof brief.output.speaker_notes !== 'boolean') { const s=speakerNotesFrom(userText); if(typeof s!=='boolean') return ask(speakerNotesMenu,'Choose yes or no below.'); brief.output.speaker_notes=s; }
 
-  if (state.step === 'outline_approved' || state.step === 'presentation_generated') {
-    if (!isPptxGenerationRequest(userText)) {
-      return ask("Your outline is approved. Say 'generate presentation' when you’re ready, and I’ll create the editable PowerPoint.");
-    }
-    if (!(state.outline.status === 'outline_approved' && brief.status === 'outline_approved')) {
-      return ask('PPTX generation is only available after outline approval.');
-    }
-
-    state.generatedPresentation = { status: 'generating', format: 'pptx' };
-    state.events.push(nextEvent({ actor: 'user', step: state.step, kind: 'pptx_generation_requested', text: userText }));
-
-    try {
-      const { generatePptxFromApprovedOutline } = await import('./createPresentationsPptxGenerator');
-      const result = await generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
-      state.generatedPresentation = {
-        status: 'generated',
-        format: 'pptx',
-        file_name: result.fileName,
-        file_path: result.filePath,
-        download_url: result.downloadUrl,
-        generated_at: result.generatedAt,
-        theme_id: result.themeId,
-      };
-      const historyEntry = toGeneratedDeckHistoryItem(state.generatedPresentation, brief, state.outline);
-      if (historyEntry) {
-        state.generatedDeckHistory = appendGeneratedDeckHistory(state.generatedDeckHistory, historyEntry);
-      }
-      state.step = 'presentation_generated';
-      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generated', text: result.downloadUrl }));
-      return `Your PowerPoint is ready: ${result.downloadUrl}`;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown PPTX generation error.';
-      state.generatedPresentation = { status: 'error', format: 'pptx', error_message: message };
-      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generation_failed', text: message }));
-      return `I could not generate the PowerPoint: ${message}`;
-    }
-  }
-
-  if (state.step === 'outline_review') {
-    if (isOutlineApproval(userText)) {
-      const errors = validateOutlineForApproval(state.outline, brief);
-      if (errors.length) {
-        state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'validation_error', text: errors.join(' | ') }));
-        return ask(`I cannot approve this outline yet:\n- ${errors.join('\n- ')}`);
-      }
-
-      state.outline.status = 'outline_approved';
-      state.outline.updated_at = now();
-      brief.status = 'outline_approved';
-      state.step = 'outline_approved';
-      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'outline_approved', text: 'Outline approved.' }));
-      return 'Great—your outline is approved. Phase 3 is complete. No PPTX generation happens in this phase.';
-    }
-
-    if (isOutlineRegenerateRequest(userText)) {
-      return generateOutline();
-    }
-
-    const titleMatch = userText.match(/change\s+slide\s+(\d+)\s+title\s+to\s+(.+)/i);
-    const objectiveMatch = userText.match(/change\s+slide\s+(\d+)\s+objective\s+to\s+(.+)/i);
-    const replacePointsMatch = userText.match(/change\s+slide\s+(\d+)\s+key\s+points\s+to\s+(.+)/i);
-    const addPointMatch = userText.match(/add\s+key\s+point\s+to\s+slide\s+(\d+)\s*:\s*(.+)/i);
-    const removePointMatch = userText.match(/remove\s+key\s+point\s+from\s+slide\s+(\d+)\s*:\s*(.+)/i);
-
-    const parseSlide = (raw: string) => Number.parseInt(raw, 10) - 1;
-    const slideAt = (idx: number) => state.outline.slides[idx];
-    const invalidSlide = (idx: number) => idx < 0 || idx >= state.outline.slides.length;
-
-    const updateOk = (field: string, value: unknown) => {
-      state.outline.status = 'outline_review';
-      state.outline.updated_at = now();
-      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'outline_updated', field, value }));
-      return presentOutlineReview();
-    };
-
-    if (titleMatch) {
-      const idx = parseSlide(titleMatch[1]);
-      if (invalidSlide(idx)) {
-        return ask(`Slide ${titleMatch[1]} is out of range. Choose a slide between 1 and ${state.outline.slides.length}.`);
-      }
-      slideAt(idx).title = titleMatch[2].trim();
-      return updateOk('slide.title', { slide: idx + 1, title: slideAt(idx).title });
-    }
-
-    if (objectiveMatch) {
-      const idx = parseSlide(objectiveMatch[1]);
-      if (invalidSlide(idx)) {
-        return ask(`Slide ${objectiveMatch[1]} is out of range. Choose a slide between 1 and ${state.outline.slides.length}.`);
-      }
-      slideAt(idx).objective = objectiveMatch[2].trim();
-      return updateOk('slide.objective', { slide: idx + 1, objective: slideAt(idx).objective });
-    }
-
-    if (replacePointsMatch) {
-      const idx = parseSlide(replacePointsMatch[1]);
-      if (invalidSlide(idx)) {
-        return ask(`Slide ${replacePointsMatch[1]} is out of range. Choose a slide between 1 and ${state.outline.slides.length}.`);
-      }
-
-      const points = toList(replacePointsMatch[2]);
-      if (points.length < 2 || points.length > 5) {
-        return ask('Key points must contain 2–5 items.');
-      }
-
-      slideAt(idx).key_points = points;
-      return updateOk('slide.key_points', { slide: idx + 1, key_points: points });
-    }
-
-    if (addPointMatch) {
-      const idx = parseSlide(addPointMatch[1]);
-      if (invalidSlide(idx)) {
-        return ask(`Slide ${addPointMatch[1]} is out of range. Choose a slide between 1 and ${state.outline.slides.length}.`);
-      }
-      if (slideAt(idx).key_points.length >= 5) {
-        return ask('This slide already has 5 key points. Remove one before adding another.');
-      }
-
-      const point = addPointMatch[2].trim();
-      slideAt(idx).key_points.push(point);
-      return updateOk('slide.key_points_add', { slide: idx + 1, key_point: point });
-    }
-
-    if (removePointMatch) {
-      const idx = parseSlide(removePointMatch[1]);
-      if (invalidSlide(idx)) {
-        return ask(`Slide ${removePointMatch[1]} is out of range. Choose a slide between 1 and ${state.outline.slides.length}.`);
-      }
-
-      const text = removePointMatch[2].trim();
-      const filtered = slideAt(idx).key_points.filter((point) => point !== text);
-
-      if (filtered.length === slideAt(idx).key_points.length) {
-        return ask(`I could not find that exact key point on slide ${idx + 1}.`);
-      }
-      if (filtered.length < 2) {
-        return ask('Each slide must keep at least 2 key points.');
-      }
-
-      slideAt(idx).key_points = filtered;
-      return updateOk('slide.key_points_remove', { slide: idx + 1, key_point: text });
-    }
-
-    state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'outline_revision_requested', text: userText }));
-    return ask('Please clarify the outline revision. Supported changes: change slide N title/objective, replace key points, add/remove key point, regenerate outline, or approve outline.');
-  }
-
-  if (state.step === 'brief_approved') {
-    if (isOutlineGenerationRequest(userText)) {
-      return generateOutline();
-    }
-    return ask("Your Deck Brief is approved. Say 'generate outline' when you’re ready, and I’ll create the proposed slide flow.");
-  }
-
-  const renderValue = (field: CreatePresentationsOptionalField) => {
-    if (state.skippedFields.includes(field)) return 'Skipped';
-
-    const value = brief[field];
-    if (Array.isArray(value)) return value.length ? value.join(', ') : 'Skipped';
-    return value ?? 'Skipped';
-  };
-
-  const presentReview = () => {
-    brief.status = 'brief_review';
-    state.step = 'brief_review';
-
-    const review = [
-      'Deck Brief Review',
-      `- deck_type: ${brief.deck_type}`,
-      `- topic: ${brief.topic}`,
-      `- audience: ${brief.audience}`,
-      `- customer_context: ${renderValue('customer_context')}`,
-      `- industry: ${renderValue('industry')}`,
-      `- use_case: ${renderValue('use_case')}`,
-      `- slide_count: ${brief.slide_count}`,
-      `- tone: ${brief.tone}`,
-      `- technical_depth: ${brief.technical_depth}`,
-      `- must_include: ${renderValue('must_include')}`,
-      `- constraints: ${renderValue('constraints')}`,
-      `- required_messaging: ${renderValue('required_messaging')}`,
-      `- user_notes: ${renderValue('user_notes')}`,
-      `- output.speaker_notes: ${brief.output.speaker_notes ? 'yes' : 'no'}`,
-      '- source policy: user_provided_only',
-      'Approve this brief, or tell me what to revise.',
-    ].join('\n');
-
-    state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_review_presented', text: review }));
-    return review;
-  };
-
-  const markSkipped = (field: CreatePresentationsOptionalField) => {
-    if (!state.skippedFields.includes(field)) {
-      state.skippedFields.push(field);
-    }
-  };
-
-  if (state.step === 'brief_review') {
-    if (approveBrief(userText)) {
-      const missing = findMissingRequired(brief);
-      if (missing.length) {
-        return ask(`I cannot approve yet. Please revise required fields: ${missing.join(', ')}.`);
-      }
-
-      brief.status = 'brief_approved';
-      state.step = 'brief_approved';
-      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_approved', text: 'Deck Brief approved.' }));
-      return "Great—your Deck Brief is approved. Say 'generate outline' when you’re ready, and I’ll create the proposed slide flow.";
-    }
-
-    const applyRevision = (pattern: RegExp, updater: (value: string) => boolean) => {
-      const match = userText.match(pattern);
-      if (!match) {
-        return false;
-      }
-      return updater(match[1].trim());
-    };
-
-    const revised =
-      applyRevision(/(?:change|set|update)\s+slide\s*count\s+(?:to\s+)?(\d+)/i, (value) => {
-        const n = Number.parseInt(value, 10);
-        if (!Number.isInteger(n) || n < 3 || n > 30) {
-          return false;
-        }
-        brief.slide_count = n;
-        state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_updated', field: 'slide_count', value: n }));
-        return true;
-      })
-      || applyRevision(/(?:set|change|update|make)\s+tone\s+(?:to\s+)?(.+)/i, (value) => {
-        const mapped = mapEnum(value, toneMap, 'tone');
-        if (!mapped) return false;
-        brief.tone = mapped;
-        state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_updated', field: 'tone', value: mapped }));
-        return true;
-      })
-      || applyRevision(/(?:set|change|update|make)\s+technical\s+depth\s+(?:to\s+)?(.+)/i, (value) => {
-        const mapped = mapEnum(value, depthMap, 'technical_depth');
-        if (!mapped) return false;
-        brief.technical_depth = mapped;
-        state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_updated', field: 'technical_depth', value: mapped }));
-        return true;
-      })
-      || applyRevision(/(?:set|change|update)\s+deck\s*type\s+(?:to\s+)?(.+)/i, (value) => {
-        const mapped = mapEnum(value, deckTypeMap, 'deck_type');
-        if (!mapped) return false;
-        brief.deck_type = mapped;
-        return true;
-      })
-      || applyRevision(/(?:set|change|update)\s+topic\s+(?:to\s+)?(.+)/i, (value) => {
-        brief.topic = value;
-        return true;
-      })
-      || applyRevision(/(?:set|change|update)\s+audience\s+(?:to\s+)?(.+)/i, (value) => {
-        brief.audience = value;
-        return true;
-      })
-      || applyRevision(/(?:add|set|change|update)\s+must\s+include\s+(?:to\s+)?(.+)/i, (value) => {
-        brief.must_include = toList(value);
-        return true;
-      })
-      || applyRevision(/(?:add|set|change|update)\s+constraints\s+(?:to\s+)?(.+)/i, (value) => {
-        brief.constraints = toList(value);
-        return true;
-      })
-      || applyRevision(/(?:add|set|change|update)\s+required\s+messaging\s+(?:to\s+)?(.+)/i, (value) => {
-        brief.required_messaging = toList(value);
-        return true;
-      })
-      || applyRevision(/(?:set|change|update)\s+user\s+notes\s+(?:to\s+)?(.+)/i, (value) => {
-        brief.user_notes = value;
-        return true;
-      })
-      || applyRevision(/(?:set|change|update)\s+speaker\s+notes\s+(?:to\s+)?(.+)/i, (value) => {
-        if (yes(value)) {
-          brief.output.speaker_notes = true;
-        } else if (no(value)) {
-          brief.output.speaker_notes = false;
-        } else {
-          return false;
-        }
-        return true;
-      });
-
-    if (!revised) {
-      return ask('I can revise deck_type, topic, audience, slide_count, tone, technical_depth, must_include, constraints, required_messaging, user_notes, or speaker notes. Please specify one change.');
-    }
-
-    return presentReview();
-  }
-
-  if (!brief.deck_type) {
-    const mapped = mapEnum(userText, deckTypeMap, 'deck_type');
-    if (!mapped) {
-      return ask('What type of deck are we creating? Choose one: executive briefing, technical deep dive, partner enablement, internal training, architecture review, workshop, roadmap, proposal, or custom.');
-    }
-    brief.deck_type = mapped;
-  } else if (!brief.topic) {
-    brief.topic = userText;
-  } else if (!brief.audience) {
-    brief.audience = userText;
-  } else if (!brief.customer_context && !state.skippedFields.includes('customer_context')) {
-    if (isSkipInput(userText)) markSkipped('customer_context');
-    else brief.customer_context = userText;
-  } else if (!brief.industry && !state.skippedFields.includes('industry')) {
-    if (isSkipInput(userText)) markSkipped('industry');
-    else brief.industry = userText;
-  } else if (!brief.use_case && !state.skippedFields.includes('use_case')) {
-    if (isSkipInput(userText)) markSkipped('use_case');
-    else brief.use_case = userText;
-  } else if (typeof brief.slide_count !== 'number') {
-    const n = Number.parseInt(userText, 10);
-    if (!Number.isInteger(n) || n < 3 || n > 30) {
-      return ask('Slide count must be an integer between 3 and 30.');
-    }
-    brief.slide_count = n;
-  } else if (!brief.tone) {
-    const mapped = mapEnum(userText, toneMap, 'tone');
-    if (!mapped) {
-      return ask('What tone should this deck use? Choose one: executive, consultative, technical, technical but executive readable, sales, training, concise, or custom.');
-    }
-    brief.tone = mapped;
-  } else if (!brief.technical_depth) {
-    const mapped = mapEnum(userText, depthMap, 'technical_depth');
-    if (!mapped) {
-      return ask('What technical depth should we target? Choose one: low, medium, high, or mixed.');
-    }
-    brief.technical_depth = mapped;
-  } else if (!brief.must_include && !state.skippedFields.includes('must_include')) {
-    if (isSkipInput(userText)) markSkipped('must_include');
-    else brief.must_include = toList(userText);
-  } else if (!brief.constraints && !state.skippedFields.includes('constraints')) {
-    if (isSkipInput(userText)) markSkipped('constraints');
-    else brief.constraints = toList(userText);
-  } else if (!brief.required_messaging && !state.skippedFields.includes('required_messaging')) {
-    if (isSkipInput(userText)) markSkipped('required_messaging');
-    else brief.required_messaging = toList(userText);
-  } else if (!brief.user_notes && !state.skippedFields.includes('user_notes')) {
-    if (isSkipInput(userText)) markSkipped('user_notes');
-    else brief.user_notes = userText;
-  } else if (typeof brief.output.speaker_notes !== 'boolean') {
-    if (yes(userText)) brief.output.speaker_notes = true;
-    else if (no(userText)) brief.output.speaker_notes = false;
-    else return ask('Should speaker notes be included? Please answer yes or no.');
-  }
-
-  const nextQuestion = [
-    [!brief.topic, 'What is the presentation topic?'],
-    [!brief.audience, 'Who is the audience?'],
-    [!brief.customer_context && !state.skippedFields.includes('customer_context'), 'What customer/company context should be included? (or say skip)'],
-    [!brief.industry && !state.skippedFields.includes('industry'), 'What industry is this for? (or say skip)'],
-    [!brief.use_case && !state.skippedFields.includes('use_case'), 'What is the primary use case? (or say skip)'],
-    [typeof brief.slide_count !== 'number', 'How many slides do you want (3–30)?'],
-    [!brief.tone, 'What tone should this deck use? Choose one: executive, consultative, technical, technical but executive readable, sales, training, concise, or custom.'],
-    [!brief.technical_depth, 'What technical depth should we target? Choose one: low, medium, high, or mixed.'],
-    [!brief.must_include && !state.skippedFields.includes('must_include'), 'List must-include sections (comma-separated), or say skip.'],
-    [!brief.constraints && !state.skippedFields.includes('constraints'), 'List constraints (comma-separated), or say skip.'],
-    [!brief.required_messaging && !state.skippedFields.includes('required_messaging'), 'List required messaging points (comma-separated), or say skip.'],
-    [!brief.user_notes && !state.skippedFields.includes('user_notes'), 'Any extra user notes? (or say skip)'],
-    [typeof brief.output.speaker_notes !== 'boolean', 'Include speaker notes? (yes/no)'],
-  ].find((x) => x[0]);
-
-  if (nextQuestion) {
-    return ask(nextQuestion[1] as string);
-  }
-
-  return presentReview();
+  const render=(v:unknown)=> Array.isArray(v)?(v.length?v.join(', '):'Skipped'):(v??'Skipped');
+  const next = !brief.topic?'What is the presentation topic?':!brief.audience?'Who is the audience?':!brief.customer_context&&!state.skippedFields.includes('customer_context')?'Customer/company context? Type it, or choose 1 to skip.':!brief.industry&&!state.skippedFields.includes('industry')?'Industry? Type it, or choose 1 to skip.':!brief.use_case&&!state.skippedFields.includes('use_case')?'Primary use case? Type it, or choose 1 to skip.':typeof brief.slide_count!=='number'?'How many slides do you want (3–30)?':!brief.tone?toneMenu:!brief.technical_depth?depthMenu:!brief.must_include&&!state.skippedFields.includes('must_include')?'Must-include sections? Type a comma-separated list, or choose 1 to skip.':!brief.constraints&&!state.skippedFields.includes('constraints')?'Constraints? Type a comma-separated list, or choose 1 to skip.':!brief.required_messaging&&!state.skippedFields.includes('required_messaging')?'Required messaging points? Type a comma-separated list, or choose 1 to skip.':!brief.user_notes&&!state.skippedFields.includes('user_notes')?'Extra user notes? Type notes, or choose 1 to skip.':typeof brief.output.speaker_notes!=='boolean'?speakerNotesMenu:'';
+  if (next) return ask(next, next===toneMenu?'Choose a tone from the list below.':next===depthMenu?'Choose the technical depth below.':next===speakerNotesMenu?'Choose yes or no below.':'');
+  state.step='brief_review'; brief.status='brief_review';
+  return ask(`Here’s the brief I heard:\n1. Deck type: ${labels[brief.deck_type!]}\n2. Topic: ${brief.topic}\n3. Audience: ${brief.audience}\n4. Customer context: ${render(brief.customer_context)}\n5. Industry: ${render(brief.industry)}\n6. Primary use case: ${render(brief.use_case)}\n7. Slide count: ${brief.slide_count}\n8. Tone: ${labels[brief.tone!]}\n9. Technical depth: ${labels[brief.technical_depth!]}\n10. Must-include sections: ${render(brief.must_include)}\n11. Constraints: ${render(brief.constraints)}\n12. Required messaging: ${render(brief.required_messaging)}\n13. User notes: ${render(brief.user_notes)}\n14. Speaker notes: ${brief.output.speaker_notes ? 'Yes' : 'No'}\n\nNext:\n1. Approve and generate outline\n2. Revise brief`,'Here’s the brief I heard. Choose approve or revise below.');
 };
