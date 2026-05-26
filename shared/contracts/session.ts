@@ -96,7 +96,7 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     cps.deckBrief.schema_version === '1.0' &&
     cps.deckBrief.mode === 'create_presentations' &&
     typeof cps.deckBrief.status === 'string' &&
-    ['draft', 'brief_review', 'brief_approved', 'outline_draft', 'outline_review', 'outline_approved', 'generated', 'error'].includes(cps.deckBrief.status as string) &&
+    ['draft', 'brief_review', 'brief_approved', 'outline_draft', 'outline_review', 'outline_approved', 'error'].includes(cps.deckBrief.status as string) &&
     isRecord(cps.deckBrief.source_requirements) &&
     cps.deckBrief.source_requirements.source_policy === 'user_provided_only' &&
     cps.deckBrief.source_requirements.citations_required === false &&

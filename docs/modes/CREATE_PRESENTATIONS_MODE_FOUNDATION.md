@@ -256,6 +256,9 @@ Architecture rule:
 - Speaker notes are included only when supported by the selected PPTX library/runtime path.
 - Deferred scope remains deferred in Phase 4 (no RAG, no Glean, no DDN retrieval/content lookup).
 
+Implementation note: Phase 4 must use a real PPTX library runtime path (for example, `pptxgenjs`) and must not hand-build Open XML parts or shell out to system archiving tools.
+If speaker notes are not proven reliable in the selected runtime path, they remain deferred rather than faked.
+
 ### Phase 5 — Template/theme/speaker-notes/export polish
 - Add visual/theme/template controls.
 - Improve export UX and optional speaker-note shaping.
