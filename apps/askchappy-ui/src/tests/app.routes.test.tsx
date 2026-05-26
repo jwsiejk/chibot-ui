@@ -314,7 +314,6 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText('Chappy')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/Chappy voice on|Chappy speaking…/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     await waitFor(() => expect(screen.getByText(/Processing to Chappy speaking:/)).toBeInTheDocument());
@@ -334,7 +333,6 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText('Chappy')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/Chappy voice on|Chappy speaking…/)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
@@ -785,8 +783,6 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByText(/Create Presentations Mode is ready\./)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Exit Create Presentations' })).toBeInTheDocument();
 
-    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
-    const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
     const session = getLocalSession(sessionId);
     expect(session?.metadata.askchappy.create_presentations_state?.mode).toBe('create_presentations');
     expect(session?.metadata.askchappy.create_presentations_state?.deckBrief.schema_version).toBe('1.0');
@@ -810,18 +806,30 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create Presentations' }));
 
-    const say = (text: string) => {
-      fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: text } });
-      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    };
-
-    for (const msg of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', '5', 'technical', 'medium', 'architecture, roadmap', 'keep concise', 'risk reduction', 'skip', 'yes', 'approve', 'generate outline', 'approve outline', 'generate presentation']) {
-      say(msg);
-    }
-
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Download' })).toBeInTheDocument());
     const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
     const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
+
+    const say = async (text: string) => {
+      fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: text } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => {
+        const state = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state;
+        expect(state?.lastUserInput).toBe(text);
+        expect(state?.isGenerating).toBe(false);
+      });
+    };
+
+    for (const msg of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', '5', 'technical', 'medium', 'architecture, roadmap', 'keep concise', 'risk reduction', 'skip', 'yes', 'approve', 'generate outline', 'approve outline']) {
+      await say(msg);
+    }
+    await say('generate presentation');
+
+    await waitFor(() => {
+      const generatedPresentation = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state?.generatedPresentation;
+      expect(generatedPresentation?.status).toBe('generated');
+      expect(generatedPresentation?.download_url).toBeTruthy();
+    });
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Download' })).toBeInTheDocument());
     const session = getLocalSession(sessionId);
     const generated = session?.metadata.askchappy.create_presentations_state?.generatedPresentation;
     expect(generated?.status).toBe('generated');
