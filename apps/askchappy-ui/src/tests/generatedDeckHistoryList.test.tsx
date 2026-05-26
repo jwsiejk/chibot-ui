@@ -27,7 +27,11 @@ describe('GeneratedDeckHistoryList', () => {
     );
 
     expect(screen.getByText('Generated decks')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('href', '/api/presentations/deck-2.pptx');
+    expect(screen.getByRole('link', { name: 'Download Deck Two' })).toHaveAttribute('href', '/api/presentations/deck-2.pptx');
+    expect(screen.getByRole('link', { name: 'Download Deck Two' })).toHaveAttribute('download', 'deck-2.pptx');
+    expect(screen.getByRole('link', { name: 'Download deck-1.pptx' })).toHaveAttribute('href', '/api/presentations/deck-1.pptx');
+    expect(screen.getByRole('link', { name: 'Download deck-1.pptx' })).toHaveAttribute('download', 'deck-1.pptx');
+    expect(screen.getAllByText('Download')).toHaveLength(2);
     expect(screen.queryByText('/tmp/internal/deck-2.pptx')).not.toBeInTheDocument();
   });
 });

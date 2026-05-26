@@ -13,6 +13,11 @@ export const GeneratedDeckHistoryList = ({
 }: {
   generatedDeckHistory?: CreatePresentationsGeneratedDeckHistoryItem[];
 }) => {
+  const toDownloadAriaLabel = (deck: CreatePresentationsGeneratedDeckHistoryItem): string => {
+    const preferredLabel = deck.title?.trim() || deck.file_name;
+    return `Download ${preferredLabel}`;
+  };
+
   if (!generatedDeckHistory?.length) {
     return null;
   }
@@ -28,7 +33,7 @@ export const GeneratedDeckHistoryList = ({
             <p>Format: {deck.format.toUpperCase()}</p>
             {deck.theme_id ? <p>Theme: {deck.theme_id}</p> : null}
             {formatGeneratedAt(deck.generated_at) ? <p>Generated: {formatGeneratedAt(deck.generated_at) as string}</p> : null}
-            <a className="btn secondary" href={deck.download_url} download={deck.file_name}>Download</a>
+            <a className="btn secondary" href={deck.download_url} download={deck.file_name} aria-label={toDownloadAriaLabel(deck)}>Download</a>
           </li>
         ))}
       </ul>
