@@ -88,4 +88,23 @@ describe('create presentations phase 2b hardening', () => {
     expect(cps?.events.some((event) => event.kind === 'brief_review_presented')).toBe(true);
     expect(cps?.events.some((event) => event.kind === 'brief_updated' && event.field === 'slide_count')).toBe(true);
   });
+
+  it('generates pptx immediately from outline review when user chooses 1', async () => {
+    resetSessionStore();
+    const session = createLocalSession();
+    setLocalSessionMode(session.session_id, 'create_presentations', 'user');
+    const answer = async (text: string) => {
+      appendLocalUserTextMessage(session.session_id, text);
+      await generateLocalAssistantMessage(session.session_id);
+      return getLocalTranscript(session.session_id).at(-1)?.text ?? '';
+    };
+    for (const msg of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', '5', 'technical', 'medium', 'architecture, roadmap', 'keep concise', 'risk reduction', 'skip', 'no']) await answer(msg);
+    await answer('1');
+    const outlineReview = await answer('1');
+    expect(outlineReview).toContain('Your PowerPoint is ready: /api/presentations/');
+    expect(outlineReview).not.toContain('Here’s the brief I heard:');
+    const state = getLocalSession(session.session_id)?.metadata.askchappy.create_presentations_state;
+    expect(state?.generatedPresentation.status).toBe('generated');
+    expect(state?.generatedPresentation.download_url).toContain('/api/presentations/');
+  });
 });

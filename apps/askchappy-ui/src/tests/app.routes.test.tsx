@@ -564,7 +564,7 @@ describe('phase 22 chappy UI', () => {
     if (!local) return;
     local.transcript = [
       { id: 'u1', ts: new Date().toISOString(), role: 'user', text: 'hello', source: 'typed', session_id: sessionId, meta: {} },
-      { id: 'a1', ts: new Date().toISOString(), role: 'assistant', text: 'hi there', source: 'assistant_stream', session_id: sessionId, meta: {} },
+      { id: 'a1', ts: new Date().toISOString(), role: 'assistant', text: 'Line one\nLine two', source: 'assistant_stream', session_id: sessionId, meta: {} },
     ];
 
     render(<MemoryRouter initialEntries={[`/chappy/session/${sessionId}`]}><App /></MemoryRouter>);
@@ -579,6 +579,8 @@ describe('phase 22 chappy UI', () => {
 
     const assistantBubble = screen.getByText('vChappy').closest('.msg');
     expect(assistantBubble).toHaveClass('msg', 'assistant');
+    expect(screen.getByText(/Line one/)).toBeInTheDocument();
+    expect(screen.queryByText(/Line one\\nLine two/)).not.toBeInTheDocument();
   });
 
   it('typed input appends user canonical transcript message with typed source and text', () => {
@@ -913,11 +915,6 @@ describe('phase 22 chappy UI', () => {
     await waitFor(() => {
       const state = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state;
       expect(state?.step === 'outline_review' || state?.outline.status === 'outline_review').toBe(true);
-    });
-    await say('approve outline');
-    await waitFor(() => {
-      const state = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state;
-      expect(state?.step === 'outline_approved' || state?.outline.status === 'outline_approved').toBe(true);
     });
     await say('1');
 

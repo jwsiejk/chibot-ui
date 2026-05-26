@@ -26,6 +26,14 @@ const createMockRequest = (method: string, url: string) => {
   req.url = url;
   return req;
 };
+const createMockJsonRequest = (method: string, url: string, body: unknown) => {
+  const req = createMockRequest(method, url);
+  process.nextTick(() => {
+    req.emit('data', Buffer.from(JSON.stringify(body)));
+    req.emit('end');
+  });
+  return req;
+};
 
 describe('presentation download route', () => {
   it('serves generated pptx bytes at /api/presentations/:fileName', async () => {
@@ -87,5 +95,29 @@ describe('presentation download route', () => {
     expect(handledMissing).toBe(true);
     expect(missing.statusCode).toBe(404);
     expect(missing.headers.get('content-type')).toBe('application/json; charset=utf-8');
+  });
+
+  it('supports POST /api/presentations/generate and omits filePath from response', async () => {
+    const s = createLocalSession();
+    setLocalSessionMode(s.session_id, 'create_presentations', 'user');
+    for (const a of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', '5', 'technical', 'medium', 'architecture, roadmap', 'keep concise', 'risk reduction', 'skip', 'no', 'Approve this brief']) await say(s.session_id, a);
+    const state = getLocalSession(s.session_id)?.metadata.askchappy.create_presentations_state;
+    const response = createMockResponse();
+    const handled = await tryHandlePresentationDownloadRoute(
+      createMockJsonRequest('POST', '/api/presentations/generate', { session_id: s.session_id, brief: state?.deckBrief, outline: state?.outline }),
+      response.res,
+    );
+    expect(handled).toBe(true);
+    expect(response.statusCode).toBe(200);
+    const payload = JSON.parse(response.body().toString('utf-8')) as Record<string, string>;
+    expect(payload.fileName).toMatch(/\.pptx$/);
+    expect(payload.downloadUrl).toContain('/api/presentations/');
+    expect(payload.filePath).toBeUndefined();
+
+    const fetchGenerated = createMockResponse();
+    const fetched = await tryHandlePresentationDownloadRoute(createMockRequest('GET', payload.downloadUrl), fetchGenerated.res);
+    expect(fetched).toBe(true);
+    expect(fetchGenerated.statusCode).toBe(200);
+    expect(fetchGenerated.body().byteLength).toBeGreaterThan(0);
   });
 });

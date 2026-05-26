@@ -4,6 +4,7 @@ import {
   type CreatePresentationsDeckBrief,
   type CreatePresentationsModeEvent,
   type CreatePresentationsOptionalField,
+  type CreatePresentationsPptxThemeId,
 } from '../../../../shared/contracts/createPresentationsMode';
 import type { AskChappySession } from '../sessions/sessionStore';
 import { appendGeneratedDeckHistory, toGeneratedDeckHistoryItem } from './createPresentationsDeckHistory';
@@ -29,6 +30,7 @@ type RevisionField =
 type CreatePresentationsState = NonNullable<AskChappySession['metadata']['askchappy']['create_presentations_state']>;
 type RevisionCapableState = CreatePresentationsState & { pendingBriefRevisionField?: RevisionField };
 type Choice<T extends string> = { label: string; value: T; aliases: string[] };
+type PptxGenerationResult = { fileName: string; downloadUrl: string; generatedAt?: string; themeId?: CreatePresentationsPptxThemeId; filePath?: string };
 
 const answer = (text: string, spokenText?: string): GuidedAssistantResponse => ({ text, spokenText });
 const now = () => new Date().toISOString();
@@ -322,6 +324,20 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
   const userText = [...session.transcript].reverse().find((m) => m.role === 'user')?.text?.trim() ?? '';
   const normalized = normalizeAnswer(userText);
   state.events.push(nextEvent({ actor: 'user', step: state.step, kind: 'answer_recorded', text: userText }));
+  const generatePptxRuntime = async (): Promise<PptxGenerationResult> => {
+    if (typeof window !== 'undefined') {
+      const response = await fetch('/api/presentations/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: session.session_id, brief, outline: state.outline }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(typeof payload?.error === 'string' ? payload.error : 'Presentation generation failed.');
+      return { fileName: payload.fileName as string, downloadUrl: payload.downloadUrl as string, generatedAt: payload.generatedAt as string | undefined, themeId: payload.themeId as CreatePresentationsPptxThemeId | undefined, filePath: undefined };
+    }
+    const { generatePptxFromApprovedOutline } = await import('./createPresentationsPptxGenerator');
+    return generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
+  };
 
   const ask = (text: string, spoken?: string) => {
     state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'question_asked', text }));
@@ -421,7 +437,7 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
     const outlineChoice = parseNumberChoice(userText);
     const wantsCreatePowerPoint =
       outlineChoice === 1
-      || /^(approve|approve outline|yes|looks good|no changes|continue)$/i.test(normalized)
+      || /^(approve|approve outline|yes|looks good|no changes|continue|one)$/i.test(normalized)
       || /(approve and create|approve.*powerpoint|approve.*pptx|create powerpoint|generate presentation|generate pptx|export pptx)/i.test(userText);
 
     if (wantsCreatePowerPoint) {
@@ -437,17 +453,16 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
       state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generation_requested', text: userText }));
 
       try {
-        const { generatePptxFromApprovedOutline } = await import('./createPresentationsPptxGenerator');
-        const result = await generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
+        const result = await generatePptxRuntime();
 
         state.generatedPresentation = {
           status: 'generated',
           format: 'pptx',
           file_name: result.fileName,
-          file_path: result.filePath,
           download_url: result.downloadUrl,
           generated_at: result.generatedAt,
           theme_id: result.themeId,
+          ...(result.filePath ? { file_path: result.filePath } : {}),
         };
 
         const history = toGeneratedDeckHistoryItem(state.generatedPresentation, brief, state.outline);
@@ -474,7 +489,7 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
     }
 
     return ask(
-      'Deck Outline Review complete. Next:\\n1. This is correct — create the PowerPoint\\n2. Edit the outline',
+      'Deck Outline Review complete. Next:\n1. This is correct — create the PowerPoint\n2. Edit the outline',
       'If this outline looks correct, choose 1 to create the PowerPoint. To edit, choose 2.',
     );
   }
@@ -487,9 +502,8 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
     state.generatedPresentation = { status: 'generating', format: 'pptx' };
     state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generation_requested', text: userText }));
     try {
-      const { generatePptxFromApprovedOutline } = await import('./createPresentationsPptxGenerator');
-      const result = await generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
-      state.generatedPresentation = { status: 'generated', format: 'pptx', file_name: result.fileName, file_path: result.filePath, download_url: result.downloadUrl, generated_at: result.generatedAt, theme_id: result.themeId };
+      const result = await generatePptxRuntime();
+      state.generatedPresentation = { status: 'generated', format: 'pptx', file_name: result.fileName, download_url: result.downloadUrl, generated_at: result.generatedAt, theme_id: result.themeId, ...(result.filePath ? { file_path: result.filePath } : {}) };
       const history = toGeneratedDeckHistoryItem(state.generatedPresentation, brief, state.outline);
       if (history) state.generatedDeckHistory = appendGeneratedDeckHistory(state.generatedDeckHistory, history);
       state.step = 'presentation_generated';
