@@ -32,10 +32,13 @@ describe('create presentations phase 2b hardening', () => {
     expect(await answer('31')).toContain('Slide count must be an integer between 3 and 30.');
     await answer('10');
 
-    expect(await answer('weird')).toContain('What tone should this deck use?');
+    const tonePrompt = await answer('weird');
+    expect(tonePrompt).toContain('Choose a tone:');
+    expect(tonePrompt).toContain('1. Executive');
+    expect(tonePrompt).toContain('4. Technical but executive readable');
     await answer('technical but executive readable');
 
-    expect(await answer('hardcore')).toContain('What technical depth should we target?');
+    expect(await answer('hardcore')).toContain('Choose technical depth:');
     await answer('moderate');
 
     await answer('business drivers, architecture, roadmap');
@@ -43,23 +46,26 @@ describe('create presentations phase 2b hardening', () => {
     await answer('risk reduction, measurable outcomes');
     await answer('blank');
 
-    expect(await answer('maybe')).toContain('Please answer yes or no');
+    expect(await answer('maybe')).toContain('Include speaker notes?');
     const review = await answer('no');
-    expect(review).toContain('Deck Brief Review');
+    expect(review).toContain('Here’s the brief I heard:');
     expect(review).toContain('customer_context: Skipped');
     expect(review).toContain('industry: Skipped');
     expect(review).toContain('use_case: Skipped');
     expect(review).toContain('user_notes: Skipped');
     expect(review).toContain('source policy: user_provided_only');
+    expect(review).toContain('Deck type: Executive briefing');
+    expect(review).toContain('Tone: Technical but executive readable');
     expect(review).not.toMatch(/RAG|Glean|DDN|embeddings|citation|internal docs/i);
 
     expect(await answer('approve with changes')).toContain('Please specify one change');
-    expect(await answer('set tone to consultative')).toContain('Deck Brief Review');
+    expect(await answer('set tone to consultative')).toContain('Here’s the brief I heard:');
     const updatedReview = await answer('change slide count to 8');
     expect(updatedReview).toContain('slide_count: 8');
 
-    const approved = await answer('approve');
-    expect(approved).toContain('Deck Brief is approved');
+    const approved = await answer('Approve this brief');
+    expect(approved).toContain('Great — I approved the brief and generated the outline.');
+    expect(approved).toContain('Deck Outline Review');
 
     const updated = getLocalSession(session.session_id);
     const cps = updated?.metadata.askchappy.create_presentations_state;
@@ -70,7 +76,9 @@ describe('create presentations phase 2b hardening', () => {
     expect(cps?.deckBrief.constraints).toEqual(['keep concise', 'one message per slide']);
     expect(cps?.deckBrief.required_messaging).toEqual(['risk reduction', 'measurable outcomes']);
     expect(cps?.deckBrief.output.speaker_notes).toBe(false);
-    expect(cps?.deckBrief.status).toBe('brief_approved');
+    expect(cps?.deckBrief.status).toBe('outline_review');
+    expect(cps?.step).toBe('outline_review');
+    expect(cps?.outline?.status).toBe('outline_review');
     expect(cps?.skippedFields).toEqual(expect.arrayContaining(['customer_context', 'industry', 'use_case', 'user_notes']));
     expect(cps?.events.some((event) => event.kind === 'validation_error')).toBe(true);
     expect(cps?.events.some((event) => event.kind === 'brief_review_presented')).toBe(true);
