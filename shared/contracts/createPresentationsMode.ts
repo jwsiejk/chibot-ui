@@ -26,7 +26,7 @@ export const CREATE_PRESENTATIONS_TONES = [
 
 export const CREATE_PRESENTATIONS_TECHNICAL_DEPTH = ['low', 'medium', 'high', 'mixed'] as const;
 
-export const CREATE_PRESENTATIONS_STEPS = ['intro', 'collecting_brief', 'brief_review', 'brief_approved', 'error'] as const;
+export const CREATE_PRESENTATIONS_STEPS = ['intro', 'collecting_brief', 'brief_review', 'brief_approved', 'outline_review', 'outline_approved', 'error'] as const;
 
 export type CreatePresentationsStep = (typeof CREATE_PRESENTATIONS_STEPS)[number];
 
@@ -43,6 +43,12 @@ export type CreatePresentationsModeEvent = {
   | 'brief_updated'
   | 'brief_review_presented'
   | 'brief_approved'
+  | 'outline_generation_requested'
+  | 'outline_generated'
+  | 'outline_review_presented'
+  | 'outline_revision_requested'
+  | 'outline_updated'
+  | 'outline_approved'
   | 'mode_exited';
   text?: string;
   field?: string;
@@ -74,7 +80,22 @@ export type CreatePresentationsDeckBrief = {
     format: 'pptx';
     speaker_notes?: boolean;
   };
-  status: 'draft' | 'brief_review' | 'brief_approved' | 'error';
+  status: 'draft' | 'brief_review' | 'brief_approved' | 'outline_draft' | 'outline_review' | 'outline_approved' | 'error';
+};
+
+export type CreatePresentationsOutlineSlide = {
+  slide_number: number;
+  title: string;
+  objective: string;
+  key_points: string[];
+  speaker_notes_prompt?: string;
+};
+
+export type CreatePresentationsOutlineState = {
+  status: 'not_started' | 'outline_draft' | 'outline_review' | 'outline_approved' | 'error';
+  slides: CreatePresentationsOutlineSlide[];
+  created_at?: string;
+  updated_at?: string;
 };
 
 export const CREATE_PRESENTATIONS_OPTIONAL_FIELDS = [
@@ -114,6 +135,10 @@ export const createPresentationsModeState = () => ({
       text: CREATE_PRESENTATIONS_INTRO_MESSAGE,
     },
   ],
+  outline: {
+    status: 'not_started' as const,
+    slides: [] as CreatePresentationsOutlineSlide[],
+  },
   skippedFields: [] as CreatePresentationsOptionalField[],
   awaitingUserInput: true,
 });
