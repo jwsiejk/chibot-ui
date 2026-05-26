@@ -1,10 +1,10 @@
-# Create Presentations Mode Foundation (Pre-Implementation)
+# Create Presentations Mode Foundation
 
 ## 1) Purpose and scope of this document
 
 This document defines the product and architecture foundation for a future AskChappy guided mode: **Create Presentations**.
 
-This is a documentation-only foundation. No runtime behavior, dependencies, retrieval integrations, or implementation code are introduced by this document.
+This document remains the authoritative foundation, and now also records implementation notes through Phase 5 for verification alignment.
 
 ## 2) Product overview
 
@@ -349,3 +349,4 @@ These are directional options only and require explicit approval at implementati
 - Deferred scope remains deferred in Phase 5: no RAG, no Glean integration, no DDN repository retrieval, no embeddings/vector DB, no document ingestion, no source citations.
 - Phase 5B hardening reinforces browser download route safety (including encoded traversal rejection, safe attachment headers, and no-store responses) and keeps export UI constrained to `generatedPresentation` status without exposing internal `file_path`.
 - Advanced branding/template management and rich visual slide preview remain future work.
+- Download affordance visibility is currently centered in the Modes overlay; Phase 6 may improve export visibility outside the Modes overlay.
