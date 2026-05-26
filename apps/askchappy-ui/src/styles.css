@@ -182,6 +182,7 @@ a { color: inherit; text-decoration: none; }
 
 .msg-text {
   font-weight: 500;
+  white-space: pre-wrap;
 }
 
 
