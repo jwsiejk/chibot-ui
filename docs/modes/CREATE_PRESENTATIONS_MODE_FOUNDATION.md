@@ -250,7 +250,11 @@ Architecture rule:
 - Support user revise/approve loop.
 
 ### Phase 4 — PPTX generation
-- Generate editable PPTX from approved outline.
+- Generate editable PPTX from approved outline using a production PPTX library (not hand-built Open XML assembly and not shelling to system `zip`).
+- Treat the approved outline as immutable input for this phase; do not regenerate or reinterpret outline content during PPTX generation.
+- Keep Deck Brief lifecycle focused on brief/outline states (`outline_approved` remains after generation); track generation lifecycle under `generatedPresentation`.
+- Speaker notes are included only when supported by the selected PPTX library/runtime path.
+- Deferred scope remains deferred in Phase 4 (no RAG, no Glean, no DDN retrieval/content lookup).
 
 ### Phase 5 — Template/theme/speaker-notes/export polish
 - Add visual/theme/template controls.
