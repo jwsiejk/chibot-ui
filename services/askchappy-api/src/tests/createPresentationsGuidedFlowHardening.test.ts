@@ -57,7 +57,12 @@ describe('create presentations phase 2b hardening', () => {
     expect(review).toContain('8. Tone: Technical but executive readable');
     expect(review).not.toMatch(/RAG|Glean|DDN|embeddings|citation|internal docs/i);
 
-    expect(await answer('approve with changes')).toContain('Please specify one change');
+    const revisionMenu = await answer('approve with changes');
+    expect(revisionMenu).toContain('What do you want to revise?');
+    expect(revisionMenu).toContain('1. Deck type');
+    expect(revisionMenu).toContain('4. Slide count');
+    expect(revisionMenu).toContain('10. User notes');
+    expect(revisionMenu).toContain('11. Speaker notes');
     expect(await answer('set tone to consultative')).toContain('Here’s the brief I heard:');
     const updatedReview = await answer('change slide count to 8');
     expect(updatedReview).toContain('7. Slide count: 8');
