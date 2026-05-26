@@ -34,6 +34,7 @@ describe('presentation download route', () => {
     for (const a of ['generate presentation','executive briefing','Topic A','Audience A','skip','skip','skip','5','technical','medium','architecture, roadmap','keep concise','risk reduction','skip','yes','approve','generate outline','approve outline','generate presentation']) await say(s.session_id, a);
 
     const state = getLocalSession(s.session_id)?.metadata.askchappy.create_presentations_state;
+    expect(state?.generatedPresentation.status).toBe('generated');
     const fileName = state?.generatedPresentation.file_name as string;
 
     const response = createMockResponse();
