@@ -816,17 +816,16 @@ describe('phase 22 chappy UI', () => {
     }
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
 
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Download' })).toBeInTheDocument());
     const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
     const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
     const session = getLocalSession(sessionId);
     const generated = session?.metadata.askchappy.create_presentations_state?.generatedPresentation;
     expect(generated?.status).toBe('generated');
-    expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toHaveAttribute('href', generated?.download_url);
-    expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toHaveAttribute('download', generated?.file_name);
-    expect(screen.getByText('Type: PPTX')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('href', generated?.download_url);
+    expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('download', generated?.file_name);
+    expect(screen.getByText('PowerPoint ready')).toBeInTheDocument();
     expect(screen.queryByText(generated?.file_path ?? '')).not.toBeInTheDocument();
   });
 it('keeps voice studio controls absent in normal /chappy/session route', () => {
