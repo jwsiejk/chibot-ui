@@ -6,6 +6,23 @@ import { DEFAULT_CREATE_PRESENTATIONS_THEME_ID, getCreatePresentationsPptxTheme 
 const OUTPUT_DIR = path.resolve(process.cwd(), 'generated/presentations');
 const sanitize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 60) || 'presentation';
 
+const waitForGeneratedFile = async (filePath: string) => {
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    try {
+      const stat = await fs.stat(filePath);
+      if (stat.size > 0) return;
+    } catch {
+      // continue polling until timeout
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(`Generated presentation file was not written in time: ${filePath}`);
+    }
+    await new Promise((resolve) => { setTimeout(resolve, 25); });
+  }
+};
+
 export const getPresentationOutputDir = () => OUTPUT_DIR;
 
 export const resolvePresentationPathFromFileName = (fileName: string) => {
@@ -61,5 +78,6 @@ export const generatePptxFromApprovedOutline = async (
   });
 
   await pres.writeFile({ fileName: filePath });
+  await waitForGeneratedFile(filePath);
   return { fileName, filePath, downloadUrl: `/api/presentations/${fileName}`, generatedAt: new Date().toISOString(), themeId: theme.id };
 };
