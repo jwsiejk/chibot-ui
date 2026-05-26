@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import type { SessionState } from '../../../../shared/contracts/session';
 import type { SessionMode } from '../../../../shared/contracts/modes';
 import type { TranscriptMessage } from '../../../../shared/contracts/transcript';
-import { appendLocalUserTextMessage, generateLocalAssistantMessage, getLocalSession, getLocalTranscript, getLocalVoiceStatus, setLocalSessionMode, synthesizeLocalAssistantMessage, transcribeLocalVoiceInput } from '../../../../services/askchappy-api/src/api/server';
+import { chappySessionRuntime } from '../session/chappySessionRuntime';
 import { useAuth } from '../auth/authState';
 import { ChappyStage } from '../session/ChappyStage';
 import { TypedInput } from '../session/TypedInput';
@@ -57,9 +57,9 @@ export const ChappySession = () => {
     }
   }, []);
 
-  const session = useMemo(() => (sessionId ? getLocalSession(sessionId) : undefined), [sessionId, version]);
-  const voiceStatus = useMemo(() => getLocalVoiceStatus(), []);
-  const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : getLocalTranscript(sessionId)), [sessionId, session, version]);
+  const session = useMemo(() => (sessionId ? chappySessionRuntime.getLocalSession(sessionId) : undefined), [sessionId, version]);
+  const voiceStatus = useMemo(() => chappySessionRuntime.getLocalVoiceStatus(), []);
+  const messages: TranscriptMessage[] = useMemo(() => (!sessionId || !session ? [] : chappySessionRuntime.getLocalTranscript(sessionId)), [sessionId, session, version]);
   if (!sessionId || !session) return <main><h1>Session not found</h1><p>Start a local-first Open Q&amp;A session from /chappy.</p></main>;
   const activeMode = session.metadata.askchappy.session_mode;
   const isCreatePresentationsMode = activeMode === 'create_presentations';
@@ -88,7 +88,7 @@ export const ChappySession = () => {
     pushDiagnostic('tts request started');
     setState('speaking');
     setVoiceNotice('Chappy speaking…');
-    const tts = await synthesizeLocalAssistantMessage(sessionId, messageId);
+    const tts = await chappySessionRuntime.synthesizeLocalAssistantMessage(sessionId, messageId);
     const ttsEndAt = performance.now();
     const nextInFlight = { ...inFlight, tts_ms: msBetween(ttsStartAt, ttsEndAt) };
     if (tts.audio_status !== 'ready' || !tts.audio_base64 || !tts.audio_format) {
@@ -129,7 +129,7 @@ export const ChappySession = () => {
   const runAssistantTurn = async (turnStartAt: number, submitAt: number, turnType: 'typed' | 'voice', micCaptureMs: number | null, sttMs: number | null) => {
     const generationStartAt = performance.now();
     setState('thinking');
-    const result = await generateLocalAssistantMessage(sessionId);
+    const result = await chappySessionRuntime.generateLocalAssistantMessage(sessionId);
     const generationEndAt = performance.now();
     if (!result.ok) {
       pushDiagnostic('assistant generation failure');
@@ -139,7 +139,7 @@ export const ChappySession = () => {
       return;
     }
     setVersion((v) => v + 1);
-    const refreshed = getLocalTranscript(sessionId);
+    const refreshed = chappySessionRuntime.getLocalTranscript(sessionId);
     const newestAssistant = [...refreshed].reverse().find((entry) => entry.role === 'assistant');
     setState('ready');
     if (newestAssistant) {
@@ -159,13 +159,13 @@ export const ChappySession = () => {
   const onSubmitText = async (text: string) => {
     const turnStartAt = performance.now();
     setRuntimeNotice(null);
-    appendLocalUserTextMessage(sessionId, text);
+    chappySessionRuntime.appendLocalUserTextMessage(sessionId, text);
     pushDiagnostic('typed message submitted');
     setVersion((v) => v + 1);
     await runAssistantTurn(turnStartAt, turnStartAt, 'typed', null, null);
   };
 
-  const onSelectMode = (mode: SessionMode) => { setLocalSessionMode(sessionId, mode, 'user'); setVersion((previous) => previous + 1); };
+  const onSelectMode = (mode: SessionMode) => { chappySessionRuntime.setLocalSessionMode(sessionId, mode, 'user'); setVersion((previous) => previous + 1); };
   const onTranscribeVoice = async (blob: Blob) => {
     const turnStartAt = micCaptureStartRef.current ?? performance.now();
     const micSubmitAt = performance.now();
@@ -174,7 +174,7 @@ export const ChappySession = () => {
     setState('transcribing');
     setVoiceNotice('Transcribing…');
     pushDiagnostic('mic transcribing started');
-    const stt = await transcribeLocalVoiceInput(sessionId, blob);
+    const stt = await chappySessionRuntime.transcribeLocalVoiceInput(sessionId, blob);
     const sttEndAt = performance.now();
     micCaptureStartRef.current = null;
     if (!stt.ok) {
