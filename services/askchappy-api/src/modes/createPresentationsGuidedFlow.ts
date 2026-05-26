@@ -15,6 +15,7 @@ import {
   renderOutlineReview,
   validateOutlineForApproval,
 } from './createPresentationsOutlineFlow';
+import { generatePptxFromApprovedOutline } from './createPresentationsPptxGenerator';
 
 const nextEvent = (
   event: Omit<CreatePresentationsModeEvent, 'id' | 'ts'>,
@@ -33,6 +34,7 @@ const toList = (input: string) =>
 const normalize = (value: string) => value.trim().toLowerCase();
 const yes = (t: string) => /^(yes|y|true)$/i.test(t.trim());
 const no = (t: string) => /^(no|n|false)$/i.test(t.trim());
+const isPptxGenerationRequest = (t: string) => /(generate|create|build|export)\s+(presentation|pptx)/i.test(t.trim());
 const approveBrief = (t: string) => /^(approve|approved|looks good|go ahead|yes,? approve)$/i.test(t.trim());
 const now = () => new Date().toISOString();
 
@@ -99,7 +101,7 @@ const findMissingRequired = (brief: CreatePresentationsDeckBrief) => {
   return missing;
 };
 
-export const handleCreatePresentationsTurn = (session: AskChappySession): string => {
+export const handleCreatePresentationsTurn = async (session: AskChappySession): Promise<string> => {
   const state = session.metadata.askchappy.create_presentations_state;
   if (!state) {
     throw new Error('create_presentations_state missing while in create_presentations mode.');
@@ -177,6 +179,39 @@ export const handleCreatePresentationsTurn = (session: AskChappySession): string
 
   if (state.step === 'intro') {
     state.step = 'collecting_brief';
+  }
+
+  if (state.step === 'outline_approved' || state.step === 'presentation_generated') {
+    if (!isPptxGenerationRequest(userText)) {
+      return ask("Your outline is approved. Say 'generate presentation' when you’re ready, and I’ll create the editable PowerPoint.");
+    }
+    if (!(state.outline.status === 'outline_approved' && brief.status === 'outline_approved' && state.step === 'outline_approved')) {
+      return ask('PPTX generation is only available immediately after outline approval.');
+    }
+
+    state.generatedPresentation = { status: 'generating', format: 'pptx' };
+    state.events.push(nextEvent({ actor: 'user', step: state.step, kind: 'pptx_generation_requested', text: userText }));
+
+    try {
+      const result = await generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
+      state.generatedPresentation = {
+        status: 'generated',
+        format: 'pptx',
+        file_name: result.fileName,
+        file_path: result.filePath,
+        download_url: result.downloadUrl,
+        generated_at: result.generatedAt,
+      };
+      brief.status = 'generated';
+      state.step = 'presentation_generated';
+      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generated', text: result.downloadUrl }));
+      return `Your PowerPoint is ready: ${result.downloadUrl}`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown PPTX generation error.';
+      state.generatedPresentation = { status: 'error', format: 'pptx', error_message: message };
+      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generation_failed', text: message }));
+      return `I could not generate the PowerPoint: ${message}`;
+    }
   }
 
   if (state.step === 'outline_review') {

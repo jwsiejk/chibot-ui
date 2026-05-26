@@ -323,3 +323,11 @@ These are directional options only and require explicit approval at implementati
 - Phase 3 scope still stops at `outline_approved` (no PPTX generation/export behavior in Phase 3).
 - Phase 4 remains the first phase for PPTX generation work.
 - Shared retrieval/RAG/Glean/DDN content integration remains deferred to later phases.
+
+## Phase 4 implementation note
+
+- Phase 4 generates an editable `.pptx` only after both Deck Brief and Outline are `outline_approved`.
+- The approved outline is immutable input for PPTX generation: slide count, titles, objectives, and key points are consumed as-is with no redesign/regeneration.
+- Presentation generation metadata should be tracked in mode state as `generatedPresentation` with status, file name/path, download URL, timestamp, and explicit error message fields.
+- Export/download access should be restricted to the generated presentations output directory with filename validation and path traversal rejection.
+- Retrieval features remain deferred in Phase 4 (no RAG, Glean, DDN content repo, embeddings, ingestion, or citations).

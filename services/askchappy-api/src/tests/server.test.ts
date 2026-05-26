@@ -159,6 +159,7 @@ describe('askchappy-api scaffold', () => {
       }),
       awaitingUserInput: true,
       outline: { status: 'not_started', slides: [] },
+      generatedPresentation: { status: 'not_started', format: 'pptx' },
       skippedFields: [],
       events: expect.arrayContaining([expect.objectContaining({ kind: 'mode_entered', actor: 'system' })]),
     });

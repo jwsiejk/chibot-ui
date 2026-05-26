@@ -26,7 +26,7 @@ export const CREATE_PRESENTATIONS_TONES = [
 
 export const CREATE_PRESENTATIONS_TECHNICAL_DEPTH = ['low', 'medium', 'high', 'mixed'] as const;
 
-export const CREATE_PRESENTATIONS_STEPS = ['intro', 'collecting_brief', 'brief_review', 'brief_approved', 'outline_review', 'outline_approved', 'error'] as const;
+export const CREATE_PRESENTATIONS_STEPS = ['intro', 'collecting_brief', 'brief_review', 'brief_approved', 'outline_review', 'outline_approved', 'presentation_generated', 'error'] as const;
 
 export type CreatePresentationsStep = (typeof CREATE_PRESENTATIONS_STEPS)[number];
 
@@ -44,8 +44,21 @@ export const CREATE_PRESENTATIONS_EVENT_KINDS = [
   'outline_revision_requested',
   'outline_updated',
   'outline_approved',
+  'pptx_generation_requested',
+  'pptx_generated',
+  'pptx_generation_failed',
   'mode_exited',
 ] as const;
+
+export type CreatePresentationsGeneratedPresentationState = {
+  status: 'not_started' | 'generating' | 'generated' | 'error';
+  format: 'pptx';
+  file_name?: string;
+  file_path?: string;
+  download_url?: string;
+  generated_at?: string;
+  error_message?: string;
+};
 
 export type CreatePresentationsModeEvent = {
   id: string;
@@ -141,6 +154,10 @@ export const createPresentationsModeState = () => ({
   outline: {
     status: 'not_started' as const,
     slides: [] as CreatePresentationsOutlineSlide[],
+  },
+  generatedPresentation: {
+    status: 'not_started' as const,
+    format: 'pptx' as const,
   },
   skippedFields: [] as CreatePresentationsOptionalField[],
   awaitingUserInput: true,

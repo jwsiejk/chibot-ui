@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import { appendUserTextMessage, appendUserVoiceMessage } from '../transcript/transcriptEngine';
 import {
   appendTranscriptMessage,
@@ -15,6 +16,7 @@ import { transcribeWithFasterWhisper } from '../voice/stt/fasterWhisperAdapter';
 import { getLocalRuntimeReadiness } from './localRuntimeReadiness';
 import { handleCreatePresentationsTurn } from '../modes/createPresentationsGuidedFlow';
 import { getLocalGpuValidationStatus } from './localGpuValidation';
+import { resolvePresentationPathFromFileName } from '../modes/createPresentationsPptxGenerator';
 
 export type ApiHealth = { service: 'askchappy-api'; status: 'placeholder' };
 
@@ -87,7 +89,7 @@ export const generateLocalAssistantMessage = async (sessionId: string) => {
   if (!latestUser) throw new Error('Cannot generate assistant response without a user transcript message.');
 
   if (session.metadata.askchappy.session_mode === 'create_presentations') {
-    const text = handleCreatePresentationsTurn(session);
+    const text = await handleCreatePresentationsTurn(session);
     const assistantMessage: TranscriptMessage = { id: `msg_${crypto.randomUUID()}`, ts: new Date().toISOString(), role: 'assistant', text, source: 'assistant_stream', session_id: session.session_id, meta: { mode: 'create_presentations' } };
     appendTranscriptMessage(session, assistantMessage);
     return { ok: true as const, text, runtime: { provider: 'ollama_local', model: 'create_presentations_guided', base_url: 'local_mode' } };
@@ -128,3 +130,12 @@ export const getLocalRuntimeReadinessStatus = () => getLocalRuntimeReadiness();
 
 
 export const getLocalGpuValidationReport = () => getLocalGpuValidationStatus();
+export const getGeneratedPresentationDownload = async (fileName: string) => {
+  const filePath = resolvePresentationPathFromFileName(fileName);
+  try {
+    const file = await fs.readFile(filePath);
+    return { ok: true as const, fileName, file, contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+  } catch {
+    return { ok: false as const, error: 'Generated presentation file not found.' };
+  }
+};
