@@ -160,21 +160,21 @@ export const handleCreatePresentationsTurn = (session: AskChappySession): string
         return true;
       }) ||
       applyRevision(/(?:set|change|update|make)\s+tone\s+(?:to\s+)?(.+)/i, (value) => {
-        const mapped = mapEnum(value, toneMap, 'tone', '');
+        const mapped = mapEnum(value, toneMap, 'tone');
         if (!mapped) return false;
         brief.tone = mapped;
         state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_updated', field: 'tone', value: mapped }));
         return true;
       }) ||
       applyRevision(/(?:set|change|update|make)\s+technical\s+depth\s+(?:to\s+)?(.+)/i, (value) => {
-        const mapped = mapEnum(value, depthMap, 'technical_depth', '');
+        const mapped = mapEnum(value, depthMap, 'technical_depth');
         if (!mapped) return false;
         brief.technical_depth = mapped;
         state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_updated', field: 'technical_depth', value: mapped }));
         return true;
       }) ||
       applyRevision(/(?:set|change|update)\s+deck\s*type\s+(?:to\s+)?(.+)/i, (value) => {
-        const mapped = mapEnum(value, deckTypeMap, 'deck_type', '');
+        const mapped = mapEnum(value, deckTypeMap, 'deck_type');
         if (!mapped) return false;
         brief.deck_type = mapped;
         state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'brief_updated', field: 'deck_type', value: mapped }));
@@ -202,7 +202,7 @@ export const handleCreatePresentationsTurn = (session: AskChappySession): string
   }
 
   if (!brief.deck_type) {
-    const mapped = mapEnum(userText, deckTypeMap, 'deck_type', '');
+    const mapped = mapEnum(userText, deckTypeMap, 'deck_type');
     if (!mapped) return ask('What type of deck are we creating? Choose one: executive briefing, technical deep dive, partner enablement, internal training, architecture review, workshop, roadmap, proposal, or custom.');
     brief.deck_type = mapped;
   } else if (!brief.topic) {
@@ -228,11 +228,11 @@ export const handleCreatePresentationsTurn = (session: AskChappySession): string
     }
     brief.slide_count = n;
   } else if (!brief.tone) {
-    const mapped = mapEnum(userText, toneMap, 'tone', '');
+    const mapped = mapEnum(userText, toneMap, 'tone');
     if (!mapped) return ask('What tone should this deck use? Choose one: executive, consultative, technical, technical but executive readable, sales, training, concise, or custom.');
     brief.tone = mapped;
   } else if (!brief.technical_depth) {
-    const mapped = mapEnum(userText, depthMap, 'technical_depth', '');
+    const mapped = mapEnum(userText, depthMap, 'technical_depth');
     if (!mapped) return ask('What technical depth should we target? Choose one: low, medium, high, or mixed.');
     brief.technical_depth = mapped;
   } else if (!brief.must_include && !state.skippedFields.includes('must_include')) {
