@@ -22,17 +22,25 @@ const assertAssistantTranscriptMessage = (message: TranscriptMessage, sessionId:
   if (!message.text.trim()) throw new Error('TTS requires non-empty assistant transcript text.');
 };
 
+export const getTranscriptMessageTtsText = (message: TranscriptMessage): string => {
+  const meta = message.meta as Record<string, unknown>;
+  const ttsText = typeof meta?.tts_text === 'string' ? meta.tts_text.trim() : '';
+  if (ttsText) return ttsText;
+
+  const spokenText = typeof meta?.spoken_text === 'string' ? meta.spoken_text.trim() : '';
+  if (spokenText) return spokenText;
+
+  return message.text;
+};
+
 export const synthesizeAssistantTranscriptMessage = async (
   input: { session_id: string; message: TranscriptMessage; voice_profiles?: readonly VoiceProfileRuntime[] },
 ): Promise<TtsSynthesisOutput> => {
   const profile = getPublishedVoiceProfile(input.voice_profiles ?? []);
   assertAssistantTranscriptMessage(input.message, input.session_id);
 
-  const meta = input.message.meta as Record<string, unknown>;
-  const spokenOverride = typeof meta?.tts_text === 'string' ? meta.tts_text : (typeof meta?.spoken_text === 'string' ? meta.spoken_text : null);
-
   return kokoroTtsProvider.synthesize({
-    text: spokenOverride ?? input.message.text,
+    text: getTranscriptMessageTtsText(input.message),
     session_id: input.session_id,
     message_id: input.message.id,
     voice_profile_id: profile?.id ?? null,
