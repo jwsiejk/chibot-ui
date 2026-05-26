@@ -33,7 +33,9 @@ describe('SessionRightRail presentation export state', () => {
       />,
     );
     expect(screen.getByText('Generated decks')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: 'Download' })[0]).toHaveAttribute('href', '/api/presentations/deck-latest.pptx');
+    expect(screen.getByRole('link', { name: 'Download Latest deck' })).toHaveAttribute('href', '/api/presentations/deck-latest.pptx');
+    expect(screen.getByRole('link', { name: 'Download deck-old.pptx' })).toHaveAttribute('href', '/api/presentations/deck-old.pptx');
+    expect(screen.getAllByText('Download')).toHaveLength(2);
   });
 
   it('shows generating and error states', () => {
