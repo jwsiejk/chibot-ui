@@ -69,7 +69,7 @@ describe('create presentations phase 2b hardening', () => {
 
     const approved = await answer('Approve this brief');
     expect(approved).toContain('Great — I approved the brief and generated the outline');
-    expect(approved).toContain('Outline review');
+    expect(approved).toContain('Deck Outline Review');
 
     const updated = getLocalSession(session.session_id);
     const cps = updated?.metadata.askchappy.create_presentations_state;
