@@ -23,12 +23,18 @@ describe('create presentations pptx theme module', () => {
       expect(theme.bulletFontSize).toBeGreaterThan(0);
       expect(theme.footerFontSize).toBeGreaterThan(0);
 
-      expect(theme.colors.background).toBeTruthy();
-      expect(theme.colors.title).toBeTruthy();
-      expect(theme.colors.objective).toBeTruthy();
-      expect(theme.colors.bullet).toBeTruthy();
-      expect(theme.colors.footer).toBeTruthy();
-      expect(theme.colors.accent).toBeTruthy();
+      expect(theme.colors).toHaveProperty('background');
+      expect(theme.colors).toHaveProperty('title');
+      expect(theme.colors).toHaveProperty('objective');
+      expect(theme.colors).toHaveProperty('bullet');
+      expect(theme.colors).toHaveProperty('footer');
+      expect(theme.colors).toHaveProperty('accent');
+
+      expect(theme.layout).toHaveProperty('title');
+      expect(theme.layout).toHaveProperty('objective');
+      expect(theme.layout).toHaveProperty('bullets');
+      expect(theme.layout).toHaveProperty('footer');
+      expect(theme.layout).toHaveProperty('accent');
 
       for (const section of [theme.layout.title, theme.layout.objective, theme.layout.bullets, theme.layout.footer, theme.layout.accent]) {
         expect(section.x).toBeGreaterThanOrEqual(0);
