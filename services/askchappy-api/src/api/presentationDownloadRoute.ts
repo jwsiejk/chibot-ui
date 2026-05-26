@@ -9,7 +9,9 @@ const getDownloadFileNameFromPath = (pathname: string): string | null => {
   const encodedFileName = pathname.slice(ROUTE_PREFIX.length);
   if (!encodedFileName || encodedFileName.includes('/')) return '';
   try {
-    return decodeURIComponent(encodedFileName);
+    const fileName = decodeURIComponent(encodedFileName);
+    if (!fileName || fileName.includes('/') || fileName.includes('\\')) return '';
+    return fileName;
   } catch {
     return '';
   }
@@ -57,4 +59,3 @@ export const tryHandlePresentationDownloadRoute = async (req: IncomingMessage, r
     return true;
   }
 };
-

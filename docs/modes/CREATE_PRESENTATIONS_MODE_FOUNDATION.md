@@ -347,4 +347,5 @@ These are directional options only and require explicit approval at implementati
 - Phase 5 introduces a small local PPTX theme/layout module (default-first, extensible) for visual polish (typography, spacing, footer/accent, color/layout tokens) while keeping slide content sourced directly from approved outline fields.
 - Speaker notes remain deferred unless the active `pptxgenjs` runtime path is explicitly validated for reliable editable notes output across environments.
 - Deferred scope remains deferred in Phase 5: no RAG, no Glean integration, no DDN repository retrieval, no embeddings/vector DB, no document ingestion, no source citations.
+- Phase 5B hardening reinforces browser download route safety (including encoded traversal rejection, safe attachment headers, and no-store responses) and keeps export UI constrained to `generatedPresentation` status without exposing internal `file_path`.
 - Advanced branding/template management and rich visual slide preview remain future work.

@@ -794,7 +794,7 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByLabelText('Type a message')).toBeInTheDocument();
   });
   
-  it('shows a clear download affordance for generated presentations and hides internal file path', () => {
+  it('shows download affordance after full create presentations flow and never shows file_path', async () => {
     render(
       <MemoryRouter initialEntries={[ROUTES.chappy]}>
         <App />
@@ -806,24 +806,28 @@ describe('phase 22 chappy UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create Presentations' }));
 
-    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
-    const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
-    const session = getLocalSession(sessionId);
-    if (!session?.metadata.askchappy.create_presentations_state) throw new Error('missing create presentations state');
-    session.metadata.askchappy.create_presentations_state.generatedPresentation = {
-      status: 'generated',
-      format: 'pptx',
-      file_name: 'demo-deck.pptx',
-      file_path: '/tmp/secret/demo-deck.pptx',
-      download_url: '/api/presentations/demo-deck.pptx',
+    const say = (text: string) => {
+      fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: text } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     };
+
+    for (const msg of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', '5', 'technical', 'medium', 'architecture, roadmap', 'keep concise', 'risk reduction', 'skip', 'yes', 'approve', 'generate outline', 'approve outline', 'generate presentation']) {
+      say(msg);
+    }
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
 
-    expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toHaveAttribute('href', '/api/presentations/demo-deck.pptx');
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toBeInTheDocument());
+    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
+    const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
+    const session = getLocalSession(sessionId);
+    const generated = session?.metadata.askchappy.create_presentations_state?.generatedPresentation;
+    expect(generated?.status).toBe('generated');
+    expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toHaveAttribute('href', generated?.download_url);
+    expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toHaveAttribute('download', generated?.file_name);
     expect(screen.getByText('Type: PPTX')).toBeInTheDocument();
-    expect(screen.queryByText('/tmp/secret/demo-deck.pptx')).not.toBeInTheDocument();
+    expect(screen.queryByText(generated?.file_path ?? '')).not.toBeInTheDocument();
   });
 it('keeps voice studio controls absent in normal /chappy/session route', () => {
     render(
