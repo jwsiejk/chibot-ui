@@ -4,6 +4,7 @@ import {
   CREATE_PRESENTATIONS_STEPS,
   type CreatePresentationsOptionalField,
   type CreatePresentationsGeneratedPresentationState,
+  type CreatePresentationsGeneratedDeckHistoryItem,
   type CreatePresentationsDeckBrief,
   type CreatePresentationsModeEvent,
   type CreatePresentationsOutlineState,
@@ -29,6 +30,7 @@ export type AskChappyMetadata = {
       outline: CreatePresentationsOutlineState;
       generatedPresentation: CreatePresentationsGeneratedPresentationState;
       events: CreatePresentationsModeEvent[];
+      generatedDeckHistory?: CreatePresentationsGeneratedDeckHistoryItem[];
       skippedFields: CreatePresentationsOptionalField[];
       awaitingUserInput: boolean;
     } | null;
@@ -115,6 +117,17 @@ export const isAskChappyMetadata = (value: unknown): value is AskChappyMetadata 
     isRecord(cps.generatedPresentation) &&
     ['not_started', 'generating', 'generated', 'error'].includes(cps.generatedPresentation.status as string) &&
     cps.generatedPresentation.format === 'pptx' &&
+    (cps.generatedDeckHistory === undefined || (
+      Array.isArray(cps.generatedDeckHistory) &&
+      cps.generatedDeckHistory.every((item) => isRecord(item)
+        && typeof item.id === 'string'
+        && typeof item.file_name === 'string'
+        && typeof item.download_url === 'string'
+        && item.format === 'pptx'
+        && (item.theme_id === undefined || ['professional_light', 'executive_dark', 'technical_clean'].includes(item.theme_id as string))
+        && (item.generated_at === undefined || typeof item.generated_at === 'string')
+        && (item.title === undefined || typeof item.title === 'string'))
+    )) &&
     Array.isArray(cps.events) &&
     cps.events.every(validEvent) &&
     Array.isArray(cps.skippedFields) &&

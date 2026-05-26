@@ -32,6 +32,9 @@ describe('create presentations phase 4 pptx generation', () => {
     expect(cps?.generatedPresentation.file_name?.endsWith('.pptx')).toBe(true);
     expect(cps?.generatedPresentation.download_url).toBe(`/api/presentations/${cps?.generatedPresentation.file_name}`);
     expect(cps?.generatedPresentation.theme_id).toBe('professional_light');
+    expect(cps?.generatedDeckHistory?.[0]?.file_name).toBe(cps?.generatedPresentation.file_name);
+    expect(cps?.generatedDeckHistory?.[0]?.download_url).toBe(cps?.generatedPresentation.download_url);
+    expect(cps?.generatedDeckHistory?.[0]).not.toHaveProperty('file_path');
     expect(result).toContain(cps?.generatedPresentation.download_url as string);
     expect(result).not.toContain(cps?.generatedPresentation.file_path as string);
     expect(cps?.events.some((e) => e.kind === 'pptx_generated')).toBe(true);
@@ -56,6 +59,16 @@ describe('create presentations phase 4 pptx generation', () => {
     expect(allXml).toContain(firstTitle);
     expect(allXml).toContain(firstKeyPoint);
     expect(allXml).toContain('Objective:');
+
+    const firstGeneratedName = cps?.generatedPresentation.file_name as string;
+    const second = await say(s.session_id, 'generate presentation');
+    expect(second).toContain('Your PowerPoint is ready: /api/presentations/');
+    const cpsAfterSecond = getLocalSession(s.session_id)?.metadata.askchappy.create_presentations_state;
+    expect(cpsAfterSecond?.generatedDeckHistory?.length).toBeGreaterThanOrEqual(2);
+    expect(cpsAfterSecond?.generatedDeckHistory?.[0]?.file_name).toBe(cpsAfterSecond?.generatedPresentation.file_name);
+    expect(cpsAfterSecond?.generatedDeckHistory?.some((item) => item.file_name === firstGeneratedName)).toBe(true);
+    expect(cpsAfterSecond?.generatedDeckHistory?.every((item) => !Object.hasOwn(item, 'file_path'))).toBe(true);
+
     const dl = await getGeneratedPresentationDownload(cps?.generatedPresentation.file_name as string);
     expect(dl.ok).toBe(true);
     const miss = await getGeneratedPresentationDownload('missing-file.pptx');

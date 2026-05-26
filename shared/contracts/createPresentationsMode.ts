@@ -52,6 +52,17 @@ export const CREATE_PRESENTATIONS_EVENT_KINDS = [
 
 export type CreatePresentationsPptxThemeId = 'professional_light' | 'executive_dark' | 'technical_clean';
 
+
+export type CreatePresentationsGeneratedDeckHistoryItem = {
+  id: string;
+  file_name: string;
+  download_url: string;
+  format: 'pptx';
+  theme_id?: CreatePresentationsPptxThemeId;
+  generated_at?: string;
+  title?: string;
+};
+
 export type CreatePresentationsGeneratedPresentationState = {
   status: 'not_started' | 'generating' | 'generated' | 'error';
   format: 'pptx';
@@ -162,6 +173,7 @@ export const createPresentationsModeState = () => ({
     status: 'not_started' as const,
     format: 'pptx' as const,
   },
+  generatedDeckHistory: [] as CreatePresentationsGeneratedDeckHistoryItem[],
   skippedFields: [] as CreatePresentationsOptionalField[],
   awaitingUserInput: true,
 });

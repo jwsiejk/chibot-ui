@@ -117,6 +117,7 @@ describe('session contracts', () => {
       outline: { status: 'not_started', slides: [] },
       generatedPresentation: { status: 'not_started', format: 'pptx' },
       skippedFields: [],
+      generatedDeckHistory: [{ id: 'deck-1', file_name: 'deck-1.pptx', download_url: '/api/presentations/deck-1.pptx', format: 'pptx' }],
       awaitingUserInput: true,
       events: CREATE_PRESENTATIONS_EVENT_KINDS.map((kind, idx) => ({
         id: `evt_${idx}`,

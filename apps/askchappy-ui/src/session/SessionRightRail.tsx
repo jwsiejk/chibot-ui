@@ -1,18 +1,21 @@
 import React from 'react';
 import type { SessionMode } from '../../../../shared/contracts/modes';
-import type { CreatePresentationsGeneratedPresentationState } from '../../../../shared/contracts/createPresentationsMode';
+import type { CreatePresentationsGeneratedDeckHistoryItem, CreatePresentationsGeneratedPresentationState } from '../../../../shared/contracts/createPresentationsMode';
 import { MODE_DEFINITIONS, MODE_LOOKUP } from '../modes/guidedModes';
+import { GeneratedDeckHistoryList } from './GeneratedDeckHistoryList';
 
 export const SessionRightRail = ({
   activeMode,
   onSelectMode,
   compact = false,
   generatedPresentation,
+  generatedDeckHistory,
 }: {
   activeMode: SessionMode;
   onSelectMode: (mode: SessionMode) => void;
   compact?: boolean;
   generatedPresentation?: CreatePresentationsGeneratedPresentationState;
+  generatedDeckHistory?: CreatePresentationsGeneratedDeckHistoryItem[];
 }) => (
   <aside className={`card panel guided-modes-panel${compact ? ' compact' : ''}`} aria-label="session right rail">
     {generatedPresentation ? (<section aria-label="presentation export status">
@@ -21,6 +24,7 @@ export const SessionRightRail = ({
       {generatedPresentation.status === 'generating' ? <p>Status: Generating PPTX…</p> : null}
       {generatedPresentation.status === 'error' ? <p role="alert">Export failed: {generatedPresentation.error_message ?? 'Unknown error.'}</p> : null}
     </section>) : null}
+    <GeneratedDeckHistoryList generatedDeckHistory={generatedDeckHistory} />
     <h3>Current mode</h3>
     <p>{MODE_LOOKUP[activeMode].title}</p>
     <p>{MODE_LOOKUP[activeMode].guidance}</p>
