@@ -809,7 +809,7 @@ describe('phase 22 chappy UI', () => {
   });
 
   it('keeps numbered menu visible while sending concise tts text in create presentations', async () => {
-    const synthSpy = vi.spyOn(serverApi, 'synthesizeLocalAssistantMessage').mockResolvedValue({
+    const synthSpy = vi.spyOn(chappySessionRuntime, 'synthesizeLocalAssistantMessage').mockResolvedValue({
       audio_status: 'ready',
       audio_base64: 'ZmFrZQ==',
       audio_format: 'wav',
@@ -907,10 +907,19 @@ describe('phase 22 chappy UI', () => {
       });
     };
 
-    for (const msg of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', '5', 'technical', 'medium', 'architecture, roadmap', 'keep concise', 'risk reduction', 'skip', 'yes', 'approve', 'generate outline', 'approve outline']) {
+    for (const msg of ['generate presentation', 'executive briefing', 'Topic A', 'Audience A', 'skip', 'skip', 'skip', 'five', '4', '4', 'skip', 'skip', 'skip', 'skip', '2', 'Approve this brief']) {
       await say(msg);
     }
-    await say('generate presentation');
+    await waitFor(() => {
+      const state = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state;
+      expect(state?.step === 'outline_review' || state?.outline.status === 'outline_review').toBe(true);
+    });
+    await say('approve outline');
+    await waitFor(() => {
+      const state = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state;
+      expect(state?.step === 'outline_approved' || state?.outline.status === 'outline_approved').toBe(true);
+    });
+    await say('1');
 
     await waitFor(() => {
       const generatedPresentation = getLocalSession(sessionId)?.metadata.askchappy.create_presentations_state?.generatedPresentation;
