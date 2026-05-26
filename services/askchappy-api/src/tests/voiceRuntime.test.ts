@@ -58,6 +58,26 @@ describe('voice runtime', () => {
     expect(output.audio_base64).toBeNull();
   });
 
+  it('prefers concise meta.tts_text for provider synthesis payload', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ audio_base64: 'ZmFrZQ==' }),
+    } as Response);
+
+    await synthesizeAssistantTranscriptMessage({
+      session_id: 'session_1',
+      message: {
+        ...createAssistantMessage('session_1', '1. Executive briefing\n2. Market update'),
+        meta: { tts_text: 'Choose one of the options below.' },
+      },
+    });
+
+    const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(options.body));
+    expect(payload.text).toBe('Choose one of the options below.');
+    expect(payload.text).not.toContain('1. Executive briefing');
+  });
+
   it('assistant transcript text synthesis preserves spoken_text exactly', async () => {
     const output = await synthesizeAssistantTranscriptMessage({
       session_id: 'session_1',
