@@ -28,8 +28,11 @@ export const synthesizeAssistantTranscriptMessage = async (
   const profile = getPublishedVoiceProfile(input.voice_profiles ?? []);
   assertAssistantTranscriptMessage(input.message, input.session_id);
 
+  const meta = input.message.meta as Record<string, unknown>;
+  const spokenOverride = typeof meta?.tts_text === 'string' ? meta.tts_text : (typeof meta?.spoken_text === 'string' ? meta.spoken_text : null);
+
   return kokoroTtsProvider.synthesize({
-    text: input.message.text,
+    text: spokenOverride ?? input.message.text,
     session_id: input.session_id,
     message_id: input.message.id,
     voice_profile_id: profile?.id ?? null,

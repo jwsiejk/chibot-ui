@@ -87,10 +87,10 @@ export const generateLocalAssistantMessage = async (sessionId: string) => {
 
   if (session.metadata.askchappy.session_mode === 'create_presentations') {
     const { handleCreatePresentationsTurn } = await import('../modes/createPresentationsGuidedFlow');
-    const text = await handleCreatePresentationsTurn(session);
-    const assistantMessage: TranscriptMessage = { id: `msg_${crypto.randomUUID()}`, ts: new Date().toISOString(), role: 'assistant', text, source: 'assistant_stream', session_id: session.session_id, meta: { mode: 'create_presentations' } };
+    const response = await handleCreatePresentationsTurn(session);
+    const assistantMessage: TranscriptMessage = { id: `msg_${crypto.randomUUID()}`, ts: new Date().toISOString(), role: 'assistant', text: response.text, source: 'assistant_stream', session_id: session.session_id, meta: { mode: 'create_presentations', tts_text: response.spokenText ?? response.text } };
     appendTranscriptMessage(session, assistantMessage);
-    return { ok: true as const, text, runtime: { provider: 'ollama_local', model: 'create_presentations_guided', base_url: 'local_mode' } };
+    return { ok: true as const, text: response.text, runtime: { provider: 'ollama_local', model: 'create_presentations_guided', base_url: 'local_mode' } };
   }
 
   const result = await generateAssistantResponse({
