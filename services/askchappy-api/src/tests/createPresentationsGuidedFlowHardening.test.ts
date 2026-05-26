@@ -49,23 +49,22 @@ describe('create presentations phase 2b hardening', () => {
     expect(await answer('maybe')).toContain('Include speaker notes?');
     const review = await answer('no');
     expect(review).toContain('Here’s the brief I heard:');
-    expect(review).toContain('customer_context: Skipped');
-    expect(review).toContain('industry: Skipped');
-    expect(review).toContain('use_case: Skipped');
-    expect(review).toContain('user_notes: Skipped');
-    expect(review).toContain('source policy: user_provided_only');
-    expect(review).toContain('Deck type: Executive briefing');
-    expect(review).toContain('Tone: Technical but executive readable');
+    expect(review).toContain('4. Customer context: Skipped');
+    expect(review).toContain('5. Industry: Skipped');
+    expect(review).toContain('6. Primary use case: Skipped');
+    expect(review).toContain('13. User notes: Skipped');
+    expect(review).toContain('1. Deck type: Executive briefing');
+    expect(review).toContain('8. Tone: Technical but executive readable');
     expect(review).not.toMatch(/RAG|Glean|DDN|embeddings|citation|internal docs/i);
 
     expect(await answer('approve with changes')).toContain('Please specify one change');
     expect(await answer('set tone to consultative')).toContain('Here’s the brief I heard:');
     const updatedReview = await answer('change slide count to 8');
-    expect(updatedReview).toContain('slide_count: 8');
+    expect(updatedReview).toContain('7. Slide count: 8');
 
     const approved = await answer('Approve this brief');
-    expect(approved).toContain('Great — I approved the brief and generated the outline.');
-    expect(approved).toContain('Deck Outline Review');
+    expect(approved).toContain('Great — I approved the brief and generated the outline');
+    expect(approved).toContain('Outline review');
 
     const updated = getLocalSession(session.session_id);
     const cps = updated?.metadata.askchappy.create_presentations_state;
