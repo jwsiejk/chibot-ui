@@ -418,22 +418,67 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
   }
 
   if (state.step === 'outline_review') {
-    if (/(approve and create|approve.*powerpoint|approve.*pptx)/i.test(userText)) {
+    const outlineChoice = parseNumberChoice(userText);
+    const wantsCreatePowerPoint =
+      outlineChoice === 1
+      || /^(approve|approve outline|yes|looks good|no changes|continue)$/i.test(normalized)
+      || /(approve and create|approve.*powerpoint|approve.*pptx|create powerpoint|generate presentation|generate pptx|export pptx)/i.test(userText);
+
+    if (wantsCreatePowerPoint) {
       const errors = validateOutlineForApproval(state.outline, brief);
-      if (errors.length) return validationError(`I cannot approve this outline yet:\n- ${errors.join('\n- ')}`);
-      state.outline.status = 'outline_approved';
-      brief.status = 'outline_approved';
-      state.step = 'outline_approved';
-    } else if (/^(approve|approve outline|yes|looks good|no changes|continue)$/i.test(normalized)) {
-      const errors = validateOutlineForApproval(state.outline, brief);
-      if (errors.length) return validationError(`I cannot approve this outline yet:\n- ${errors.join('\n- ')}`);
+      if (errors.length) return validationError(`I cannot approve this outline yet:\n- ${errors.join('\\n- ')}`);
+
       state.outline.status = 'outline_approved';
       brief.status = 'outline_approved';
       state.step = 'outline_approved';
       state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'outline_approved', text: 'Outline approved.' }));
-      return ask('Outline approved. Next:\n1. This is correct — create the PowerPoint\n2. Edit the outline', 'If this outline looks correct, choose 1 to create the PowerPoint. To edit, choose 2.');
+
+      state.generatedPresentation = { status: 'generating', format: 'pptx' };
+      state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generation_requested', text: userText }));
+
+      try {
+        const { generatePptxFromApprovedOutline } = await import('./createPresentationsPptxGenerator');
+        const result = await generatePptxFromApprovedOutline(session.session_id, brief, state.outline);
+
+        state.generatedPresentation = {
+          status: 'generated',
+          format: 'pptx',
+          file_name: result.fileName,
+          file_path: result.filePath,
+          download_url: result.downloadUrl,
+          generated_at: result.generatedAt,
+          theme_id: result.themeId,
+        };
+
+        const history = toGeneratedDeckHistoryItem(state.generatedPresentation, brief, state.outline);
+        if (history) state.generatedDeckHistory = appendGeneratedDeckHistory(state.generatedDeckHistory, history);
+
+        state.step = 'presentation_generated';
+        state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generated', text: result.downloadUrl }));
+
+        return ask(`Your PowerPoint is ready: ${result.downloadUrl}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown PPTX generation error.';
+        state.generatedPresentation = { status: 'error', format: 'pptx', error_message: message };
+        state.step = 'error';
+        state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generation_failed', text: message }));
+        return ask(`I could not generate the PowerPoint: ${message}`);
+      }
     }
+
+    if (outlineChoice === 2 || /^(edit|revise|revise outline|change outline|change something)$/i.test(normalized)) {
+      return ask(
+        'Tell me what to change in the outline. For example: change slide 2 title to ...',
+        'Tell me what to change in the outline.',
+      );
+    }
+
+    return ask(
+      'Deck Outline Review complete. Next:\\n1. This is correct — create the PowerPoint\\n2. Edit the outline',
+      'If this outline looks correct, choose 1 to create the PowerPoint. To edit, choose 2.',
+    );
   }
+
 
   if (state.step === 'outline_approved' || state.step === 'presentation_generated') {
     if (!(parseNumberChoice(userText) === 1 || /(create powerpoint|generate presentation|generate pptx|export pptx)/i.test(userText))) {
