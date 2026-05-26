@@ -72,22 +72,27 @@ The Deck Brief is the contract between:
 2) outline generation, and
 3) PPTX generation.
 
-### 6.1 Initial JSON schema (draft)
+### 6.1 Deck Brief schema contract (v1.0)
+
+This contract is implementation-oriented for initial phases and may evolve only through explicit schema versioning.
 
 ```json
 {
+  "schema_version": "1.0",
   "mode": "create_presentations",
-  "deck_type": "string",
-  "topic": "string",
-  "audience": "string",
+  "deck_type": "customer_executive_briefing",
+  "topic": "non-empty string",
+  "audience": "non-empty string",
   "customer_context": "string",
   "industry": "string",
   "use_case": "string",
   "slide_count": 12,
-  "tone": "string",
-  "technical_depth": "string",
+  "tone": "technical_but_executive_readable",
+  "technical_depth": "medium",
   "must_include": ["string"],
   "user_notes": "string",
+  "constraints": ["string"],
+  "required_messaging": ["string"],
   "source_requirements": {
     "source_policy": "user_provided_only",
     "citations_required": false,
@@ -101,19 +106,64 @@ The Deck Brief is the contract between:
 }
 ```
 
+Required fields:
+- `schema_version`
+- `mode`
+- `deck_type`
+- `topic`
+- `audience`
+- `slide_count`
+- `tone`
+- `technical_depth`
+- `source_requirements.source_policy`
+- `output.format`
+- `output.speaker_notes`
+- `status`
+
+Optional but supported fields:
+- `customer_context`
+- `industry`
+- `use_case`
+- `must_include`
+- `user_notes`
+- `constraints`
+- `required_messaging`
+
+Controlled enum values:
+- `mode`: `create_presentations`
+- `deck_type`: `customer_executive_briefing`, `customer_technical_deep_dive`, `partner_enablement`, `internal_training`, `architecture_review`, `workshop`, `roadmap`, `proposal`, `custom`
+- `tone`: `executive`, `consultative`, `technical`, `technical_but_executive_readable`, `sales`, `training`, `concise`, `custom`
+- `technical_depth`: `low`, `medium`, `high`, `mixed`
+- `source_requirements.source_policy`: `user_provided_only`
+- `source_requirements.allowed_source_types`: `manual_notes`, `uploaded_later`
+- `output.format`: `pptx`
+- `status`: `draft`, `brief_review`, `brief_approved`, `outline_draft`, `outline_review`, `outline_approved`, `generation_ready`, `generated`, `error`
+
+Validation rules for initial phases:
+- `topic` must be non-empty.
+- `audience` must be non-empty.
+- `slide_count` must be an integer between 3 and 30.
+- `must_include` must be an array of strings if provided.
+- `output.speaker_notes` must be boolean.
+- `source_requirements.citations_required` must remain `false` while `source_policy` is `user_provided_only`.
+- No internal/private source citations are allowed until shared retrieval/RAG is explicitly approved in a later phase.
+- Outline generation cannot proceed until `status` is `brief_approved`.
+- PPTX generation cannot proceed until `status` is `outline_approved` or `generation_ready`.
+
 ### 6.2 Example Deck Brief payload
 
 ```json
 {
+  "schema_version": "1.0",
   "mode": "create_presentations",
-  "deck_type": "customer_executive_update",
+  "deck_type": "customer_executive_briefing",
   "topic": "Q3 storage modernization proposal",
   "audience": "CIO and infrastructure leadership",
   "customer_context": "Large healthcare provider evaluating AI + backup refresh",
   "industry": "healthcare",
   "use_case": "hybrid AI and cyber resilience",
   "slide_count": 10,
-  "tone": "confident and consultative",
+  "tone": "technical_but_executive_readable",
   "technical_depth": "medium",
   "must_include": [
     "business drivers",
@@ -124,6 +174,13 @@ The Deck Brief is the contract between:
     "next steps"
   ],
   "user_notes": "Emphasize operational simplicity and measurable timeline.",
+  "constraints": [
+    "Keep content executive-readable",
+    "Limit each slide to one primary message"
+  ],
+  "required_messaging": [
+    "Position modernization as risk reduction and business enablement"
+  ],
   "source_requirements": {
     "source_policy": "user_provided_only",
     "citations_required": false,
@@ -136,6 +193,23 @@ The Deck Brief is the contract between:
   "status": "brief_review"
 }
 ```
+
+### 6.3 Deck Brief lifecycle and stage gating
+
+Expected forward lifecycle:
+`draft` → `brief_review` → `brief_approved` → `outline_draft` → `outline_review` → `outline_approved` → `generation_ready` → `generated`
+
+Failure behavior:
+- `error` may be used for explicit failures at any stage.
+- The app must not silently skip failed stages.
+
+### 6.4 Implementation notes for Phase 2
+
+- Phase 2 should implement validation against this schema contract.
+- Invalid Deck Brief data should produce explicit user-facing guidance.
+- The Deck Brief should be treated as the boundary object between UI state, guided interview, outline generation, and future PPTX generation.
+- Do not hardcode future RAG assumptions into the schema.
+- Future retrieval fields should be added by schema versioning only after approval.
 
 ## 7) Intended architecture (modular)
 
