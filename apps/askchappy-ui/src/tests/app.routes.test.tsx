@@ -314,6 +314,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Chappy')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     await waitFor(() => expect(screen.getByText(/Processing to Chappy speaking:/)).toBeInTheDocument());
     expect(screen.getByText(/Processing to assistant text:/)).toBeInTheDocument();
@@ -332,6 +333,7 @@ describe('phase 22 chappy UI', () => {
     fireEvent.change(screen.getByLabelText('Type a message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Chappy')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     await waitFor(() => expect(screen.getByText(/Assistant text chars:/)).toBeInTheDocument());
