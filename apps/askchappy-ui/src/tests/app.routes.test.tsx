@@ -793,7 +793,39 @@ describe('phase 22 chappy UI', () => {
     expect(screen.getByLabelText('top meeting bar')).toHaveTextContent('Open Q&A');
     expect(screen.getByLabelText('Type a message')).toBeInTheDocument();
   });
-  it('keeps voice studio controls absent in normal /chappy/session route', () => {
+  
+  it('shows a clear download affordance for generated presentations and hides internal file path', () => {
+    render(
+      <MemoryRouter initialEntries={[ROUTES.chappy]}>
+        <App />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'person@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join Chappy Room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Presentations' }));
+
+    const sessionText = screen.getByLabelText('top meeting bar').textContent ?? '';
+    const sessionId = (sessionText.match(/session_[a-z0-9-]+/i)?.[0]) ?? '';
+    const session = getLocalSession(sessionId);
+    if (!session?.metadata.askchappy.create_presentations_state) throw new Error('missing create presentations state');
+    session.metadata.askchappy.create_presentations_state.generatedPresentation = {
+      status: 'generated',
+      format: 'pptx',
+      file_name: 'demo-deck.pptx',
+      file_path: '/tmp/secret/demo-deck.pptx',
+      download_url: '/api/presentations/demo-deck.pptx',
+    };
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Modes' }));
+
+    expect(screen.getByRole('link', { name: 'Download PowerPoint' })).toHaveAttribute('href', '/api/presentations/demo-deck.pptx');
+    expect(screen.getByText('Type: PPTX')).toBeInTheDocument();
+    expect(screen.queryByText('/tmp/secret/demo-deck.pptx')).not.toBeInTheDocument();
+  });
+it('keeps voice studio controls absent in normal /chappy/session route', () => {
     render(
       <MemoryRouter initialEntries={['/chappy/session/session_123']}>
         <App />

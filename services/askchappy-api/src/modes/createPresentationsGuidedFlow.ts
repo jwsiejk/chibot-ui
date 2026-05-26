@@ -201,6 +201,7 @@ export const handleCreatePresentationsTurn = async (session: AskChappySession): 
         file_path: result.filePath,
         download_url: result.downloadUrl,
         generated_at: result.generatedAt,
+        theme_id: result.themeId,
       };
       state.step = 'presentation_generated';
       state.events.push(nextEvent({ actor: 'assistant', step: state.step, kind: 'pptx_generated', text: result.downloadUrl }));

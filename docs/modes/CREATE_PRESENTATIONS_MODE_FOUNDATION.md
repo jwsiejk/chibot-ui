@@ -339,3 +339,12 @@ These are directional options only and require explicit approval at implementati
 - Presentation generation metadata should be tracked in mode state as `generatedPresentation` with status, file name/path, download URL, timestamp, and explicit error message fields.
 - Export/download access should be restricted to the generated presentations output directory with filename validation and path traversal rejection.
 - Retrieval features remain deferred in Phase 4 (no RAG, Glean, DDN content repo, embeddings, ingestion, or citations).
+
+## 9) Phase 5 implementation notes (template/theme + export UX)
+
+- Phase 5 adds a clearer user-facing export surface after PPTX generation (for example a dedicated **Download PowerPoint** affordance in mode UI), using `generatedPresentation.download_url` and `generatedPresentation.file_name`.
+- Phase 5 keeps the approved outline as immutable input to PPTX generation; outline content is not regenerated, reinterpreted, or rewritten.
+- Phase 5 introduces a small local PPTX theme/layout module (default-first, extensible) for visual polish (typography, spacing, footer/accent, color/layout tokens) while keeping slide content sourced directly from approved outline fields.
+- Speaker notes remain deferred unless the active `pptxgenjs` runtime path is explicitly validated for reliable editable notes output across environments.
+- Deferred scope remains deferred in Phase 5: no RAG, no Glean integration, no DDN repository retrieval, no embeddings/vector DB, no document ingestion, no source citations.
+- Advanced branding/template management and rich visual slide preview remain future work.
