@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from 'vite';
+import { tryHandlePresentationDownloadRoute } from './services/askchappy-api/src/api/presentationDownloadRoute';
 
 const LOCAL_RUNTIME_ENV_KEYS = [
   'OLLAMA_BASE_URL',
@@ -24,6 +25,23 @@ export default defineConfig(({ mode }) => {
   }, {});
 
   return {
+    plugins: [
+      {
+        name: 'askchappy-presentation-download-route',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const handled = await tryHandlePresentationDownloadRoute(req, res);
+            if (!handled) next();
+          });
+        },
+        configurePreviewServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const handled = await tryHandlePresentationDownloadRoute(req, res);
+            if (!handled) next();
+          });
+        },
+      },
+    ],
     define: defineProcessEnv,
     server: {
       host: '127.0.0.1',

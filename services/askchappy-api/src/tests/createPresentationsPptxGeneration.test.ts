@@ -30,6 +30,9 @@ describe('create presentations phase 4 pptx generation', () => {
     expect(cps?.step).toBe('presentation_generated');
     expect(cps?.outline).toEqual(before);
     expect(cps?.generatedPresentation.file_name?.endsWith('.pptx')).toBe(true);
+    expect(cps?.generatedPresentation.download_url).toBe(`/api/presentations/${cps?.generatedPresentation.file_name}`);
+    expect(result).toContain(cps?.generatedPresentation.download_url as string);
+    expect(result).not.toContain(cps?.generatedPresentation.file_path as string);
     expect(cps?.events.some((e) => e.kind === 'pptx_generated')).toBe(true);
     expect(cps?.events.some((e) => e.kind === 'outline_generated' && e.step === 'presentation_generated')).toBe(false);
     const p = cps?.generatedPresentation.file_path as string;
