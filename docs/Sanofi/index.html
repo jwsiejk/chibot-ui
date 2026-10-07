@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EXAScaler Whiteboard Series</title>
+  <style>
+    :root { --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --card: #f6f8fa; --border: #d1d9e0; --link: #0969da; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --card: #151b23; --border: #3d444d; --link: #4493f8; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg);
+           font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+    h1 { font-size: 28px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 32px; }
+    section { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+              padding: 16px; margin-bottom: 24px; }
+    h2 { font-size: 18px; margin: 0 0 12px; }
+    video { width: 100%; height: auto; display: block; border-radius: 6px; background: #000; }
+    .meta { color: var(--muted); font-size: 14px; margin: 8px 0 0; }
+    a { color: var(--link); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>EXAScaler Whiteboard Series</h1>
+    <p class="sub">Short whiteboard walkthroughs of the EXAScaler architecture.</p>
+
+    <section>
+      <h2>Episode 1 — Physical Architecture</h2>
+      <video controls preload="metadata" playsinline>
+        <source src="Exascaler%20Whiteboard%20Series%20-%20E1%20Phys%20Arch%201.mp4" type="video/mp4">
+      </video>
+      <p class="meta">5:10 ·
+        <a href="Exascaler%20Whiteboard%20Series%20-%20E1%20Phys%20Arch%201.mp4" download>Download MP4</a></p>
+    </section>
+
+    <section>
+      <h2>Episode 2 — Parallel Data Access</h2>
+      <video controls preload="metadata" playsinline>
+        <source src="Exascaler%20whiteboard%20series%20-%20E2%20Parallel%20Data%20Access%201.mp4" type="video/mp4">
+      </video>
+      <p class="meta">3:51 ·
+        <a href="Exascaler%20whiteboard%20series%20-%20E2%20Parallel%20Data%20Access%201.mp4" download>Download MP4</a></p>
+    </section>
+  </main>
+</body>
+</html>
